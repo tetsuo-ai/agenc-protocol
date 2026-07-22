@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -41,6 +39,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -58,9 +58,7 @@ export const REGISTER_STORE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getRegisterStoreDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REGISTER_STORE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REGISTER_STORE_DISCRIMINATOR);
 }
 
 export type RegisterStoreInstruction<
@@ -112,9 +110,9 @@ export type RegisterStoreInstructionDataArgs = {
 export function getRegisterStoreInstructionDataEncoder(): Encoder<RegisterStoreInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["handle", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["handle", getFixedBytesEncoder(32, "handle")],
+      ["metadataHash", getFixedBytesEncoder(32, "metadataHash")],
       [
         "metadataUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

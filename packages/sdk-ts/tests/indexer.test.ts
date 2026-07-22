@@ -206,6 +206,7 @@ async function validHireBuild(input: {
   expectedPrice?: bigint;
   expectedVersion?: bigint;
   listingSpecHash?: string;
+  taskJobSpecHash?: string;
   extraInstruction?: Instruction;
   programOverride?: Address;
 }) {
@@ -215,6 +216,10 @@ async function validHireBuild(input: {
   );
   const listingSpecHash = input.listingSpecHash ?? "13".repeat(32);
   const specHash = Uint8Array.from(listingSpecHash.match(/../g)!, (part) =>
+    Number.parseInt(part, 16),
+  );
+  const taskJobSpecHash = input.taskJobSpecHash ?? "14".repeat(32);
+  const taskHash = Uint8Array.from(taskJobSpecHash.match(/../g)!, (part) =>
     Number.parseInt(part, 16),
   );
   const signer = createNoopSigner(input.buyer);
@@ -228,6 +233,7 @@ async function validHireBuild(input: {
     expectedPrice: input.expectedPrice ?? 1_000_000n,
     expectedVersion: input.expectedVersion ?? 2n,
     listingSpecHash: specHash,
+    taskJobSpecHash: taskHash,
     moderator: addrFromByte(0x55),
   });
   const instruction: Instruction = input.programOverride
@@ -580,6 +586,7 @@ describe("createIndexerClient writes", () => {
         expectedPrice: 1_000_000n,
         expectedVersion: 2n,
         listingSpecHash: "13".repeat(32),
+        taskJobSpecHash: "14".repeat(32),
         creatorAgent,
       }),
     ).resolves.toEqual(build);
@@ -593,6 +600,7 @@ describe("createIndexerClient writes", () => {
       expectedPrice: "1000000",
       expectedVersion: "2",
       listingSpecHash: "13".repeat(32),
+      taskJobSpecHash: "14".repeat(32),
       creatorAgent,
     });
   });
@@ -676,6 +684,7 @@ describe("indexer trust and resource boundaries", () => {
     expectedPrice: 1_000_000n,
     expectedVersion: 2n,
     listingSpecHash: "13".repeat(32),
+    taskJobSpecHash: "14".repeat(32),
     creatorAgent,
   };
 
@@ -713,11 +722,18 @@ describe("indexer trust and resource boundaries", () => {
       creatorAgent,
       expectedPrice: 9_999_999n,
     });
+    const wrongCommitment = await validHireBuild({
+      buyer,
+      listing,
+      creatorAgent,
+      taskJobSpecHash: "15".repeat(32),
+    });
     const candidates = [
       { ...valid, transaction: "NOT_BASE64" },
       extra,
       wrongProgram,
       wrongTerms,
+      wrongCommitment,
       {
         ...valid,
         transaction: makeAllNonSignersWritable(valid.transaction),

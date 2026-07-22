@@ -39,6 +39,9 @@ import {
   type SuspendAgentAsyncInput,
   type UnsuspendAgentAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotFixedBytes } from "../values/fixed-bytes.js";
+import { snapshotOptionOrNullable } from "../values/options.js";
 
 export { findAgentPda };
 
@@ -54,7 +57,19 @@ export function findAgentStatsPda(seeds: { agent: Address }) {
 
 /** Build a register_agent instruction; the agent PDA is auto-derived from agentId. */
 export async function registerAgent(input: RegisterAgentAsyncInput) {
-  return getRegisterAgentInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getRegisterAgentInstructionAsync({
+    ...stableInput,
+    agentId: snapshotFixedBytes(
+      stableInput.agentId,
+      32,
+      "registerAgent: agentId",
+    ),
+    metadataUri: snapshotOptionOrNullable(
+      stableInput.metadataUri,
+      "registerAgent: metadataUri",
+    ),
+  });
 }
 
 /**
@@ -84,15 +99,22 @@ export type UpdateAgentInput = {
  * the Option the generated encoder expects.
  */
 export function updateAgent(input: UpdateAgentInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   return getUpdateAgentInstruction({
-    agent: input.agent,
-    authority: input.authority,
+    agent: stableInput.agent,
+    authority: stableInput.authority,
     capabilities:
-      input.capabilities === undefined ? none() : some(input.capabilities),
-    endpoint: input.endpoint === undefined ? none() : some(input.endpoint),
+      stableInput.capabilities === undefined
+        ? none()
+        : some(stableInput.capabilities),
+    endpoint:
+      stableInput.endpoint === undefined ? none() : some(stableInput.endpoint),
     metadataUri:
-      input.metadataUri === undefined ? none() : some(input.metadataUri),
-    status: input.status === undefined ? none() : some(input.status),
+      stableInput.metadataUri === undefined
+        ? none()
+        : some(stableInput.metadataUri),
+    status:
+      stableInput.status === undefined ? none() : some(stableInput.status),
   });
 }
 
@@ -105,15 +127,18 @@ export function updateAgent(input: UpdateAgentInput) {
  *       is refused while it reports live bids, because every bid-withdrawal path
  *       loads this registration (AgentHasActiveBids);
  *   [1] the canonical `["agent_verification", agent]` PDA (writable) — a live
- *       badge is closed with the registration so it can never attach to a later
- *       re-registration of the same agent_id.
+ *       badge is revoked and retained as an audit trail so it can never remain
+ *       trusted after retirement.
  */
 export async function deregisterAgent(input: DeregisterAgentAsyncInput) {
-  const ix = await getDeregisterAgentInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const ix = await getDeregisterAgentInstructionAsync(stableInput);
   const [bidderMarket] = await findBidderMarketStatePda({
-    bidder: input.agent,
+    bidder: stableInput.agent,
   });
-  const [verification] = await findAgentVerificationPda({ agent: input.agent });
+  const [verification] = await findAgentVerificationPda({
+    agent: stableInput.agent,
+  });
   return {
     ...ix,
     accounts: [
@@ -126,12 +151,16 @@ export async function deregisterAgent(input: DeregisterAgentAsyncInput) {
 
 /** Build a suspend_agent instruction; the protocol config PDA is auto-derived. */
 export async function suspendAgent(input: SuspendAgentAsyncInput) {
-  return getSuspendAgentInstructionAsync(input);
+  return getSuspendAgentInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /** Build an unsuspend_agent instruction; the protocol config PDA is auto-derived. */
 export async function unsuspendAgent(input: UnsuspendAgentAsyncInput) {
-  return getUnsuspendAgentInstructionAsync(input);
+  return getUnsuspendAgentInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 // ===========================================================================
@@ -199,8 +228,7 @@ export async function fetchAgentVerification(
   if (v.revoked) {
     return { verified: false, reason: "revoked" };
   }
-  const now =
-    options.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+  const now = options.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
   if (v.expiresAt !== 0n && now >= v.expiresAt) {
     return { verified: false, reason: "expired" };
   }
@@ -340,7 +368,13 @@ export async function getAgentTrackRecord(
     fetchMaybeAgentRegistration(rpc, agentPda),
     fetchMaybeAgentStats(rpc, agentStatsPda),
     // P7.3(3): fold in the on-chain verification trust signal.
-    fetchAgentVerification(rpc, agentPda, options.nowSeconds === undefined ? {} : { nowSeconds: options.nowSeconds }),
+    fetchAgentVerification(
+      rpc,
+      agentPda,
+      options.nowSeconds === undefined
+        ? {}
+        : { nowSeconds: options.nowSeconds },
+    ),
   ]);
 
   const tasksCompleted = maybeReg.exists ? maybeReg.data.tasksCompleted : 0n;

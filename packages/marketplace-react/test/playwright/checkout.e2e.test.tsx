@@ -143,7 +143,7 @@ async function setupCheckoutSandbox() {
       ownsSandbox = true;
       env = await start({
         quiet: true,
-        unsafeUnpausedFixture: true,
+        devReady: true,
         disposable: true,
       });
     }

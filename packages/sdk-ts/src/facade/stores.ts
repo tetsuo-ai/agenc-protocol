@@ -20,6 +20,8 @@ import {
   type UpdateStoreAsyncInput,
   type CloseStoreAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotFixedBytes } from "../values/fixed-bytes.js";
 import { encodeStoreHandle } from "../values/index.js";
 
 export { findStorePda, fetchStore, fetchMaybeStore };
@@ -51,9 +53,7 @@ export type UpdateStoreInput = Omit<UpdateStoreAsyncInput, "handle"> & {
 };
 
 /** Encode the string form of a handle; pass raw bytes through untouched. */
-function coerceHandle(
-  handle: ReadonlyUint8Array | string,
-): ReadonlyUint8Array {
+function coerceHandle(handle: ReadonlyUint8Array | string): ReadonlyUint8Array {
   return typeof handle === "string" ? encodeStoreHandle(handle) : handle;
 }
 
@@ -73,9 +73,19 @@ function coerceHandle(
  * registration time or curation), never by the program.
  */
 export async function registerStore(input: RegisterStoreInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["owner"]);
   return getRegisterStoreInstructionAsync({
-    ...input,
-    handle: coerceHandle(input.handle),
+    ...stableInput,
+    handle: snapshotFixedBytes(
+      coerceHandle(stableInput.handle),
+      32,
+      "registerStore: handle",
+    ),
+    metadataHash: snapshotFixedBytes(
+      stableInput.metadataHash,
+      32,
+      "registerStore: metadataHash",
+    ),
   });
 }
 
@@ -86,9 +96,19 @@ export async function registerStore(input: RegisterStoreInput) {
  * The bond stays untouched on the PDA across updates.
  */
 export async function updateStore(input: UpdateStoreInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["owner"]);
   return getUpdateStoreInstructionAsync({
-    ...input,
-    handle: coerceHandle(input.handle),
+    ...stableInput,
+    handle: snapshotFixedBytes(
+      coerceHandle(stableInput.handle),
+      32,
+      "updateStore: handle",
+    ),
+    metadataHash: snapshotFixedBytes(
+      stableInput.metadataHash,
+      32,
+      "updateStore: metadataHash",
+    ),
   });
 }
 
@@ -98,5 +118,7 @@ export async function updateStore(input: UpdateStoreInput) {
  * bond to the owner in one step — the full, never-confiscatable refund.
  */
 export async function closeStore(input: CloseStoreAsyncInput) {
-  return getCloseStoreInstructionAsync(input);
+  return getCloseStoreInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["owner"]),
+  );
 }

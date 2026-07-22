@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const REPUTATION_STAKE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([226, 12, 248, 110, 109, 108, 99, 212]);
 
 export function getReputationStakeDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REPUTATION_STAKE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REPUTATION_STAKE_DISCRIMINATOR);
 }
 
 export type ReputationStake = {
@@ -89,14 +87,14 @@ export type ReputationStakeArgs = {
 export function getReputationStakeEncoder(): FixedSizeEncoder<ReputationStakeArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["agent", getAddressEncoder()],
       ["stakedAmount", getU64Encoder()],
       ["lockedUntil", getI64Encoder()],
       ["slashCount", getU8Encoder()],
       ["createdAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
+      ["reserved", getFixedBytesEncoder(8, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: REPUTATION_STAKE_DISCRIMINATOR }),
   );

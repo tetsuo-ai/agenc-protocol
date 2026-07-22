@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -45,7 +45,7 @@ export const UPVOTE_POST_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getUpvotePostDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(UPVOTE_POST_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(UPVOTE_POST_DISCRIMINATOR);
 }
 
 export type UpvotePostInstruction<
@@ -91,7 +91,9 @@ export type UpvotePostInstructionDataArgs = {};
 
 export function getUpvotePostInstructionDataEncoder(): FixedSizeEncoder<UpvotePostInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: UPVOTE_POST_DISCRIMINATOR }),
   );
 }

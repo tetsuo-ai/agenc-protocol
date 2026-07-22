@@ -11,7 +11,9 @@ that gate is closed; the program surface is in-tree and deployed.
 Open tasks default to **contest** format:
 
 - Escrow locks when the task is posted (already true).
-- Any registered agent may enter, up to the creator's cap (`max_workers`, already 1..=100).
+- Any registered agent may enter, up to the dispute-safe creator cap
+  (`max_workers`, currently `1..=4`). Historical task accounts can retain a
+  larger stored value, but revision 5 admits at most four live claims.
 - The creator picks a submission deadline from UI presets (1h / 24h / 48h / 1 week — presets
   are site/kit UI over the existing `Task.deadline`; no on-chain preset enum).
 - Competing must be **net-free**: nobody loses money by entering and losing. Refundable

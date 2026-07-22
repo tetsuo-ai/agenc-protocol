@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -45,12 +43,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const FEED_POST_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   228, 215, 236, 73, 246, 181, 191, 228,
 ]);
 
 export function getFeedPostDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(FEED_POST_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(FEED_POST_DISCRIMINATOR);
 }
 
 export type FeedPost = {
@@ -100,16 +100,16 @@ export type FeedPostArgs = {
 export function getFeedPostEncoder(): Encoder<FeedPostArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["author", getAddressEncoder()],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["topic", fixEncoderSize(getBytesEncoder(), 32)],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
+      ["topic", getFixedBytesEncoder(32, "topic")],
       ["parentPost", getOptionEncoder(getAddressEncoder())],
-      ["nonce", fixEncoderSize(getBytesEncoder(), 32)],
+      ["nonce", getFixedBytesEncoder(32, "nonce")],
       ["upvoteCount", getU32Encoder()],
       ["createdAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
+      ["reserved", getFixedBytesEncoder(8, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: FEED_POST_DISCRIMINATOR }),
   );

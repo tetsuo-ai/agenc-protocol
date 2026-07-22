@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU8Decoder,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -49,9 +49,7 @@ export const POST_COMPLETION_BOND_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([119, 207, 253, 151, 32, 175, 35, 66]);
 
 export function getPostCompletionBondDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    POST_COMPLETION_BOND_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(POST_COMPLETION_BOND_DISCRIMINATOR);
 }
 
 export type PostCompletionBondInstruction<
@@ -105,7 +103,7 @@ export type PostCompletionBondInstructionDataArgs = { role: number };
 export function getPostCompletionBondInstructionDataEncoder(): FixedSizeEncoder<PostCompletionBondInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["role", getU8Encoder()],
     ]),
     (value) => ({

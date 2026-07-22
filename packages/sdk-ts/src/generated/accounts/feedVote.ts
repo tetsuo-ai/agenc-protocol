@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -39,12 +37,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const FEED_VOTE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   228, 56, 120, 128, 135, 128, 195, 19,
 ]);
 
 export function getFeedVoteDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(FEED_VOTE_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(FEED_VOTE_DISCRIMINATOR);
 }
 
 export type FeedVote = {
@@ -78,12 +78,12 @@ export type FeedVoteArgs = {
 export function getFeedVoteEncoder(): FixedSizeEncoder<FeedVoteArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["post", getAddressEncoder()],
       ["voter", getAddressEncoder()],
       ["timestamp", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 4)],
+      ["reserved", getFixedBytesEncoder(4, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: FEED_VOTE_DISCRIMINATOR }),
   );

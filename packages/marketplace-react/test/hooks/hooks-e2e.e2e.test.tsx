@@ -57,7 +57,9 @@ import {
 
 /** Read raw account bytes from litesvm, or null when absent/empty. */
 function svmBytes(market: LocalMarketplace, pda: string): Uint8Array | null {
-  const acct = market.svm.getAccount(pda as Parameters<typeof market.svm.getAccount>[0]);
+  const acct = market.svm.getAccount(
+    pda as Parameters<typeof market.svm.getAccount>[0],
+  );
   if (!acct || acct.exists !== true || acct.data.length === 0) return null;
   return Uint8Array.from(acct.data);
 }
@@ -206,6 +208,7 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
     });
 
     const taskId = new Uint8Array(32).fill(44);
+    const jobHash = new Uint8Array(32).fill(55);
     let hireResult!: {
       signature: string;
       taskPda: string;
@@ -221,6 +224,7 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
         expectedVersion: 1n,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        taskJobSpecHash: jobHash,
         // P1.2: the hire gate consumes the named moderator's record.
         moderator: market.moderator.address,
       } as never)) as never;
@@ -238,16 +242,17 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
     const reader = svmTaskReader(market);
     const statusConfig: AgencProviderConfig = { ...buyerConfig };
     const { result: statusHook } = renderHook(
-      () => useTaskStatus(task, { taskReader: reader, pollIntervalMs: 50 }),
+      () => useTaskStatus(task, { taskReader: reader, pollIntervalMs: 60_000 }),
       { wrapper: makeWrapper(statusConfig) },
     );
-    await waitFor(() => expect(statusHook.current.status).toBe(TaskStatus.Open));
+    await waitFor(() =>
+      expect(statusHook.current.status).toBe(TaskStatus.Open),
+    );
 
     // ---- Scaffolding: moderate task, publish job spec, claim, submit ----
     // The humanless hire already pinned CreatorReview + initialized the
     // validation config, so the submit -> accept review path is ready; no
     // separate configure_task_validation is needed (and would be rejected).
-    const jobHash = new Uint8Array(32).fill(55);
     await market.moderator.attestTask(task, jobHash);
     await buyerClient.send([
       await facade.setTaskJobSpec({

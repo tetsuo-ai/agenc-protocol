@@ -5,7 +5,8 @@
 > now 99 instructions (since 2026-07-09, `surface_revision = 4`), the migrations
 > below were executed 2026-06-11, and every "0 open findings" statement is
 > historical (batches 1–3 closed at that time) — the 2026-07-16/17 adversarial
-> audit found new issues these audits missed. See `TODO.MD` (completed hardening
+> audit found new issues these audits missed. See
+> `docs/audit/ENTERPRISE_REMEDIATION_2026-07.md` (completed hardening
 > record F-1..F-19), `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
 
 > **Filename note.** This file is retained at the historical path

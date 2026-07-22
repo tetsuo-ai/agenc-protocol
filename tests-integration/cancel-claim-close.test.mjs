@@ -39,12 +39,13 @@ async function hireAndClaim(w) {
 
   // buyer hires -> Open task + escrow + HireRecord (deadline = now + 3600).
   const taskId = id32();
+  const jobHash = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [authorityRateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0, w.modAuth.publicKey)
+    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0, w.modAuth.publicKey, arr(jobHash))
     .accounts({
       task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda,
@@ -56,7 +57,6 @@ async function hireAndClaim(w) {
     .instruction(), [w.buyer]), "hire");
 
   // task moderation -> publish job spec -> worker claims.
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

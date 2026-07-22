@@ -25,7 +25,8 @@ import type { Address } from "../types.js";
 import {
   requireClient,
   resolveReferrerArgs,
-  signerAddress,
+  snapshotFixedBytes32,
+  stabilizeSelectedTransactionSigner,
   withoutReferrerArgs,
 } from "./internal.js";
 import {
@@ -110,6 +111,26 @@ export interface UseHireResult {
   reset: () => void;
 }
 
+type HireCreator = Parameters<
+  typeof facadeNs.hireFromListingHumanless
+>[0]["creator"];
+type HireAuthority = Parameters<
+  typeof facadeNs.hireFromListing
+>[0]["authority"];
+
+interface HireMutationVariables {
+  client: ReturnType<typeof requireClient>;
+  input: AnyHireInput;
+  creator: HireCreator;
+  creatorAddress: Address;
+  authority?: HireAuthority;
+  orchestrationRpcUrl: ReturnType<
+    typeof useAgencContext
+  >["orchestrationRpcUrl"];
+  orchestrationRpc: ReturnType<typeof useAgencContext>["orchestrationRpc"];
+  referral: ReturnType<typeof resolveReferrerArgs>;
+}
+
 /**
  * The hire hook.
  *
@@ -120,21 +141,32 @@ export interface UseHireResult {
  * const { hire, status, taskPda, error } = useHire();
  * await hire({
  *   listing, creatorAgent, taskId, expectedPrice: price, expectedVersion: 1n,
- *   listingSpecHash,
+ *   listingSpecHash, taskJobSpecHash,
  * });
  * ```
  */
 export function useHire(): UseHireResult {
   const ctx = useAgencContext();
 
-  const mutation = useMutation<HireResult, Error, AnyHireInput>({
-    mutationFn: async (input: AnyHireInput): Promise<HireResult> => {
-      const client = requireClient(ctx.client);
+  const mutation = useMutation<HireResult, Error, HireMutationVariables>({
+    mutationFn: async ({
+      client,
+      input,
+      creator,
+      creatorAddress,
+      authority,
+      orchestrationRpcUrl,
+      orchestrationRpc,
+      referral,
+    }): Promise<HireResult> => {
+      const { referrerArgs, referrerInjected } = referral;
 
-      // Resolve fresh per hire so a provider referrer config change cannot leak
-      // stale referral terms into a new transaction.
-      const { referrerArgs, referrerInjected } = resolveReferrerArgs(ctx);
-      const hireInput = withoutReferrerArgs(input);
+      // Derive exactly once from the synchronously captured signer identity and
+      // detached task id. The same PDA is returned after the funded await.
+      const [taskPda] = await findTaskPda({
+        creator: creatorAddress,
+        taskId: input.taskId,
+      });
 
       // P1.2: the hire gate names an explicit `moderator` (the caller's trust
       // decision) and needs the roster-entry PDA when that moderator is a
@@ -150,21 +182,21 @@ export function useHire(): UseHireResult {
         listingSpecHash !== undefined
       ) {
         moderationArgs = await resolveHireListingModerationAccounts({
-          rpcUrl: ctx.rpcUrl,
+          rpcUrl: orchestrationRpcUrl,
+          ...(orchestrationRpc === null ? {} : { rpc: orchestrationRpc }),
           listing: input.listing,
           listingSpecHash,
           moderator: input.moderator,
         });
       }
 
-      const creator = input.creator ?? client.signer;
       let signature: string;
 
       if (input.humanless === true) {
         // Storefront-visitor hire: no creator agent; CreatorReview-pinned, so
         // it settles via the buyer review path (useSubmissionReview).
         const result = await client.hireFromListingHumanless({
-          ...hireInput,
+          ...input,
           ...moderationArgs,
           creator,
           ...referrerArgs,
@@ -172,9 +204,11 @@ export function useHire(): UseHireResult {
         signature = result.signature;
       } else {
         // Standard hire: authority == creator == buyer (the buyer has an agent).
-        const authority = input.authority ?? client.signer;
+        if (authority === undefined) {
+          throw new Error("useHire: missing snapshotted authority");
+        }
         const result = await client.hireFromListing({
-          ...hireInput,
+          ...input,
           ...moderationArgs,
           authority,
           creator,
@@ -183,19 +217,75 @@ export function useHire(): UseHireResult {
         signature = result.signature;
       }
 
-      // Derive the minted Task PDA from (creator, taskId).
-      const [taskPda] = await findTaskPda({
-        creator: signerAddress(creator),
-        taskId: input.taskId,
-      });
-
       return { signature, taskPda, referrerInjected };
     },
   });
 
   const hire = useCallback(
-    (input: AnyHireInput) => mutation.mutateAsync(input),
-    [mutation],
+    async (input: AnyHireInput) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = withoutReferrerArgs(input) as AnyHireInput;
+      const snapshottedInput = {
+        ...detachedInput,
+        taskId: snapshotFixedBytes32(detachedInput.taskId, "useHire: taskId"),
+        ...(detachedInput.listingSpecHash === undefined
+          ? {}
+          : {
+              listingSpecHash: snapshotFixedBytes32(
+                detachedInput.listingSpecHash,
+                "useHire: listingSpecHash",
+              ),
+            }),
+        ...(detachedInput.taskJobSpecHash === undefined
+          ? {}
+          : {
+              taskJobSpecHash: snapshotFixedBytes32(
+                detachedInput.taskJobSpecHash,
+                "useHire: taskJobSpecHash",
+              ),
+            }),
+      } as unknown as AnyHireInput;
+
+      // Stabilize the same signer objects the SDK will place in the
+      // instruction. The SDK helper canonicalizes and permanently locks the
+      // address while preserving Kit's fee-payer/signer object identity and
+      // any unrelated stateful wallet/session fields.
+      const clientSigner = stabilizeSelectedTransactionSigner(client.signer);
+      const creator = stabilizeSelectedTransactionSigner(
+        clientSigner,
+        detachedInput.creator,
+      );
+      const creatorAddress = creator.address;
+      let authority: HireAuthority | undefined;
+      if (detachedInput.humanless !== true) {
+        const selectedAuthority = stabilizeSelectedTransactionSigner(
+          clientSigner,
+          detachedInput.authority,
+        );
+        // Creator and authority may be two wallet-adapter wrappers for the
+        // same non-fee-payer account. Kit requires one object identity per
+        // address across every signer role, so make creator the canonical
+        // representative for that address while preserving distinct signers.
+        authority = stabilizeSelectedTransactionSigner(
+          creator,
+          selectedAuthority,
+        );
+      }
+
+      return mutation.mutateAsync({
+        client,
+        input: snapshottedInput,
+        creator,
+        creatorAddress,
+        ...(authority === undefined ? {} : { authority }),
+        orchestrationRpcUrl: ctx.orchestrationRpcUrl,
+        orchestrationRpc: ctx.orchestrationRpc,
+        // Resolve fresh at this synchronous enqueue boundary so provider
+        // changes cannot alter an already accepted hire intent.
+        referral: resolveReferrerArgs(ctx),
+      });
+    },
+    [ctx, mutation],
   );
 
   const status: HireStatus = useMemo(() => {

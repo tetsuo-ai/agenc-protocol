@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU64Decoder,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -48,9 +48,7 @@ export const UPDATE_STATE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getUpdateStateDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_STATE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_STATE_DISCRIMINATOR);
 }
 
 export type UpdateStateInstruction<
@@ -102,9 +100,9 @@ export type UpdateStateInstructionDataArgs = {
 export function getUpdateStateInstructionDataEncoder(): FixedSizeEncoder<UpdateStateInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["stateKey", fixEncoderSize(getBytesEncoder(), 32)],
-      ["stateValue", fixEncoderSize(getBytesEncoder(), 64)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["stateKey", getFixedBytesEncoder(32, "stateKey")],
+      ["stateValue", getFixedBytesEncoder(64, "stateValue")],
       ["version", getU64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: UPDATE_STATE_DISCRIMINATOR }),

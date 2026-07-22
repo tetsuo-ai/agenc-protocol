@@ -9,13 +9,11 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -36,6 +34,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -47,7 +47,7 @@ export const CONFIGURE_TASK_MODERATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([228, 57, 251, 233, 203, 252, 126, 31]);
 
 export function getConfigureTaskModerationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     CONFIGURE_TASK_MODERATION_DISCRIMINATOR,
   );
 }
@@ -95,7 +95,7 @@ export type ConfigureTaskModerationInstructionDataArgs = {
 export function getConfigureTaskModerationInstructionDataEncoder(): FixedSizeEncoder<ConfigureTaskModerationInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["moderationAuthority", getAddressEncoder()],
       ["enabled", getBooleanEncoder()],
     ]),

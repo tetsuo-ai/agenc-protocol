@@ -88,7 +88,7 @@ pub enum CoordinationError {
     #[msg("Invalid description: cannot be empty")]
     InvalidDescription,
 
-    #[msg("Invalid max workers: must be between 1 and 100")]
+    #[msg("Invalid max workers: must be between 1 and 4")]
     InvalidMaxWorkers,
 
     #[msg("Invalid task type")]
@@ -1168,4 +1168,34 @@ pub enum CoordinationError {
     ReleaseProgramDataNotSettled,
     #[msg("The full production protocol can only be unpaused after the current release surface is atomically stamped")]
     ReleaseUnpauseRequiresCurrentSurface,
+    // Appended (hired-spec commitment hardening): keep this LAST so every
+    // existing Anchor error discriminant remains stable.
+    #[msg("The job specification does not match the commitment selected at hire time")]
+    HiredTaskJobSpecMismatch,
+    // Appended (O(1) bid acceptance redesign): keep these LAST so every
+    // existing Anchor error discriminant remains stable.
+    #[msg("Acceptance requires the bid book's tracked best bid")]
+    BidNotBookBest,
+    #[msg("The bid book's re-promotion grace window has not elapsed")]
+    BidRepromotionGraceActive,
+    #[msg("The tracked best bid can only update to equal-or-better terms")]
+    BidLeaderRetreat,
+    #[msg("The tracked best bid is still valid and eligible")]
+    BidWinnerStillEligible,
+    #[msg("The bid book's cached winner terms do not match the bid account")]
+    BidBookCacheMismatch,
+    #[msg("The presented bid does not beat the bid book's tracked best")]
+    BidNotBetterThanTrackedBest,
+    #[msg("The bid book requires a positive frozen scoring window")]
+    BidBookScoreWindowInvalid,
+    // Appended (chunked dispute settlement): keep these LAST so every existing
+    // Anchor error discriminant remains stable.
+    #[msg("Dispute rulings no longer accept peer worker bundles; use settle_dispute_claim")]
+    DisputePeerBundlesRetired,
+    #[msg("The dispute has no deferred worker settlement pending")]
+    DisputeSettlementNotPending,
+    #[msg("The defendant claim settles through the ruling, not peer settlement")]
+    DisputeDefendantNotPeer,
+    #[msg("The dispute's recorded terminal status is invalid")]
+    DisputeTerminalStatusCorrupt,
 }

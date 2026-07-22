@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -35,6 +33,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -46,9 +46,7 @@ export const MIGRATE_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getMigrateTaskDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    MIGRATE_TASK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(MIGRATE_TASK_DISCRIMINATOR);
 }
 
 export type MigrateTaskInstruction<
@@ -95,7 +93,7 @@ export type MigrateTaskInstructionDataArgs = { dryRun: boolean };
 export function getMigrateTaskInstructionDataEncoder(): FixedSizeEncoder<MigrateTaskInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["dryRun", getBooleanEncoder()],
     ]),
     (value) => ({ ...value, discriminator: MIGRATE_TASK_DISCRIMINATOR }),

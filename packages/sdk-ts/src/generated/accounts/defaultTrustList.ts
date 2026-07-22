@@ -16,11 +16,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -45,6 +43,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -54,9 +54,7 @@ export const DEFAULT_TRUST_LIST_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([142, 83, 121, 72, 66, 39, 149, 44]);
 
 export function getDefaultTrustListDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    DEFAULT_TRUST_LIST_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(DEFAULT_TRUST_LIST_DISCRIMINATOR);
 }
 
 export type DefaultTrustList = {
@@ -98,8 +96,8 @@ export type DefaultTrustListArgs = {
 export function getDefaultTrustListEncoder(): Encoder<DefaultTrustListArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["listHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["listHash", getFixedBytesEncoder(32, "listHash")],
       [
         "listUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
@@ -108,7 +106,7 @@ export function getDefaultTrustListEncoder(): Encoder<DefaultTrustListArgs> {
       ["updatedAt", getI64Encoder()],
       ["updatedBy", getAddressEncoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 16)],
+      ["reserved", getFixedBytesEncoder(16, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: DEFAULT_TRUST_LIST_DISCRIMINATOR }),
   );

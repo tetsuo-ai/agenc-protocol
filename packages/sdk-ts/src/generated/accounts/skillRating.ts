@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -45,14 +43,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const SKILL_RATING_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   107, 74, 49, 243, 139, 30, 9, 244,
 ]);
 
 export function getSkillRatingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    SKILL_RATING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(SKILL_RATING_DISCRIMINATOR);
 }
 
 export type SkillRating = {
@@ -98,15 +96,15 @@ export type SkillRatingArgs = {
 export function getSkillRatingEncoder(): Encoder<SkillRatingArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["skill", getAddressEncoder()],
       ["rater", getAddressEncoder()],
       ["rating", getU8Encoder()],
-      ["reviewHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
+      ["reviewHash", getOptionEncoder(getFixedBytesEncoder(32))],
       ["raterReputation", getU16Encoder()],
       ["timestamp", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 4)],
+      ["reserved", getFixedBytesEncoder(4, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: SKILL_RATING_DISCRIMINATOR }),
   );

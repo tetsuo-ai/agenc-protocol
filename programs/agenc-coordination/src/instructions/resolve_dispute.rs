@@ -14,7 +14,7 @@ use crate::instructions::completion_helpers::{
 };
 use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::dispute_helpers::{
-    pay_dispute_marketplace_legs, process_dispute_peer_bundles, resolve_task_marketplace_terms,
+    expected_peer_bundles, pay_dispute_marketplace_legs, resolve_task_marketplace_terms,
     settle_dispute_submission_evidence, validate_dispute_worker_accounts, MarketplaceTerms,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
@@ -1130,22 +1130,26 @@ pub fn handler<'info>(
         )?;
     }
 
-    // P6.3: the arbiter vote/quorum model is retired, so there are no (vote, arbiter)
-    // pairs to clean up. Each additional collaborative worker now supplies a
-    // canonical `(claim, worker, task_submission)` bundle. The submission meta is
-    // non-skippable evidence: live records are swept before claim close; the exact
-    // empty PDA proves absence.
-    process_dispute_peer_bundles(
-        task.as_mut(),
-        &task_key,
-        dispute_worker_accounts,
-        dispute.total_voters,
-        defendant_worker_key,
-        ctx.accounts.task_validation_config.as_deref_mut(),
-        ctx.program_id,
-    )?;
+    // Chunked settlement: a ruling is O(1) in accounts. Additional
+    // collaborative workers are swept by the permissionless
+    // `settle_dispute_claim` crank, one worker per transaction, so the ruling
+    // no longer enumerates `(claim, worker, task_submission)` peer bundles —
+    // any peer account presented here is rejected outright.
+    require!(
+        dispute_worker_accounts.is_empty(),
+        CoordinationError::DisputePeerBundlesRetired
+    );
+    let deferred_peers = u8::try_from(expected_peer_bundles(task.current_workers))
+        .map_err(|_| CoordinationError::ArithmeticOverflow)?;
 
-    dispute.status = DisputeStatus::Resolved;
+    if deferred_peers == 0 {
+        dispute.status = DisputeStatus::Resolved;
+    } else {
+        dispute.status = DisputeStatus::SettlementPending;
+        dispute.pending_terminal_status = DisputeStatus::Resolved as u8;
+    }
+    dispute.peer_workers_total = deferred_peers;
+    dispute.peer_workers_settled = 0;
     dispute.resolved_at = clock.unix_timestamp;
     // P6.3: record the resolver's binary RULING into the (now-deprecated) vote-tally
     // fields so the permissionless slash finalizers — `apply_dispute_slash` (worker) and
@@ -1180,7 +1184,9 @@ pub fn handler<'info>(
     // defendant's disputes_as_defendant — and their entire stake — forever, and let a
     // creator race the permissionless finalizer). The initiator side no longer needs
     // this protection: apply_initiator_slash does not load the Task at all.
-    task.current_workers = if defer_worker_claim_close { 1 } else { 0 };
+    task.current_workers = deferred_peers
+        .checked_add(u8::from(defer_worker_claim_close))
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
     task.set_worker_slash_pending(worker_slash_pending);
 
     // Audit M-3 (follow-up): a token task's escrow PDA stays OPEN even when nothing was

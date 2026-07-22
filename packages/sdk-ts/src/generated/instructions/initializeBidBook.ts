@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -36,6 +34,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -52,9 +52,7 @@ export const INITIALIZE_BID_BOOK_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([13, 138, 190, 172, 182, 53, 234, 251]);
 
 export function getInitializeBidBookDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    INITIALIZE_BID_BOOK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(INITIALIZE_BID_BOOK_DISCRIMINATOR);
 }
 
 export type InitializeBidBookInstruction<
@@ -114,7 +112,7 @@ export type InitializeBidBookInstructionDataArgs = {
 export function getInitializeBidBookInstructionDataEncoder(): FixedSizeEncoder<InitializeBidBookInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["policy", getU8Encoder()],
       ["priceWeightBps", getU16Encoder()],
       ["etaWeightBps", getU16Encoder()],

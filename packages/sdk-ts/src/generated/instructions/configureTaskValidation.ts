@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -42,6 +40,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -59,7 +59,7 @@ export const CONFIGURE_TASK_VALIDATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([11, 79, 19, 188, 13, 32, 244, 90]);
 
 export function getConfigureTaskValidationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     CONFIGURE_TASK_VALIDATION_DISCRIMINATOR,
   );
 }
@@ -123,7 +123,7 @@ export type ConfigureTaskValidationInstructionDataArgs = {
 export function getConfigureTaskValidationInstructionDataEncoder(): Encoder<ConfigureTaskValidationInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["mode", getU8Encoder()],
       ["reviewWindowSecs", getI64Encoder()],
       ["validatorQuorum", getU8Encoder()],

@@ -16,7 +16,7 @@ use crate::instructions::constants::MIN_GOOD_PRICE;
 use crate::instructions::create_goods_listing::{validate_goods_metadata, validate_operator_terms};
 use crate::instructions::launch_controls::require_goods_enabled;
 use crate::state::{AgentRegistration, AgentStatus, GoodsListing, ProtocolConfig};
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::{check_version_compatible, check_version_compatible_for_exit};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -49,6 +49,46 @@ pub struct UpdateGoodsListing<'info> {
     pub authority: Signer<'info>,
 }
 
+#[allow(clippy::too_many_arguments)]
+fn is_pure_goods_deactivation(
+    price: &Option<u64>,
+    is_active: Option<bool>,
+    metadata_hash: &Option<[u8; 32]>,
+    metadata_uri: &Option<String>,
+    tags: &Option<[u8; 64]>,
+    additional_supply: &Option<u64>,
+    operator: &Option<Pubkey>,
+    operator_fee_bps: &Option<u16>,
+) -> bool {
+    is_active == Some(false)
+        && price.is_none()
+        && metadata_hash.is_none()
+        && metadata_uri.is_none()
+        && tags.is_none()
+        && additional_supply.is_none()
+        && operator.is_none()
+        && operator_fee_bps.is_none()
+}
+
+fn check_goods_update_version(config: &ProtocolConfig, pure_deactivation: bool) -> Result<()> {
+    if pure_deactivation {
+        check_version_compatible_for_exit(config)
+    } else {
+        check_version_compatible(config)
+    }
+}
+
+fn validate_goods_update_seller(seller: &AgentRegistration, pure_deactivation: bool) -> Result<()> {
+    if pure_deactivation {
+        return Ok(());
+    }
+    require!(
+        seller.status == AgentStatus::Active && !seller.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
+    Ok(())
+}
+
 /// All-`Option` update surface: `None` = leave unchanged. Metadata hash + URI
 /// must be updated TOGETHER (the hash pins the URI's content — changing one
 /// without the other would desynchronize them). NOTE: a swapped-in metadata
@@ -67,14 +107,27 @@ pub fn handler(
     operator_fee_bps: Option<u16>,
 ) -> Result<()> {
     let config = &ctx.accounts.protocol_config;
-    check_version_compatible(config)?;
+    // A pause stops repricing, reactivation, metadata/operator changes, and
+    // restocks, but must not prevent the seller's one close-equivalent action.
+    // Mixed updates cannot smuggle mutations through the exit path.
+    let pure_deactivation = is_pure_goods_deactivation(
+        &price,
+        is_active,
+        &metadata_hash,
+        &metadata_uri,
+        &tags,
+        &additional_supply,
+        &operator,
+        &operator_fee_bps,
+    );
+    check_goods_update_version(config, pure_deactivation)?;
     require_goods_enabled(config)?;
 
     let seller = &ctx.accounts.seller;
-    require!(
-        seller.status == AgentStatus::Active,
-        CoordinationError::AgentNotActive
-    );
+    // Delisting is the inventory/rent-safe exit and remains available to a
+    // suspended, inactive, busy, or retired seller. Every other mutation still
+    // requires a live Active registration.
+    validate_goods_update_seller(seller, pure_deactivation)?;
 
     let good = &mut ctx.accounts.good;
 
@@ -146,4 +199,148 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pure(
+        price: Option<u64>,
+        is_active: Option<bool>,
+        metadata_hash: Option<[u8; 32]>,
+        metadata_uri: Option<String>,
+        tags: Option<[u8; 64]>,
+        additional_supply: Option<u64>,
+        operator: Option<Pubkey>,
+        operator_fee_bps: Option<u16>,
+    ) -> bool {
+        is_pure_goods_deactivation(
+            &price,
+            is_active,
+            &metadata_hash,
+            &metadata_uri,
+            &tags,
+            &additional_supply,
+            &operator,
+            &operator_fee_bps,
+        )
+    }
+
+    #[test]
+    fn only_a_bare_false_active_update_is_an_exit() {
+        assert!(pure(None, Some(false), None, None, None, None, None, None));
+        assert!(!pure(None, None, None, None, None, None, None, None));
+        assert!(!pure(None, Some(true), None, None, None, None, None, None));
+        assert!(!pure(
+            Some(1),
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!pure(
+            None,
+            Some(false),
+            Some([1; 32]),
+            None,
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!pure(
+            None,
+            Some(false),
+            None,
+            Some("https://example.com".into()),
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(!pure(
+            None,
+            Some(false),
+            None,
+            None,
+            Some([1; 64]),
+            None,
+            None,
+            None
+        ));
+        assert!(!pure(
+            None,
+            Some(false),
+            None,
+            None,
+            None,
+            Some(1),
+            None,
+            None
+        ));
+        assert!(!pure(
+            None,
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            Some(Pubkey::new_unique()),
+            None
+        ));
+        assert!(!pure(
+            None,
+            Some(false),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(1)
+        ));
+    }
+
+    #[test]
+    fn paused_protocol_allows_only_pure_deactivation() {
+        let config = ProtocolConfig {
+            protocol_version: 1,
+            min_supported_version: 1,
+            protocol_paused: true,
+            ..ProtocolConfig::default()
+        };
+        assert!(check_goods_update_version(&config, true).is_ok());
+        assert!(check_goods_update_version(&config, false).is_err());
+    }
+
+    #[test]
+    fn every_seller_state_can_exit_but_only_live_active_can_mutate() {
+        for status in [
+            AgentStatus::Active,
+            AgentStatus::Busy,
+            AgentStatus::Inactive,
+            AgentStatus::Suspended,
+        ] {
+            let seller = AgentRegistration {
+                status,
+                ..AgentRegistration::default()
+            };
+            assert!(validate_goods_update_seller(&seller, true).is_ok());
+            assert_eq!(
+                validate_goods_update_seller(&seller, false).is_ok(),
+                status == AgentStatus::Active
+            );
+        }
+
+        let mut retired = AgentRegistration {
+            status: AgentStatus::Active,
+            ..AgentRegistration::default()
+        };
+        retired._reserved = AgentRegistration::RETIRED_IDENTITY_MARKER;
+        assert!(validate_goods_update_seller(&retired, true).is_ok());
+        assert!(validate_goods_update_seller(&retired, false).is_err());
+    }
 }

@@ -360,7 +360,7 @@ async function humanlessHireIx(w, { human, taskId, listingMod, moderationAttesto
   const [validation] = pda([enc("task_validation"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), human.publicKey.toBuffer()]);
   const ix = await makeProgram(human).methods
-    .hireFromListingHumanless(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, moderator ?? w.modAuth.publicKey)
+    .hireFromListingHumanless(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, moderator ?? w.modAuth.publicKey, arr(w.specHash))
     .accounts({
       task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
       providerAgent: w.providerAgent,

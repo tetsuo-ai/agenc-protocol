@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const DISPUTE_RESOLVER_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([68, 124, 148, 26, 177, 224, 247, 53]);
 
 export function getDisputeResolverDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    DISPUTE_RESOLVER_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(DISPUTE_RESOLVER_DISCRIMINATOR);
 }
 
 export type DisputeResolver = {
@@ -105,7 +103,7 @@ export type DisputeResolverArgs = {
 export function getDisputeResolverEncoder(): FixedSizeEncoder<DisputeResolverArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["resolver", getAddressEncoder()],
       ["assignedBy", getAddressEncoder()],
       ["assignedAt", getI64Encoder()],
@@ -113,7 +111,7 @@ export function getDisputeResolverEncoder(): FixedSizeEncoder<DisputeResolverArg
       ["resolvedCount", getU64Encoder()],
       ["overturnedCount", getU64Encoder()],
       ["lastResolvedAt", getI64Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
+      ["reserved", getFixedBytesEncoder(8, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: DISPUTE_RESOLVER_DISCRIMINATOR }),
   );

@@ -53,23 +53,61 @@ work; the bare no-default command is an expected compile-fail assertion. CI
 additionally builds the program fresh and runs `npm run artifacts:check:built`
 (`--require-build`) plus the canary-IDL gate (`.github/workflows/idl-drift.yml`).
 
-Current candidate evidence, measured from the commands and built artifacts on
-2026-07-19:
+Last complete aggregate gate snapshot, measured on 2026-07-19 before the current
+revision-5 continuation:
 
-| Gate                             | Result                                                                                                                             |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Rust production/default          | 524 tests                                                                                                                          |
-| Rust `validation-timings`        | 524 tests                                                                                                                          |
-| Rust explicit `private-zk`       | 549 tests                                                                                                                          |
-| Rust restricted `mainnet-canary` | 321 tests                                                                                                                          |
-| Model/property suite             | 77 tests                                                                                                                           |
-| Compiled-program litesvm         | 408 total: 399 pass, 9 explicit canary-profile skips; separate canary run 11 pass                                                  |
-| SDK                              | 658 total: 657 pass, one environment-gated skip                                                                                    |
-| All npm workspaces               | 1,446 total: 1,444 pass, two environment-gated skips                                                                               |
-| Deployment/preflight scripts     | 239 pass                                                                                                                           |
-| All `scripts/*.test.mjs`         | 355 pass (includes the deployment/preflight subset above)                                                                          |
-| Production SBF                   | 2,280,376 bytes; SHA-256 `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`                                        |
-| Candidate IDL                    | 98 instructions / 43 accounts / 99 events / 393 errors; SHA-256 `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b` |
+| Gate                             | Result                                                                            |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| Rust production/default          | 524 tests                                                                         |
+| Rust `validation-timings`        | 524 tests                                                                         |
+| Rust explicit `private-zk`       | 549 tests                                                                         |
+| Rust restricted `mainnet-canary` | 321 tests                                                                         |
+| Model/property suite             | 77 tests                                                                          |
+| Compiled-program litesvm         | 408 total: 399 pass, 9 explicit canary-profile skips; separate canary run 11 pass |
+| SDK                              | 658 total: 657 pass, one environment-gated skip                                   |
+| All npm workspaces               | 1,446 total: 1,444 pass, two environment-gated skips                              |
+| Deployment/preflight scripts     | 239 pass                                                                          |
+| All `scripts/*.test.mjs`         | 355 pass (includes the deployment/preflight subset above)                         |
+
+Those aggregate totals are historical and must not be combined with the final
+revision-5 candidate as if they were one quiescent release run.
+
+Current local candidate evidence, measured on 2026-07-21 during the
+post-cutoff continuation (verified address-lookup-table transport resolver,
+canary-profile dead-code gate in `utils/version.rs`). This is not a final
+quiescent release snapshot:
+
+| Gate                             | Latest local evidence / current status                                                                                                  |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust production/default          | 533/533; strict Clippy and formatting pass                                                                                              |
+| Rust `validation-timings`        | 533/533; strict Clippy pass                                                                                                             |
+| Rust explicit `private-zk`       | 558/558; strict Clippy pass                                                                                                             |
+| Rust restricted `mainnet-canary` | 323/323; strict Clippy pass (required gating the full-surface-only bootstrap version helper out of the canary build)                    |
+| Model/property suite             | 77/77 with `PROPTEST_CASES=10000`                                                                                                       |
+| Compiled-program LiteSVM         | Two consecutive production passes, each 413 total: 404 pass / 0 fail / 9 explicit canary-only skips; separate canary artifact 11/11     |
+| SDK (`@tetsuo-ai/marketplace-sdk`) | Two consecutive Node 24 passes, 884 total: 883 pass / one intentional skip; drift, typecheck, build, examples all pass                |
+| Other workspaces (Node 24)       | worker 273/273, CLI 146/146, tools 98/98, React 312 pass + one intentional skip, starter example 36/36                                  |
+| Minimum toolchains               | Node 22.23.1 typecheck plus focused client/governance 100/100; Rust 1.82 profile checks unchanged from 2026-07-20                       |
+| Deployment/preflight scripts     | 328/328 (expanded suite)                                                                                                                |
+| All `scripts/*.test.mjs`         | Two consecutive Node 24 passes at 451/451                                                                                               |
+| Package release train            | **OPEN:** late SDK/React/worker/CLI fixes invalidated prior SRIs; all-nine double-pack/rebind/smoke is pending                          |
+| Supply/artifact checks           | npm production audit 0; built artifact sync, IDL reference, stack, and integration dependency audit pass                                |
+
+These local gates do not substitute for protected CI, live revision-4
+compatibility simulations, consumer convergence, or the controlled mainnet
+ceremony.
+
+Current candidate identities (thrice-reproduced SBF: the 2026-07-20 close-task
+fix build, which precedes the canary-gate source edit, plus two 2026-07-21
+rebuilds that follow it — proving that edit is codegen-neutral for the
+production profile; deployment still required). The
+previously recorded `79f55a68…` identity predates the 2026-07-20 `close_task`
+repeat-cleanup fix and is superseded:
+
+| Artifact       | Current local evidence                                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Production SBF | superseded 2026-07-21 by the O(1) accept / chunked-settlement redesign — rebuild, twice-reproduce, and rebind (rail + docs) after its independent review; the extension rail stays fail-closed against its pinned `5112216b…` (2,303,608-byte) prior artifact |
+| Candidate IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `8cfd094dc356f88678ba712a8a167a9fcd94cf3c33852ec1092a7a3ff491a82e` |
 
 These are candidate facts, not a claim that this binary is deployed: mainnet
 still runs the verified revision-4 artifact at commit `097ded1` (99 instructions /
@@ -241,8 +279,29 @@ shell inputs for tag-derived package/hash values. The release stays a draft unti
 the hash manifest is attached and npm publication succeeds. Every external
 release mutation re-resolves the remote tag to the triggering commit and exact
 fetched tag object, including annotated tags. An already-published npm version
-fails closed because its integrity/provenance was not established by the current
-run.
+is resumed only after its registry integrity and provenance match the exact
+repository, workflow, ref, and commit; a mismatch or unverifiable provenance
+fails closed.
+
+Release routing is bound to the package id produced by the validated resolver,
+not to a second interpretation of the raw tag prefix. The reusable protocol
+verifier is selected only after an earlier trusted resolution job, every
+package-specific step uses the resolved id, and every release-train id must map
+to exactly one real routed gate step. The selected gate writes a one-time proof
+only after its checks succeed; packaging fails closed unless a later workflow
+step verifies that proof against the resolved id, name, directory, version, and
+tag. The preflight derives completion ids from the actual workflow steps rather
+than trusting the separately declared identity list, so adding a train package
+and static identity without an implemented gate is rejected. GitHub documents
+job outputs through `needs` and permits `needs`/`if` on reusable-workflow jobs:
+<https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/pass-job-outputs> and
+<https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations>.
+The dependency-DAG validator reads
+`dependencies`, `optionalDependencies`, and `peerDependencies` independently,
+rejects contradictory duplicate first-party ranges, and prohibits `npm:` aliases
+to train packages. npm documents those aliases as package specs that can target a
+different registry package, so inspecting only dependency keys is insufficient:
+<https://docs.npmjs.com/cli/v11/using-npm/package-spec/>.
 
 Both the protocol-tag release job and the IDL-drift job finish all production
 artifact/package comparisons before building the shared-path canary SBF, then
@@ -281,8 +340,12 @@ canonical stake and AgentRegistration PDA bindings, and each account's own rent
 plus tracked `staked_amount` backing. Fully backed nonzero stake is compatible;
 malformed state, principal without its agent identity, or a per-account deficit
 blocks deployment even when aggregate balances appear sufficient.
-The current candidate remains blocked on a separate 97,152-byte Squads-CPI
-`ExtendProgramChecked` action in a slot before the binary upgrade.
+The current candidate remains blocked on a separate 120,384-byte top-level
+legacy `ExtendProgram` action in a slot before the binary upgrade. Mainnet never
+activated checked extension, and current Agave rejects legacy extension through
+CPI, so this action cannot be a Squads vault transaction. Use the pinned
+`scripts/program-extend-mainnet.mjs` rail with official Agave CLI 4.1.0, an
+explicitly funded payer, and two independent genesis-checked RPCs.
 
 The SDK drift gate snapshots a deterministic digest of every generated path and
 byte, regenerates from the current IDL, and compares the before/after trees. This

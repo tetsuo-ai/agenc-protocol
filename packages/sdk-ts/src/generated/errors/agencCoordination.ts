@@ -66,7 +66,7 @@ export const AGENC_COORDINATION_ERROR__INVALID_CREATOR = 0x1787; // 6023
 export const AGENC_COORDINATION_ERROR__INVALID_TASK_ID = 0x1788; // 6024
 /** InvalidDescription: Invalid description: cannot be empty */
 export const AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION = 0x1789; // 6025
-/** InvalidMaxWorkers: Invalid max workers: must be between 1 and 100 */
+/** InvalidMaxWorkers: Invalid max workers: must be between 1 and 4 */
 export const AGENC_COORDINATION_ERROR__INVALID_MAX_WORKERS = 0x178a; // 6026
 /** InvalidTaskType: Invalid task type */
 export const AGENC_COORDINATION_ERROR__INVALID_TASK_TYPE = 0x178b; // 6027
@@ -800,6 +800,30 @@ export const AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_DIGEST_MISMATCH = 0x18f6
 export const AGENC_COORDINATION_ERROR__RELEASE_PROGRAM_DATA_NOT_SETTLED = 0x18f7; // 6391
 /** ReleaseUnpauseRequiresCurrentSurface: The full production protocol can only be unpaused after the current release surface is atomically stamped */
 export const AGENC_COORDINATION_ERROR__RELEASE_UNPAUSE_REQUIRES_CURRENT_SURFACE = 0x18f8; // 6392
+/** HiredTaskJobSpecMismatch: The job specification does not match the commitment selected at hire time */
+export const AGENC_COORDINATION_ERROR__HIRED_TASK_JOB_SPEC_MISMATCH = 0x18f9; // 6393
+/** BidNotBookBest: Acceptance requires the bid book's tracked best bid */
+export const AGENC_COORDINATION_ERROR__BID_NOT_BOOK_BEST = 0x18fa; // 6394
+/** BidRepromotionGraceActive: The bid book's re-promotion grace window has not elapsed */
+export const AGENC_COORDINATION_ERROR__BID_REPROMOTION_GRACE_ACTIVE = 0x18fb; // 6395
+/** BidLeaderRetreat: The tracked best bid can only update to equal-or-better terms */
+export const AGENC_COORDINATION_ERROR__BID_LEADER_RETREAT = 0x18fc; // 6396
+/** BidWinnerStillEligible: The tracked best bid is still valid and eligible */
+export const AGENC_COORDINATION_ERROR__BID_WINNER_STILL_ELIGIBLE = 0x18fd; // 6397
+/** BidBookCacheMismatch: The bid book's cached winner terms do not match the bid account */
+export const AGENC_COORDINATION_ERROR__BID_BOOK_CACHE_MISMATCH = 0x18fe; // 6398
+/** BidNotBetterThanTrackedBest: The presented bid does not beat the bid book's tracked best */
+export const AGENC_COORDINATION_ERROR__BID_NOT_BETTER_THAN_TRACKED_BEST = 0x18ff; // 6399
+/** BidBookScoreWindowInvalid: The bid book requires a positive frozen scoring window */
+export const AGENC_COORDINATION_ERROR__BID_BOOK_SCORE_WINDOW_INVALID = 0x1900; // 6400
+/** DisputePeerBundlesRetired: Dispute rulings no longer accept peer worker bundles; use settle_dispute_claim */
+export const AGENC_COORDINATION_ERROR__DISPUTE_PEER_BUNDLES_RETIRED = 0x1901; // 6401
+/** DisputeSettlementNotPending: The dispute has no deferred worker settlement pending */
+export const AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING = 0x1902; // 6402
+/** DisputeDefendantNotPeer: The defendant claim settles through the ruling, not peer settlement */
+export const AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER = 0x1903; // 6403
+/** DisputeTerminalStatusCorrupt: The dispute's recorded terminal status is invalid */
+export const AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT = 0x1904; // 6404
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -826,20 +850,27 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED
   | typeof AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED
   | typeof AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED
+  | typeof AGENC_COORDINATION_ERROR__BID_BOOK_CACHE_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_ENUMERATION_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_NOT_ACCEPTED
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_NOT_OPEN
+  | typeof AGENC_COORDINATION_ERROR__BID_BOOK_SCORE_WINDOW_INVALID
   | typeof AGENC_COORDINATION_ERROR__BID_DOES_NOT_SATISFY_MATCHING_POLICY
   | typeof AGENC_COORDINATION_ERROR__BID_EXCLUSIVE_REQUIRES_SINGLE_WORKER
   | typeof AGENC_COORDINATION_ERROR__BID_JOB_SPEC_BINDING_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__BID_JOB_SPEC_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__BID_LEADER_RETREAT
   | typeof AGENC_COORDINATION_ERROR__BID_NOT_ACTIVE
+  | typeof AGENC_COORDINATION_ERROR__BID_NOT_BETTER_THAN_TRACKED_BEST
+  | typeof AGENC_COORDINATION_ERROR__BID_NOT_BOOK_BEST
   | typeof AGENC_COORDINATION_ERROR__BID_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__BID_PRICE_EXCEEDS_TASK_BUDGET
+  | typeof AGENC_COORDINATION_ERROR__BID_REPROMOTION_GRACE_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__BID_SETTLEMENT_ACCOUNTS_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__BID_TASK_REQUIRES_ACCEPTANCE
   | typeof AGENC_COORDINATION_ERROR__BID_TASK_SOL_ONLY
+  | typeof AGENC_COORDINATION_ERROR__BID_WINNER_STILL_ELIGIBLE
   | typeof AGENC_COORDINATION_ERROR__BOND_ALREADY_EXISTS
   | typeof AGENC_COORDINATION_ERROR__BOND_ALREADY_POSTED
   | typeof AGENC_COORDINATION_ERROR__BOND_AMOUNT_TOO_LOW
@@ -880,10 +911,14 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_PEER_BUNDLES_RETIRED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT
   | typeof AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER
   | typeof AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH
@@ -905,6 +940,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__GOODS_SURFACE_NOT_ENABLED
   | typeof AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE
   | typeof AGENC_COORDINATION_ERROR__GRACE_PERIOD_NOT_PASSED
+  | typeof AGENC_COORDINATION_ERROR__HIRED_TASK_JOB_SPEC_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__HIRED_TASK_VALIDATION_UNSUPPORTED
   | typeof AGENC_COORDINATION_ERROR__INCOMPLETE_WORKER_ACCOUNTS
   | typeof AGENC_COORDINATION_ERROR__INITIATOR_CANNOT_RESOLVE
@@ -1225,20 +1261,27 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED]: `Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke`,
     [AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED]: `Authority has already voted on this dispute`,
     [AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED]: `Bid has already been accepted`,
+    [AGENC_COORDINATION_ERROR__BID_BOOK_CACHE_MISMATCH]: `The bid book's cached winner terms do not match the bid account`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED]: `Bid book has reached its active bid capacity`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_ENUMERATION_MISMATCH]: `accept_bid must enumerate every other canonical open bid and matching bidder exactly once`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_NOT_ACCEPTED]: `Bid book is not in accepted state`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_NOT_OPEN]: `Bid book is not open`,
+    [AGENC_COORDINATION_ERROR__BID_BOOK_SCORE_WINDOW_INVALID]: `The bid book requires a positive frozen scoring window`,
     [AGENC_COORDINATION_ERROR__BID_DOES_NOT_SATISFY_MATCHING_POLICY]: `The selected bid does not win the bid book's declared matching policy`,
     [AGENC_COORDINATION_ERROR__BID_EXCLUSIVE_REQUIRES_SINGLE_WORKER]: `Bid-exclusive tasks must use max_workers = 1`,
     [AGENC_COORDINATION_ERROR__BID_JOB_SPEC_BINDING_REQUIRED]: `Legacy unbound bid must be refreshed against the locked job specification before acceptance`,
     [AGENC_COORDINATION_ERROR__BID_JOB_SPEC_MISMATCH]: `Bid job-spec commitment does not match the current task job specification`,
+    [AGENC_COORDINATION_ERROR__BID_LEADER_RETREAT]: `The tracked best bid can only update to equal-or-better terms`,
     [AGENC_COORDINATION_ERROR__BID_NOT_ACTIVE]: `Bid is not active`,
+    [AGENC_COORDINATION_ERROR__BID_NOT_BETTER_THAN_TRACKED_BEST]: `The presented bid does not beat the bid book's tracked best`,
+    [AGENC_COORDINATION_ERROR__BID_NOT_BOOK_BEST]: `Acceptance requires the bid book's tracked best bid`,
     [AGENC_COORDINATION_ERROR__BID_NOT_EXPIRED]: `Bid has not expired and bid book is not closed`,
     [AGENC_COORDINATION_ERROR__BID_PRICE_EXCEEDS_TASK_BUDGET]: `Bid price exceeds task budget`,
+    [AGENC_COORDINATION_ERROR__BID_REPROMOTION_GRACE_ACTIVE]: `The bid book's re-promotion grace window has not elapsed`,
     [AGENC_COORDINATION_ERROR__BID_SETTLEMENT_ACCOUNTS_REQUIRED]: `Bid settlement accounts are required`,
     [AGENC_COORDINATION_ERROR__BID_TASK_REQUIRES_ACCEPTANCE]: `Bid-exclusive tasks require bid acceptance and cannot be claimed directly`,
     [AGENC_COORDINATION_ERROR__BID_TASK_SOL_ONLY]: `Marketplace V2 bid tasks are SOL-only in v2`,
+    [AGENC_COORDINATION_ERROR__BID_WINNER_STILL_ELIGIBLE]: `The tracked best bid is still valid and eligible`,
     [AGENC_COORDINATION_ERROR__BOND_ALREADY_EXISTS]: `Bond already exists`,
     [AGENC_COORDINATION_ERROR__BOND_ALREADY_POSTED]: `A completion bond has already been posted for this party and task`,
     [AGENC_COORDINATION_ERROR__BOND_AMOUNT_TOO_LOW]: `Bond amount too low`,
@@ -1279,10 +1322,14 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED]: `Delegation must be active for minimum duration before revocation`,
     [AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED]: `Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use.`,
     [AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED]: `Dispute has already been resolved`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER]: `The defendant claim settles through the ruling, not peer settlement`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE]: `Dispute is not active`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED]: `Dispute has not expired`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED]: `Dispute has not been resolved`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_PEER_BUNDLES_RETIRED]: `Dispute rulings no longer accept peer worker bundles; use settle_dispute_claim`,
     [AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED]: `The dispute resolution window has expired; use expire_dispute`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING]: `The dispute has no deferred worker settlement pending`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT]: `The dispute's recorded terminal status is invalid`,
     [AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER]: `Duplicate arbiter provided in remaining_accounts`,
     [AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG]: `Dispute evidence exceeds maximum allowed length`,
     [AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH]: `Feed content hash cannot be all zeros`,
@@ -1304,6 +1351,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__GOODS_SURFACE_NOT_ENABLED]: `Goods market requires surface revision 4 to be stamped (update_launch_controls)`,
     [AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE]: `Only the seller can update a goods listing`,
     [AGENC_COORDINATION_ERROR__GRACE_PERIOD_NOT_PASSED]: `Grace period not passed: only worker authority can expire claim within 60 seconds of expiry`,
+    [AGENC_COORDINATION_ERROR__HIRED_TASK_JOB_SPEC_MISMATCH]: `The job specification does not match the commitment selected at hire time`,
     [AGENC_COORDINATION_ERROR__HIRED_TASK_VALIDATION_UNSUPPORTED]: `A hired task cannot be reconfigured for manual validation; it settles on the hire completion path`,
     [AGENC_COORDINATION_ERROR__INCOMPLETE_WORKER_ACCOUNTS]: `All worker accounts must be provided when cancelling a task with active claims`,
     [AGENC_COORDINATION_ERROR__INITIATOR_CANNOT_RESOLVE]: `Dispute initiator cannot resolve their own dispute`,
@@ -1345,7 +1393,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_JOURNAL_LENGTH]: `Invalid RISC0 journal length`,
     [AGENC_COORDINATION_ERROR__INVALID_JOURNAL_TASK]: `RISC0 journal task binding mismatch`,
     [AGENC_COORDINATION_ERROR__INVALID_MATCHING_POLICY]: `Invalid matching policy`,
-    [AGENC_COORDINATION_ERROR__INVALID_MAX_WORKERS]: `Invalid max workers: must be between 1 and 100`,
+    [AGENC_COORDINATION_ERROR__INVALID_MAX_WORKERS]: `Invalid max workers: must be between 1 and 4`,
     [AGENC_COORDINATION_ERROR__INVALID_MIGRATION_SOURCE]: `Migration not allowed: invalid source version`,
     [AGENC_COORDINATION_ERROR__INVALID_MIGRATION_TARGET]: `Migration not allowed: invalid target version`,
     [AGENC_COORDINATION_ERROR__INVALID_MIN_REPUTATION]: `Invalid minimum reputation: must be <= 10000`,

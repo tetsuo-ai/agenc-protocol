@@ -19,6 +19,11 @@ export * from "./webhooks/index.js";
 export * from "./events/index.js";
 export * from "./watch/index.js";
 export * as values from "./values/index.js";
+export { snapshotStructuredClone } from "./values/structured-clone.js";
+// Decode-only compatibility surface for transaction-history/indexer backfills.
+// Kept namespaced so legacy write schemas cannot be mistaken for current
+// instruction builders.
+export * as history from "./history/index.js";
 
 // P7.1 / P7.2 off-chain content rails. Namespaced (like `values`/`facade`) so
 // generic helper names (`encryptDeliverable`, `postTaskMessage`,
@@ -40,6 +45,7 @@ export {
   type ListingModerationResult,
   type ListingModerationVerdict,
   type RequestListingModerationInput,
+  type SandboxFetchLike,
 } from "./sandbox/moderation.js";
 
 // Every successful settlement has a shareable, independently verifiable

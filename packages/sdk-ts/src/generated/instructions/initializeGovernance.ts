@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -49,9 +49,7 @@ export const INITIALIZE_GOVERNANCE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([171, 87, 101, 237, 27, 107, 201, 57]);
 
 export function getInitializeGovernanceDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    INITIALIZE_GOVERNANCE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(INITIALIZE_GOVERNANCE_DISCRIMINATOR);
 }
 
 export type InitializeGovernanceInstruction<
@@ -103,7 +101,7 @@ export type InitializeGovernanceInstructionDataArgs = {
 export function getInitializeGovernanceInstructionDataEncoder(): FixedSizeEncoder<InitializeGovernanceInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["votingPeriod", getI64Encoder()],
       ["executionDelay", getI64Encoder()],
       ["quorumBps", getU16Encoder()],

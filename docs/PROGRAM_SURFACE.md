@@ -13,26 +13,26 @@ initialized, so `complete_task_private` is off and `initialize_zk_config` is
 multisig-gated (audit H-5).
 
 Candidate status (verified from `src/lib.rs`, Cargo features, and generated IDL on
-2026-07-18): default production is **98 instructions**, explicit `private-zk` is
+2026-07-18): default production is **101 instructions**, explicit `private-zk` is
 **101**, and `mainnet-canary` is **25**. `lib.rs` therefore contains 126 raw
 `pub fn` declarations across its mutually exclusive modules but 101 unique names;
 the canary repeats 25 full-module names. The candidate retires the three private-ZK
 entrypoints from production and adds `reclaim_orphan_task_child`; it is not live
 until an independently approved upgrade. The canonical candidate IDL contains
-**98 instructions / 43 accounts / 99 events / 393 errors**;
+**101 instructions / 43 accounts / 102 events / 405 errors**;
 `docs/reference/INSTRUCTIONS.md` is its generated instruction reference.
 
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (393 variants in the generated candidate IDL)
+- `src/errors.rs` - program error codes (394 variants in the generated candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
 ## Instruction Families
 
-The families below describe the 98-instruction production candidate. The three
+The families below describe the 101-instruction production candidate (the O(1) bid-accept redesign added `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`; see docs/design/bid-accept-o1-redesign.md). The three
 entries explicitly marked `private-zk development build only` are shown for
 context and are excluded from that count. The batch-N subsections recall which
 milestone introduced instructions already listed under their primary family.
@@ -160,10 +160,17 @@ The live mainnet instruction ABI only lets a hardware wallet display values
 that are present in signed transaction bytes.
 
 - `create_task` carries reward, task id, deadline, worker caps, reputation gate,
-  creator accounts, and a 64-byte description commitment directly. The description
+  creator accounts, and a 64-byte description commitment directly. A direct task
   must contain a non-zero 32-byte digest followed by a zeroed 32-byte tail; human
-  title/detail belongs in the pinned job spec.
-- `set_task_job_spec` carries `job_spec_hash` and `job_spec_uri` directly.
+  title/detail belongs in the pinned job spec. A revision-5 listing hire uses both
+  halves: the advertised listing-spec hash followed by the buyer-specific task
+  job-spec hash.
+- Revision-5 `hire_from_listing` and `hire_from_listing_humanless` carry the
+  required non-zero `task_job_spec_hash` directly and snapshot it before escrow
+  funding.
+- `set_task_job_spec` carries `job_spec_hash` and `job_spec_uri` directly and,
+  for a listing hire, requires the hash to equal the immutable second-half
+  commitment. Direct tasks retain the canonical zero-tail convention.
 - `submit_task_result` carries `proof_hash` and optional `result_data`; the kit
   artifact encoder commits artifact results as `artifact:sha256:*`.
 - `claim_task_with_job_spec` verifies the on-chain `TaskJobSpec` account, but

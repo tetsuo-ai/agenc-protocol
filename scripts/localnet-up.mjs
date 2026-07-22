@@ -13,21 +13,23 @@
 // duplicating. Existing configs with DIFFERENT values fail loudly.
 //
 // Usage:
-//   node scripts/localnet-up.mjs [--port 8899] [--keep-ledger] [--env-file <path>]
+//   node scripts/localnet-up.mjs [--port 8899] [--keep-ledger] [--dev-ready] [--env-file <path>]
 //
-//   --port <n>       RPC port (default 8899; websocket port is always rpc+1)
+//   --port <n>       Base RPC port (default 8899; reserves rpc through rpc+103)
 //   --keep-ledger    do NOT --reset the validator ledger (keeps prior state)
 //   --env-file <p>   where to write the environment file
 //                    (default <repo>/.localnet/env.json)
 //
-// Requires: solana-test-validator + solana-keygen on PATH, an `anchor build`
-// .so at programs/agenc-coordination/target/deploy/agenc_coordination.so, and
-// the built SDK at packages/sdk-ts/dist (cd packages/sdk-ts && npm run build).
-import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+// Requires: Linux 5.1+ with procfs, /usr/bin/python3 3.9+ with pidfd signalling
+// and fcntl.flock lifecycle locking,
+// solana-test-validator + solana-keygen on PATH, an `anchor build` .so at
+// programs/agenc-coordination/target/deploy/agenc_coordination.so, and the built
+// SDK at packages/sdk-ts/dist (cd packages/sdk-ts && npm run build).
+import { spawnSync } from "node:child_process";
 import { openSync, closeSync } from "node:fs";
 import {
   chmod,
+  lstat,
   mkdir,
   readFile,
   rename,
@@ -39,12 +41,41 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  archiveProcessIdentityFile,
   assertRecordedProcessIdentity,
-  captureAndPublishSpawnedProcess,
+  captureProcessIdentity,
   ensurePrivateStateDirectory,
   observeLinuxProcess,
+  publishProcessIdentityFile,
   readProcessIdentityFile,
 } from "./localnet-process-identity.mjs";
+import {
+  assertRaceFreeProcessSignallingAvailable,
+  openLinuxProcessReference,
+  signalProcessIfIdentityMatches,
+} from "./localnet-process-signal.mjs";
+import { startGuardedProcess } from "./localnet-guarded-spawn.mjs";
+import { withLocalnetLifecycleLock } from "./localnet-lifecycle-lock.mjs";
+import {
+  LOCALNET_BID_MARKETPLACE_PARAMS,
+  LOCALNET_PROTOCOL_PARAMS,
+} from "./localnet-marketplace-policy.mjs";
+import {
+  LOCALNET_PROGRAM_DESCRIPTOR_PATH,
+  LOCALNET_PROGRAM_ID,
+  LOCALNET_PROGRAM_LOAD_METHOD,
+} from "./localnet-program-binding.mjs";
+import {
+  assertLocalnetProgramAccountLinksProgramData,
+  assertLocalnetProgramDataMatchesArtifact,
+  captureLocalnetProgramArtifact,
+  materializeLocalnetProgramSnapshot,
+} from "./localnet-program-snapshot.mjs";
+import {
+  ensureValidatorLaunchIntentFile,
+  readValidatorLaunchIntentFile,
+  replaceValidatorLaunchIntentFile,
+} from "./localnet-validator-launch.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -53,6 +84,8 @@ const LEDGER_DIR = path.join(STATE_DIR, "ledger");
 const KEYS_DIR = path.join(STATE_DIR, "keys");
 const LOGS_DIR = path.join(STATE_DIR, "logs");
 const PID_FILE = path.join(STATE_DIR, "validator.pid");
+const STOPPED_PID_FILE = path.join(STATE_DIR, "validator.stopped");
+const STARTING_PID_FILE = path.join(STATE_DIR, "validator.starting");
 const VALIDATOR_LOG = path.join(LOGS_DIR, "validator.log");
 const UNSAFE_PROTOCOL_FIXTURE = path.join(
   STATE_DIR,
@@ -79,40 +112,33 @@ const AIRDROP_FLOOR = 100n * LAMPORTS_PER_SOL; // top up below this
 // Localnet protocol parameters. minStake is the program-enforced floor
 // (MIN_REASONABLE_STAKE = 0.001 SOL in initialize_protocol.rs) — register_agent
 // requires stake_amount >= this, so local seeding must stake >= 0.001 SOL.
-const PROTOCOL_PARAMS = {
-  disputeThreshold: 60,
-  // 500 bps = the LIVE mainnet protocol fee — keep the local demo split
-  // production-truthful (docs/VERSIONING.md; agenc-cli's sandbox mode
-  // stamps the same value).
-  protocolFeeBps: 500,
-  minStake: 1_000_000n,
-  minStakeForDispute: 1_000_000n,
-  multisigThreshold: 2,
-};
+const PROTOCOL_PARAMS = LOCALNET_PROTOCOL_PARAMS;
+const BID_MARKETPLACE_PARAMS = LOCALNET_BID_MARKETPLACE_PARAMS;
 
 function usage() {
   return [
     "localnet-up — boot + deploy + initialize the local AgenC stack",
     "",
     "USAGE",
-    "  node scripts/localnet-up.mjs [--port 8899] [--keep-ledger] [--env-file <path>]",
+    "  node scripts/localnet-up.mjs [--port 8899] [--keep-ledger] [--dev-ready] [--env-file <path>]",
+    "  --port reserves RPC n, WS n+1, faucet n+2, gossip n+3, and dynamic n+4..n+103.",
+    "  --dev-ready creates a fresh disposable, current-surface, unpaused local",
+    "              marketplace for seeding/hiring. It intentionally bypasses",
+    "              the production release-stamp ceremony and cannot keep a ledger.",
     "",
     "TEST-ONLY",
-    "  --unsafe-unpaused-fixture  Genesis-inject an unpaused current-surface",
-    "                              ProtocolConfig for browser fixtures. This",
-    "                              bypasses the production release-stamp ceremony",
-    "                              and requires a fresh, disposable ledger.",
+    "  --unsafe-unpaused-fixture  Legacy alias for --dev-ready used by browser tests.",
     "",
     "See docs/LOCALNET.md for the full local-stack runbook.",
   ].join("\n");
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     port: 8899,
     keepLedger: false,
     envFile: DEFAULT_ENV_FILE,
-    unsafeUnpausedFixture: false,
+    devReady: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -127,8 +153,8 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--keep-ledger") {
       args.keepLedger = true;
-    } else if (arg === "--unsafe-unpaused-fixture") {
-      args.unsafeUnpausedFixture = true;
+    } else if (arg === "--dev-ready" || arg === "--unsafe-unpaused-fixture") {
+      args.devReady = true;
     } else if (arg === "--env-file") {
       if (!argv[i + 1]) throw new Error("--env-file requires a path");
       args.envFile = path.resolve(argv[i + 1]);
@@ -140,17 +166,133 @@ function parseArgs(argv) {
       throw new Error(`Unknown argument: ${arg}\n\n${usage()}`);
     }
   }
-  if (args.keepLedger && args.unsafeUnpausedFixture) {
+  if (args.keepLedger && args.devReady) {
     throw new Error(
-      "--unsafe-unpaused-fixture requires a fresh genesis and cannot be combined with --keep-ledger",
+      "--dev-ready requires a fresh disposable genesis and cannot be combined with --keep-ledger",
     );
   }
   return args;
 }
 
+export function expectedLocalnetProtocolMode(devReady, currentSurfaceRevision) {
+  if (
+    typeof devReady !== "boolean" ||
+    !Number.isSafeInteger(currentSurfaceRevision) ||
+    currentSurfaceRevision < 1
+  ) {
+    throw new TypeError("invalid localnet protocol-mode expectation");
+  }
+  return Object.freeze(
+    devReady
+      ? { protocolPaused: false, surfaceRevision: currentSurfaceRevision }
+      : { protocolPaused: true, surfaceRevision: 0 },
+  );
+}
+
+/**
+ * A reset creates a different chain even though deterministic fixture paths
+ * survive on disk. Remove only that stale cache: a live idempotent converge and
+ * an explicit keep-ledger restart still describe the same chain.
+ */
+export async function invalidateFixturesAfterValidatorBoot(
+  { booted, keepLedger },
+  removeFixtures = () => rm(FIXTURES_PATH, { force: true }),
+) {
+  if (!booted || keepLedger) return false;
+  await removeFixtures();
+  return true;
+}
+
+/** Build the exact M-of-N-gated singleton initializer used by both modes. */
+export function localnetBidMarketplaceInitializeInput(signers) {
+  const authority = signers?.authority;
+  const moderator = signers?.moderator;
+  if (
+    typeof authority?.address !== "string" ||
+    typeof moderator?.address !== "string" ||
+    authority.address === moderator.address
+  ) {
+    throw new TypeError(
+      "localnet bid marketplace requires distinct authority and moderator signers",
+    );
+  }
+  if (PROTOCOL_PARAMS.multisigThreshold !== 2) {
+    throw new Error(
+      "localnet bid marketplace signer policy requires a 2-of-N ProtocolConfig threshold",
+    );
+  }
+  return {
+    authority,
+    multisigSigners: [authority, moderator],
+    ...BID_MARKETPLACE_PARAMS,
+  };
+}
+
+function discriminatorHex(value) {
+  if (!(value instanceof Uint8Array)) return String(value);
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
+/** Return every exact singleton mismatch so startup can refuse partial drift. */
+export function localnetBidMarketplaceDiffs({
+  account,
+  expectedAuthority,
+  expectedBump,
+  expectedDiscriminator,
+  programId = LOCALNET_PROGRAM_ID,
+}) {
+  if (!account?.exists) {
+    return [{ field: "exists", actual: false, expected: true }];
+  }
+  const d = account.data ?? {};
+  const diffs = [];
+  const check = (field, actual, expected) => {
+    if (`${actual}` !== `${expected}`) {
+      diffs.push({ field, actual, expected });
+    }
+  };
+  check("owner", account.programAddress, programId);
+  check("executable", account.executable, false);
+  check(
+    "discriminator",
+    discriminatorHex(d.discriminator),
+    discriminatorHex(expectedDiscriminator),
+  );
+  check("authority", d.authority, expectedAuthority);
+  check(
+    "minBidBondLamports",
+    d.minBidBondLamports,
+    BID_MARKETPLACE_PARAMS.minBidBondLamports,
+  );
+  check(
+    "bidCreationCooldownSecs",
+    d.bidCreationCooldownSecs,
+    BID_MARKETPLACE_PARAMS.bidCreationCooldownSecs,
+  );
+  check("maxBidsPer24h", d.maxBidsPer24h, BID_MARKETPLACE_PARAMS.maxBidsPer24h);
+  check(
+    "maxActiveBidsPerTask",
+    d.maxActiveBidsPerTask,
+    BID_MARKETPLACE_PARAMS.maxActiveBidsPerTask,
+  );
+  check(
+    "maxBidLifetimeSecs",
+    d.maxBidLifetimeSecs,
+    BID_MARKETPLACE_PARAMS.maxBidLifetimeSecs,
+  );
+  check(
+    "acceptedNoShowSlashBps",
+    d.acceptedNoShowSlashBps,
+    BID_MARKETPLACE_PARAMS.acceptedNoShowSlashBps,
+  );
+  check("bump", d.bump, expectedBump);
+  return diffs;
+}
+
 function fail(message) {
-  console.error(`\nlocalnet-up: ERROR: ${message}`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 const startedAt = Date.now();
@@ -179,24 +321,89 @@ async function fileExists(p) {
   }
 }
 
-function pidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+function decodeCanonicalBase64AccountData(value, label) {
+  const encoded = value?.data;
+  if (
+    !Array.isArray(encoded) ||
+    encoded.length !== 2 ||
+    encoded[1] !== "base64" ||
+    typeof encoded[0] !== "string"
+  ) {
+    fail(`${label} RPC response did not contain canonical base64 account data`);
+  }
+  const bytes = Buffer.from(encoded[0], "base64");
+  if (bytes.toString("base64") !== encoded[0]) {
+    fail(`${label} RPC response contained malformed base64 account data`);
+  }
+  return bytes;
+}
+
+async function existingLedgerIsDirectory() {
   try {
-    process.kill(pid, 0);
+    const metadata = await lstat(LEDGER_DIR);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      fail("localnet ledger must be a real non-symlink directory");
+    }
     return true;
   } catch (error) {
-    return error.code === "EPERM"; // alive but not ours
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function artifactMatches(record, programSha256, programSize) {
+  return (
+    record?.programSha256 === programSha256 &&
+    record?.programSize === programSize &&
+    record?.programLoadMethod === LOCALNET_PROGRAM_LOAD_METHOD
+  );
+}
+
+/** Fail before marker publication or spawn when generated surfaces drift. */
+export function assertCanonicalProgramIdentity(idlProgramId, sdkProgramId) {
+  if (
+    idlProgramId !== LOCALNET_PROGRAM_ID ||
+    sdkProgramId !== LOCALNET_PROGRAM_ID
+  ) {
+    fail(
+      `program identity mismatch: canonical=${LOCALNET_PROGRAM_ID}, IDL=${idlProgramId}, SDK=${sdkProgramId}.\n` +
+        "  Rebuild and synchronize the IDL + SDK before starting a validator.",
+    );
+  }
+}
+
+/** Refuse both reset and reuse when an existing ledger lacks prior proof. */
+export function assertLedgerLaunchIsAttested({
+  ledgerExists,
+  keepLedger,
+  stoppedMarker,
+  startingMarker,
+  programSha256,
+  programSize,
+}) {
+  if (!ledgerExists) return;
+  const evidence = [stoppedMarker, startingMarker].filter(
+    (record) => record !== null && record !== undefined,
+  );
+  if (evidence.length === 0) {
+    fail(
+      "existing ledger has no prior stopped/startup lifecycle evidence; refusing to manufacture reset or reuse authority",
+    );
+  }
+  if (
+    keepLedger &&
+    evidence.some(
+      (record) => !artifactMatches(record, programSha256, programSize),
+    )
+  ) {
+    fail(
+      "--keep-ledger refused: prior lifecycle evidence does not prove the current program artifact is loaded; restart without --keep-ledger to perform an attested reset",
+    );
   }
 }
 
 async function readPidFile() {
   return readProcessIdentityFile(PID_FILE, "validator");
-}
-
-async function hashFile(p) {
-  return createHash("sha256")
-    .update(await readFile(p))
-    .digest("hex");
 }
 
 function assertValidatorArgv(record, argv, programId) {
@@ -210,7 +417,7 @@ function assertValidatorArgv(record, argv, programId) {
     argument("--rpc-port") !== String(record.rpcPort) ||
     upgrade < 0 ||
     argv[upgrade + 1] !== programId ||
-    path.resolve(argv[upgrade + 2] ?? "") !== path.resolve(SO_PATH)
+    argv[upgrade + 2] !== LOCALNET_PROGRAM_DESCRIPTOR_PATH
   ) {
     throw new Error(
       "validator stop refused: command line does not bind this repo ledger/program",
@@ -218,10 +425,10 @@ function assertValidatorArgv(record, argv, programId) {
   }
 }
 
-async function assertValidatorIdentity(record, programId) {
+async function assertValidatorIdentity(record, programId, processReference) {
   return assertRecordedProcessIdentity(
     record,
-    await observeLinuxProcess(record.pid),
+    await observeLinuxProcess(record.pid, { processReference }),
     {
       executableBasename: "solana-test-validator",
       cwd: STATE_DIR,
@@ -230,18 +437,71 @@ async function assertValidatorIdentity(record, programId) {
   );
 }
 
-async function stopPid(label, record, programId) {
-  if (!(await assertValidatorIdentity(record, programId))) return;
-  process.kill(record.pid, "SIGTERM");
-  const deadline = Date.now() + 10_000;
+async function captureGuardedValidatorIdentity(
+  pid,
+  programId,
+  processReference,
+  extra,
+  timeoutMs = 10_000,
+) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!(await assertValidatorIdentity(record, programId))) return;
-    await new Promise((r) => setTimeout(r, 200));
+    const observed = await observeLinuxProcess(pid, { processReference });
+    if (observed === null) {
+      throw new Error(
+        `validator pid ${pid} exited before identity publication`,
+      );
+    }
+    if (observed.executable.split("/").at(-1) === "solana-test-validator") {
+      assertValidatorArgv(extra, observed.argv, programId);
+      const record = await captureProcessIdentity(pid, "validator", extra, {
+        processReference,
+      });
+      if (
+        !(await assertValidatorIdentity(record, programId, processReference))
+      ) {
+        throw new Error(
+          `validator pid ${pid} exited before identity publication`,
+        );
+      }
+      return record;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  await assertValidatorIdentity(record, programId);
-  process.kill(record.pid, "SIGKILL");
-  await new Promise((r) => setTimeout(r, 500));
-  if (await assertValidatorIdentity(record, programId)) {
+  throw new Error(
+    `guarded validator pid ${pid} did not exec solana-test-validator within ${timeoutMs}ms`,
+  );
+}
+
+export async function stopPid(label, record, programId, dependencies = {}) {
+  const assertIdentityForStop =
+    dependencies.assertIdentity ??
+    ((candidate, processReference) =>
+      assertValidatorIdentity(candidate, programId, processReference));
+  const openProcessReference = dependencies.openProcessReference;
+  const sendSignal = dependencies.sendSignal;
+  const now = dependencies.now ?? Date.now;
+  const sleep =
+    dependencies.sleep ??
+    ((milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const termGraceMs = dependencies.termGraceMs ?? 10_000;
+  const signalIfExact = (signal) =>
+    signalProcessIfIdentityMatches(record, signal, {
+      assertIdentity: assertIdentityForStop,
+      ...(openProcessReference === undefined ? {} : { openProcessReference }),
+      ...(sendSignal === undefined ? {} : { sendSignal }),
+    });
+
+  if (!(await signalIfExact("SIGTERM"))) return;
+  const deadline = now() + termGraceMs;
+  while (now() < deadline) {
+    if (!(await assertIdentityForStop(record))) return;
+    await sleep(200);
+  }
+  if (!(await signalIfExact("SIGKILL"))) return;
+  await sleep(500);
+  if (await assertIdentityForStop(record)) {
     fail(`${label} pid ${record.pid} is still alive after SIGKILL`);
   }
 }
@@ -416,8 +676,7 @@ async function writeUnsafeUnpausedProtocolFixture({
   return { address: String(protocolPda), path: UNSAFE_PROTOCOL_FIXTURE };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+async function mainLocked(args, lifecycleLock) {
   const rpcUrl = `http://127.0.0.1:${args.port}`;
   const wsPort = args.port + 1;
   const faucetPort = args.port + 2;
@@ -429,6 +688,7 @@ async function main() {
 
   // ---------------------------------------------------------------- preflight
   step("preflight (binaries, .so, SDK dist)");
+  assertRaceFreeProcessSignallingAvailable();
   const validatorVersion = binaryOnPath("solana-test-validator");
   if (!validatorVersion) {
     fail(
@@ -445,7 +705,8 @@ async function main() {
       `program binary missing: ${SO_PATH}\n  Run \`anchor build\` from the repo root first (full surface, default features).`,
     );
   }
-  const soBytes = (await stat(SO_PATH)).size;
+  const programArtifact = await captureLocalnetProgramArtifact(SO_PATH);
+  const soBytes = programArtifact.size;
   if (soBytes < 2_000_000) {
     console.warn(
       `\nWARNING: ${SO_PATH} is only ${soBytes} bytes — the full surface is ~2.8 MB.` +
@@ -463,9 +724,14 @@ async function main() {
       `IDL missing: ${IDL_PATH} (run \`anchor build && npm run artifacts:refresh\`).`,
     );
   }
-  const soSha256 = await hashFile(SO_PATH);
+  const soSha256 = programArtifact.sha256;
   const programId = JSON.parse(await readFile(IDL_PATH, "utf8")).address;
   if (!programId) fail(`IDL at ${IDL_PATH} has no .address field`);
+  const sdk = await import(pathToFileURL(SDK_DIST).href);
+  assertCanonicalProgramIdentity(
+    programId,
+    sdk.AGENC_COORDINATION_PROGRAM_ADDRESS,
+  );
   stepDone(
     `${validatorVersion}; .so ${soBytes} bytes sha256=${soSha256.slice(0, 16)}; program ${programId}`,
   );
@@ -473,7 +739,6 @@ async function main() {
   // ------------------------------------------------------- state dir + keys
   step("state dir + keypairs (.localnet/)");
   await ensurePrivateStateDirectory(STATE_DIR);
-  await mkdir(LEDGER_DIR, { recursive: true });
   await mkdir(KEYS_DIR, { recursive: true });
   await mkdir(LOGS_DIR, { recursive: true });
   const keyPaths = Object.fromEntries(
@@ -488,7 +753,6 @@ async function main() {
   );
 
   const kit = await import("@solana/kit");
-  const sdk = await import(pathToFileURL(SDK_DIST).href);
   const signers = {};
   for (const name of KEY_NAMES) {
     signers[name] = await loadSigner(kit, keyPaths[name]);
@@ -498,7 +762,7 @@ async function main() {
   console.log(`   seeder    ${signers.seeder.address}`);
 
   let unsafeProtocolFixture = null;
-  if (args.unsafeUnpausedFixture) {
+  if (args.devReady) {
     unsafeProtocolFixture = await writeUnsafeUnpausedProtocolFixture({
       kit,
       sdk,
@@ -506,7 +770,7 @@ async function main() {
       signers,
     });
     console.warn(
-      `   TEST-ONLY: genesis-injecting unpaused ProtocolConfig ${unsafeProtocolFixture.address}`,
+      `   LOCAL DEV ONLY: genesis-injecting current, unpaused ProtocolConfig ${unsafeProtocolFixture.address}`,
     );
   }
 
@@ -517,30 +781,36 @@ async function main() {
     pidInfo !== null && (await assertValidatorIdentity(pidInfo, programId));
   let booted = false;
 
-  if (
-    ourValidatorAlive &&
-    !args.keepLedger &&
-    pidInfo.programSha256 !== soSha256
-  ) {
+  if (ourValidatorAlive) {
+    // A live managed identity supersedes either recovery marker. In
+    // particular, a launcher can die after COMMIT acknowledgement but before
+    // removing validator.starting; a later converge must finish that cleanup.
+    await rm(STARTING_PID_FILE, { force: true });
+    await rm(STOPPED_PID_FILE, { force: true });
+  }
+
+  const liveArtifactCurrent =
+    ourValidatorAlive && artifactMatches(pidInfo, soSha256, soBytes);
+  if (ourValidatorAlive && args.keepLedger && !liveArtifactCurrent) {
+    fail(
+      `--keep-ledger refused: live validator pid ${pidInfo.pid} is running a different program artifact.\n` +
+        "  Re-run without --keep-ledger to stop it and perform an attested reset.",
+    );
+  }
+
+  if (ourValidatorAlive && !args.keepLedger && !liveArtifactCurrent) {
     const stalePid = pidInfo.pid;
     const previous = pidInfo.programSha256
       ? pidInfo.programSha256.slice(0, 16)
       : "missing";
     await stopPid("validator", pidInfo, programId);
-    await rm(PID_FILE, { force: true });
+    await archiveProcessIdentityFile(PID_FILE, STOPPED_PID_FILE, "validator");
     pidInfo = null;
     ourValidatorAlive = false;
     stepDone(
       `stopped stale pid ${stalePid} (program sha ${previous} -> ${soSha256.slice(0, 16)})`,
     );
     step(`validator on port ${args.port}`);
-  }
-
-  if (args.unsafeUnpausedFixture && ourValidatorAlive) {
-    fail(
-      "--unsafe-unpaused-fixture only applies at genesis, but this validator is already running.\n" +
-        "  Stop and purge the disposable ledger first: node scripts/localnet-down.mjs --purge",
-    );
   }
 
   if (ourValidatorAlive) {
@@ -570,9 +840,34 @@ async function main() {
     }
     stepDone(`already running (pid ${pidInfo.pid}) — converging`);
   } else {
+    let stoppedMarker = await readProcessIdentityFile(
+      STOPPED_PID_FILE,
+      "validator",
+    );
+    let startingMarker = await readValidatorLaunchIntentFile(
+      STARTING_PID_FILE,
+      {
+        repoRoot: ROOT,
+        ledgerDir: LEDGER_DIR,
+        programId,
+      },
+    );
     if (pidInfo !== null) {
-      await rm(PID_FILE, { force: true }); // stale pid file
+      // The exact managed process is gone, but its durable record is still the
+      // proof that this ledger belonged to a script-managed validator.
+      await archiveProcessIdentityFile(PID_FILE, STOPPED_PID_FILE, "validator");
+      stoppedMarker = pidInfo;
+      pidInfo = null;
     }
+    const ledgerExists = await existingLedgerIsDirectory();
+    assertLedgerLaunchIsAttested({
+      ledgerExists,
+      keepLedger: args.keepLedger,
+      stoppedMarker,
+      startingMarker,
+      programSha256: soSha256,
+      programSize: soBytes,
+    });
     const stillOccupied = await waitForPortsFree([
       args.port,
       wsPort,
@@ -605,7 +900,7 @@ async function main() {
       // (Silently ignored when the ledger already exists, i.e. --keep-ledger.)
       "--upgradeable-program",
       programId,
-      SO_PATH,
+      LOCALNET_PROGRAM_DESCRIPTOR_PATH,
       signers.authority.address,
     ];
     if (unsafeProtocolFixture !== null) {
@@ -617,48 +912,209 @@ async function main() {
     }
     if (!args.keepLedger) validatorArgs.unshift("--reset");
 
-    const logFd = openSync(VALIDATOR_LOG, "a");
-    const child = spawn("solana-test-validator", validatorArgs, {
-      cwd: STATE_DIR,
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-    });
-    closeSync(logFd);
-    await captureAndPublishSpawnedProcess(child, "validator", PID_FILE, {
-      rpcPort: args.port,
+    // Keep prior proof until the replacement has a durable live identity. A
+    // valid old starting marker is atomically rebound only for an attested
+    // reset; keep-ledger requires every prior artifact binding to match.
+    const launchIntent = {
+      repoRoot: ROOT,
+      ledgerDir: LEDGER_DIR,
+      programId,
       programSha256: soSha256,
       programSize: soBytes,
-    });
-    child.unref();
+      programLoadMethod: LOCALNET_PROGRAM_LOAD_METHOD,
+    };
+    if (
+      startingMarker !== null &&
+      !artifactMatches(startingMarker, soSha256, soBytes)
+    ) {
+      await replaceValidatorLaunchIntentFile(STARTING_PID_FILE, launchIntent);
+    } else {
+      await ensureValidatorLaunchIntentFile(STARTING_PID_FILE, launchIntent);
+    }
+    let logFd = openSync(VALIDATOR_LOG, "a");
+    let guarded;
+    let programSnapshot;
+    let processReference;
+    let commitAcknowledged = false;
+    let startupError;
+    try {
+      programSnapshot = await materializeLocalnetProgramSnapshot(
+        programArtifact,
+        STATE_DIR,
+      );
+      guarded = await startGuardedProcess(
+        "solana-test-validator",
+        validatorArgs,
+        {
+          cwd: STATE_DIR,
+          logFd,
+          lifecycleLockFd: lifecycleLock.fd,
+          pinnedInputFd: programSnapshot.fd,
+        },
+      );
+      await programSnapshot.close();
+      programSnapshot = undefined;
+      const openedLogFd = logFd;
+      logFd = undefined;
+      closeSync(openedLogFd);
 
-    const deadline = Date.now() + 90_000;
-    let healthy = false;
-    while (Date.now() < deadline) {
-      if (!pidAlive(child.pid)) {
-        await rm(PID_FILE, { force: true });
-        fail(
-          `solana-test-validator exited during startup. Last log lines (${VALIDATOR_LOG}):\n${await tailLog()}`,
+      processReference = openLinuxProcessReference(guarded.pid);
+      if (processReference === null) {
+        throw new Error(
+          `guarded validator pid ${guarded.pid} exited before identity capture`,
         );
       }
-      if (await rpcHealthy(rpcUrl)) {
-        healthy = true;
-        break;
+      pidInfo = await captureGuardedValidatorIdentity(
+        guarded.pid,
+        programId,
+        processReference,
+        {
+          rpcPort: args.port,
+          programSha256: soSha256,
+          programSize: soBytes,
+          programLoadMethod: LOCALNET_PROGRAM_LOAD_METHOD,
+        },
+      );
+      await publishProcessIdentityFile(PID_FILE, pidInfo);
+      await guarded.commit();
+      commitAcknowledged = true;
+      await rm(STARTING_PID_FILE, { force: true });
+      await rm(STOPPED_PID_FILE, { force: true });
+
+      const deadline = Date.now() + 90_000;
+      let healthy = false;
+      while (Date.now() < deadline) {
+        if (
+          !(await assertValidatorIdentity(pidInfo, programId, processReference))
+        ) {
+          await archiveProcessIdentityFile(
+            PID_FILE,
+            STOPPED_PID_FILE,
+            "validator",
+          );
+          fail(
+            `solana-test-validator exited during startup. Last log lines (${VALIDATOR_LOG}):\n${await tailLog()}`,
+          );
+        }
+        if (await rpcHealthy(rpcUrl)) {
+          healthy = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
       }
-      await new Promise((r) => setTimeout(r, 500));
+      if (!healthy) {
+        fail(
+          `validator did not become healthy on ${rpcUrl} within 90s (pid ${guarded.pid}).\n` +
+            `  Inspect ${VALIDATOR_LOG}, then \`node scripts/localnet-down.mjs\`.`,
+        );
+      }
+      booted = true;
+      stepDone(
+        `booted pid ${guarded.pid}${args.keepLedger ? " (kept ledger)" : " (reset)"}`,
+      );
+    } catch (error) {
+      startupError = error;
     }
-    if (!healthy) {
-      fail(
-        `validator did not become healthy on ${rpcUrl} within 90s (pid ${child.pid}).\n` +
-          `  Inspect ${VALIDATOR_LOG}, then \`node scripts/localnet-down.mjs\`.`,
+
+    const cleanupErrors = [];
+    if (
+      startupError !== undefined &&
+      guarded !== undefined &&
+      !commitAcknowledged
+    ) {
+      try {
+        await guarded.abort();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    try {
+      processReference?.close();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (programSnapshot !== undefined) {
+      try {
+        await programSnapshot.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (logFd !== undefined) {
+      const openedLogFd = logFd;
+      logFd = undefined;
+      try {
+        closeSync(openedLogFd);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (startupError !== undefined || cleanupErrors.length > 0) {
+      const failures = [startupError, ...cleanupErrors].filter(
+        (error) => error !== undefined,
+      );
+      if (failures.length === 1) throw failures[0];
+      throw new AggregateError(
+        failures,
+        "validator startup or guarded cleanup failed",
       );
     }
-    booted = true;
-    stepDone(
-      `booted pid ${child.pid}${args.keepLedger ? " (kept ledger)" : " (reset)"}`,
-    );
   }
 
+  await invalidateFixturesAfterValidatorBoot({
+    booted,
+    keepLedger: args.keepLedger,
+  });
+
   const rpc = kit.createSolanaRpc(rpcUrl);
+
+  // ------------------------------------------ exact live program verification
+  // This must precede every funded or initialization action. Lifecycle markers
+  // bind the managed launch; these RPC reads prove what this ledger currently
+  // stores even if someone attempted an out-of-band local program upgrade.
+  step("program account check");
+  const programInfo = await rpc
+    .getAccountInfo(kit.address(programId), { encoding: "base64" })
+    .send();
+  if (
+    !programInfo.value ||
+    !programInfo.value.executable ||
+    String(programInfo.value.owner) !== BPF_LOADER_UPGRADEABLE
+  ) {
+    fail(
+      `program ${programId} is not an executable account on ${rpcUrl}.\n` +
+        `  The ledger predates the genesis program load — re-run WITHOUT --keep-ledger (resets the ledger).`,
+    );
+  }
+  const [programDataPda] = await kit.getProgramDerivedAddress({
+    programAddress: kit.address(BPF_LOADER_UPGRADEABLE),
+    seeds: [kit.getAddressEncoder().encode(kit.address(programId))],
+  });
+  assertLocalnetProgramAccountLinksProgramData(
+    decodeCanonicalBase64AccountData(programInfo.value, "Program"),
+    kit.getAddressEncoder().encode(programDataPda),
+  );
+  const programDataInfo = await rpc
+    .getAccountInfo(programDataPda, { encoding: "base64" })
+    .send();
+  if (
+    !programDataInfo.value ||
+    programDataInfo.value.executable ||
+    String(programDataInfo.value.owner) !== BPF_LOADER_UPGRADEABLE
+  ) {
+    fail(
+      `ProgramData ${programDataPda} missing — the program was not loaded as UPGRADEABLE.\n` +
+        `  Re-run without --keep-ledger so genesis uses --upgradeable-program.`,
+    );
+  }
+  assertLocalnetProgramDataMatchesArtifact(
+    programArtifact,
+    decodeCanonicalBase64AccountData(programDataInfo.value, "ProgramData"),
+    kit.getAddressEncoder().encode(signers.authority.address),
+  );
+  stepDone(
+    `executable at ${programId}; ProgramData ${programDataPda}; exact .so verified`,
+  );
 
   // ------------------------------------------------------------- airdrops
   step("airdrops (500 SOL targets)");
@@ -688,38 +1144,6 @@ async function main() {
   }
   stepDone(funded.join(" "));
 
-  // ---------------------------------------------------------- SDK + program
-  step("program account check");
-  if (sdk.AGENC_COORDINATION_PROGRAM_ADDRESS !== programId) {
-    fail(
-      `SDK program address ${sdk.AGENC_COORDINATION_PROGRAM_ADDRESS} != IDL address ${programId}.\n` +
-        `  Rebuild artifacts + SDK (npm run artifacts:refresh; cd packages/sdk-ts && npm run sdk:generate && npm run build).`,
-    );
-  }
-  const programInfo = await rpc
-    .getAccountInfo(kit.address(programId), { encoding: "base64" })
-    .send();
-  if (!programInfo.value || !programInfo.value.executable) {
-    fail(
-      `program ${programId} is not an executable account on ${rpcUrl}.\n` +
-        `  The ledger predates the genesis program load — re-run WITHOUT --keep-ledger (resets the ledger).`,
-    );
-  }
-  const [programDataPda] = await kit.getProgramDerivedAddress({
-    programAddress: kit.address(BPF_LOADER_UPGRADEABLE),
-    seeds: [kit.getAddressEncoder().encode(kit.address(programId))],
-  });
-  const programDataInfo = await rpc
-    .getAccountInfo(programDataPda, { encoding: "base64" })
-    .send();
-  if (!programDataInfo.value) {
-    fail(
-      `ProgramData ${programDataPda} missing — the program was not loaded as UPGRADEABLE.\n` +
-        `  Re-run without --keep-ledger so genesis uses --upgradeable-program.`,
-    );
-  }
-  stepDone(`executable at ${programId}; ProgramData ${programDataPda}`);
-
   // ------------------------------------------------- initialize_protocol
   step("protocol config (initialize_protocol)");
   const client = sdk.createMarketplaceClient({
@@ -733,8 +1157,8 @@ async function main() {
   ];
   const [protocolPda] = await sdk.findProtocolConfigPda();
   let protocol = await sdk.fetchMaybeProtocolConfig(rpc, protocolPda);
-  let protocolAction = args.unsafeUnpausedFixture
-    ? "verified TEST-ONLY genesis fixture"
+  let protocolAction = args.devReady
+    ? "verified LOCAL-DEV genesis fixture"
     : "verified existing";
   if (!protocol.exists) {
     const ix = await sdk.facade.initializeProtocol({
@@ -790,16 +1214,19 @@ async function main() {
       PROTOCOL_PARAMS.multisigThreshold,
     );
     check("multisigOwners", actualOwners.join("|"), expectedOwners.join("|"));
-    if (args.unsafeUnpausedFixture) {
-      check("protocolPaused", d.protocolPaused, false);
-      check("surfaceRevision", d.surfaceRevision, sdk.SURFACE_REVISION_CURRENT);
-    }
+    const expectedMode = expectedLocalnetProtocolMode(
+      args.devReady,
+      sdk.SURFACE_REVISION_CURRENT,
+    );
+    check("protocolPaused", d.protocolPaused, expectedMode.protocolPaused);
+    check("surfaceRevision", d.surfaceRevision, expectedMode.surfaceRevision);
     if (diffs.length > 0) {
       fail(
         `ProtocolConfig ${protocolPda} EXISTS WITH DIFFERENT VALUES — refusing to converge:\n` +
           `${describeDiffs(diffs)}\n` +
           `  This ledger was initialized with other keys/parameters. Either restore the matching\n` +
-          `  .localnet/keys/, or wipe and restart: node scripts/localnet-down.mjs --purge && node scripts/localnet-up.mjs`,
+          `  .localnet/keys/, or wipe and restart: node scripts/localnet-down.mjs --purge && ` +
+          `node scripts/localnet-up.mjs${args.devReady ? " --dev-ready" : ""}`,
       );
     }
   }
@@ -808,6 +1235,59 @@ async function main() {
     `   ProtocolConfig ${protocolPda}: authority=${protocol.data.authority} feeBps=${protocol.data.protocolFeeBps} ` +
       `disputeThreshold=${protocol.data.disputeThreshold} minAgentStake=${protocol.data.minAgentStake} ` +
       `multisig=${protocol.data.multisigThreshold}/${protocol.data.multisigOwnersLen} version=${protocol.data.protocolVersion}`,
+  );
+
+  // ------------------------------------------ initialize_bid_marketplace
+  step("bid marketplace config (initialize_bid_marketplace)");
+  const [bidMarketplacePda, bidMarketplaceBump] =
+    await sdk.findBidMarketplacePda();
+  let bidMarketplace = await sdk.fetchMaybeBidMarketplaceConfig(
+    rpc,
+    bidMarketplacePda,
+  );
+  let bidMarketplaceAction = "verified existing";
+  if (!bidMarketplace.exists) {
+    const ix = await sdk.facade.initializeBidMarketplace(
+      localnetBidMarketplaceInitializeInput(signers),
+    );
+    const { signature } = await client.send([ix]);
+    bidMarketplaceAction = `initialized (${signature})`;
+    bidMarketplace = await sdk.fetchMaybeBidMarketplaceConfig(
+      rpc,
+      bidMarketplacePda,
+    );
+    if (!bidMarketplace.exists) {
+      fail(
+        "BidMarketplaceConfig still missing after initialize_bid_marketplace",
+      );
+    }
+  }
+  {
+    const diffs = localnetBidMarketplaceDiffs({
+      account: bidMarketplace,
+      expectedAuthority: signers.authority.address,
+      expectedBump: bidMarketplaceBump,
+      expectedDiscriminator: sdk.BID_MARKETPLACE_CONFIG_DISCRIMINATOR,
+      programId,
+    });
+    if (diffs.length > 0) {
+      fail(
+        `BidMarketplaceConfig ${bidMarketplacePda} EXISTS WITH DIFFERENT VALUES — refusing to converge:\n` +
+          `${describeDiffs(diffs)}\n` +
+          `  This singleton must exactly match the reviewed local marketplace policy. Wipe and restart:\n` +
+          `  node scripts/localnet-down.mjs --purge && node scripts/localnet-up.mjs${args.devReady ? " --dev-ready" : ""}`,
+      );
+    }
+  }
+  stepDone(bidMarketplaceAction);
+  console.log(
+    `   BidMarketplaceConfig ${bidMarketplacePda}: authority=${bidMarketplace.data.authority} ` +
+      `minBidBondLamports=${bidMarketplace.data.minBidBondLamports} ` +
+      `cooldown=${bidMarketplace.data.bidCreationCooldownSecs}s ` +
+      `maxPer24h=${bidMarketplace.data.maxBidsPer24h} ` +
+      `maxActivePerTask=${bidMarketplace.data.maxActiveBidsPerTask} ` +
+      `maxLifetime=${bidMarketplace.data.maxBidLifetimeSecs}s ` +
+      `noShowSlashBps=${bidMarketplace.data.acceptedNoShowSlashBps}`,
   );
 
   // -------------------------------------------- configure_task_moderation
@@ -844,7 +1324,7 @@ async function main() {
       fail(
         `ModerationConfig ${moderationPda} EXISTS WITH DIFFERENT VALUES — refusing to converge:\n` +
           `${describeDiffs(diffs)}\n` +
-          `  Wipe and restart: node scripts/localnet-down.mjs --purge && node scripts/localnet-up.mjs`,
+          `  Wipe and restart: node scripts/localnet-down.mjs --purge && node scripts/localnet-up.mjs${args.devReady ? " --dev-ready" : ""}`,
       );
     }
   }
@@ -895,6 +1375,9 @@ async function main() {
   console.log(
     `\nlocalnet is up (${totalSecs}s total)${booted ? "" : " — was already running"}.`,
   );
+  console.log(
+    `  mode:       ${args.devReady ? "DEV READY (disposable local fixture)" : "PRODUCTION-FROZEN initialization rehearsal"}`,
+  );
   console.log(`  rpc:        ${rpcUrl}`);
   console.log(`  ws:         ${rpcSubscriptionsUrl}`);
   console.log(
@@ -906,25 +1389,45 @@ async function main() {
   );
   console.log("\nNext commands:");
   console.log(
-    "  node scripts/localnet-status.mjs                      # health + decoded configs",
+    "  node scripts/localnet-status.mjs                      # integrity + marketplace readiness",
   );
-  console.log(
-    "  node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs \\\n" +
-      `      --rpc ${rpcUrl} \\\n` +
-      "      --keypair .localnet/keys/seeder.json \\\n" +
-      "      --moderator-keypair .localnet/keys/moderator.json  # seed providers + listings",
-  );
-  console.log(
-    "  # attestor (optional): see docs/LOCALNET.md — storefront sandboxAttestor with\n" +
-      `  #   SANDBOX_ATTESTOR_RPC_URL=${rpcUrl} SANDBOX_ATTESTOR_ALLOW_CUSTOM_RPC=true,\n` +
-      "  #   then record its URL in the env file's attestorUrl.",
-  );
+  if (args.devReady) {
+    console.log(
+      "  node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs \\\n" +
+        `      --rpc ${rpcUrl} \\\n` +
+        "      --keypair .localnet/keys/seeder.json \\\n" +
+        "      --moderator-keypair .localnet/keys/moderator.json  # seed providers + listings",
+    );
+    console.log(
+      "  # attestor (optional): see docs/LOCALNET.md — storefront sandboxAttestor with\n" +
+        `  #   SANDBOX_ATTESTOR_RPC_URL=${rpcUrl} SANDBOX_ATTESTOR_ALLOW_CUSTOM_RPC=true,\n` +
+        "  #   then record its URL in the env file's attestorUrl.",
+    );
+  } else {
+    console.warn(
+      "  MARKETPLACE INTENTIONALLY PAUSED: this mode validates production-frozen initialization.\n" +
+        "  New registrations/listings/hires will fail. For disposable development:\n" +
+        "    node scripts/localnet-down.mjs --purge && node scripts/localnet-up.mjs --dev-ready",
+    );
+  }
   console.log(
     "  node scripts/localnet-down.mjs [--purge]              # stop (and wipe ledger)",
   );
 }
 
-main().catch((error) => {
-  console.error(`\nlocalnet-up: ERROR: ${error?.stack ?? error}`);
-  process.exit(1);
-});
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  await withLocalnetLifecycleLock(STATE_DIR, (lifecycleLock) =>
+    mainLocked(args, lifecycleLock),
+  );
+}
+
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    console.error(`\nlocalnet-up: ERROR: ${error?.stack ?? error}`);
+    process.exit(1);
+  });
+}

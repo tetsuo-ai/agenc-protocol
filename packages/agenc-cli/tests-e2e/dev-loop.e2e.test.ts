@@ -39,7 +39,12 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
     const admin = await fundedSigner(svm); // ProtocolConfig treasury
     await seedProtocolConfig(svm, admin.address);
     const moderatorSigner = await fundedSigner(svm);
-    await seedModerationConfig(svm, admin.address, moderatorSigner.address, true);
+    await seedModerationConfig(
+      svm,
+      admin.address,
+      moderatorSigner.address,
+      true,
+    );
 
     const buyerSigner = await fundedSigner(svm);
     const providerSigner = await fundedSigner(svm);
@@ -51,7 +56,9 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
     svm.airdrop(referrer.address, lamports(10_000_000n));
 
     const transport = createLiteSvmTransport(svm);
-    const actor = (signer: Awaited<ReturnType<typeof fundedSigner>>): DevActor => ({
+    const actor = (
+      signer: Awaited<ReturnType<typeof fundedSigner>>,
+    ): DevActor => ({
       signer,
       client: createMarketplaceClient({ transport, signer }),
     });
@@ -65,6 +72,15 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
       operator: operator.address,
       referrer: referrer.address,
       readAccount: async (address: Address) => accountData(svm, address),
+      readAccountInfo: async (address: Address) => {
+        const account = svm.getAccount(address);
+        if (!account || !account.exists) return null;
+        return {
+          data: Uint8Array.from(account.data),
+          owner: account.programAddress,
+          executable: account.executable,
+        };
+      },
       getBalance: async (address: Address) => svm.getBalance(address) ?? 0n,
       getMinimumBalanceForRentExemption: async (space: number) =>
         svm.minimumBalanceForRentExemption(BigInt(space)),
@@ -101,7 +117,9 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
     // Protocol fee: positive, and never above the configured bps (reputation
     // can only discount it).
     expect(legs.treasury.deltaLamports > 0n).toBe(true);
-    expect(legs.treasury.deltaLamports <= (REWARD * PROTOCOL_FEE_BPS) / 10_000n).toBe(true);
+    expect(
+      legs.treasury.deltaLamports <= (REWARD * PROTOCOL_FEE_BPS) / 10_000n,
+    ).toBe(true);
 
     // The worker keeps at least 60% of the reward (the program-invariant
     // floor at the fee caps), and at least the exact residual cut.
@@ -147,7 +165,11 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
     expect(table).toContain("5.00%");
 
     // The worker bot ran through the reused agenc-worker runtime.
-    expect(logs.some((line) => line.includes("worker bot: task.claimed"))).toBe(true);
-    expect(logs.some((line) => line.includes("worker bot: task.submitted"))).toBe(true);
+    expect(logs.some((line) => line.includes("worker bot: task.claimed"))).toBe(
+      true,
+    );
+    expect(
+      logs.some((line) => line.includes("worker bot: task.submitted")),
+    ).toBe(true);
   });
 });

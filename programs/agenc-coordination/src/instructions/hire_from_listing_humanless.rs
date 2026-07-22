@@ -21,8 +21,9 @@ use crate::instructions::completion_helpers::{
     resolve_referrer_snapshot, validate_marketplace_payee_destinations,
 };
 use crate::instructions::hire_from_listing::{
-    hire_deadline_offset, resolve_listing_attestor, validate_hire_terms, validate_listing_capacity,
-    validate_listing_moderation_for_hire, validate_listing_spec_hash,
+    hire_deadline_offset, resolve_listing_attestor, validate_hire_terms,
+    validate_hired_task_spec_hash, validate_listing_capacity, validate_listing_moderation_for_hire,
+    validate_listing_spec_hash,
 };
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::moderation_gate_helpers::{
@@ -156,6 +157,8 @@ pub struct HireFromListingHumanless<'info> {
 /// - `expected_price` / `expected_version`: the listing terms the buyer agreed to;
 ///   the hire is rejected if the on-chain listing no longer matches (anti-rug).
 /// - `review_window_secs`: CreatorReview review window for the forced validation config.
+/// - `task_job_spec_hash`: immutable buyer-specific work instructions committed
+///   before the escrow transfer and enforced when the task is activated.
 pub fn handler(
     ctx: Context<HireFromListingHumanless>,
     task_id: [u8; 32],
@@ -165,6 +168,7 @@ pub fn handler(
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
     moderator: Pubkey,
+    task_job_spec_hash: [u8; 32],
 ) -> Result<()> {
     let clock = Clock::get()?;
     let config = ctx.accounts.protocol_config.as_ref();
@@ -264,8 +268,10 @@ pub fn handler(
     validate_deadline(deadline, &clock, true)?;
 
     validate_listing_spec_hash(&listing_spec_hash)?;
+    validate_hired_task_spec_hash(&task_job_spec_hash)?;
     let mut description = [0u8; 64];
     description[..32].copy_from_slice(&listing_spec_hash);
+    description[32..].copy_from_slice(&task_job_spec_hash);
 
     let protocol_fee_bps = config.protocol_fee_bps;
 

@@ -16,11 +16,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -43,6 +41,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -52,9 +52,7 @@ export const MODERATION_BLOCK_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([90, 220, 89, 93, 67, 217, 235, 20]);
 
 export function getModerationBlockDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    MODERATION_BLOCK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(MODERATION_BLOCK_DISCRIMINATOR);
 }
 
 export type ModerationBlock = {
@@ -116,10 +114,10 @@ export type ModerationBlockArgs = {
 export function getModerationBlockEncoder(): Encoder<ModerationBlockArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
       ["status", getU8Encoder()],
-      ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["rationaleHash", getFixedBytesEncoder(32, "rationaleHash")],
       [
         "rationaleUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
@@ -128,7 +126,7 @@ export function getModerationBlockEncoder(): Encoder<ModerationBlockArgs> {
       ["updatedAt", getI64Encoder()],
       ["updatedBy", getAddressEncoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 16)],
+      ["reserved", getFixedBytesEncoder(16, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: MODERATION_BLOCK_DISCRIMINATOR }),
   );

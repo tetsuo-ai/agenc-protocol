@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
@@ -39,6 +37,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -61,9 +61,7 @@ export const RESOLVE_DISPUTE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getResolveDisputeDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    RESOLVE_DISPUTE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(RESOLVE_DISPUTE_DISCRIMINATOR);
 }
 
 export type ResolveDisputeInstruction<
@@ -200,9 +198,9 @@ export type ResolveDisputeInstructionDataArgs = {
 export function getResolveDisputeInstructionDataEncoder(): Encoder<ResolveDisputeInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["approve", getBooleanEncoder()],
-      ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["rationaleHash", getFixedBytesEncoder(32, "rationaleHash")],
       [
         "rationaleUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

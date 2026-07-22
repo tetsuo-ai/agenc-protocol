@@ -22,7 +22,17 @@ import {
   type PurchaseGoodAsyncInput,
   type UpdateGoodsListingAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
 import { encodeListingName, encodeListingTags } from "../values/index.js";
+import {
+  snapshotFixedBytes,
+  snapshotOptionalFixedBytes,
+} from "../values/fixed-bytes.js";
+import {
+  snapshotOptionOrNullable,
+  snapshotOptionalAddress,
+} from "../values/options.js";
+import { snapshotDenseStructuredArray } from "../values/structured-clone.js";
 import { assertCapability, type CapabilitySet } from "./surface.js";
 
 export { findGoodPda, findSaleReceiptPda };
@@ -64,30 +74,57 @@ export type CreateGoodsListingInput = Omit<
 };
 
 const encName = (v: CreateGoodsListingInput["name"]) =>
-  typeof v === "string" ? encodeListingName(v) : v;
+  typeof v === "string"
+    ? encodeListingName(v)
+    : snapshotFixedBytes(v, 32, "createGoodsListing: name");
 const encTags = (v: CreateGoodsListingInput["tags"]) =>
-  Array.isArray(v) ? encodeListingTags(v as readonly string[]) : (v as CreateGoodsListingAsyncInput["tags"]);
+  Array.isArray(v)
+    ? encodeListingTags(
+        snapshotDenseStructuredArray(
+          v as readonly string[],
+          "createGoodsListing: tags",
+          32,
+        ),
+      )
+    : snapshotFixedBytes(v, 64, "createGoodsListing: tags");
 
 /**
  * Build a `create_goods_listing` instruction (SELLER-signed). The `good` PDA
- * and (when omitted) the `moderationBlock` account are auto-resolved from the
- * metadata hash. Pass `surface` to fail fast if the cluster hasn't stamped the
+ * is auto-resolved from the seller and good ID. The required `moderationBlock`
+ * must be the canonical BLOCK-floor PDA for `metadataHash`; the program verifies
+ * that binding. Pass `surface` to fail fast if the cluster hasn't stamped the
  * batch-4 goods surface.
  */
 export async function createGoodsListing(
   input: CreateGoodsListingInput,
   opts: { surface?: CapabilitySet } = {},
 ) {
-  if (opts.surface) assertCapability(opts.surface, "goods");
-  const operator = input.operator ?? NO_OPERATOR;
-  const operatorFeeBps = input.operatorFeeBps ?? 0;
-  return getCreateGoodsListingInstructionAsync({
-    ...input,
-    name: encName(input.name),
-    tags: encTags(input.tags),
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const operator = stableInput.operator ?? NO_OPERATOR;
+  const operatorFeeBps = stableInput.operatorFeeBps ?? 0;
+  const generatedInput = {
+    ...stableInput,
+    goodId: snapshotFixedBytes(
+      stableInput.goodId,
+      32,
+      "createGoodsListing: goodId",
+    ),
+    name: encName(stableInput.name),
+    metadataHash: snapshotFixedBytes(
+      stableInput.metadataHash,
+      32,
+      "createGoodsListing: metadataHash",
+    ),
+    priceMint: snapshotOptionalAddress(
+      stableInput.priceMint,
+      "createGoodsListing: priceMint",
+    ),
+    tags: encTags(stableInput.tags),
     operator,
     operatorFeeBps,
-  } as CreateGoodsListingAsyncInput);
+  } as CreateGoodsListingAsyncInput;
+  if (opts.surface) assertCapability(opts.surface, "goods");
+  return getCreateGoodsListingInstructionAsync(generatedInput);
 }
 
 /**
@@ -97,8 +134,9 @@ export async function createGoodsListing(
  * IMPORTANT runtime contract for the caller (a purchase is one atomic sale):
  *  - `expectedSerial` MUST equal the listing's current `sold_count`; if a
  *    concurrent sale lands first the tx fails (`GoodsSerialStale` or a receipt
- *    init-collision) — re-read `sold_count` and retry with the new serial
- *    ({@link purchaseGoodWithRetry} does this for you).
+ *    init-collision) — re-read `sold_count`, rebuild the instruction, and retry
+ *    with the new serial. Transport-level blockhash retries cannot repair a
+ *    stale program argument.
  *  - `expectedPrice` is the slippage ceiling.
  *  - `expectedMetadataHash` pins the exact off-chain good description the buyer
  *    reviewed; a concurrent metadata swap fails before payment.
@@ -113,8 +151,17 @@ export async function purchaseGood(
   input: PurchaseGoodInput,
   opts: { surface?: CapabilitySet } = {},
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const generatedInput = {
+    ...stableInput,
+    expectedMetadataHash: snapshotFixedBytes(
+      stableInput.expectedMetadataHash,
+      32,
+      "purchaseGood: expectedMetadataHash",
+    ),
+  };
   if (opts.surface) assertCapability(opts.surface, "goods");
-  return getPurchaseGoodInstructionAsync(input);
+  return getPurchaseGoodInstructionAsync(generatedInput);
 }
 
 /**
@@ -127,11 +174,55 @@ export async function updateGoodsListing(
   input: UpdateGoodsListingAsyncInput,
   opts: { surface?: CapabilitySet } = {},
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const generatedInput = {
+    ...stableInput,
+    price: snapshotOptionOrNullable(
+      stableInput.price,
+      "updateGoodsListing: price",
+    ),
+    isActive: snapshotOptionOrNullable(
+      stableInput.isActive,
+      "updateGoodsListing: isActive",
+    ),
+    metadataHash: snapshotOptionalFixedBytes(
+      stableInput.metadataHash,
+      32,
+      "updateGoodsListing: metadataHash",
+    ),
+    metadataUri: snapshotOptionOrNullable(
+      stableInput.metadataUri,
+      "updateGoodsListing: metadataUri",
+    ),
+    tags: snapshotOptionalFixedBytes(
+      stableInput.tags,
+      64,
+      "updateGoodsListing: tags",
+    ),
+    additionalSupply: snapshotOptionOrNullable(
+      stableInput.additionalSupply,
+      "updateGoodsListing: additionalSupply",
+    ),
+    operator: snapshotOptionalAddress(
+      stableInput.operator,
+      "updateGoodsListing: operator",
+    ),
+    operatorFeeBps: snapshotOptionOrNullable(
+      stableInput.operatorFeeBps,
+      "updateGoodsListing: operatorFeeBps",
+    ),
+  };
   if (opts.surface) assertCapability(opts.surface, "goods");
-  return getUpdateGoodsListingInstructionAsync(input);
+  return getUpdateGoodsListingInstructionAsync(generatedInput);
 }
 
 /** The BLOCK-floor account a create/purchase must pass for a metadata hash. */
 export async function goodsModerationBlockPda(metadataHash: Uint8Array) {
-  return findModerationBlockPda({ contentHash: metadataHash });
+  return findModerationBlockPda({
+    contentHash: snapshotFixedBytes(
+      metadataHash,
+      32,
+      "goodsModerationBlockPda: metadataHash",
+    ),
+  });
 }

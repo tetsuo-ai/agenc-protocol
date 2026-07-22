@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -43,9 +43,7 @@ export const APPLY_DISPUTE_SLASH_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([195, 168, 20, 83, 250, 122, 11, 187]);
 
 export function getApplyDisputeSlashDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    APPLY_DISPUTE_SLASH_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(APPLY_DISPUTE_SLASH_DISCRIMINATOR);
 }
 
 export type ApplyDisputeSlashInstruction<
@@ -125,7 +123,9 @@ export type ApplyDisputeSlashInstructionDataArgs = {};
 
 export function getApplyDisputeSlashInstructionDataEncoder(): FixedSizeEncoder<ApplyDisputeSlashInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: APPLY_DISPUTE_SLASH_DISCRIMINATOR }),
   );
 }

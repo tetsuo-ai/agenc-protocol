@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -49,7 +49,7 @@ export const UPDATE_BID_MARKETPLACE_CONFIG_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([188, 47, 195, 95, 22, 60, 246, 211]);
 
 export function getUpdateBidMarketplaceConfigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     UPDATE_BID_MARKETPLACE_CONFIG_DISCRIMINATOR,
   );
 }
@@ -100,7 +100,7 @@ export type UpdateBidMarketplaceConfigInstructionDataArgs = {
 export function getUpdateBidMarketplaceConfigInstructionDataEncoder(): FixedSizeEncoder<UpdateBidMarketplaceConfigInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["minBidBondLamports", getU64Encoder()],
       ["bidCreationCooldownSecs", getI64Encoder()],
       ["maxBidsPer24h", getU16Encoder()],

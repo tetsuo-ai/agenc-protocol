@@ -71,9 +71,17 @@ import {
   type BidMarketplaceInitializedEventData,
 } from "./bidMarketplaceInitialized";
 import {
+  getBidPromotedEventDecoder,
+  type BidPromotedEventData,
+} from "./bidPromoted";
+import {
   getBidUpdatedEventDecoder,
   type BidUpdatedEventData,
 } from "./bidUpdated";
+import {
+  getBidWinnerDemotedEventDecoder,
+  type BidWinnerDemotedEventData,
+} from "./bidWinnerDemoted";
 import {
   getBondForfeitedEventDecoder,
   type BondForfeitedEventData,
@@ -110,6 +118,10 @@ import {
   getDisputeInitiatedEventDecoder,
   type DisputeInitiatedEventData,
 } from "./disputeInitiated";
+import {
+  getDisputePeerClaimSettledEventDecoder,
+  type DisputePeerClaimSettledEventData,
+} from "./disputePeerClaimSettled";
 import {
   getDisputeResolvedEventDecoder,
   type DisputeResolvedEventData,
@@ -431,7 +443,9 @@ export type AgencEvent =
   | { eventName: "BidCreated"; data: BidCreatedEventData }
   | { eventName: "BidExpired"; data: BidExpiredEventData }
   | { eventName: "BidMarketplaceInitialized"; data: BidMarketplaceInitializedEventData }
+  | { eventName: "BidPromoted"; data: BidPromotedEventData }
   | { eventName: "BidUpdated"; data: BidUpdatedEventData }
+  | { eventName: "BidWinnerDemoted"; data: BidWinnerDemotedEventData }
   | { eventName: "BondForfeited"; data: BondForfeitedEventData }
   | { eventName: "BondPosted"; data: BondPostedEventData }
   | { eventName: "BondRefunded"; data: BondRefundedEventData }
@@ -441,6 +455,7 @@ export type AgencEvent =
   | { eventName: "DisputeCancelled"; data: DisputeCancelledEventData }
   | { eventName: "DisputeExpired"; data: DisputeExpiredEventData }
   | { eventName: "DisputeInitiated"; data: DisputeInitiatedEventData }
+  | { eventName: "DisputePeerClaimSettled"; data: DisputePeerClaimSettledEventData }
   | { eventName: "DisputeResolved"; data: DisputeResolvedEventData }
   | { eventName: "DisputeResolverAssigned"; data: DisputeResolverAssignedEventData }
   | { eventName: "DisputeResolverRevoked"; data: DisputeResolverRevokedEventData }
@@ -647,11 +662,25 @@ export const AGENC_EVENT_DECODERS: {
       data: getBidMarketplaceInitializedEventDecoder().decode(payload),
     }),
   },
+  "fd0c1af5670c92b0": {
+    eventName: "BidPromoted",
+    decode: (payload) => ({
+      eventName: "BidPromoted",
+      data: getBidPromotedEventDecoder().decode(payload),
+    }),
+  },
   "469919fde05ec694": {
     eventName: "BidUpdated",
     decode: (payload) => ({
       eventName: "BidUpdated",
       data: getBidUpdatedEventDecoder().decode(payload),
+    }),
+  },
+  "2616586def7992f9": {
+    eventName: "BidWinnerDemoted",
+    decode: (payload) => ({
+      eventName: "BidWinnerDemoted",
+      data: getBidWinnerDemotedEventDecoder().decode(payload),
     }),
   },
   "8d2e66ea1f1081a9": {
@@ -715,6 +744,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "DisputeInitiated",
       data: getDisputeInitiatedEventDecoder().decode(payload),
+    }),
+  },
+  "7028149881ecda7f": {
+    eventName: "DisputePeerClaimSettled",
+    decode: (payload) => ({
+      eventName: "DisputePeerClaimSettled",
+      data: getDisputePeerClaimSettledEventDecoder().decode(payload),
     }),
   },
   "7940f9998b80ecbb": {

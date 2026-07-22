@@ -27,6 +27,11 @@
 > reviewed compact on-chain IDL **before** `surface_revision` is stamped, and the
 > stamp is the final mutation. A new revision must never be advertised over an old
 > or unverified IDL.
+>
+> **Revision-5 cutover:** use [`REVISION_5_CUTOVER.md`](./REVISION_5_CUTOVER.md)
+> for the pending atomic hire/activation wire change, consumer staging, legacy
+> hire disposition, and current execution order. The historical sequence below
+> is not the revision-5 procedure.
 
 Operational runbook that was used to upgrade the live mainnet `agenc-coordination`
 program from the restricted **25-instruction canary** surface to the full
@@ -45,14 +50,14 @@ authorization.
 > Historical: these were the values **before** the upgrade. They are no longer the
 > live state. Post-upgrade live values are recorded in §6 and `MAINNET_MAINLINE.md`.
 
-| | Value (pre-upgrade) |
-|---|---|
-| Program ID | `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` |
-| ProgramData | `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` |
-| Upgrade authority | now a **2-of-3 multisig** (`Hcecp…` / `BXDan…` / `4QcKB…`) |
-| Live binary | 921,016 B (canary build, `--features mainnet-canary`) |
-| Live ProtocolConfig | OLD 349-byte layout (pre-P6.5, no `surface_revision`) |
-| Live Task accounts | **169**, at 382-byte (pre-Batch-2) layout |
+|                     | Value (pre-upgrade)                                        |
+| ------------------- | ---------------------------------------------------------- |
+| Program ID          | `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`             |
+| ProgramData         | `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`             |
+| Upgrade authority   | now a **2-of-3 multisig** (`Hcecp…` / `BXDan…` / `4QcKB…`) |
+| Live binary         | 921,016 B (canary build, `--features mainnet-canary`)      |
+| Live ProtocolConfig | OLD 349-byte layout (pre-P6.5, no `surface_revision`)      |
+| Live Task accounts  | **169**, at 382-byte (pre-Batch-2) layout                  |
 
 The full-surface binary as deployed is **1,948,384 B** (~1.95 MB, size-optimized;
 sha `ea2fa92f…`).
@@ -63,12 +68,12 @@ sha `ea2fa92f…`).
 
 Solana rent = `(128 + bytes) × 6960` lamports; verified with `solana rent`.
 
-| Item | SOL | Nature |
-|---|---|---|
-| Current ProgramData rent (already funded, pre-upgrade) | 6.41147544 | already locked |
-| **Permanent extension top-up** (to fund the ~1.95 MB binary) | **~7.15** | **locked forever** (recoverable only by closing the program) |
-| Upgrade buffer rent | — | **temporary — refunded** to the payer after the upgrade |
-| Write/upgrade tx fees | ~0.015 | permanent |
+| Item                                                         | SOL        | Nature                                                       |
+| ------------------------------------------------------------ | ---------- | ------------------------------------------------------------ |
+| Current ProgramData rent (already funded, pre-upgrade)       | 6.41147544 | already locked                                               |
+| **Permanent extension top-up** (to fund the ~1.95 MB binary) | **~7.15**  | **locked forever** (recoverable only by closing the program) |
+| Upgrade buffer rent                                          | —          | **temporary — refunded** to the payer after the upgrade      |
+| Write/upgrade tx fees                                        | ~0.015     | permanent                                                    |
 
 - **Net permanent spend:** ~**7.15 SOL** (the ProgramData rent increase) + fees.
 
@@ -113,7 +118,7 @@ the badge silently flips back to unverified:
 
 1. **Build the deploy artifact reproducibly.** The dockerized build is the
    canonical one (`solana-verify build --library-name agenc_coordination
-   programs/agenc-coordination`); a plain local `anchor build` reproduced the
+programs/agenc-coordination`); a plain local `anchor build` reproduced the
    same hash for the c38874c artifact, but verify BEFORE deploy:
    `solana-verify get-executable-hash <the .so you will deploy>` must equal
    the hash of the dockerized build at the release commit. Keep
@@ -126,13 +131,13 @@ the badge silently flips back to unverified:
    **Squads-era procedure (as executed 2026-07-03, restoring the badge after
    the P1.2 upgrade missed this step):**
    1. Reproduce + compare (read-only): `solana-verify verify-from-repo --url
-      <RPC> --program-id HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
-      https://github.com/tetsuo-ai/agenc-protocol --commit-hash <deployed
-      commit> --library-name agenc_coordination --mount-path
-      programs/agenc-coordination` — hashes must match before any signing.
+<RPC> --program-id HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
+https://github.com/tetsuo-ai/agenc-protocol --commit-hash <deployed
+commit> --library-name agenc_coordination --mount-path
+programs/agenc-coordination` — hashes must match before any signing.
    2. `solana-verify export-pda-tx <repo-url> --program-id <PID> --uploader
-      <vault> --commit-hash <deployed commit> --library-name
-      agenc_coordination --mount-path programs/agenc-coordination` →
+<vault> --commit-hash <deployed commit> --library-name
+agenc_coordination --mount-path programs/agenc-coordination` →
       a base58 legacy TRANSACTION. Decode it, DROP the ComputeBudget
       instruction (CPI-illegal inside a vault execute), and re-serialize the
       remaining otter-verify instruction as a Squads `TransactionMessage`
@@ -140,11 +145,11 @@ the badge silently flips back to unverified:
       otter-verify program], u8/u16 SmallVec length prefixes).
    3. Fund the vault with ~0.01 SOL (it pays the otter PDA rent), then
       `squads-multisig-cli vault-transaction-create --vault-index 0
-      --transaction-message <bytes>` → `proposal-vote --action Approve` × 2
+--transaction-message <bytes>` → `proposal-vote --action Approve` × 2
       members → `vault-transaction-execute`. Verify the stored vault tx's
       content (commit string + account set) BEFORE voting.
    4. Re-trigger: `solana-verify remote submit-job --program-id <PID>
-      --uploader <vault>` and confirm `is_verified: true` at
+--uploader <vault>` and confirm `is_verified: true` at
       verify.osec.io/status/<PID>.
 
 ## 2.6 P1.2 open-roster cutover — a FLAG-DAY, not a compatible upgrade (added 2026-07-03)
@@ -184,10 +189,12 @@ Full rationale + the adversarial-review addendum: `docs/P1_2_OPEN_ROSTER_SPEC.md
 > `protocol_version == 1`; the version bump is **LAST**. Do not reorder.
 
 1. **Deploy the binary first.**
+
    ```
    solana program deploy --program-id HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
      <full-surface agenc_coordination.so> --upgrade-authority <multisig/authority>
    ```
+
    At this instant the live 349-byte ProtocolConfig and the 169 382-byte Tasks
    **fail typed reads** — this is expected and is why steps 2–3 follow immediately.
 

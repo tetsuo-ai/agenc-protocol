@@ -54,6 +54,7 @@ import {
   type GpaFilter,
   type ProgramAccountsSource,
 } from "./transport.js";
+import { DISPUTE_SAFE_MAX_WORKERS } from "../values/protocol-limits.js";
 
 /** A decoded program account paired with its on-chain address. */
 export type DecodedProgramAccount<TAccount> = {
@@ -247,9 +248,6 @@ export type ListDirectClaimableTasksOptions = ListOpenTasksOptions & {
    */
   deadlineSafetySeconds?: bigint;
 };
-
-/** The monolithic dispute unwind supports at most four simultaneous workers. */
-const DISPUTE_SAFE_MAX_WORKERS = 4;
 
 /** Bound ordinary client/validator clock skew without surfacing doomed work. */
 export const DEFAULT_DIRECT_CLAIM_DEADLINE_SAFETY_SECONDS = 30n;

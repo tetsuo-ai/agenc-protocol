@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const REPUTATION_DELEGATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([247, 166, 224, 123, 62, 95, 198, 71]);
 
 export function getReputationDelegationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REPUTATION_DELEGATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REPUTATION_DELEGATION_DISCRIMINATOR);
 }
 
 export type ReputationDelegation = {
@@ -89,14 +87,14 @@ export type ReputationDelegationArgs = {
 export function getReputationDelegationEncoder(): FixedSizeEncoder<ReputationDelegationArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["delegator", getAddressEncoder()],
       ["delegatee", getAddressEncoder()],
       ["amount", getU16Encoder()],
       ["expiresAt", getI64Encoder()],
       ["createdAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
+      ["reserved", getFixedBytesEncoder(8, "reserved")],
     ]),
     (value) => ({
       ...value,

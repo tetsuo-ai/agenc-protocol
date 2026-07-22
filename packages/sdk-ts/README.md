@@ -22,6 +22,16 @@ npm install @tetsuo-ai/marketplace-sdk @solana/kit @solana/program-client-core
 `@solana/kit` and `@solana/program-client-core` are peer dependencies, so you control
 their versions.
 
+### Signer identity contract
+
+`createMarketplaceClient` and the exported `stabilizeTransactionSigner` helper
+canonicalize the supplied signer's `address`, install it as a non-writable own
+property, and preserve that same signer object's identity. The object itself is
+not frozen, so wallet/session state unrelated to its public key can continue to
+change. This preserves the single capability identity Solana Kit requires when
+one public key fills multiple signer roles. Treat a stabilized signer as enrolled
+to one wallet; create a new signer object when the connected account changes.
+
 ## Quickstart — the full marketplace in-process (litesvm sandbox)
 
 **Start here.** This is a complete, runnable marketplace lifecycle against the
@@ -104,6 +114,8 @@ await market.moderator.attestListing(listing, listingSpecHash);
 
 // 4) Human buyer hires the listing -> Task + escrow + HireRecord.
 const taskId = new Uint8Array(32).fill(8);
+// Compute this from the exact buyer-specific job spec BEFORE escrow funding.
+const jobSpecHash = new Uint8Array(32).fill(9);
 await buyerClient.hireFromListingHumanless({
   listing,
   providerAgent,
@@ -113,13 +125,13 @@ await buyerClient.hireFromListingHumanless({
   expectedVersion: 1n,
   reviewWindowSecs: 86_400n,
   listingSpecHash,
+  taskJobSpecHash: jobSpecHash,
   moderator: market.moderator.address, // P1.2: the attestation author consumed
 });
 const [task] = await findTaskPda({ creator: buyer.address, taskId });
 const [hireRecord] = await findHireRecordPda({ task });
 
 // 5) CLEAN task attestation, then the creator pins the job spec.
-const jobSpecHash = new Uint8Array(32).fill(9);
 await market.moderator.attestTask(task, jobSpecHash);
 await buyerClient.send([
   await facade.setTaskJobSpec({
@@ -266,6 +278,28 @@ getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tet
   `complete_task_private` is not in the production IDL; it exists only in the
   unsupported 101-instruction `private-zk` development build.
 
+### Historical transaction backfills
+
+The namespaced `history` API strictly identifies and decodes the three writes
+whose wire changed at revision 5: `hire_from_listing`,
+`hire_from_listing_humanless`, and `set_task_job_spec`. It preserves the exact
+revision-4 discriminators, data fields, and account-meta order alongside the
+current commitment-v2 layouts so indexers can backfill old mainnet
+transactions:
+
+```ts
+import { history } from "@tetsuo-ai/marketplace-sdk";
+
+const decoded = history.decodeMarketplaceWriteInstruction(instruction.data);
+if (decoded?.wireVersion === "legacy-v1") {
+  // Map transaction account indices with decoded.accountSchema.
+}
+```
+
+This is intentionally decode-only. Do not construct or replay revision-4
+writes: legacy hires lack the buyer-specific job-spec commitment required by
+revision 5.
+
 **Advanced / additive facade surfaces** (beyond the hire lifecycle):
 
 | Surface                                 | Facade entry points                                                 | Notes                                                                   |
@@ -285,7 +319,8 @@ on-chain semantics in `docs/PROGRAM_SURFACE.md` and `docs/VERSIONS.md`.
 
 `createSandboxClient()` wires the client to a sandbox cluster with a throwaway
 airdropped signer. The shipped default is the **documented localnet stack**
-(`node scripts/localnet-up.mjs` at the repo root, RPC `127.0.0.1:8899`) —
+(`node scripts/localnet-up.mjs --dev-ready` at the repo root, RPC
+`127.0.0.1:8899`) —
 never a dead hosted endpoint; `AGENC_SANDBOX_CLUSTER=devnet` retargets the
 same code at public devnet. Fixtures come from the localnet seeder
 (`scripts/seed-devnet-sandbox.mjs` writes `.localnet/fixtures.json`; the
@@ -360,7 +395,7 @@ your own RPC. The indexer client also includes webhook helpers
 
 **Local development: the localnet stack.** Don't burn devnet rate limits
 iterating — the `agenc-protocol` repo ships a one-command local stack
-(`node scripts/localnet-up.mjs`, see `docs/LOCALNET.md`) that boots a
+(`node scripts/localnet-up.mjs --dev-ready`, see `docs/LOCALNET.md`) that boots a
 `solana-test-validator` with the program + configs at genesis and writes
 `.localnet/env.json`. The sandbox helpers — `resolveSandboxEnvironment`,
 `createSandboxClient`, `requestSandboxAttestation`,
@@ -386,8 +421,10 @@ configured threshold on-chain.
 `executeProposal` keeps `multisigSigners` optional because only `FeeChange` and
 `RateLimitChange` executions require dual control; callers executing either kind
 must supply the current threshold. The always-gated update and migration builders
-require the field at the TypeScript boundary. For `updateMultisig`, supply enough
-current owners and enough owners from the proposed new set, without duplicates.
+and `stampReleaseSurface` require the field at the TypeScript boundary. The release
+stamp builder also detaches every reviewed 32-byte evidence hash before deriving
+default PDAs. For `updateMultisig`, supply enough current owners and enough owners
+from the proposed new set, without duplicates.
 
 ## Layout
 

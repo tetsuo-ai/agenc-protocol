@@ -123,7 +123,7 @@ surface.
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed 98-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten.                                                                                          |
 | `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **98-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
-| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | 0.4.2 candidate (published: 0.4.1)   | React hooks/components for embeddable marketplace UIs; the candidate peer range admits SDK 0.12.                                                                                                                                                                      |
+| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | 0.5.0 candidate (published: 0.4.1)   | React hooks/components for embeddable marketplace UIs; the candidate requires the revision-5 SDK and buyer job-spec commitment.                                                                                                                                       |
 | `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | 0.5.0 candidate (published: 0.4.0)   | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers.                                                                                                                                                                                      |
 | `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | 0.5.0 candidate (published: 0.4.0)   | MCP server exposing marketplace tools.                                                                                                                                                                                                                                |
 | `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | 0.2.0 candidate (published: 0.1.0)   | Shared moderation canon / test vectors.                                                                                                                                                                                                                               |
@@ -172,8 +172,8 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (runner totals refreshed 2026-07-19):** Rust **524** production /
-**524** `validation-timings` / **549** private-ZK / **321** canary; **77**
+**Last complete pre-revision-5-continuation test snapshot (2026-07-19):** Rust
+**524** production / **524** `validation-timings` / **549** private-ZK / **321** canary; **77**
 model/property tests; **408** compiled-program integrations (**399** pass and
 **9** explicit canary-profile skips), plus the separate canary compiled suite at
 **11/11**; SDK **657 pass + one skip**; all npm workspaces
@@ -184,9 +184,26 @@ the batch 1–3 internal audits closed with 0 open findings **at that time**
 ([docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)); the 2026-07-16/17 adversarial
 audit (three passes, branch `fix/audit-findings-2026-07-16`) landed all blocker fixes,
 and its full hardening queue is now **complete** — all 19 findings (F-1–F-19)
-implemented and gated ([TODO.MD](TODO.MD) tracks each with evidence and acceptance
+implemented and gated ([enterprise remediation record](docs/audit/ENTERPRISE_REMEDIATION_2026-07.md) tracks each with evidence and acceptance
 criteria); accepted trade-offs are recorded in
 [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md).
+
+That snapshot is historical, not release authority for the dirty revision-5
+continuation. The current tree reproduces **533** production Rust and **323**
+canary tests; its SBF is byte-identical across three isolated builds at
+2,285,640 bytes with SHA-256
+`5112216b5ebdeeed3d83d6fe987ea847cfe44e1e1c7f8d3caa9a5169aef2a1cb`.
+Late accepted SDK/React/worker/CLI fixes invalidate the prior package-train SRIs
+and 1,560-test workspace aggregate. Latest package evidence (2026-07-21) is SDK
+**883/1** twice consecutively, React **312/1**, worker **273/273**, CLI
+**146/146**, tools **98/98**, and starter **36/36** on Node 24, with Node 22
+typecheck plus focused client/governance **100/100**; the full script suite is
+twice green at **451/451**, but the all-nine double-pack/rebind remains open.
+Compiled production integration is twice green at **404/404** plus nine
+canary-only skips that separately pass **11/11**. Remaining release authority
+comes from those reopened local gates, protected CI, live compatibility
+simulations, consumer convergence, and the controlled mainnet ceremony—not this
+paragraph.
 
 > Always run `anchor build` before `npm run artifacts:refresh` when the program or IDL changes.
 
@@ -223,10 +240,19 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    active `.well-known/security.txt` at both canonical hosts and verify the
    plain-text responses. Do not advertise the security mailbox until delivery
    and alerting have been tested end to end.
-4. **ProgramData capacity ceremony.** The current candidate is 97,152 bytes too
-   large for the live allocation. Before upgrade, execute a separately reviewed
-   Squads-CPI `ExtendProgramChecked`, wait for a later slot, and rerun the full
-   capacity/rent/authority preflight. Never let deploy auto-extend.
+4. **ProgramData capacity ceremony.** The thrice-reproduced current candidate is
+   102,416 bytes too
+   large for the live allocation. Current Agave rejects both the inactive
+   `ExtendProgramChecked` instruction and legacy `ExtendProgram` through CPI,
+   so this cannot be a Squads proposal. Before upgrade, use the pinned
+   `scripts/program-extend-mainnet.mjs` rail with official Agave CLI 4.1.0 to
+   execute the permissionless legacy extension as a top-level transaction from
+   an explicitly funded System-owned payer. The rail pins the Linux binary hash
+   and one unlinked read-only payer-keypair inode for both signer uses, writes
+   durable recovery evidence before broadcast, recovers the exact finalized
+   signature, and proves the old payload is unchanged plus the new region is zero.
+   Require independent-RPC pre/postflight, wait for a later slot, and rerun the
+   full capacity/rent/authority preflight. Never let deploy auto-extend.
 5. **Migration verification and revision stamp.** Run the canonical idempotent sweep after
    deployment and stamp the new surface last. The 2026-06-11 upgrade's 169-Task migration
    is historical; revision 5 expects the already-migrated 351-byte config and 466-byte
@@ -280,21 +306,21 @@ artifacts (PLAN.md Phase 8):
 
 Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for developers and AI agents).
 
-| Doc                                                                        | What                                                                                            |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md)                               | Path-by-path repo map                                                                           |
-| [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md)                         | Grouped instructions + PDA/account model                                                        |
-| [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)               | Batch 1–3 changes, audits, coverage matrix                                                      |
-| [TODO.MD](TODO.MD)                                                         | Security-hardening queue (F-1–F-19): all items DONE with per-fix evidence + acceptance criteria |
-| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)                       | Accepted design decisions (do not re-file) with rationale                                       |
-| [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md)                 | SDK build/automation plan + status                                                              |
-| [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md)                       | Deployed source-of-truth + branch policy                                                        |
-| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                     | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live)            |
-| [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md)                     | How `anchor build` output becomes published artifacts                                           |
-| [docs/VALIDATION.md](docs/VALIDATION.md)                                   | Local toolchain + CI-equivalent commands                                                        |
-| [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                   | Reviewed-completion validation model                                                            |
-| [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md)                         | Private-completion + zk-config flow                                                             |
-| [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md) | Bid-book RFC                                                                                    |
+| Doc                                                                                          | What                                                                                            |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md)                                                 | Path-by-path repo map                                                                           |
+| [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md)                                           | Grouped instructions + PDA/account model                                                        |
+| [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)                                 | Batch 1–3 changes, audits, coverage matrix                                                      |
+| [docs/audit/ENTERPRISE_REMEDIATION_2026-07.md](docs/audit/ENTERPRISE_REMEDIATION_2026-07.md) | Security-hardening queue (F-1–F-19): all items DONE with per-fix evidence + acceptance criteria |
+| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)                                         | Accepted design decisions (do not re-file) with rationale                                       |
+| [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md)                                   | SDK build/automation plan + status                                                              |
+| [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md)                                         | Deployed source-of-truth + branch policy                                                        |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live)            |
+| [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md)                                       | How `anchor build` output becomes published artifacts                                           |
+| [docs/VALIDATION.md](docs/VALIDATION.md)                                                     | Local toolchain + CI-equivalent commands                                                        |
+| [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                                     | Reviewed-completion validation model                                                            |
+| [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md)                                           | Private-completion + zk-config flow                                                             |
+| [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md)                   | Bid-book RFC                                                                                    |
 
 AI agents working in this repo: also read **[CLAUDE.md](CLAUDE.md)** for the build gate,
 conventions, and the local-only / migration-sensitivity rules.

@@ -141,6 +141,39 @@ describe("AgencProvider", () => {
       }),
     });
     expect(result.current.client).toBe(client);
+    expect(result.current.rpcUrl).toBe("http://127.0.0.1:8899");
+    expect(result.current.orchestrationRpcUrl).toBeNull();
+    expect(result.current.orchestrationRpc).toBeNull();
+  });
+
+  it("uses only explicit reconciliation wiring with a custom client", () => {
+    const client = stubClient();
+    const orchestrationRpc = {} as NonNullable<
+      AgencProviderConfig["orchestrationRpc"]
+    >;
+    const explicitUrl = renderHook(() => useAgencContext(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        rpcUrl: "https://custom-rpc.example.test",
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    expect(explicitUrl.result.current.orchestrationRpcUrl).toBe(
+      "https://custom-rpc.example.test",
+    );
+
+    const injected = renderHook(() => useAgencContext(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        rpcUrl: "https://ignored.example.test",
+        orchestrationRpc,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    expect(injected.result.current.orchestrationRpc).toBe(orchestrationRpc);
+    expect(injected.result.current.orchestrationRpcUrl).toBeNull();
   });
 
   it("exposes a null client when neither client nor signer+rpc is given", () => {

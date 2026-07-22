@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -49,9 +49,7 @@ export const RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([224, 135, 44, 9, 88, 5, 32, 20]);
 
 export function getReclaimTerminalClaimDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR);
 }
 
 export type ReclaimTerminalClaimInstruction<
@@ -110,7 +108,9 @@ export type ReclaimTerminalClaimInstructionDataArgs = {};
 
 export function getReclaimTerminalClaimInstructionDataEncoder(): FixedSizeEncoder<ReclaimTerminalClaimInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR,

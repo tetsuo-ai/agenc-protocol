@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const LISTING_MODERATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([157, 129, 173, 120, 123, 143, 215, 24]);
 
 export function getListingModerationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    LISTING_MODERATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(LISTING_MODERATION_DISCRIMINATOR);
 }
 
 export type ListingModeration = {
@@ -113,20 +111,20 @@ export type ListingModerationArgs = {
 export function getListingModerationEncoder(): FixedSizeEncoder<ListingModerationArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["listing", getAddressEncoder()],
       ["providerAgent", getAddressEncoder()],
-      ["jobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["jobSpecHash", getFixedBytesEncoder(32, "jobSpecHash")],
       ["status", getU8Encoder()],
       ["riskScore", getU8Encoder()],
       ["categoryMask", getU64Encoder()],
-      ["policyHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["scannerHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["policyHash", getFixedBytesEncoder(32, "policyHash")],
+      ["scannerHash", getFixedBytesEncoder(32, "scannerHash")],
       ["recordedAt", getI64Encoder()],
       ["expiresAt", getI64Encoder()],
       ["moderator", getAddressEncoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 7)],
+      ["reserved", getFixedBytesEncoder(7, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: LISTING_MODERATION_DISCRIMINATOR }),
   );

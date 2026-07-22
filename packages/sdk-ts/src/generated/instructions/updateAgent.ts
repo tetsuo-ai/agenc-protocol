@@ -11,9 +11,7 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -44,6 +42,8 @@ import {
   type WritableAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -59,9 +59,7 @@ export const UPDATE_AGENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getUpdateAgentDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_AGENT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_AGENT_DISCRIMINATOR);
 }
 
 export type UpdateAgentInstruction<
@@ -102,7 +100,7 @@ export type UpdateAgentInstructionDataArgs = {
 export function getUpdateAgentInstructionDataEncoder(): Encoder<UpdateAgentInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["capabilities", getOptionEncoder(getU64Encoder())],
       [
         "endpoint",

@@ -5,6 +5,47 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-21 — verified lookup-table resolution + candidate rebind (not deployed)
+
+- **O(1) bid acceptance (founder-approved redesign,
+  docs/design/bid-accept-o1-redesign.md):** `TaskBidBook` now incrementally
+  tracks its deterministic policy winner (WeightedScore eta normalization is
+  frozen to the book-creation window, making every policy ordering a pure
+  function of immutable bid fields). `accept_bid` requires the tracked winner
+  with exact cached-component equality and enumerates NO competitors; the
+  tracked best may sweeten but not retreat; winner exits open a re-promotion
+  grace window served by the new permissionless `promote_bid` /
+  `demote_ineligible_best` cranks. `MAX_ACTIVE_BIDS_PER_TASK` is now a pure
+  state bound with no wire-size consequence.
+- **Chunked dispute settlement:** `resolve_dispute` / `expire_dispute` record
+  the ruling O(1) and reject peer bundles; each deferred collaborative peer is
+  swept by the new permissionless exit-gated `settle_dispute_claim` crank
+  (defendant excluded, tombstone-structural idempotency, per-peer counter
+  conservation). `Dispute` gained append-only peer counters and a recorded
+  terminal status behind the new non-terminal `SettlementPending` state; slash
+  finalizers still require true terminal status. Production surface is now
+  **101 instructions**; the frozen 25-instruction canary is unchanged.
+- **Artifact note:** these program changes supersede the `5112216b…` candidate
+  SBF identity recorded earlier today; the extension rail stays fail-closed
+  against its pinned prior artifact and must be deliberately rebound after
+  independent review of this redesign.
+
+- **SDK — verified address-lookup-table resolver:** the RPC transport now
+  resolves v0 lookup-table contents from raw base64 account bytes through the
+  official `@solana-program/address-lookup-table` codec instead of the RPC's
+  `jsonParsed` view, rejecting missing accounts, wrong owners, uninitialized
+  state, and undecodable layouts before compression; the client re-validates an
+  exact requested-set bijection. Independently senior-reviewed; five
+  revert-sensitive regressions added.
+- **Program (build-only):** the full-surface-only bootstrap version helper is
+  compiled out of the `mainnet-canary` build, restoring strict canary Clippy;
+  the production SBF is byte-identical before and after.
+- **Candidate rebind:** the extension rail, its tests, and the deploy docs are
+  rebound to the thrice-reproduced 2,285,640-byte candidate SBF
+  (`5112216b…`), superseding the pre-close-task-fix `79f55a68…` identity; the
+  required top-level extension is now exactly 102,416 bytes and rent/balance
+  evidence must be re-read before any ceremony.
+
 ## 2026-07-18 — revision-5 release hardening candidate (not deployed)
 
 - **Bootstrap validation:** `initialize_protocol` now verifies the exact
@@ -44,19 +85,24 @@ authoritative deployed-state record is
   obligations, account layouts, payout bindings, and all supported build surfaces.
   Production is 98 instructions, explicit development `private-zk` is 101, and the
   frozen canary is 25; invalid mixed feature combinations now fail compilation.
-  The candidate is 97,152 bytes larger than the live ProgramData payload capacity,
-  so upgrade preflight now blocks until a separately reviewed Squads/loader
-  `ExtendProgramChecked` action expands it. The rail models the loader's distinct
-  45-byte ProgramData and 37-byte Buffer headers, mainnet's active minimum-extension
-  rule, and the loader maximum; it pins Solana CLI 3.0.13, reads rent from the
-  genesis-checked RPC, disables implicit auto-extension, and rejects concurrent
-  capacity drift. Execute-mode step selection also refuses to deploy a needed
+  The thrice-reproduced candidate is 102,416 bytes larger than the live ProgramData payload capacity,
+  so upgrade preflight now blocks until a separately reviewed top-level legacy
+  `ExtendProgram` action expands it. Current mainnet never activated checked
+  extension and Agave rejects legacy extension through CPI, so the extension rail
+  uses official Agave CLI 4.1.0 with an explicit payer and two independent,
+  genesis-checked RPC snapshots. The rail also pins the release binary hash,
+  persists pre-send recovery evidence, recovers the exact finalized transaction,
+  and proves slot advancement plus unchanged-prefix/zero-suffix allocation. It
+  models the loader's distinct 45-byte ProgramData
+  and 37-byte Buffer headers, mainnet's active minimum-extension rule, and the loader
+  maximum; deploy still pins Solana CLI 3.0.13, disables implicit auto-extension,
+  and rejects concurrent capacity drift. Execute-mode step selection also refuses to deploy a needed
   binary while a migration is pending unless `sweep` immediately follows, so a
   partial `--only deploy` run cannot leave legacy accounts in the typed-read
   frozen window. The final release uses `stamp_release_surface`, which locks and
   validates the reviewed ProgramData metadata, canonical IDL, bid/moderation
   singletons, freshness, and Squads custody image in the same transaction that
-  writes the revision. The Squads-CPI extension and upgrade must execute in
+  writes the revision. The top-level extension and Squads upgrade must execute in
   different slots. No extension was authorized or executed here.
 - **Memory safety/maintainability:** all 11 production lifetime transmutes were
   removed in favor of owned deserialization with explicit persist/close operations.
@@ -70,7 +116,7 @@ authoritative deployed-state record is
   reviewed uncommitted tree as drift. CI gates all four Rust profiles and every
   downstream workspace.
 - **Unreleased coordinated package set:** the workspace candidates are protocol
-  **0.4.0**, SDK **0.12.0**, React **0.4.2**, tools/MCP **0.5.0**, worker **0.2.0**,
+  **0.4.0**, SDK **0.12.0**, React **0.5.0**, tools/MCP **0.5.0**, worker **0.2.0**,
   and scoped/unscoped CLI **0.3.0**. They are not published/live-version claims:
   protocol 0.3.0, SDK 0.11.0, React 0.4.1, tools/MCP 0.4.0, worker 0.1.1, and
   CLI 0.2.0 remain the published revision-4 set until the coordinated cutover.
@@ -82,8 +128,17 @@ authoritative deployed-state record is
   makes the GitHub release public. Tag-derived values reach shell through environment
   variables rather than direct expression interpolation. Every external release
   mutation re-resolves the remote tag to the triggering commit and exact fetched tag
-  object (including annotated tags), and a pre-existing npm version fails closed instead
-  of being silently endorsed as a successful rerun.
+  object (including annotated tags). A pre-existing npm version resumes only after
+  exact registry integrity and repository/workflow/ref/commit provenance verification;
+  mismatch or unverifiable provenance fails closed.
+- **Release identity/DAG routing:** package-specific gates now route exclusively from
+  the validated resolver's package id, including the pre-publication protocol verifier;
+  every release-train id maps to one actual routed gate step, which emits a one-time
+  completion proof after its checks pass. Packaging verifies that proof against the
+  resolved id/name/directory/version/tag and fails closed when a train package has only
+  a static identity declaration but no implemented gate. First-party dependency edges are checked
+  independently in production, optional, and peer sections; conflicting duplicate
+  ranges and `npm:` aliases to train packages are rejected.
 - **Post-audit CodeQL and cold-release hardening:** all ten reported source patterns
   are remediated with bounded structural parsing or linear scans, including public
   error handling, npm identity validation, SDK retry classification, receipt URLs,
@@ -95,18 +150,31 @@ authoritative deployed-state record is
   RFC 9116 metadata names only PVR. Release still requires deploying and verifying the
   exact metadata at both canonical hosts; no unverified contact is embedded in the
   candidate program.
-- **Final local evidence (refreshed 2026-07-19):** Rust 524 production / 524
-  `validation-timings` / 549 private-ZK / 321 canary; 77 model/property tests;
-  408 compiled-program integrations (399 pass and 9 explicit canary-profile
-  skips), plus the separate canary compiled suite passing 11/11; SDK 657 pass +
-  one skip; 1,444 workspace tests pass + two skips; all 355 script tests pass,
-  including the 239-test deployment/preflight subset. Strict Clippy,
-  formatting, artifact drift, package smoke, and SBF stack gates are green. The final
-  production SBF is 2,280,376 bytes with SHA-256
-  `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`.
+- **Current local evidence (refreshed 2026-07-20):** production and
+  `validation-timings` Rust pass **529/529** each, private-ZK **554/554**,
+  restricted canary **323/323**, and the 10,000-case property/model gate
+  **77/77**. Strict Clippy and formatting pass. Late accepted SDK/React/worker/
+  CLI repairs invalidated the former 1,560-test workspace aggregate and package
+  SRIs; final two-pass workspace and all-nine repack gates are pending until the
+  stable-reference localnet/CLI repairs, systematic React write-hook snapshots,
+  and release completeness control pass fresh senior review and the source tree
+  is frozen. Latest package evidence is SDK **743/1**, React **285/1** before the
+  reopened hook repair, worker **273/273**, and CLI **133/133** on Node 22 and
+  24, with typechecks/builds green. The pidfd rail passes focused **28/28** and
+  deployment/preflight **278/278** on both runtimes; the all-script two-pass
+  aggregate remains pending after source freeze.
+  The compiled production
+  suite passes twice at **399/399** plus nine canary-only skips; those cases pass
+  separately on the canary artifact at **11/11**. Node 22.23.1 and Rust 1.82
+  minimum-runtime gates pass and production audits find zero vulnerabilities.
+  The previously reproduced package train is not release authority for the
+  current tree until its open all-nine rebind closes. Two isolated builds, the canonical artifact, and the
+  SDK testing fixture reproduce the production SBF exactly at **2,284,496 bytes**,
+  SHA-256
+  `79f55a6847fa954ef9427fd09c0d84f4f363857e2b0c4753b03ff02802e8684d`.
   The canonical candidate IDL contains 98 instructions / 43 accounts / 99 events /
-  393 errors and has SHA-256
-  `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b`.
+  394 errors and has SHA-256
+  `8711c66ca53988efaad4f255a13e15f0804dd01328352496924f03fb4a4c5236`.
 - This is a pending candidate. Mainnet remains the revision-4, 99-instruction binary
   until an independently approved Squads upgrade and revision-5 stamp are complete.
 
@@ -171,7 +239,8 @@ authoritative deployed-state record is
 
 ## 2026-07-18 — audit P0 hardening queue complete (F-1, F-2, F-3, F-5)
 
-- the full P0 queue from the 2026-07 audit's pass-3 report (TODO.MD) is
+- the full P0 queue from the 2026-07 audit's pass-3 report
+  (`docs/audit/ENTERPRISE_REMEDIATION_2026-07.md`) is
   implemented and gated on branch `fix/audit-findings-2026-07-16` — 409 Rust
   unit tests, 290 litesvm integration tests, 520 SDK tests; clippy
   default+canary, artifacts, canary freeze, and IDL reference all green
@@ -211,7 +280,8 @@ authoritative deployed-state record is
   sanitize + dist + release wiring
 - SDK regenerated from the refreshed program artifacts (`packages/sdk-ts`
   generated client committed alongside)
-- remaining full-surface / SPL hardening is tracked in `TODO.MD` (F-1..F-19;
+- remaining full-surface / SPL hardening is tracked in
+  `docs/audit/ENTERPRISE_REMEDIATION_2026-07.md` (F-1..F-19;
   F-6 closed by on-chain verification 2026-07-17) — no canary-reachable
   finding remains open
 

@@ -8,6 +8,8 @@ use crate::instructions::moderation_gate_helpers::{
     load_task_moderation_record, moderation_gate_relaxed, require_content_not_blocked,
 };
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::state::HireRecord;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::state::ModerationAttestor;
 use crate::state::{
     is_publishable_task_moderation_status, ModerationConfig, ProtocolConfig, Task, TaskJobSpec,
@@ -27,20 +29,20 @@ pub struct SetTaskJobSpec<'info> {
         seeds = [b"protocol"],
         bump = protocol_config.bump
     )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
     #[account(
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump,
         constraint = task.creator == creator.key() @ CoordinationError::UnauthorizedTaskAction
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         seeds = [b"moderation_config"],
         bump = moderation_config.bump
     )]
-    pub moderation_config: Account<'info, ModerationConfig>,
+    pub moderation_config: Box<Account<'info, ModerationConfig>>,
 
     /// P1.2 §4.4 — the v2-else-legacy moderation record slot. The v2 seed carries the
     /// moderator INSIDE the primary record's derivation (circular for Anchor's
@@ -103,12 +105,23 @@ pub struct SetTaskJobSpec<'info> {
         seeds = [b"task_job_spec", task.key().as_ref()],
         bump
     )]
-    pub task_job_spec: Account<'info, TaskJobSpec>,
+    pub task_job_spec: Box<Account<'info, TaskJobSpec>>,
 
     #[account(mut)]
     pub creator: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// Canonical hire-link PDA. A program-owned record proves this task came
+    /// from a listing and binds the published job spec to the immutable hash
+    /// snapshotted in `Task.description[32..64]` at hire time. A direct task must
+    /// supply the empty system-owned account at the same canonical address.
+    ///
+    /// CHECK: canonical PDA is seeds-bound here; owner, discriminator, task,
+    /// bump, and immutable hash commitment are validated in the handler.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(seeds = [b"hire", task.key().as_ref()], bump)]
+    pub hire_record: UncheckedAccount<'info>,
 }
 
 /// Full-surface handler (P1.2 §4.4): takes the EXPLICIT `moderator` argument — the
@@ -130,6 +143,12 @@ pub fn handler(
     require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     validate_task_job_spec_mutable(task)?;
     validate_task_job_spec_bid_lock(&ctx.accounts.task_job_spec)?;
+    validate_hired_task_job_spec(
+        &ctx.accounts.hire_record.to_account_info(),
+        task,
+        &task_key,
+        &job_spec_hash,
+    )?;
 
     // §5.2 BLOCK floor first: a multisig takedown hard-rejects the hash regardless of
     // any CLEAN attestation presented below. Handler-derived — cannot be skipped.
@@ -320,6 +339,58 @@ pub fn validate_task_job_spec_inputs(
     Ok(())
 }
 
+/// A required canonical account prevents a hired-task caller from omitting the
+/// provenance proof. Direct tasks pass the empty system account at this PDA;
+/// listing hires must publish exactly the task hash captured when funds moved.
+/// Legacy hires have a zero second half because the old instruction did not
+/// commit the buyer-specific work terms. They must be cancelled/refunded and
+/// re-hired through the v2 wire instruction; activation cannot safely infer the
+/// buyer's intent after funds have moved.
+#[cfg(not(feature = "mainnet-canary"))]
+fn validate_hired_task_job_spec(
+    hire_info: &AccountInfo,
+    task: &Task,
+    task_key: &Pubkey,
+    job_spec_hash: &[u8; HASH_SIZE],
+) -> Result<()> {
+    let (expected, expected_bump) =
+        Pubkey::find_program_address(&[b"hire", task_key.as_ref()], &crate::ID);
+    require!(
+        hire_info.key() == expected,
+        CoordinationError::InvalidHireRecord
+    );
+
+    if hire_info.owner == &crate::ID {
+        let data = hire_info.try_borrow_data()?;
+        let hire = HireRecord::try_deserialize(&mut &data[..])
+            .map_err(|_| error!(CoordinationError::InvalidHireRecord))?;
+        require!(
+            hire.task == *task_key && hire.bump == expected_bump,
+            CoordinationError::InvalidHireRecord
+        );
+        validate_hired_spec_commitment(task, job_spec_hash)?;
+    } else {
+        require!(
+            hire_info.owner == &anchor_lang::system_program::ID && hire_info.data_is_empty(),
+            CoordinationError::InvalidHireRecord
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(not(feature = "mainnet-canary"), test))]
+pub(crate) fn validate_hired_spec_commitment(
+    task: &Task,
+    job_spec_hash: &[u8; HASH_SIZE],
+) -> Result<()> {
+    let committed = &task.description[HASH_SIZE..HASH_SIZE * 2];
+    require!(
+        committed.iter().any(|byte| *byte != 0) && committed == job_spec_hash,
+        CoordinationError::HiredTaskJobSpecMismatch
+    );
+    Ok(())
+}
+
 /// Validate a task-level moderation attestation at job-spec publish time.
 ///
 /// WP-A1: the attestation's `moderator` is accepted when it is EITHER the global
@@ -400,6 +471,42 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err, CoordinationError::InvalidTaskJobSpecHash.into());
+    }
+
+    #[test]
+    fn hired_task_accepts_only_the_immutable_spec_snapshot() {
+        let hash = [0x5au8; HASH_SIZE];
+        let mut task = Task::default();
+        task.description[..HASH_SIZE].copy_from_slice(&[0x11; HASH_SIZE]);
+        task.description[HASH_SIZE..].copy_from_slice(&hash);
+        assert!(validate_hired_spec_commitment(&task, &hash).is_ok());
+
+        let mut moved = hash;
+        moved[0] ^= 1;
+        assert_eq!(
+            validate_hired_spec_commitment(&task, &moved).unwrap_err(),
+            CoordinationError::HiredTaskJobSpecMismatch.into()
+        );
+
+        task.description[HASH_SIZE + 1] ^= 1;
+        assert_eq!(
+            validate_hired_spec_commitment(&task, &hash).unwrap_err(),
+            CoordinationError::HiredTaskJobSpecMismatch.into()
+        );
+    }
+
+    #[test]
+    fn legacy_hired_task_without_a_task_hash_must_cancel_and_rehire() {
+        let mut task = Task::default();
+        task.description[..HASH_SIZE].copy_from_slice(&[0x11; HASH_SIZE]);
+        assert_eq!(
+            validate_hired_spec_commitment(&task, &[0x11; HASH_SIZE]).unwrap_err(),
+            CoordinationError::HiredTaskJobSpecMismatch.into()
+        );
+        assert_eq!(
+            validate_hired_spec_commitment(&task, &[0x5a; HASH_SIZE]).unwrap_err(),
+            CoordinationError::HiredTaskJobSpecMismatch.into()
+        );
     }
 
     #[test]

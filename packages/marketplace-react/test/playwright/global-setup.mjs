@@ -1,8 +1,9 @@
 /**
  * Playwright global setup for the A3 checkout browser e2e.
  *
- * 1. Boots the deterministic local sandbox (validator + protocol/moderation
- *    config + seeded listings) via test/sandbox-up.mjs (idempotent).
+ * 1. Boots the deterministic local sandbox (validator + protocol, moderation,
+ *    and bid-marketplace configs + seeded listings) via test/sandbox-up.mjs
+ *    (idempotent).
  * 2. Generates a fresh buyer keypair, funds it, and resolves the on-chain
  *    parameters the checkout needs (listing spec hash/price/version, the worker
  *    agent + authority, the treasury from ProtocolConfig).
@@ -153,7 +154,7 @@ async function setupBrowserFixture({ preserveLedger, sandboxPort }) {
       env = await start({
         port: sandboxPort,
         quiet: true,
-        unsafeUnpausedFixture: true,
+        devReady: true,
         disposable: true,
       });
     }

@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getNonNullResolvedInstructionInput,
@@ -46,7 +46,7 @@ export const ASSIGN_MODERATION_ATTESTOR_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([236, 52, 254, 148, 54, 97, 130, 25]);
 
 export function getAssignModerationAttestorDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     ASSIGN_MODERATION_ATTESTOR_DISCRIMINATOR,
   );
 }
@@ -90,7 +90,7 @@ export type AssignModerationAttestorInstructionDataArgs = { attestor: Address };
 export function getAssignModerationAttestorInstructionDataEncoder(): FixedSizeEncoder<AssignModerationAttestorInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["attestor", getAddressEncoder()],
     ]),
     (value) => ({

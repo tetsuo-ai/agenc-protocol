@@ -8,7 +8,7 @@
       "name": "@tetsuo-ai/protocol",
       "directory": "packages/protocol",
       "expectedVersion": "0.4.0",
-      "expectedIntegrity": "sha512-eG/ExuTBxRgOrgx7UMuo+LOwXxvTb+jkNG8P6/onjJRlLaiabxJtvHOU9m/7UbL60xb+wUcIVpJI5Ng4u3yKdA==",
+      "expectedIntegrity": "sha512-vpjDp9LAg1wQ7Eouz7Ta8Rto/TKhUAwEC9I9A0jGgLGjZjYKSPuFalbD+K4v18VbOZIxejRdfYb6hRK+ObEoAg==",
       "requires": []
     },
     {
@@ -17,7 +17,7 @@
       "name": "@tetsuo-ai/marketplace-sdk",
       "directory": "packages/sdk-ts",
       "expectedVersion": "0.12.0",
-      "expectedIntegrity": "sha512-+7hAMFi6pcOqkC+VLsj/Eru4IbRYN8iAaygOgmn7xQdcbc+OyeYpidHxtqUdEs8arEmS/opqw2FztClDMV+dpQ==",
+      "expectedIntegrity": "sha512-VMoNHADkdWMk01/YdV2oM7taN1eJmzNFL4djiCKa9ZnbUGLv6jGFxxHd63b/lvU+PEMK62PxNstHSOimtFNkgQ==",
       "requires": ["protocol"]
     },
     {
@@ -34,8 +34,8 @@
       "tagPrefix": "react-v",
       "name": "@tetsuo-ai/marketplace-react",
       "directory": "packages/marketplace-react",
-      "expectedVersion": "0.4.2",
-      "expectedIntegrity": "sha512-lpvxLN2cARR2YfB67KavivNxyzZ3orbdl6UbmpEAyR/Hf/f0IgDrDxBJ7Cc0Eps1KQQ5bKz2GHeqV5vcMKIq0g==",
+      "expectedVersion": "0.5.0",
+      "expectedIntegrity": "sha512-dG1601X3lyUoxIMsmPnowzcNFRCbSU3zpzi6wjzbipyBoCjBPX/RYCqk2Po0zTRdQuIv2WRlHBhKSPzSo8Wd8A==",
       "requires": ["sdk"]
     },
     {
@@ -44,7 +44,7 @@
       "name": "@tetsuo-ai/marketplace-tools",
       "directory": "packages/marketplace-tools",
       "expectedVersion": "0.5.0",
-      "expectedIntegrity": "sha512-4qC0CQtYcFapIN6tEHydf4aE5NBzG8y1H1Z9FWpIRexILoH8UmjaMqaNkTqQJcmMgofvTLdn5diIwiFkHQl3Sw==",
+      "expectedIntegrity": "sha512-D8m755wNk3HCmILlKm/43206NKlCMZCKNNOHzXquB2ZgulmzUJDr5Qod0OV+xmZrFfTnf8QQzjfZlsIeKeR9NA==",
       "requires": ["sdk"]
     },
     {
@@ -53,7 +53,7 @@
       "name": "@tetsuo-ai/agenc-worker",
       "directory": "packages/agenc-worker",
       "expectedVersion": "0.2.0",
-      "expectedIntegrity": "sha512-akKEpqnF5efhcOhvRmWG4R/9dan/eRkAY8eQfCOY4WykmVgQ/CQNu9XhAU1vwBe2E4MMI/XWjkhd14unTy16uQ==",
+      "expectedIntegrity": "sha512-MsaGd1SXs3OwWiJSOu9/LdqSkyf+4oDT7nA1IPmVaSzFOsLJ7G0ZYdJ415Ybqe7u3+LzYSuzN/UJU6dpVVXKVA==",
       "requires": ["sdk"]
     },
     {
@@ -71,7 +71,7 @@
       "name": "@tetsuo-ai/agenc-cli",
       "directory": "packages/agenc-cli",
       "expectedVersion": "0.3.0",
-      "expectedIntegrity": "sha512-WoM8pp/ESBHNKDbuBk8E0IEmaDC79qyiLWrJMVRNbazYT/UquH1IaU8RHx5BCqMyjSHAuPoYRZ4tEWb22/MIcA==",
+      "expectedIntegrity": "sha512-SwnSAJJS35AjjVvR/sXUBsDmg59DGknjZX8EWcNpOPkx2KUtzUkwQehGDfG3Obuv0cxb42DHRr1f+/UvuaOD9Q==",
       "requires": ["sdk", "worker"]
     },
     {

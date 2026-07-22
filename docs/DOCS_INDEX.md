@@ -12,6 +12,7 @@ proposals. Everything else listed here is a living doc.
 
 - [../README.md](../README.md) - repo overview, ownership, and top-level layout
 - [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full **99-ix** surface live as of 2026-07-09, `surface_revision = 4`)
+- [./REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md) - pending, operator-reviewed revision-5 flag-day procedure: exact v2 discriminators, coordinated consumers, historical decoding, legacy-hire exits, and execution order (**not an authorization to deploy**)
 - [./MAINNET_ROLLOUT_RUNBOOK.md](./MAINNET_ROLLOUT_RUNBOOK.md) - **HISTORICAL** — the Phase 9 full-surface rollout choreography, **COMPLETED 2026-06-11** (execution record + post-rollout state)
 - [./POLICY_CHANGES.md](./POLICY_CHANGES.md) - dated log of authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys)
 - [./CODEBASE_MAP.md](./CODEBASE_MAP.md) - path-by-path map for programs, artifacts, packages, scripts, migrations, zkVM, and workflows
@@ -45,10 +46,10 @@ proposals. Everything else listed here is a living doc.
 - [../migrations/README.md](../migrations/README.md) - migration authority and current-state guidance
 - [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - core protocol security invariants/assumptions; its active 77-test model/property companion is `programs/agenc-coordination/fuzz/` (the retired `vote_dispute` target has been removed)
 - [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - **HISTORICAL** revision-4 external-auditor handoff: 99-instruction scope, invariants, prior internal audits, test inventory, and migration choreography; use `THREAT_MODEL.md`, `PROGRAM_SURFACE.md`, and `VALIDATION.md` for the pending revision-5 candidate
-- [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; later 2026-07-16/17 remediation is recorded in [../TODO.MD](../TODO.MD))
+- [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; later 2026-07-16/17 remediation is recorded in [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md))
 - [./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md](./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md) - **HISTORICAL** — the 2026-06-11 multi-agent adversarial-verification verdicts (94 findings × 3 lens-skeptics + adjudicator) that gated the full-surface deploy
 - [./audit/PREDEPLOY_AUDIT_FIXES_20260611.md](./audit/PREDEPLOY_AUDIT_FIXES_20260611.md) - **HISTORICAL** — pre-mainnet audit: fixes applied + remaining human-owned items for the 2026-06-11 full-surface deploy
-- [../TODO.MD](../TODO.MD) - detailed remediation record for the 2026-07-16/17 adversarial audit (F-1..F-19 are marked complete; current candidate evidence and deployment status live in `CHANGELOG.md` and `MAINNET_MAINLINE.md`)
+- [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md) - detailed remediation record for the 2026-07-16/17 adversarial audit (F-1..F-19 are marked complete; current candidate evidence and deployment status live in `CHANGELOG.md` and `MAINNET_MAINLINE.md`)
 - [../PLAN.md](../PLAN.md) - **HISTORICAL** — the master roadmap authored 2026-06-09 (the phase/P-track plan that drove the protocol through the full-surface rollout); dated plan, not a current-state source
 - [../PLAN_2.md](../PLAN_2.md) - **HISTORICAL** — PLAN.md's Phase-4 companion spec for the embeddable surface (hooks → components → widget → store templates), authored 2026-06-09
 - [./design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** contest tasks (batch-3, `surface_revision = 3`, 96 ix)
@@ -64,6 +65,7 @@ proposals. Everything else listed here is a living doc.
 
 ## Read By Task
 
+- I need the pending revision-5 upgrade procedure: [REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md)
 - I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
 - I need the open-roster moderation model (P1.2): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
 - I need moderation heartbeat/liveness behavior: [MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md)
@@ -88,5 +90,5 @@ proposals. Everything else listed here is a living doc.
 - I need reviewed public-task completion: [TASK_VALIDATION_V2.md](./TASK_VALIDATION_V2.md)
 - I need private completion or zk-config context: [ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md)
 - I need job-spec-required flag context: [JOB_SPEC_REQUIRED_FLAG_DECISION.md](./JOB_SPEC_REQUIRED_FLAG_DECISION.md)
-- I need the detailed security-hardening remediation record from the 2026-07-16/17 adversarial audit: [../TODO.MD](../TODO.MD)
+- I need the detailed security-hardening remediation record from the 2026-07-16/17 adversarial audit: [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md)
 - I need the original execution roadmaps (historical): [../PLAN.md](../PLAN.md) / [../PLAN_2.md](../PLAN_2.md)

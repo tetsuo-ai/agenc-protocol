@@ -16,11 +16,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -43,6 +41,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -53,9 +53,7 @@ export const TASK_JOB_SPEC_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getTaskJobSpecDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_JOB_SPEC_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_JOB_SPEC_DISCRIMINATOR);
 }
 
 export type TaskJobSpec = {
@@ -101,10 +99,10 @@ export type TaskJobSpecArgs = {
 export function getTaskJobSpecEncoder(): Encoder<TaskJobSpecArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["creator", getAddressEncoder()],
-      ["jobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["jobSpecHash", getFixedBytesEncoder(32, "jobSpecHash")],
       [
         "jobSpecUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
@@ -112,7 +110,7 @@ export function getTaskJobSpecEncoder(): Encoder<TaskJobSpecArgs> {
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 7)],
+      ["reserved", getFixedBytesEncoder(7, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: TASK_JOB_SPEC_DISCRIMINATOR }),
   );

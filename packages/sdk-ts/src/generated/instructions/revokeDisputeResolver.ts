@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -43,9 +43,7 @@ export const REVOKE_DISPUTE_RESOLVER_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([155, 111, 4, 156, 192, 155, 89, 134]);
 
 export function getRevokeDisputeResolverDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REVOKE_DISPUTE_RESOLVER_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REVOKE_DISPUTE_RESOLVER_DISCRIMINATOR);
 }
 
 export type RevokeDisputeResolverInstruction<
@@ -80,7 +78,9 @@ export type RevokeDisputeResolverInstructionDataArgs = {};
 
 export function getRevokeDisputeResolverInstructionDataEncoder(): FixedSizeEncoder<RevokeDisputeResolverInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: REVOKE_DISPUTE_RESOLVER_DISCRIMINATOR,

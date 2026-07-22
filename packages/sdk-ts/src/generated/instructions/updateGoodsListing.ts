@@ -11,13 +11,11 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -49,6 +47,8 @@ import {
   type WritableAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -64,9 +64,7 @@ export const UPDATE_GOODS_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([241, 254, 37, 228, 78, 53, 110, 40]);
 
 export function getUpdateGoodsListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_GOODS_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_GOODS_LISTING_DISCRIMINATOR);
 }
 
 export type UpdateGoodsListingInstruction<
@@ -123,17 +121,17 @@ export type UpdateGoodsListingInstructionDataArgs = {
 export function getUpdateGoodsListingInstructionDataEncoder(): Encoder<UpdateGoodsListingInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["price", getOptionEncoder(getU64Encoder())],
       ["isActive", getOptionEncoder(getBooleanEncoder())],
-      ["metadataHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
+      ["metadataHash", getOptionEncoder(getFixedBytesEncoder(32))],
       [
         "metadataUri",
         getOptionEncoder(
           addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
         ),
       ],
-      ["tags", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 64))],
+      ["tags", getOptionEncoder(getFixedBytesEncoder(64))],
       ["additionalSupply", getOptionEncoder(getU64Encoder())],
       ["operator", getOptionEncoder(getAddressEncoder())],
       ["operatorFeeBps", getOptionEncoder(getU16Encoder())],

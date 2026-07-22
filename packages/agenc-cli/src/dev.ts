@@ -14,7 +14,6 @@ import {
   createKeyPairSignerFromBytes,
   createSolanaRpc,
   generateKeyPairSigner,
-  getBase64Encoder,
   lamports,
   type Address,
   type KeyPairSigner,
@@ -23,10 +22,18 @@ import {
   createMarketplaceClient,
   settlementReceiptUrl,
 } from "@tetsuo-ai/marketplace-sdk";
-import { loadSolanaKeypairFile } from "@tetsuo-ai/agenc-worker";
+import {
+  createSolanaAccountReaders,
+  loadSolanaKeypairFile,
+} from "@tetsuo-ai/agenc-worker";
 import { loadConfig, defaultConfig, type AgencConfig } from "./config.js";
 import { detectProject } from "./detect.js";
-import { runDevLoop, type DevActor, type DevListingTerms, type DevLoopResult } from "./bots.js";
+import {
+  runDevLoop,
+  type DevActor,
+  type DevListingTerms,
+  type DevLoopResult,
+} from "./bots.js";
 import {
   bootLocalnet,
   checkLocalnetHealth,
@@ -84,7 +91,9 @@ async function airdropped(
 ): Promise<KeyPairSigner> {
   const signer = await generateKeyPairSigner();
   const target = AIRDROP_SOL * LAMPORTS_PER_SOL;
-  await (rpc as AirdropRpc).requestAirdrop(signer.address, lamports(target)).send();
+  await (rpc as AirdropRpc)
+    .requestAirdrop(signer.address, lamports(target))
+    .send();
   const deadline = Date.now() + 30_000;
   for (;;) {
     const { value } = await rpc
@@ -92,11 +101,15 @@ async function airdropped(
       .send();
     if (BigInt(value) >= target) break;
     if (Date.now() >= deadline) {
-      throw new LocalnetError(`airdrop for the ${label} wallet did not land in 30s`);
+      throw new LocalnetError(
+        `airdrop for the ${label} wallet did not land in 30s`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  log(`${label}: throwaway wallet ${signer.address} funded with ${AIRDROP_SOL} localnet SOL`);
+  log(
+    `${label}: throwaway wallet ${signer.address} funded with ${AIRDROP_SOL} localnet SOL`,
+  );
   return signer;
 }
 
@@ -123,7 +136,9 @@ async function resolveLocalnet(
   const env = findLocalnetEnv(dir, options.envFile);
   if (env === null) {
     if (required) {
-      throw new LocalnetError(`no localnet sandbox found.\n\n${SETUP_INSTRUCTIONS}`);
+      throw new LocalnetError(
+        `no localnet sandbox found.\n\n${SETUP_INSTRUCTIONS}`,
+      );
     }
     log(
       "localnet: no stack discoverable — falling back to the in-process sandbox (litesvm)",
@@ -135,9 +150,27 @@ async function resolveLocalnet(
     return findLocalnetEnv(dir, options.envFile) ?? env;
   }
   const health = await checkLocalnetHealth(env);
-  if (health.rpcHealthy && health.programDeployed) {
-    log(`localnet: healthy stack at ${env.rpcUrl} (program deployed) — reusing it`);
+  if (health.rpcHealthy && health.programDeployed && health.marketplaceReady) {
+    log(
+      `localnet: operational stack at ${env.rpcUrl} (surface revision ${health.surfaceRevision}) — reusing it`,
+    );
     return env;
+  }
+  if (health.rpcHealthy && health.programDeployed) {
+    const detail =
+      `paused=${String(health.protocolPaused)} ` +
+      `surfaceRevision=${String(health.surfaceRevision)}`;
+    if (required) {
+      throw new LocalnetError(
+        `localnet stack at ${env.rpcUrl} has integrity but is not ready for marketplace writes (${detail}).\n` +
+          "Use `agenc dev --purge --localnet` to replace it with a fresh disposable developer stack.",
+      );
+    }
+    log(
+      `localnet: discovered stack is production-frozen (${detail}) — ` +
+        "falling back to the in-process sandbox; use --purge --localnet for a disposable local validator",
+    );
+    return null;
   }
   if (localnetTooling(env.repoRoot) !== null) {
     log(
@@ -174,14 +207,19 @@ function printSettlement(
   mode: DevMode,
 ): void {
   log("");
-  log("  == SETTLEMENT: the 4-way split (real lamport deltas from the chain) ==");
+  log(
+    "  == SETTLEMENT: the 4-way split (real lamport deltas from the chain) ==",
+  );
   log("");
   log(
     formatSplitTable(
       [
         // The worker row shows the reward cut; the raw delta additionally
         // includes claim/submission rent refunds, itemized below the table.
-        { ...result.legs.worker, deltaLamports: result.workerRewardCutLamports },
+        {
+          ...result.legs.worker,
+          deltaLamports: result.workerRewardCutLamports,
+        },
         result.legs.operator,
         result.legs.referrer,
         result.legs.treasury,
@@ -198,7 +236,9 @@ function printSettlement(
   }
   log("");
   log(`  mode:             ${MODE_LABEL[mode]}`);
-  log(`  reward escrowed:  ${lamportsToSol(result.rewardLamports)} SOL ("${config.name}")`);
+  log(
+    `  reward escrowed:  ${lamportsToSol(result.rewardLamports)} SOL ("${config.name}")`,
+  );
   log(`  settlement tx:    ${result.acceptSignature}`);
   log(
     `  receipt:          on mainnet this settlement gets a shareable receipt at ` +
@@ -219,7 +259,9 @@ export async function runDev(
   const log = options.log ?? ((line: string) => console.log(line));
   if (
     options.sandbox === true &&
-    (options.localnet === true || options.purge === true || options.envFile !== undefined)
+    (options.localnet === true ||
+      options.purge === true ||
+      options.envFile !== undefined)
   ) {
     throw new LocalnetError(
       "--sandbox cannot be combined with --localnet, --purge, or --env-file (those force the localnet stack)",
@@ -235,7 +277,9 @@ export async function runDev(
   } else {
     const detection = detectProject(dir);
     config = defaultConfig(detection.name, detection.kind);
-    log(`no ${path.join(dir, "agenc.config.json")} — using defaults (run \`agenc init\` to pin them)`);
+    log(
+      `no ${path.join(dir, "agenc.config.json")} — using defaults (run \`agenc init\` to pin them)`,
+    );
   }
   const listing: DevListingTerms = {
     name: config.name,
@@ -273,13 +317,17 @@ export async function runDev(
   }
 
   const rpc = createSolanaRpc(env.rpcUrl);
-  const readAccount = async (address: Address): Promise<Uint8Array | null> => {
-    const { value } = await rpc
-      .getAccountInfo(address, { commitment: "confirmed", encoding: "base64" })
-      .send();
-    if (value === null) return null;
-    return new Uint8Array(getBase64Encoder().encode(value.data[0]));
-  };
+  const { readAccount, readAccountInfo } = createSolanaAccountReaders(
+    async (address) => {
+      const { value } = await rpc
+        .getAccountInfo(address, {
+          commitment: "confirmed",
+          encoding: "base64",
+        })
+        .send();
+      return value;
+    },
+  );
   const getBalance = async (address: Address): Promise<bigint> =>
     BigInt(
       (await rpc.getBalance(address, { commitment: "confirmed" }).send()).value,
@@ -303,7 +351,9 @@ export async function runDev(
   const operatorSigner = await airdropped(rpc, "operator payee", log);
   const referrerSigner = await airdropped(rpc, "referrer payee", log);
   const moderatorSigner = await loadKeypairSigner(moderatorPath);
-  log(`moderator: localnet moderation authority ${moderatorSigner.address} (from ${env.envPath})`);
+  log(
+    `moderator: localnet moderation authority ${moderatorSigner.address} (from ${env.envPath})`,
+  );
 
   const actor = (signer: KeyPairSigner): DevActor => ({
     signer,
@@ -317,6 +367,7 @@ export async function runDev(
     operator: operatorSigner.address,
     referrer: referrerSigner.address,
     readAccount,
+    readAccountInfo,
     getBalance,
     getMinimumBalanceForRentExemption,
     gpa: rpc,

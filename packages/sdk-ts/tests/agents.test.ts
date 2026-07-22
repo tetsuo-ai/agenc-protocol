@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { AccountRole, address, createNoopSigner, some, none } from "@solana/kit";
 import {
-  getRegisterAgentInstruction,
+  AccountRole,
+  address,
+  createNoopSigner,
+  some,
+  none,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
+import {
   getRegisterAgentInstructionDataDecoder,
   getUpdateAgentInstructionDataDecoder,
   getDeregisterAgentInstructionDataDecoder,
@@ -10,16 +17,36 @@ import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 import {
+  registerAgent,
   updateAgent,
   deregisterAgent,
   suspendAgent,
   unsuspendAgent,
 } from "../src/facade/agents.js";
 
+function mutableSigner(initialAddress: Address): {
+  signer: TransactionSigner;
+  setAddress(nextAddress: Address): void;
+} {
+  let liveAddress = initialAddress;
+  const signer = { ...createNoopSigner(initialAddress) } as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setAddress(nextAddress) {
+      liveAddress = nextAddress;
+    },
+  };
+}
+
 // Structural test pattern (the template for the facade loop): build the instruction and
 // assert program address, account order, and that the encoded data round-trips. Deterministic,
 // no VM — validates the generated builder + (later) the facade wiring against the IDL.
-describe("registerAgent (generated instruction)", () => {
+describe("registerAgent (facade)", () => {
   const SYSTEM_PROGRAM = address("11111111111111111111111111111111");
   const agent = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
   const protocolConfig = address("So11111111111111111111111111111111111111112");
@@ -27,9 +54,9 @@ describe("registerAgent (generated instruction)", () => {
     address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   );
 
-  it("assembles with the right program, account order, and round-trips its data", () => {
+  it("assembles with the right program, account order, and round-trips its data", async () => {
     const agentId = new Uint8Array(32).fill(7);
-    const ix = getRegisterAgentInstruction({
+    const ix = await registerAgent({
       agent,
       protocolConfig,
       authority,
@@ -52,6 +79,63 @@ describe("registerAgent (generated instruction)", () => {
     expect(decoded.capabilities).toBe(1n);
     expect(decoded.endpoint).toBe("http://agent.test");
     expect(Array.from(decoded.agentId)).toEqual(Array.from(agentId));
+  });
+
+  it("detaches agent identity bytes and metadata before PDA derivation", async () => {
+    const mutableAuthority = mutableSigner(authority.address);
+    const agentId = new Uint8Array(32).fill(17);
+    const metadataUri = {
+      __option: "Some" as const,
+      value: "https://agent.test/v1",
+    };
+    const pending = registerAgent({
+      protocolConfig,
+      authority: mutableAuthority.signer,
+      agentId,
+      capabilities: 1n,
+      endpoint: "https://agent.test",
+      metadataUri,
+      stakeAmount: 0n,
+    });
+
+    agentId.fill(99);
+    metadataUri.value = "https://attacker.test";
+    mutableAuthority.setAddress(agent);
+
+    const ix = await pending;
+    const decoded = getRegisterAgentInstructionDataDecoder().decode(ix.data);
+    expect(decoded.agentId).toEqual(new Uint8Array(32).fill(17));
+    expect(decoded.metadataUri).toEqual(some("https://agent.test/v1"));
+    expect(ix.accounts[2]).toMatchObject({
+      address: authority.address,
+      signer: mutableAuthority.signer,
+    });
+  });
+
+  it("rejects an accessor-backed signer field without invoking it", async () => {
+    let authorityReads = 0;
+    const hostileInput = {
+      agent,
+      protocolConfig,
+      agentId: new Uint8Array(32),
+      capabilities: 1n,
+      endpoint: "https://agent.test",
+      metadataUri: null,
+      stakeAmount: 0n,
+    } as unknown as Parameters<typeof registerAgent>[0];
+    Object.defineProperty(hostileInput, "authority", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        authorityReads += 1;
+        return authority;
+      },
+    });
+
+    await expect(registerAgent(hostileInput)).rejects.toThrow(
+      /authority.*own data property/u,
+    );
+    expect(authorityReads).toBe(0);
   });
 });
 
@@ -109,7 +193,8 @@ describe("deregisterAgent (facade)", () => {
     // PDA — audit: stake must be withdrawn before deregister), authority, then the two
     // seeds-pinned remaining_accounts the handler requires (audit, 2026-07 swarm):
     // [4] the ["bidder_market", agent] PDA (read-only; live bids block deregistration),
-    // [5] the ["agent_verification", agent] PDA (writable; a live badge is swept).
+    // [5] the ["agent_verification", agent] PDA (writable; a live badge is revoked
+    // and retained as an audit trail).
     const addrs = ix.accounts.map((a) => a.address);
     expect(addrs).toHaveLength(6);
     expect(addrs[0]).toBe(agent);

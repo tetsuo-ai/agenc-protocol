@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -40,6 +38,8 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getSubmissionStatusDecoder,
   getSubmissionStatusEncoder,
@@ -52,9 +52,7 @@ export const TASK_SUBMISSION_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getTaskSubmissionDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_SUBMISSION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_SUBMISSION_DISCRIMINATOR);
 }
 
 export type TaskSubmission = {
@@ -124,21 +122,21 @@ export type TaskSubmissionArgs = {
 export function getTaskSubmissionEncoder(): FixedSizeEncoder<TaskSubmissionArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["claim", getAddressEncoder()],
       ["worker", getAddressEncoder()],
       ["status", getSubmissionStatusEncoder()],
-      ["proofHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["resultData", fixEncoderSize(getBytesEncoder(), 64)],
+      ["proofHash", getFixedBytesEncoder(32, "proofHash")],
+      ["resultData", getFixedBytesEncoder(64, "resultData")],
       ["submissionCount", getU16Encoder()],
       ["submittedAt", getI64Encoder()],
       ["reviewDeadlineAt", getI64Encoder()],
       ["acceptedAt", getI64Encoder()],
       ["rejectedAt", getI64Encoder()],
-      ["rejectionHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["rejectionHash", getFixedBytesEncoder(32, "rejectionHash")],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 5)],
+      ["reserved", getFixedBytesEncoder(5, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: TASK_SUBMISSION_DISCRIMINATOR }),
   );

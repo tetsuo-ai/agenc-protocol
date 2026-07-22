@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getNonNullResolvedInstructionInput,
@@ -46,9 +46,7 @@ export const ASSIGN_DISPUTE_RESOLVER_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([64, 252, 49, 0, 45, 0, 58, 14]);
 
 export function getAssignDisputeResolverDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    ASSIGN_DISPUTE_RESOLVER_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(ASSIGN_DISPUTE_RESOLVER_DISCRIMINATOR);
 }
 
 export type AssignDisputeResolverInstruction<
@@ -90,7 +88,7 @@ export type AssignDisputeResolverInstructionDataArgs = { resolver: Address };
 export function getAssignDisputeResolverInstructionDataEncoder(): FixedSizeEncoder<AssignDisputeResolverInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["resolver", getAddressEncoder()],
     ]),
     (value) => ({

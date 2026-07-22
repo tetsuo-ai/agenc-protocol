@@ -6,7 +6,8 @@
  * ## LOCALNET/DEVNET ONLY
  *
  * Everything in this module targets the documented localnet stack
- * (`scripts/localnet-up.mjs` at the repo root — the shipped default) or
+ * (`scripts/localnet-up.mjs --dev-ready` at the repo root — the shipped
+ * operational default) or
  * public devnet through the environment seam
  * ({@link resolveSandboxEnvironment}) — with throwaway keys and faucet play
  * money. Never point it at mainnet and never send real funds to a sandbox

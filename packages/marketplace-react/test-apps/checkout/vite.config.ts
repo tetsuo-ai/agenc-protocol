@@ -54,8 +54,12 @@ export default defineConfig({
       },
     },
   },
-  server: { port: 3200, strictPort: true },
-  preview: { port: 3200, strictPort: true },
+  // Playwright probes the numeric loopback address. Binding Vite's default
+  // `localhost` hostname can select ::1 or 127.0.0.1 differently across Node
+  // and runner images, leaving a healthy server unreachable from the probe.
+  // Keep the listener and probe on the same explicit, non-wildcard interface.
+  server: { host: "127.0.0.1", port: 3200, strictPort: true },
+  preview: { host: "127.0.0.1", port: 3200, strictPort: true },
   resolve: {
     // Deduplicate React AND the marketplace package so the provider (imported
     // from the package root) and the hooks (imported from the "/hooks" subpath)

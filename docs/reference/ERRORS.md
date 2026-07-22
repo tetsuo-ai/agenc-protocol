@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**393 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**394 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -37,7 +37,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6023 | 0x1787 | `InvalidCreator` | Invalid creator |
 | 6024 | 0x1788 | `InvalidTaskId` | Invalid task ID: cannot be zero |
 | 6025 | 0x1789 | `InvalidDescription` | Invalid description: cannot be empty |
-| 6026 | 0x178a | `InvalidMaxWorkers` | Invalid max workers: must be between 1 and 100 |
+| 6026 | 0x178a | `InvalidMaxWorkers` | Invalid max workers: must be between 1 and 4 |
 | 6027 | 0x178b | `InvalidTaskType` | Invalid task type |
 | 6028 | 0x178c | `TaskNotBidExclusive` | Task is not a Marketplace V2 bid-exclusive task |
 | 6029 | 0x178d | `BidExclusiveRequiresSingleWorker` | Bid-exclusive tasks must use max_workers = 1 |
@@ -404,3 +404,4 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6390 | 0x18f6 | `ReleaseBoundaryDigestMismatch` | A release-boundary account data digest changed before the atomic stamp |
 | 6391 | 0x18f7 | `ReleaseProgramDataNotSettled` | The reviewed ProgramData upgrade slot has not settled before the release stamp |
 | 6392 | 0x18f8 | `ReleaseUnpauseRequiresCurrentSurface` | The full production protocol can only be unpaused after the current release surface is atomically stamped |
+| 6393 | 0x18f9 | `HiredTaskJobSpecMismatch` | The job specification does not match the commitment selected at hire time |

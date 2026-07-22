@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
@@ -40,6 +38,11 @@ import {
 } from "@solana/kit";
 
 import {
+  getCommitment32Encoder,
+  getFixedBytesEncoder,
+} from "../codecs/fixedBytes";
+
+import {
   getBorshStringDecoder,
   getBorshStringEncoder,
 } from "../codecs/borshString";
@@ -50,6 +53,7 @@ import {
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
 import {
+  findHireRecordPda,
   findModerationConfigPda,
   findProtocolConfigPda,
   findRecordListingModerationModerationAttestorPda,
@@ -58,12 +62,10 @@ import {
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const SET_TASK_JOB_SPEC_DISCRIMINATOR: ReadonlyUint8Array =
-  new Uint8Array([134, 102, 102, 86, 31, 164, 202, 193]);
+  new Uint8Array([118, 9, 99, 58, 215, 87, 58, 59]);
 
 export function getSetTaskJobSpecDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    SET_TASK_JOB_SPEC_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(SET_TASK_JOB_SPEC_DISCRIMINATOR);
 }
 
 export type SetTaskJobSpecInstruction<
@@ -78,6 +80,7 @@ export type SetTaskJobSpecInstruction<
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountHireRecord extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -111,6 +114,9 @@ export type SetTaskJobSpecInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountHireRecord extends string
+        ? ReadonlyAccount<TAccountHireRecord>
+        : TAccountHireRecord,
       ...TRemainingAccounts,
     ]
   >;
@@ -131,8 +137,8 @@ export type SetTaskJobSpecInstructionDataArgs = {
 export function getSetTaskJobSpecInstructionDataEncoder(): Encoder<SetTaskJobSpecInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["jobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["jobSpecHash", getCommitment32Encoder("jobSpecHash")],
       [
         "jobSpecUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
@@ -175,6 +181,7 @@ export type SetTaskJobSpecAsyncInput<
   TAccountTaskJobSpec extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountHireRecord extends string = string,
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
   task: Address<TAccountTask>;
@@ -214,6 +221,15 @@ export type SetTaskJobSpecAsyncInput<
   taskJobSpec?: Address<TAccountTaskJobSpec>;
   creator: TransactionSigner<TAccountCreator>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Canonical hire-link PDA. A program-owned record proves this task came
+   * from a listing and binds the published job spec to the immutable hash
+   * snapshotted in `Task.description[32..64]` at hire time. A direct task must
+   * supply the empty system-owned account at the same canonical address.
+   *
+   * bump, and immutable hash commitment are validated in the handler.
+   */
+  hireRecord?: Address<TAccountHireRecord>;
   jobSpecHash: SetTaskJobSpecInstructionDataArgs["jobSpecHash"];
   jobSpecUri: SetTaskJobSpecInstructionDataArgs["jobSpecUri"];
   moderator: SetTaskJobSpecInstructionDataArgs["moderator"];
@@ -229,6 +245,7 @@ export async function getSetTaskJobSpecInstructionAsync<
   TAccountTaskJobSpec extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
+  TAccountHireRecord extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: SetTaskJobSpecAsyncInput<
@@ -240,7 +257,8 @@ export async function getSetTaskJobSpecInstructionAsync<
     TAccountModerationBlock,
     TAccountTaskJobSpec,
     TAccountCreator,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountHireRecord
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -254,7 +272,8 @@ export async function getSetTaskJobSpecInstructionAsync<
     TAccountModerationBlock,
     TAccountTaskJobSpec,
     TAccountCreator,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountHireRecord
   >
 > {
   // Program address.
@@ -281,6 +300,7 @@ export async function getSetTaskJobSpecInstructionAsync<
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -318,6 +338,14 @@ export async function getSetTaskJobSpecInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.hireRecord.value) {
+    accounts.hireRecord.value = await findHireRecordPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -331,6 +359,7 @@ export async function getSetTaskJobSpecInstructionAsync<
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("hireRecord", accounts.hireRecord),
     ],
     data: getSetTaskJobSpecInstructionDataEncoder().encode(
       args as SetTaskJobSpecInstructionDataArgs,
@@ -346,7 +375,8 @@ export async function getSetTaskJobSpecInstructionAsync<
     TAccountModerationBlock,
     TAccountTaskJobSpec,
     TAccountCreator,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountHireRecord
   >);
 }
 
@@ -360,6 +390,7 @@ export type SetTaskJobSpecInput<
   TAccountTaskJobSpec extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountHireRecord extends string = string,
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
   task: Address<TAccountTask>;
@@ -399,6 +430,15 @@ export type SetTaskJobSpecInput<
   taskJobSpec: Address<TAccountTaskJobSpec>;
   creator: TransactionSigner<TAccountCreator>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Canonical hire-link PDA. A program-owned record proves this task came
+   * from a listing and binds the published job spec to the immutable hash
+   * snapshotted in `Task.description[32..64]` at hire time. A direct task must
+   * supply the empty system-owned account at the same canonical address.
+   *
+   * bump, and immutable hash commitment are validated in the handler.
+   */
+  hireRecord: Address<TAccountHireRecord>;
   jobSpecHash: SetTaskJobSpecInstructionDataArgs["jobSpecHash"];
   jobSpecUri: SetTaskJobSpecInstructionDataArgs["jobSpecUri"];
   moderator: SetTaskJobSpecInstructionDataArgs["moderator"];
@@ -414,6 +454,7 @@ export function getSetTaskJobSpecInstruction<
   TAccountTaskJobSpec extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
+  TAccountHireRecord extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: SetTaskJobSpecInput<
@@ -425,7 +466,8 @@ export function getSetTaskJobSpecInstruction<
     TAccountModerationBlock,
     TAccountTaskJobSpec,
     TAccountCreator,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountHireRecord
   >,
   config?: { programAddress?: TProgramAddress },
 ): SetTaskJobSpecInstruction<
@@ -438,7 +480,8 @@ export function getSetTaskJobSpecInstruction<
   TAccountModerationBlock,
   TAccountTaskJobSpec,
   TAccountCreator,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountHireRecord
 > {
   // Program address.
   const programAddress =
@@ -464,6 +507,7 @@ export function getSetTaskJobSpecInstruction<
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -491,6 +535,7 @@ export function getSetTaskJobSpecInstruction<
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("hireRecord", accounts.hireRecord),
     ],
     data: getSetTaskJobSpecInstructionDataEncoder().encode(
       args as SetTaskJobSpecInstructionDataArgs,
@@ -506,7 +551,8 @@ export function getSetTaskJobSpecInstruction<
     TAccountModerationBlock,
     TAccountTaskJobSpec,
     TAccountCreator,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountHireRecord
   >);
 }
 
@@ -554,6 +600,15 @@ export type ParsedSetTaskJobSpecInstruction<
     taskJobSpec: TAccountMetas[6];
     creator: TAccountMetas[7];
     systemProgram: TAccountMetas[8];
+    /**
+     * Canonical hire-link PDA. A program-owned record proves this task came
+     * from a listing and binds the published job spec to the immutable hash
+     * snapshotted in `Task.description[32..64]` at hire time. A direct task must
+     * supply the empty system-owned account at the same canonical address.
+     *
+     * bump, and immutable hash commitment are validated in the handler.
+     */
+    hireRecord: TAccountMetas[9];
   };
   data: SetTaskJobSpecInstructionData;
 };
@@ -566,12 +621,12 @@ export function parseSetTaskJobSpecInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedSetTaskJobSpecInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 9) {
+  if (instruction.accounts.length < 10) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 9,
+        expectedAccountMetas: 10,
       },
     );
   }
@@ -599,6 +654,7 @@ export function parseSetTaskJobSpecInstruction<
       taskJobSpec: getNextAccount(),
       creator: getNextAccount(),
       systemProgram: getNextAccount(),
+      hireRecord: getNextAccount(),
     },
     data: getSetTaskJobSpecInstructionDataDecoder().decode(instruction.data),
   };

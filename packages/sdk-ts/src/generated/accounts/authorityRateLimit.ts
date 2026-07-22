@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -39,13 +37,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const AUTHORITY_RATE_LIMIT_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([155, 36, 149, 133, 58, 70, 81, 19]);
 
 export function getAuthorityRateLimitDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    AUTHORITY_RATE_LIMIT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(AUTHORITY_RATE_LIMIT_DISCRIMINATOR);
 }
 
 export type AuthorityRateLimit = {
@@ -87,7 +85,7 @@ export type AuthorityRateLimitArgs = {
 export function getAuthorityRateLimitEncoder(): FixedSizeEncoder<AuthorityRateLimitArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["authority", getAddressEncoder()],
       ["lastTaskCreated", getI64Encoder()],
       ["lastDisputeInitiated", getI64Encoder()],

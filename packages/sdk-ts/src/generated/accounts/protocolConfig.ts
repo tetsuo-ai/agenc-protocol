@@ -14,7 +14,6 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getArrayDecoder,
@@ -22,7 +21,6 @@ import {
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -47,14 +45,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const PROTOCOL_CONFIG_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
   [207, 91, 250, 28, 152, 179, 215, 209],
 );
 
 export function getProtocolConfigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    PROTOCOL_CONFIG_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(PROTOCOL_CONFIG_DISCRIMINATOR);
 }
 
 export type ProtocolConfig = {
@@ -282,7 +280,7 @@ export type ProtocolConfigArgs = {
 export function getProtocolConfigEncoder(): FixedSizeEncoder<ProtocolConfigArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["authority", getAddressEncoder()],
       ["treasury", getAddressEncoder()],
       ["disputeThreshold", getU8Encoder()],

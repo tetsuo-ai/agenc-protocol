@@ -32,6 +32,8 @@ use crate::state::{
 };
 use anchor_lang::prelude::*;
 
+const CLOSED_ACCOUNT_TOMBSTONE: [u8; 8] = [255u8; 8];
+
 /// Pure guard: a task is closable only in a terminal state with no live workers.
 /// Extracted so the terminal-only rule is unit-testable and revert-sensitive.
 pub(crate) fn validate_task_closable(
@@ -57,6 +59,17 @@ fn decrement_listing_open_jobs(open_jobs: u16) -> Result<u16> {
     open_jobs
         .checked_sub(1)
         .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
+}
+
+/// LiteSVM deliberately retains drained account images, and a zero-lamport
+/// account can remain observable until runtime cleanup. Treat only the exact
+/// tombstone written by this instruction as an already-swept hire link. Any
+/// other program-owned image remains live and must deserialize successfully,
+/// preserving the fail-closed capacity invariant for malformed state.
+fn is_drained_hire_record_tombstone(lamports: u64, data: &[u8]) -> bool {
+    lamports == 0
+        && data.len() >= CLOSED_ACCOUNT_TOMBSTONE.len()
+        && data[..CLOSED_ACCOUNT_TOMBSTONE.len()] == CLOSED_ACCOUNT_TOMBSTONE
 }
 
 #[derive(Accounts)]
@@ -251,7 +264,20 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     let escrow_closed = ctx.accounts.escrow.is_some();
     // A live hire link is one owned by this program; an empty/absent PDA (non-hired
     // task) is system-owned. The caller cannot omit it (it is a required account).
-    let hire_record_closed = ctx.accounts.hire_record.owner == &crate::ID;
+    let hire_record_info = ctx.accounts.hire_record.to_account_info();
+    let hire_record_live = if hire_record_info.owner == &crate::ID {
+        let data = hire_record_info.try_borrow_data()?;
+        !is_drained_hire_record_tombstone(hire_record_info.lamports(), &data)
+    } else {
+        // An absent or merely pre-funded PDA is system-owned with no data. No
+        // other owner is a valid representation of the canonical hire link.
+        require!(
+            hire_record_info.owner == &anchor_lang::system_program::ID
+                && hire_record_info.data_is_empty(),
+            CoordinationError::InvalidAccountOwner
+        );
+        false
+    };
 
     emit!(TaskClosed {
         task_id: task.task_id,
@@ -259,7 +285,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         status: task.status as u8,
         job_spec_closed,
         escrow_closed,
-        hire_record_closed,
+        hire_record_closed: hire_record_live,
         timestamp: clock.unix_timestamp,
     });
 
@@ -286,8 +312,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     // If a live hire link is present, free the listing's capacity slot and close the
     // link. Because hire_record is a required, seeds-fixed account, the caller cannot
     // skip this for a hired task — closing the capacity decrement loophole.
-    if hire_record_closed {
-        let hire_info = ctx.accounts.hire_record.to_account_info();
+    if hire_record_live {
+        let hire_info = hire_record_info;
         let hire = {
             let data = hire_info.try_borrow_data()?;
             HireRecord::try_deserialize(&mut &data[..])?
@@ -317,7 +343,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         let mut data = hire_info.try_borrow_mut_data()?;
         data.fill(0);
-        data[..8].copy_from_slice(&[255u8; 8]);
+        data[..8].copy_from_slice(&CLOSED_ACCOUNT_TOMBSTONE);
     }
 
     // Reclaim rent from explicitly supplied auxiliary child PDAs. Each child is
@@ -604,5 +630,19 @@ mod tests {
         assert_eq!(decrement_listing_open_jobs(2).unwrap(), 1);
         assert_eq!(decrement_listing_open_jobs(1).unwrap(), 0);
         assert!(decrement_listing_open_jobs(0).is_err());
+    }
+
+    #[test]
+    fn only_exact_drained_hire_tombstone_is_already_swept() {
+        let mut tombstone = vec![0u8; HireRecord::SIZE];
+        tombstone[..8].copy_from_slice(&CLOSED_ACCOUNT_TOMBSTONE);
+
+        assert!(is_drained_hire_record_tombstone(0, &tombstone));
+        assert!(!is_drained_hire_record_tombstone(1, &tombstone));
+        assert!(!is_drained_hire_record_tombstone(0, &[255u8; 7]));
+        assert!(!is_drained_hire_record_tombstone(
+            0,
+            &[0u8; HireRecord::SIZE]
+        ));
     }
 }

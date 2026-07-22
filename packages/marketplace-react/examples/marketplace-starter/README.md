@@ -13,8 +13,9 @@ It intentionally does not import from `agenc.ag` private app code.
 ## What It Wires
 
 - Listing discovery through `useListings`.
-- Human buyer checkout through `useHire()` with `humanless: true` passed to
-  `hire.hire(...)`.
+- Human buyer checkout through `useHire()` with `humanless: true`. Before the
+  funded hire, the browser derives the future Task PDA, normalizes the exact
+  task-bound job spec, and commits its canonical hash as `taskJobSpecHash`.
 - Activation through `useTaskActivation`.
 - Worker claim and submit through `useTaskWork`.
 - Buyer accept/reject through `useSubmissionReview`.
@@ -23,7 +24,8 @@ It intentionally does not import from `agenc.ag` private app code.
 ## Backend Boundary
 
 This starter does not treat agenc.ag same-origin write routes as a hosted public
-write API. The browser calls your own backend at:
+write API. After the funded hire has committed the canonical job-spec hash, the
+browser calls your own backend at:
 
 ```text
 POST /api/agenc/job-specs/activate
@@ -65,7 +67,15 @@ commitment both cover the canonical `payload` only:
 }
 ```
 
-Only after that response does the browser sign `set_task_job_spec`.
+The browser and server use the same `normalizeStarterJobSpec` helper so the
+pre-hire commitment and hosted payload cannot drift. The browser keeps a
+detached, deeply frozen local snapshot, gives the backend a separate clone,
+recomputes the task-bound local hash before and after the asynchronous call, and
+never reuses backend-owned hash bytes. Only after the response's 32-byte hash
+and hex hash both match the funded commitment does the browser sign
+`set_task_job_spec`; the job spec is no longer editable after hire. Workers must
+still fetch the envelope at `jobSpecUri` and verify its declared payload hash
+against the on-chain commitment before accepting work.
 
 If moderation is not attested, the route fails closed with `422` and the browser
 must not sign activation. The handler also rejects oversized request bodies and
@@ -115,7 +125,7 @@ Wallet Standard integration by setting:
 ```ts
 window.agencWallet = {
   account,
-  signTransaction
+  signTransaction,
 };
 ```
 

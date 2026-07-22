@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const MODERATION_ATTESTOR_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([52, 62, 194, 121, 157, 169, 40, 178]);
 
 export function getModerationAttestorDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    MODERATION_ATTESTOR_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(MODERATION_ATTESTOR_DISCRIMINATOR);
 }
 
 export type ModerationAttestor = {
@@ -117,7 +115,7 @@ export type ModerationAttestorArgs = {
 export function getModerationAttestorEncoder(): FixedSizeEncoder<ModerationAttestorArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["attestor", getAddressEncoder()],
       ["assignedBy", getAddressEncoder()],
       ["assignedAt", getI64Encoder()],
@@ -125,7 +123,7 @@ export function getModerationAttestorEncoder(): FixedSizeEncoder<ModerationAttes
       ["bondLamports", getU64Encoder()],
       ["registeredAt", getI64Encoder()],
       ["exitAt", getI64Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
+      ["reserved", getFixedBytesEncoder(8, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: MODERATION_ATTESTOR_DISCRIMINATOR }),
   );

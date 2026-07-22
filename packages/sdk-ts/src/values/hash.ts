@@ -1,8 +1,28 @@
 // SHA-256 hashing helpers built on WebCrypto (`globalThis.crypto.subtle`).
 // Browser-safe: no `node:crypto`, no `Buffer`.
+import type { ReadonlyUint8Array } from "@solana/kit";
 
 /** Shared UTF-8 encoder for string inputs. */
 const utf8 = new TextEncoder();
+
+/**
+ * Reject values that a fixed-size Solana encoder would otherwise silently pad
+ * or truncate. Use this at any signing boundary where the caller's exact
+ * SHA-256 intent must survive instruction construction byte-for-byte.
+ */
+export function assertCanonicalHash32(
+  hash: ReadonlyUint8Array,
+  label = "hash",
+): void {
+  if (hash.byteLength !== 32) {
+    throw new RangeError(
+      `${label} must be exactly 32 bytes (got ${hash.byteLength})`,
+    );
+  }
+  if (!hash.some((byte) => byte !== 0)) {
+    throw new RangeError(`${label} must not be all zeroes`);
+  }
+}
 
 /**
  * Computes the SHA-256 digest of `input`.

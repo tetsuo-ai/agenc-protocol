@@ -251,14 +251,13 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
 
   // REFERRED hire: the referrer terms are snapshotted at hire time.
   const taskId = id32();
-  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod, referrer: referrerKp.publicKey, referrerFeeBps: REF_BPS });
+  const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod, referrer: referrerKp.publicKey, referrerFeeBps: REF_BPS });
   expectOk(send(w.svm, hix, [w.buyer]), "b2ref:referred hire");
   const h = decode(w.svm, "HireRecord", hireRecord);
   assert.equal(h.referrer.toBase58(), referrerKp.publicKey.toBase58(), "referrer snapshotted on the HireRecord");
   assert.equal(h.referrer_fee_bps, REF_BPS, "referrer bps snapshotted");
 
   // Publish job spec -> worker claims (the standard reviewed choreography).
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

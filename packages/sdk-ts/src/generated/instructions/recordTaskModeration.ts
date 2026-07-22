@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -51,9 +51,7 @@ export const RECORD_TASK_MODERATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([156, 205, 56, 24, 136, 114, 93, 160]);
 
 export function getRecordTaskModerationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    RECORD_TASK_MODERATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(RECORD_TASK_MODERATION_DISCRIMINATOR);
 }
 
 export type RecordTaskModerationInstruction<
@@ -117,13 +115,13 @@ export type RecordTaskModerationInstructionDataArgs = {
 export function getRecordTaskModerationInstructionDataEncoder(): FixedSizeEncoder<RecordTaskModerationInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["jobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["jobSpecHash", getFixedBytesEncoder(32, "jobSpecHash")],
       ["status", getU8Encoder()],
       ["riskScore", getU8Encoder()],
       ["categoryMask", getU64Encoder()],
-      ["policyHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["scannerHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["policyHash", getFixedBytesEncoder(32, "policyHash")],
+      ["scannerHash", getFixedBytesEncoder(32, "scannerHash")],
       ["expiresAt", getI64Encoder()],
     ]),
     (value) => ({

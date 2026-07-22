@@ -16,8 +16,15 @@ import {
   type facade as facadeNs,
 } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
-import type { Address } from "../types.js";
-import { pdaKey, queryKeys, requireClient } from "./internal.js";
+import type { Address, MarketplaceClient } from "../types.js";
+import {
+  pdaKey,
+  queryKeys,
+  requireClient,
+  snapshotFixedBytes32,
+  snapshotRecord,
+  stabilizeSelectedTransactionSigner,
+} from "./internal.js";
 
 /** Reads a Dispute account for a task, returning the decoded value or null. */
 export type DisputeReader = (
@@ -39,6 +46,11 @@ export type InitiateDisputeInput = Omit<
 
 /** Lifecycle status of the initiate mutation. */
 export type DisputeStatus = "idle" | "pending" | "success" | "error";
+
+interface QueuedDisputeInput {
+  readonly client: MarketplaceClient;
+  readonly input: InitiateDisputeInput;
+}
 
 /** Options for {@link useDispute}. */
 export interface UseDisputeOptions {
@@ -93,13 +105,11 @@ export function useDispute(
     queryFn: () => reader!(taskPda as Address | string),
   });
 
-  const mutation = useMutation<string, Error, InitiateDisputeInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const mutation = useMutation<string, Error, QueuedDisputeInput>({
+    mutationFn: async ({ client, input }) => {
       const { signature } = await client.initiateDispute({
         ...input,
         task: taskPda as Address,
-        authority: input.authority ?? client.signer,
       } as Parameters<typeof facadeNs.initiateDispute>[0]);
       // A new dispute exists — refresh the read.
       void read.refetch();
@@ -108,8 +118,32 @@ export function useDispute(
   });
 
   const initiate = useCallback(
-    (input: InitiateDisputeInput) => mutation.mutateAsync(input),
-    [mutation],
+    async (input: InitiateDisputeInput) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const authority = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.authority,
+      );
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        authority,
+        disputeId: snapshotFixedBytes32(
+          detachedInput.disputeId,
+          "useDispute.initiate: disputeId",
+        ),
+        taskId: snapshotFixedBytes32(
+          detachedInput.taskId,
+          "useDispute.initiate: taskId",
+        ),
+        evidenceHash: snapshotFixedBytes32(
+          detachedInput.evidenceHash,
+          "useDispute.initiate: evidenceHash",
+        ),
+      }) as InitiateDisputeInput;
+      return mutation.mutateAsync({ client, input: snapshottedInput });
+    },
+    [ctx.client, mutation],
   );
 
   const status: DisputeStatus = mutation.isPending

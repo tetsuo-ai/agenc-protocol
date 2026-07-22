@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -37,6 +35,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -48,9 +48,7 @@ export const UPDATE_RATE_LIMITS_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([247, 36, 121, 254, 22, 16, 226, 1]);
 
 export function getUpdateRateLimitsDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_RATE_LIMITS_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_RATE_LIMITS_DISCRIMINATOR);
 }
 
 export type UpdateRateLimitsInstruction<
@@ -93,7 +91,7 @@ export type UpdateRateLimitsInstructionDataArgs = {
 export function getUpdateRateLimitsInstructionDataEncoder(): FixedSizeEncoder<UpdateRateLimitsInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["taskCreationCooldown", getI64Encoder()],
       ["maxTasksPer24h", getU8Encoder()],
       ["disputeInitiationCooldown", getI64Encoder()],

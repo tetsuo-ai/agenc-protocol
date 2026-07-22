@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -28,6 +26,8 @@ import {
   type ReadonlyUint8Array,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -38,9 +38,7 @@ export const REVOKE_DELEGATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([188, 92, 135, 67, 160, 181, 54, 62]);
 
 export function getRevokeDelegationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REVOKE_DELEGATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REVOKE_DELEGATION_DISCRIMINATOR);
 }
 
 export type RevokeDelegationInstruction<
@@ -74,7 +72,9 @@ export type RevokeDelegationInstructionDataArgs = {};
 
 export function getRevokeDelegationInstructionDataEncoder(): FixedSizeEncoder<RevokeDelegationInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: REVOKE_DELEGATION_DISCRIMINATOR }),
   );
 }

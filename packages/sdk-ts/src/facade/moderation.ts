@@ -11,6 +11,7 @@ import {
   type Address,
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
+  type TransactionSigner,
 } from "@solana/kit";
 import {
   getConfigureTaskModerationInstructionAsync,
@@ -45,6 +46,13 @@ import {
   type SetDefaultTrustListAsyncInput,
   type ModerationHeartbeatAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotFixedBytes } from "../values/fixed-bytes.js";
+import { snapshotOptionOrNullable } from "../values/options.js";
+import {
+  appendMultisigSignerMetas,
+  snapshotMultisigFacadeInput,
+} from "./wire.js";
 
 export {
   findModerationConfigPda,
@@ -67,12 +75,17 @@ export async function findLegacyTaskModerationPda(seeds: {
   task: Address;
   jobSpecHash: ReadonlyUint8Array;
 }): Promise<ProgramDerivedAddress> {
+  const jobSpecHash = snapshotFixedBytes(
+    seeds.jobSpecHash,
+    32,
+    "findLegacyTaskModerationPda: jobSpecHash",
+  );
   return getProgramDerivedAddress({
     programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
     seeds: [
       getUtf8Encoder().encode("task_moderation"),
       getAddressEncoder().encode(seeds.task),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.jobSpecHash),
+      fixEncoderSize(getBytesEncoder(), 32).encode(jobSpecHash),
     ],
   });
 }
@@ -87,12 +100,17 @@ export async function findLegacyListingModerationPda(seeds: {
   listing: Address;
   jobSpecHash: ReadonlyUint8Array;
 }): Promise<ProgramDerivedAddress> {
+  const jobSpecHash = snapshotFixedBytes(
+    seeds.jobSpecHash,
+    32,
+    "findLegacyListingModerationPda: jobSpecHash",
+  );
   return getProgramDerivedAddress({
     programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
     seeds: [
       getUtf8Encoder().encode("listing_moderation"),
       getAddressEncoder().encode(seeds.listing),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.jobSpecHash),
+      fixEncoderSize(getBytesEncoder(), 32).encode(jobSpecHash),
     ],
   });
 }
@@ -105,7 +123,9 @@ export async function findLegacyListingModerationPda(seeds: {
 export async function configureTaskModeration(
   input: ConfigureTaskModerationAsyncInput,
 ) {
-  return getConfigureTaskModerationInstructionAsync(input);
+  return getConfigureTaskModerationInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -119,7 +139,25 @@ export async function configureTaskModeration(
 export async function recordTaskModeration(
   input: RecordTaskModerationAsyncInput,
 ) {
-  return getRecordTaskModerationInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["moderator"]);
+  return getRecordTaskModerationInstructionAsync({
+    ...stableInput,
+    jobSpecHash: snapshotFixedBytes(
+      stableInput.jobSpecHash,
+      32,
+      "recordTaskModeration: jobSpecHash",
+    ),
+    policyHash: snapshotFixedBytes(
+      stableInput.policyHash,
+      32,
+      "recordTaskModeration: policyHash",
+    ),
+    scannerHash: snapshotFixedBytes(
+      stableInput.scannerHash,
+      32,
+      "recordTaskModeration: scannerHash",
+    ),
+  });
 }
 
 /**
@@ -133,7 +171,25 @@ export async function recordTaskModeration(
 export async function recordListingModeration(
   input: RecordListingModerationAsyncInput,
 ) {
-  return getRecordListingModerationInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["moderator"]);
+  return getRecordListingModerationInstructionAsync({
+    ...stableInput,
+    jobSpecHash: snapshotFixedBytes(
+      stableInput.jobSpecHash,
+      32,
+      "recordListingModeration: jobSpecHash",
+    ),
+    policyHash: snapshotFixedBytes(
+      stableInput.policyHash,
+      32,
+      "recordListingModeration: policyHash",
+    ),
+    scannerHash: snapshotFixedBytes(
+      stableInput.scannerHash,
+      32,
+      "recordListingModeration: scannerHash",
+    ),
+  });
 }
 
 /**
@@ -151,7 +207,9 @@ export async function recordListingModeration(
 export async function assignModerationAttestor(
   input: AssignModerationAttestorAsyncInput,
 ) {
-  return getAssignModerationAttestorInstructionAsync(input);
+  return getAssignModerationAttestorInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -172,7 +230,8 @@ export async function revokeModerationAttestor(
     moderationAttestor?: Address;
   },
 ) {
-  const { attestor, moderationAttestor, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { attestor, moderationAttestor, ...rest } = stableInput;
   let roster = moderationAttestor;
   if (!roster) {
     if (!attestor) {
@@ -205,7 +264,9 @@ export type RegisterModerationAttestorInput =
 export async function registerModerationAttestor(
   input: RegisterModerationAttestorInput,
 ) {
-  return getRegisterModerationAttestorInstructionAsync(input);
+  return getRegisterModerationAttestorInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["attestor"]),
+  );
 }
 
 /**
@@ -222,7 +283,8 @@ export async function requestAttestorExit(
     moderationAttestor?: Address;
   },
 ) {
-  const { moderationAttestor, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["attestor"]);
+  const { moderationAttestor, ...rest } = stableInput;
   const roster =
     moderationAttestor ??
     (await findModerationAttestorPda({ attestor: rest.attestor.address }))[0];
@@ -245,7 +307,8 @@ export async function finalizeAttestorExit(
     moderationAttestor?: Address;
   },
 ) {
-  const { moderationAttestor, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["attestor"]);
+  const { moderationAttestor, ...rest } = stableInput;
   const roster =
     moderationAttestor ??
     (await findModerationAttestorPda({ attestor: rest.attestor.address }))[0];
@@ -266,12 +329,33 @@ export async function finalizeAttestorExit(
  * the on-chain audit trail.
  *
  * On-chain approval is the multisig threshold over `remaining_accounts`
- * (exactly like `update_protocol_fee`): the facade only builds the instruction —
- * append the co-signer accounts to `ix.accounts` and have them sign the
- * transaction.
+ * (exactly like `update_protocol_fee`). Supply every approval explicitly in
+ * `multisigSigners`; the facade appends them as readonly signer accounts.
  */
-export async function setModerationBlock(input: SetModerationBlockAsyncInput) {
-  return getSetModerationBlockInstructionAsync(input);
+type ModerationMultisigApprovals = {
+  readonly multisigSigners: readonly TransactionSigner[];
+};
+
+export type SetModerationBlockInput = SetModerationBlockAsyncInput &
+  ModerationMultisigApprovals;
+
+export async function setModerationBlock(input: SetModerationBlockInput) {
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
+  const instruction = await getSetModerationBlockInstructionAsync({
+    ...generatedInput,
+    contentHash: snapshotFixedBytes(
+      generatedInput.contentHash,
+      32,
+      "setModerationBlock: contentHash",
+    ),
+    rationaleHash: snapshotFixedBytes(
+      generatedInput.rationaleHash,
+      32,
+      "setModerationBlock: rationaleHash",
+    ),
+  });
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -283,15 +367,20 @@ export async function setModerationBlock(input: SetModerationBlockAsyncInput) {
  * the facade derives it from `contentHash` when `moderationBlock` is not passed
  * explicitly.
  */
-export async function clearModerationBlock(
-  input: Omit<ClearModerationBlockAsyncInput, "moderationBlock"> & {
-    /** The blocked content hash (32 bytes). Used to derive the block PDA. */
-    contentHash?: ReadonlyUint8Array;
-    /** Optional pre-derived override for the block PDA. */
-    moderationBlock?: Address;
-  },
-) {
-  const { contentHash, moderationBlock, ...rest } = input;
+export type ClearModerationBlockInput = Omit<
+  ClearModerationBlockAsyncInput,
+  "moderationBlock"
+> & {
+  /** The blocked content hash (32 bytes). Used to derive the block PDA. */
+  contentHash?: ReadonlyUint8Array;
+  /** Optional pre-derived override for the block PDA. */
+  moderationBlock?: Address;
+} & ModerationMultisigApprovals;
+
+export async function clearModerationBlock(input: ClearModerationBlockInput) {
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
+  const { contentHash, moderationBlock, ...rest } = generatedInput;
   let block = moderationBlock;
   if (!block) {
     if (!contentHash) {
@@ -299,12 +388,21 @@ export async function clearModerationBlock(
         "clearModerationBlock: provide contentHash (or moderationBlock) so the block PDA can be derived",
       );
     }
-    block = (await findModerationBlockPda({ contentHash }))[0];
+    block = (
+      await findModerationBlockPda({
+        contentHash: snapshotFixedBytes(
+          contentHash,
+          32,
+          "clearModerationBlock: contentHash",
+        ),
+      })
+    )[0];
   }
-  return getClearModerationBlockInstructionAsync({
+  const instruction = await getClearModerationBlockInstructionAsync({
     ...rest,
     moderationBlock: block,
   });
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -316,8 +414,21 @@ export async function clearModerationBlock(
  * consumption gates never read it; key-death freezes only these defaults, never
  * publishing (fail-open).
  */
-export async function setDefaultTrustList(input: SetDefaultTrustListAsyncInput) {
-  return getSetDefaultTrustListInstructionAsync(input);
+export type SetDefaultTrustListInput = SetDefaultTrustListAsyncInput &
+  ModerationMultisigApprovals;
+
+export async function setDefaultTrustList(input: SetDefaultTrustListInput) {
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
+  const instruction = await getSetDefaultTrustListInstructionAsync({
+    ...generatedInput,
+    listHash: snapshotFixedBytes(
+      generatedInput.listHash,
+      32,
+      "setDefaultTrustList: listHash",
+    ),
+  });
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -332,6 +443,15 @@ export async function setDefaultTrustList(input: SetDefaultTrustListAsyncInput) 
  * abandonment authority cannot freeze the marketplace; the multisig BLOCK
  * floor never relaxes.
  */
-export async function moderationHeartbeat(input: ModerationHeartbeatAsyncInput) {
-  return getModerationHeartbeatInstructionAsync(input);
+export async function moderationHeartbeat(
+  input: ModerationHeartbeatAsyncInput,
+) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getModerationHeartbeatInstructionAsync({
+    ...stableInput,
+    newWindowSecs: snapshotOptionOrNullable(
+      stableInput.newWindowSecs,
+      "moderationHeartbeat: newWindowSecs",
+    ),
+  });
 }

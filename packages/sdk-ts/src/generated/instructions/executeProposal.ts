@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -33,6 +31,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -44,9 +44,7 @@ export const EXECUTE_PROPOSAL_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([186, 60, 116, 133, 108, 128, 111, 28]);
 
 export function getExecuteProposalDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    EXECUTE_PROPOSAL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(EXECUTE_PROPOSAL_DISCRIMINATOR);
 }
 
 export type ExecuteProposalInstruction<
@@ -99,7 +97,9 @@ export type ExecuteProposalInstructionDataArgs = {};
 
 export function getExecuteProposalInstructionDataEncoder(): FixedSizeEncoder<ExecuteProposalInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: EXECUTE_PROPOSAL_DISCRIMINATOR }),
   );
 }

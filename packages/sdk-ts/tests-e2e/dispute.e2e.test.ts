@@ -131,6 +131,7 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
 
     // 4) Human buyer hires the listing -> Open CreatorReview Task + escrow + HireRecord.
     const taskId = new Uint8Array(32).fill(44);
+    const jobHash = new Uint8Array(32).fill(55);
     await send(svm, buyer, [
       await facade.hireFromListingHumanless({
         listing,
@@ -141,6 +142,7 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
         expectedVersion: 1n,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        taskJobSpecHash: jobHash,
         moderator: moderator.address,
       }),
     ]);
@@ -148,7 +150,6 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
     const [escrow] = await facade.findEscrowPda({ task });
 
     // 5) Moderation authority records a CLEAN task moderation.
-    const jobHash = new Uint8Array(32).fill(55);
     await send(svm, moderator, [
       await facade.recordTaskModeration({
         moderator,

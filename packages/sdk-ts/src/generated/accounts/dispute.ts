@@ -16,13 +16,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -47,6 +45,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -67,7 +67,7 @@ export const DISPUTE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getDisputeDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(DISPUTE_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(DISPUTE_DISCRIMINATOR);
 }
 
 export type Dispute = {
@@ -172,6 +172,24 @@ export type Dispute = {
    * `resolve_dispute`. Default pubkey until resolved.
    */
   resolvedBy: Address;
+  /**
+   * Chunked settlement — APPENDED fields. A ruling on a collaborative task
+   * records the peer count and defers each peer's sweep to the
+   * permissionless `settle_dispute_claim` crank (one worker per
+   * transaction), so ruling transactions are O(1) in accounts. Zero on
+   * single-worker disputes and on every dispute predating the redesign.
+   */
+  peerWorkersTotal: number;
+  /**
+   * Peers settled so far; the dispute reaches its recorded terminal status
+   * when this equals `peer_workers_total`.
+   */
+  peerWorkersSettled: number;
+  /**
+   * Raw `DisputeStatus` discriminant (Resolved/Expired) to apply when the
+   * final peer settles. Only meaningful while `status == SettlementPending`.
+   */
+  pendingTerminalStatus: number;
 };
 
 export type DisputeArgs = {
@@ -275,18 +293,36 @@ export type DisputeArgs = {
    * `resolve_dispute`. Default pubkey until resolved.
    */
   resolvedBy: Address;
+  /**
+   * Chunked settlement — APPENDED fields. A ruling on a collaborative task
+   * records the peer count and defers each peer's sweep to the
+   * permissionless `settle_dispute_claim` crank (one worker per
+   * transaction), so ruling transactions are O(1) in accounts. Zero on
+   * single-worker disputes and on every dispute predating the redesign.
+   */
+  peerWorkersTotal: number;
+  /**
+   * Peers settled so far; the dispute reaches its recorded terminal status
+   * when this equals `peer_workers_total`.
+   */
+  peerWorkersSettled: number;
+  /**
+   * Raw `DisputeStatus` discriminant (Resolved/Expired) to apply when the
+   * final peer settles. Only meaningful while `status == SettlementPending`.
+   */
+  pendingTerminalStatus: number;
 };
 
 /** Gets the encoder for {@link DisputeArgs} account data. */
 export function getDisputeEncoder(): Encoder<DisputeArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["disputeId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["disputeId", getFixedBytesEncoder(32, "disputeId")],
       ["task", getAddressEncoder()],
       ["initiator", getAddressEncoder()],
       ["initiatorAuthority", getAddressEncoder()],
-      ["evidenceHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["evidenceHash", getFixedBytesEncoder(32, "evidenceHash")],
       ["resolutionType", getResolutionTypeEncoder()],
       ["status", getDisputeStatusEncoder()],
       ["createdAt", getI64Encoder()],
@@ -302,12 +338,15 @@ export function getDisputeEncoder(): Encoder<DisputeArgs> {
       ["initiatedByCreator", getBooleanEncoder()],
       ["bump", getU8Encoder()],
       ["defendant", getAddressEncoder()],
-      ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["rationaleHash", getFixedBytesEncoder(32, "rationaleHash")],
       [
         "rationaleUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
       ],
       ["resolvedBy", getAddressEncoder()],
+      ["peerWorkersTotal", getU8Encoder()],
+      ["peerWorkersSettled", getU8Encoder()],
+      ["pendingTerminalStatus", getU8Encoder()],
     ]),
     (value) => ({ ...value, discriminator: DISPUTE_DISCRIMINATOR }),
   );
@@ -343,6 +382,9 @@ export function getDisputeDecoder(): Decoder<Dispute> {
       addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
     ],
     ["resolvedBy", getAddressDecoder()],
+    ["peerWorkersTotal", getU8Decoder()],
+    ["peerWorkersSettled", getU8Decoder()],
+    ["pendingTerminalStatus", getU8Decoder()],
   ]);
 }
 

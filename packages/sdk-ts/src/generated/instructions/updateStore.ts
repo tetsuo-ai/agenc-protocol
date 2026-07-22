@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -40,6 +38,8 @@ import {
   type WritableAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -57,9 +57,7 @@ export const UPDATE_STORE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getUpdateStoreDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_STORE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_STORE_DISCRIMINATOR);
 }
 
 export type UpdateStoreInstruction<
@@ -106,9 +104,9 @@ export type UpdateStoreInstructionDataArgs = {
 export function getUpdateStoreInstructionDataEncoder(): Encoder<UpdateStoreInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["handle", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["handle", getFixedBytesEncoder(32, "handle")],
+      ["metadataHash", getFixedBytesEncoder(32, "metadataHash")],
       [
         "metadataUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

@@ -60,7 +60,10 @@ test("activate job-spec handler stores a verifiable envelope and attests its can
   assert.match(body.jobSpecHashHex, /^[0-9a-f]{64}$/);
   assert.equal(body.moderationAttested, true);
   assert.equal(body.txSignature, "sig-task-moderation");
-  assert.equal(body.jobSpecUri, `https://market.example/job-specs/${body.jobSpecHashHex}.json`);
+  assert.equal(
+    body.jobSpecUri,
+    `https://market.example/job-specs/${body.jobSpecHashHex}.json`,
+  );
 
   assert.equal(stored.length, 1);
   assert.equal(attested.length, 1);
@@ -74,22 +77,87 @@ test("activate job-spec handler stores a verifiable envelope and attests its can
     storedInput.envelope.payload.schema,
     "agenc.marketplace.starter.jobSpec.v1",
   );
-  assert.ok(attestedInput.canonicalJson.includes("Summarize the source material"));
-  assert.deepEqual(
-    storedInput.envelope,
-    {
-      integrity: {
-        algorithm: "sha256",
-        canonicalization: "json-stable-v1",
-        payloadHash: body.jobSpecHashHex,
-      },
-      payload: attestedInput.payload,
-    },
+  assert.ok(
+    attestedInput.canonicalJson.includes("Summarize the source material"),
   );
+  assert.deepEqual(storedInput.envelope, {
+    integrity: {
+      algorithm: "sha256",
+      canonicalization: "json-stable-v1",
+      payloadHash: body.jobSpecHashHex,
+    },
+    payload: attestedInput.payload,
+  });
   assert.equal(
     (await values.canonicalJobSpecHash(storedInput.envelope.payload)).hex,
     body.jobSpecHashHex,
   );
+});
+
+test("activate job-spec handler snapshots immutable storage output without mutating it", async () => {
+  const uri = "https://market.example/job-specs/frozen.json";
+  let getterReads = 0;
+  const stored = Object.freeze(
+    Object.defineProperty({}, "uri", {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        return uri;
+      },
+    }),
+  ) as { readonly uri: string };
+  const handler = createActivateJobSpecHandler({
+    storeJobSpec: async () => stored,
+    attestTaskModeration: async (input) => {
+      assert.equal(input.jobSpecUri, uri);
+      return { attested: true };
+    },
+  });
+
+  const response = await handler(
+    request({
+      taskPda: TASK_PDA,
+      spec: {
+        title: "Frozen storage result",
+        deliverables: ["One report"],
+        acceptanceCriteria: ["The report is complete"],
+      },
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).jobSpecUri, uri);
+  assert.equal(getterReads, 1);
+});
+
+test("activate job-spec handler returns the exact URI attested before an await mutation", async () => {
+  const attestedUri = "https://market.example/job-specs/attested.json";
+  const substitutedUri = "https://market.example/job-specs/substituted.json";
+  const retained = { uri: attestedUri };
+  const handler = createActivateJobSpecHandler({
+    storeJobSpec: async () => retained,
+    attestTaskModeration: async (input) => {
+      assert.equal(input.jobSpecUri, attestedUri);
+      retained.uri = substitutedUri;
+      await Promise.resolve();
+      return { attested: true };
+    },
+  });
+
+  const response = await handler(
+    request({
+      taskPda: TASK_PDA,
+      spec: {
+        title: "Stable attested URI",
+        deliverables: ["One report"],
+        acceptanceCriteria: ["The report is complete"],
+      },
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).jobSpecUri, attestedUri);
+  assert.equal(retained.uri, substitutedUri);
 });
 
 test("activate job-spec handler rejects invalid task PDA and malformed spec", async () => {
@@ -113,7 +181,10 @@ test("activate job-spec handler rejects invalid task PDA and malformed spec", as
     }),
   );
   assert.equal(badTask.status, 400);
-  assert.equal((await badTask.json()).error, "Task PDA or job spec is invalid.");
+  assert.equal(
+    (await badTask.json()).error,
+    "Task PDA or job spec is invalid.",
+  );
 
   const base58LookingButWrongWidth = await handler(
     request({
@@ -142,7 +213,10 @@ test("activate job-spec handler rejects invalid task PDA and malformed spec", as
     }),
   );
   assert.equal(badSpec.status, 400);
-  assert.equal((await badSpec.json()).error, "Task PDA or job spec is invalid.");
+  assert.equal(
+    (await badSpec.json()).error,
+    "Task PDA or job spec is invalid.",
+  );
 });
 
 test("activate job-spec handler blocks a non-attested moderation result", async () => {
@@ -280,7 +354,10 @@ test("activate job-spec handler reports storage and attestation failures without
 
   const storageResponse = await storageFailure(request(baseBody));
   assert.equal(storageResponse.status, 502);
-  assert.equal((await storageResponse.json()).error, "Job-spec storage failed.");
+  assert.equal(
+    (await storageResponse.json()).error,
+    "Job-spec storage failed.",
+  );
 
   const emptyStorageUri = createActivateJobSpecHandler({
     storeJobSpec: async () => ({

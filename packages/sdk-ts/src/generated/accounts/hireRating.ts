@@ -16,11 +16,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -47,6 +45,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -57,7 +57,7 @@ export const HIRE_RATING_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getHireRatingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(HIRE_RATING_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(HIRE_RATING_DISCRIMINATOR);
 }
 
 export type HireRating = {
@@ -113,19 +113,19 @@ export type HireRatingArgs = {
 export function getHireRatingEncoder(): Encoder<HireRatingArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["listing", getAddressEncoder()],
       ["buyer", getAddressEncoder()],
       ["score", getU8Encoder()],
-      ["reviewHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
+      ["reviewHash", getOptionEncoder(getFixedBytesEncoder(32))],
       [
         "reviewUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
       ],
       ["ratedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["reserved", getFixedBytesEncoder(32, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: HIRE_RATING_DISCRIMINATOR }),
   );

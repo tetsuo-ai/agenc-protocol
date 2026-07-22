@@ -7,7 +7,6 @@
  */
 
 import {
-  fixEncoderSize,
   getAddressEncoder,
   getBytesEncoder,
   getProgramDerivedAddress,
@@ -15,6 +14,8 @@ import {
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type PostSeeds = {
   author: Address;
@@ -33,7 +34,7 @@ export async function findPostPda(
     seeds: [
       getBytesEncoder().encode(new Uint8Array([112, 111, 115, 116])),
       getAddressEncoder().encode(seeds.author),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.nonce),
+      getFixedBytesEncoder(32).encode(seeds.nonce),
     ],
   });
 }

@@ -12,10 +12,11 @@
 //
 //   1. anchor build                                # compile the program (once)
 //   2. (cd packages/sdk-ts && npm install && npm run build)
-//   3. node scripts/localnet-up.mjs                # validator + program + configs
-//   4. node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs
-//      # no flags needed: it picks up .localnet/env.json automatically and
-//      # writes the seeded fixtures to .localnet/fixtures.json
+//   3. node scripts/localnet-up.mjs --dev-ready    # operational disposable stack
+//   4. node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs \
+//        --moderator-keypair .localnet/keys/moderator.json
+//      # the explicit moderator route suppresses a stale optional attestor URL
+//      # while still picking up the rest of .localnet/env.json automatically
 //   5. (cd packages/sdk-ts && npx tsx examples/localnet-first-hire.ts)
 //
 // No environment variables are needed: this example auto-discovers the
@@ -107,8 +108,8 @@ const NOT_SEEDED_MESSAGE = [
   "The resolved fixtures have seeded: false. Seed the localnet stack first",
   "(all commands from the repo root):",
   "",
-  "  node scripts/localnet-up.mjs",
-  "  node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs",
+  "  node scripts/localnet-up.mjs --dev-ready",
+  "  node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --moderator-keypair .localnet/keys/moderator.json",
   "",
   "The seeder picks up .localnet/env.json automatically and writes the",
   "seeded fixtures to .localnet/fixtures.json; re-running this example then",
@@ -158,11 +159,44 @@ function envVar(name: string): string | undefined {
 
 /** Load + minimally validate the `.localnet/env.json` convention file. */
 async function loadEnvFile(filePath: string): Promise<LocalnetEnvFile> {
-  const parsed: unknown = JSON.parse(await readFile(filePath, "utf8"));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(filePath, "utf8"));
+  } catch {
+    throw new Error(`env file ${filePath} is not valid JSON`);
+  }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`env file ${filePath} is not a JSON object`);
   }
   return parsed as LocalnetEnvFile;
+}
+
+const LOCAL_KEYPAIR_FORMAT_ERROR =
+  "expected a solana-keygen JSON array of 64 bytes";
+
+/** Parse the local moderator key without reflecting secret input in errors. */
+export function parseLocalnetFirstHireKeypair(
+  raw: string,
+  filePath: string,
+): Uint8Array {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `invalid keypair file ${filePath}: ${LOCAL_KEYPAIR_FORMAT_ERROR}`,
+    );
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 64 ||
+    !parsed.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+  ) {
+    throw new Error(
+      `invalid keypair file ${filePath}: ${LOCAL_KEYPAIR_FORMAT_ERROR}`,
+    );
+  }
+  return Uint8Array.from(parsed);
 }
 
 /** Load a fixtures JSON file (the seeder's `.localnet/fixtures.json`). */
@@ -184,10 +218,17 @@ async function loadFixturesFile(filePath: string): Promise<SandboxFixtures> {
 
 /** Load a Solana keypair JSON (64-byte array) as a kit signer. */
 async function loadKeypairSigner(filePath: string): Promise<KeyPairSigner> {
-  const bytes = Uint8Array.from(
-    JSON.parse(await readFile(filePath, "utf8")) as number[],
+  const bytes = parseLocalnetFirstHireKeypair(
+    await readFile(filePath, "utf8"),
+    filePath,
   );
-  return await createKeyPairSignerFromBytes(bytes);
+  try {
+    return await createKeyPairSignerFromBytes(bytes);
+  } catch {
+    throw new Error(
+      `invalid keypair file ${filePath}: ${LOCAL_KEYPAIR_FORMAT_ERROR}`,
+    );
+  }
 }
 
 /** Fetch + decode raw account bytes via the sandbox rpc (base64 path). */
@@ -319,6 +360,13 @@ export async function runFirstHire(
     fixtures = await loadFixturesFile(envFile.fixturesPath);
   }
 
+  // A directly usable moderator keypair is the deterministic localnet route.
+  // Suppress only an inherited env-file attestor URL when that route exists;
+  // an explicit option or AGENC_SANDBOX_ATTESTOR_URL still wins.
+  const moderatorKeypairPath =
+    options.moderatorKeypairPath ?? envFile?.keypairs?.moderator;
+  const explicitAttestorEnv = envVar("AGENC_SANDBOX_ATTESTOR_URL");
+
   const environment = await resolveSandboxEnvironment({
     cluster:
       options.cluster ??
@@ -337,7 +385,7 @@ export async function runFirstHire(
         : undefined),
     attestorUrl:
       options.attestorUrl ??
-      (envVar("AGENC_SANDBOX_ATTESTOR_URL") === undefined
+      (explicitAttestorEnv === undefined && moderatorKeypairPath === undefined
         ? (envFile?.attestorUrl ?? undefined)
         : undefined),
     fixtures,
@@ -427,8 +475,6 @@ export async function runFirstHire(
   // ---- 2c) the attestation strategy: HTTP attestor when configured,
   // otherwise the moderator keypair directly (the localnet stack's
   // no-extra-service path — the same fallback the seeder uses).
-  const moderatorKeypairPath =
-    options.moderatorKeypairPath ?? envFile?.keypairs?.moderator;
   let attest: (
     kind: "listing" | "task",
     address: Address,
@@ -564,6 +610,7 @@ export async function runFirstHire(
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       moderator, // P1.2: the attestation author the hire gate consumes
     },
     jobSpec: { instructions: "one haiku about escrow, plain text" },

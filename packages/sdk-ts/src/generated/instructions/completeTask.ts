@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -36,6 +34,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -56,9 +56,7 @@ export const COMPLETE_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getCompleteTaskDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    COMPLETE_TASK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(COMPLETE_TASK_DISCRIMINATOR);
 }
 
 export type CompleteTaskInstruction<
@@ -165,9 +163,9 @@ export type CompleteTaskInstructionDataArgs = {
 export function getCompleteTaskInstructionDataEncoder(): Encoder<CompleteTaskInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["proofHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["resultData", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 64))],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["proofHash", getFixedBytesEncoder(32, "proofHash")],
+      ["resultData", getOptionEncoder(getFixedBytesEncoder(64))],
     ]),
     (value) => ({ ...value, discriminator: COMPLETE_TASK_DISCRIMINATOR }),
   );

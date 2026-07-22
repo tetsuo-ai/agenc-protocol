@@ -22,7 +22,7 @@ changes. Last reconciled with the deployed revision and candidate artifacts on
   The 25-instruction `mainnet-canary` build is a restricted rehearsal/fallback
   build, CI-frozen, NOT live — do not threat-model it as the production surface.
 - Pending revision-5 candidate: the default production artifact contains 98
-  instructions / 43 accounts / 99 events / 393 errors. Explicit development
+  instructions / 43 accounts / 99 events / 394 errors. Explicit development
   `private-zk` has 101 instructions and the frozen canary has 25. The candidate
   is not live until a separately reviewed Squads upgrade and revision stamp.
 - Singletons: `BidMarketplaceConfig`, `ModerationConfig`, and `GovernanceConfig`
@@ -33,7 +33,7 @@ changes. Last reconciled with the deployed revision and candidate artifacts on
   `DisputeResolver` resolves directly without a per-case vote. Both paths require
   a reasoned ruling (`rationale_hash` + bounded `rationale_uri`). Arbiter voting /
   `vote_dispute` is retired (P6.3) and absent from the IDL.
-- Errors are append-only by policy: 354 variants in deployed revision 4 and 393
+- Errors are append-only by policy: 354 variants in deployed revision 4 and 394
   in the candidate artifact. Existing numeric codes are not reordered.
 - Legacy state: the 169 pre-upgrade Task accounts were migrated 2026-06-11
   (schema-0 vs schema-1); migrations are done, not pending.
@@ -44,7 +44,8 @@ Batch 1–3 internal adversarial audits are closed — 0 open findings **at that
 time** (historical, not a current cleanliness claim). The 2026-07-16/17 audit
 and subsequent adversarial runs found issues those passes missed. The resulting
 F-1–F-19 queue and later hardening are implemented in the pending revision-5
-candidate; `TODO.MD` is the detailed historical/remediation record, not a list
+candidate; `ENTERPRISE_REMEDIATION_2026-07.md` is the detailed
+historical/remediation record, not a list
 of still-unimplemented blockers. Treat `CHANGELOG.md` and
 `docs/MAINNET_MAINLINE.md` as the current candidate/deployment split. Passing
 the present gates is evidence, not a guarantee that no unknown vulnerability

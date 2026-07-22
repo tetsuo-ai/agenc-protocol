@@ -68,7 +68,11 @@ function neverResolvingClient(
   } as unknown as MarketplaceClient;
 }
 
-function ConnectedHarness({ client }: { client: MarketplaceClient }): ReactNode {
+function ConnectedHarness({
+  client,
+}: {
+  client: MarketplaceClient;
+}): ReactNode {
   const config: AgencProviderConfig = {
     network: "localnet",
     queryTransport: noopReadTransport(),
@@ -86,6 +90,7 @@ function ConnectedHarness({ client }: { client: MarketplaceClient }): ReactNode 
           taskId: new Uint8Array(32).fill(7),
           expectedPrice: l.account.price,
           expectedVersion: 3n,
+          taskJobSpecHash: l.account.specHash,
           moderator: FIXTURE_AGENT,
         })}
       />
@@ -127,15 +132,11 @@ describe("double-submit guard (finding #1)", () => {
     fireEvent.click(confirm);
     fireEvent.click(confirm);
 
-    // The hire runs through `mutateAsync` -> `mutationFn` on a microtask, so
-    // flush the queue before asserting the SDK call count. The synchronous
-    // latch (set in the click handler, before any await) is what blocks the
-    // second click from ever reaching `mutateAsync`.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // Pre-fix: the SDK money path fired twice (two funded escrows).
-    expect(hireFromListing).toHaveBeenCalledTimes(1);
+    // PDA derivation now runs from the synchronously captured identity before
+    // the funded client call, so wait for that async boundary without assuming
+    // a particular microtask count. The click-handler latch still blocks the
+    // second click before either enqueue can happen.
+    await waitFor(() => expect(hireFromListing).toHaveBeenCalledTimes(1));
   });
 
   it("releases the latch after rejection without an unhandled rejection", async () => {

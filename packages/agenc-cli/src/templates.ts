@@ -554,12 +554,13 @@ const U64_MAX = 18_446_744_073_709_551_615n;
 
 type HeadersLike = { get(name: string): string | null };
 type Stored = {
-  state: "pending" | "recoverable" | "complete";
+  state: "pending" | "recoverable" | "blocked" | "complete";
   generation: string;
   expiresAt: number;
   maximumDebitLamports: bigint;
   fingerprint?: string;
   recovery?: unknown;
+  blockReason?: string;
   reservationId?: string;
   body?: Record<string, unknown>;
 };
@@ -575,9 +576,13 @@ export type CheckoutAdmissionSuccess = {
   recovery?: unknown;
   cachedBody?: Record<string, unknown>;
   bindIntent(fingerprint: string): boolean;
-  /** Acquire durable ownership of the exact pre-broadcast recovery point. */
-  checkpoint(recovery: unknown, now?: number): boolean;
+  /** Reconfirm ownership and extend the debit reservation immediately before send. */
+  checkpoint(now?: number): boolean;
   preserve(recovery: unknown): void;
+  /** Permanently lock an outcome that cannot be proved safe to retry. */
+  block(reason: string): void;
+  /** Discard recovery after finalized proof that its transaction failed atomically. */
+  discardRecovery(): void;
   complete(body: Record<string, unknown>, now?: number): void;
   abort(): void;
 };
@@ -640,6 +645,7 @@ function prune(now: number): void {
     if (
       value.expiresAt <= now &&
       value.state !== "recoverable" &&
+      value.state !== "blocked" &&
       value.state !== "complete" &&
       !(value.state === "pending" && value.recovery !== undefined)
     ) {
@@ -651,7 +657,7 @@ function prune(now: number): void {
       // Pending code may still broadcast, so its reservation cannot expire.
       // Recoverable code is dormant; a later retry atomically creates a fresh
       // full reservation when the original rolling-window entry has expired.
-      .filter((entry) => entry.state === "pending")
+      .filter((entry) => entry.state === "pending" || entry.state === "blocked")
       .map((entry) => entry.reservationId)
       .filter((id): id is string => id !== undefined),
   );
@@ -693,6 +699,13 @@ export function admitCheckout(
   const previous = idempotency.get(key);
   if (previous?.state === "pending") {
     return { ok: false, status: 409, body: { error: "checkout with this idempotency key is in progress" } };
+  }
+  if (previous?.state === "blocked") {
+    return {
+      ok: false,
+      status: 409,
+      body: { error: previous.blockReason ?? "checkout outcome requires manual operator review" },
+    };
   }
   if (
     previous === undefined &&
@@ -770,10 +783,9 @@ export function admitCheckout(
       idempotency.set(key, active);
       return true;
     },
-    checkpoint(recovery, activityAt = Date.now()) {
+    checkpoint(activityAt = Date.now()) {
       if (settled || !isCurrent()) return false;
       refreshReservation(activityAt);
-      active.recovery = recovery;
       idempotency.set(key, active);
       return true;
     },
@@ -786,6 +798,23 @@ export function admitCheckout(
         expiresAt: Number.MAX_SAFE_INTEGER,
         recovery,
       });
+    },
+    block(reason) {
+      if (settled || !isCurrent()) return;
+      settled = true;
+      idempotency.set(key, {
+        ...active,
+        state: "blocked",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        recovery: undefined,
+        blockReason: reason,
+      });
+    },
+    discardRecovery() {
+      if (settled || !isCurrent()) return;
+      settled = true;
+      idempotency.delete(key);
+      if (reservationId !== undefined) debitReservations.delete(reservationId);
     },
     complete(body, activityAt = Date.now()) {
       if (settled || !isCurrent()) return;
@@ -831,24 +860,24 @@ import {
   address,
   createKeyPairSignerFromBytes,
   createSolanaRpc,
+  getBase58Decoder,
+  getBase58Encoder,
   isNone,
   type Address,
   type ReadonlyUint8Array,
 } from "@solana/kit";
 import {
-  AgencError,
   createMarketplaceClient,
-  fetchMaybeTask,
   fetchMaybeTaskJobSpec,
   fetchServiceListing,
   findTaskModerationPda,
-  findTaskPda,
   findTaskJobSpecPda,
   getAuthorityRateLimitSize,
   getHireRecordSize,
   getTaskEscrowSize,
   getTaskValidationConfigSize,
   HireAndActivateError,
+  HireAndActivateFinalizedFailure,
   hireAndActivate,
   ListingState,
   resumeHireAndActivate,
@@ -889,8 +918,7 @@ type Recovery = {
   taskId: Uint8Array;
   expectedVersion: bigint;
   storedJobSpec: { jobSpecHash: Uint8Array; jobSpecUri: string };
-  progress?: HireAndActivateProgress;
-  ambiguous?: true;
+  progress: HireAndActivateProgress;
 };
 
 function requiredEnv(name: string): string {
@@ -1009,11 +1037,41 @@ function bytesEqual(left: ReadonlyUint8Array, right: ReadonlyUint8Array): boolea
   return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
 }
 
+function isCanonicalAddress(value: unknown): value is Address {
+  if (typeof value !== "string") return false;
+  try {
+    return address(value) === value;
+  } catch {
+    return false;
+  }
+}
+
+function isCanonicalTransactionSignature(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 100) return false;
+  try {
+    const bytes = new Uint8Array(getBase58Encoder().encode(value));
+    return bytes.byteLength === 64 && getBase58Decoder().decode(bytes) === value;
+  } catch {
+    return false;
+  }
+}
+
+function isIntentDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
 function isRecovery(value: unknown): value is Recovery {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Partial<Recovery>;
   const stored = record.storedJobSpec as Recovery["storedJobSpec"] | undefined;
   const progress = record.progress as Partial<HireAndActivateProgress> | undefined;
+  const hiring = progress as
+    | Partial<Extract<HireAndActivateProgress, { phase: "hiring" }>>
+    | undefined;
+  const committed = progress as
+    | Partial<Extract<HireAndActivateProgress, { phase: "moderating" }>>
+    | Partial<Extract<HireAndActivateProgress, { phase: "activating" }>>
+    | undefined;
   const activating = progress as
     | Partial<Extract<HireAndActivateProgress, { phase: "activating" }>>
     | undefined;
@@ -1025,23 +1083,27 @@ function isRecovery(value: unknown): value is Recovery {
     typeof stored.jobSpecUri === "string" &&
     stored.jobSpecUri !== "";
   const validProgress =
-    progress === undefined ||
-    ((progress.phase === "moderating" || progress.phase === "activating") &&
-      typeof progress.taskPda === "string" &&
-      typeof progress.hireSignature === "string" &&
-      (progress.hireSignature.length === 0) === (progress.hireReconciled === true) &&
-      (progress.phase === "moderating" ||
-        (activating?.jobSpecHash instanceof Uint8Array &&
-          activating.jobSpecHash.byteLength === 32 &&
-          typeof activating.jobSpecUri === "string" &&
-          activating.jobSpecUri !== "" &&
-          typeof activating.moderator === "string" &&
-          validStored &&
-          bytesEqual(activating.jobSpecHash, stored!.jobSpecHash) &&
-          activating.jobSpecUri === stored!.jobSpecUri)));
-  const validRecoveryKind =
-    (record.ambiguous === true && progress === undefined) ||
-    (record.ambiguous === undefined && progress !== undefined);
+    typeof progress === "object" &&
+    progress !== null &&
+    (progress.phase === "hiring" ||
+      progress.phase === "moderating" ||
+      progress.phase === "activating") &&
+      isCanonicalAddress(progress.taskPda) &&
+      isIntentDigest(progress.hireIntentDigest) &&
+      (progress.phase === "hiring"
+        ? hiring?.candidateSignature === null ||
+          isCanonicalTransactionSignature(hiring?.candidateSignature)
+        : isCanonicalTransactionSignature(committed?.hireSignature) &&
+          committed?.hireReconciled !== true &&
+          (progress.phase === "moderating" ||
+            (activating?.jobSpecHash instanceof Uint8Array &&
+              activating.jobSpecHash.byteLength === 32 &&
+              typeof activating.jobSpecUri === "string" &&
+              activating.jobSpecUri !== "" &&
+              isCanonicalAddress(activating.moderator) &&
+              validStored &&
+              bytesEqual(activating.jobSpecHash, stored!.jobSpecHash) &&
+              activating.jobSpecUri === stored!.jobSpecUri)));
   return (
     record.taskId instanceof Uint8Array &&
     record.taskId.byteLength === 32 &&
@@ -1049,8 +1111,7 @@ function isRecovery(value: unknown): value is Recovery {
     record.expectedVersion > 0n &&
     record.expectedVersion <= U64_MAX &&
     validStored &&
-    validProgress &&
-    validRecoveryKind
+    validProgress
   );
 }
 
@@ -1084,31 +1145,6 @@ function intentFingerprint(input: {
       referrerFeeBps: input.referrer === null ? 0 : REFERRER_FEE_BPS,
     }))
     .digest("hex");
-}
-
-async function reconcileAmbiguousHire(
-  rpc: ReturnType<typeof createSolanaRpc>,
-  creator: Address,
-  taskId: Uint8Array,
-  referrer: Address | null,
-): Promise<HireAndActivateProgress | null> {
-  const [taskPda] = await findTaskPda({ creator, taskId });
-  const account = await fetchMaybeTask(rpc, taskPda, { commitment: "finalized" });
-  if (!account.exists) return null;
-  const task = account.data;
-  if (
-    task.creator !== creator ||
-    !bytesEqual(task.taskId, taskId) ||
-    task.rewardAmount !== EXPECTED_PRICE_LAMPORTS ||
-    task.referrerFeeBps !== (referrer === null ? 0 : REFERRER_FEE_BPS) ||
-    (referrer !== null && task.referrer !== referrer)
-  ) {
-    throw new Error("derived task exists but does not match the saved checkout intent");
-  }
-  // Exact finalized account state proves the funded hire landed, but an
-  // address-touching signature is not necessarily the hire transaction. Keep
-  // the SDK's internal string field empty and expose it as nullable evidence.
-  return { phase: "moderating", taskPda, hireSignature: "", hireReconciled: true };
 }
 
 async function reconcileActivation(
@@ -1267,9 +1303,9 @@ export async function executeCheckout(
 
   let version: bigint;
   if (saved !== undefined) {
-    // A saved post-attempt recovery remains bound to the original CAS version.
-    // Provider changes must not turn an ambiguous outcome or committed hire
-    // into a fresh spend under a different intent.
+    // A genuine SDK post-send recovery remains bound to the original CAS
+    // version. Provider changes must not turn it into a fresh spend under a
+    // different intent.
     version = saved.expectedVersion;
   } else {
     try {
@@ -1298,10 +1334,12 @@ export async function executeCheckout(
   const jobSpec = { instructions };
   let storedJobSpec: Awaited<ReturnType<typeof storeJobSpec>>;
   try {
-    storedJobSpec = saved?.progress?.phase === "activating"
+    storedJobSpec =
+      saved?.progress.phase === "hiring" ||
+      saved?.progress.phase === "activating"
         ? {
-            jobSpecHash: new Uint8Array(saved.progress.jobSpecHash),
-            jobSpecUri: saved.progress.jobSpecUri,
+            jobSpecHash: new Uint8Array(saved.storedJobSpec.jobSpecHash),
+            jobSpecUri: saved.storedJobSpec.jobSpecUri,
           }
         : await storeJobSpec(jobSpec);
     await verifyPublishedJobSpec(storedJobSpec, jobSpec);
@@ -1312,18 +1350,19 @@ export async function executeCheckout(
       body: {
         error: saved === undefined
           ? "job-spec publish/readback failed; no hire was sent"
-          : saved.progress !== undefined
-            ? "a committed hire exists, but job-spec readback failed; retry with the same idempotency key"
-            : "the hire outcome remains ambiguous and job-spec readback failed; retry with the same idempotency key",
+          : "saved post-send recovery exists, but job-spec readback failed; retry with the same idempotency key",
       },
     };
   }
 
   const taskId = saved?.taskId ?? values.randomId32();
-  const recovery = (
-    fields: Pick<Recovery, "progress" | "ambiguous"> = {},
-  ): Recovery => ({ taskId, expectedVersion: version, storedJobSpec, ...fields });
-  if (!admission.checkpoint(recovery())) {
+  const recovery = (progress: HireAndActivateProgress): Recovery => ({
+    taskId,
+    expectedVersion: version,
+    storedJobSpec,
+    progress,
+  });
+  if (!admission.checkpoint()) {
     admission.abort();
     return {
       status: 409,
@@ -1341,6 +1380,7 @@ export async function executeCheckout(
       expectedVersion: version,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: storedJobSpec.jobSpecHash,
       moderator,
       ...(referrer === null ? {} : { referrer, referrerFeeBps: REFERRER_FEE_BPS }),
     },
@@ -1371,18 +1411,7 @@ export async function executeCheckout(
 
   let attemptedProgress = saved?.progress;
   try {
-    let progress = attemptedProgress;
-    if (progress === undefined && saved?.ambiguous === true) {
-      progress = await reconcileAmbiguousHire(rpc, signer.address, taskId, referrer) ?? undefined;
-      attemptedProgress = progress;
-      if (progress === undefined) {
-        admission.preserve(recovery({ ambiguous: true }));
-        return {
-          status: 503,
-          body: { error: "hire outcome remains ambiguous; this key is locked to prevent duplicate spend" },
-        };
-      }
-    }
+    const progress = attemptedProgress;
     if (progress?.phase === "activating") {
       const activation = await reconcileActivation(rpc, signer.address, progress);
       if (activation.committed) {
@@ -1392,7 +1421,6 @@ export async function executeCheckout(
           hireReconciled: progress.hireReconciled === true,
           activationSignature: activation.signature,
           activationReconciled: true,
-          moderation: progress.moderation,
         };
         admission.complete(responseBody);
         return { status: 200, body: responseBody };
@@ -1412,19 +1440,58 @@ export async function executeCheckout(
     admission.complete(responseBody);
     return { status: 200, body: responseBody };
   } catch (error) {
-    if (error instanceof HireAndActivateError) {
-      admission.preserve(recovery({ progress: error.progress }));
+    if (error instanceof HireAndActivateFinalizedFailure) {
+      if (!isCanonicalTransactionSignature(error.signature)) {
+        if (attemptedProgress !== undefined) {
+          admission.preserve(recovery(attemptedProgress));
+        } else {
+          admission.block(
+            "checkout outcome is locked: SDK returned an invalid finalized-failure signature",
+          );
+        }
+        return {
+          status: 503,
+          body: {
+            error: attemptedProgress !== undefined
+              ? "SDK returned an invalid finalized-failure signature; recovery was not discarded and this key is locked"
+              : "SDK returned an invalid finalized-failure signature; the outcome cannot be proved safe to retry and this key is locked",
+          },
+        };
+      }
+      admission.discardRecovery();
       return {
         status: 503,
         body: {
-          error: "hire committed but activation is incomplete; retry with the same idempotency key",
+          error: "hire transaction failed atomically at finalized commitment; no hire was funded and this idempotency key may be retried",
+          signature: error.signature,
+        },
+      };
+    }
+    if (error instanceof HireAndActivateError) {
+      const sdkRecovery = recovery(error.progress);
+      admission.preserve(sdkRecovery);
+      if (!isRecovery(sdkRecovery)) {
+        return {
+          status: 503,
+          body: {
+            error: "SDK returned an invalid post-send recovery token; this idempotency key remains locked",
+          },
+        };
+      }
+      return {
+        status: 503,
+        body: {
+          error:
+            error.progress.phase === "hiring"
+              ? "hire submission outcome is not finalized; retry only with the same idempotency key"
+              : "hire committed but activation is incomplete; retry with the same idempotency key",
           task: error.progress.taskPda,
           phase: error.progress.phase,
         },
       };
     }
     if (attemptedProgress !== undefined) {
-      admission.preserve(recovery({ progress: attemptedProgress }));
+      admission.preserve(recovery(attemptedProgress));
       return {
         status: 503,
         body: {
@@ -1434,35 +1501,14 @@ export async function executeCheckout(
         },
       };
     }
-    if (error instanceof AgencError && error.signature === null) {
-      admission.abort();
-      return {
-        status: 503,
-        body: {
-          error: "hire was not submitted; fix the RPC/signing failure and retry this idempotency key",
-        },
-      };
-    }
-    try {
-      const progress = await reconcileAmbiguousHire(rpc, signer.address, taskId, referrer);
-      if (progress !== null) {
-        admission.preserve(recovery({ progress }));
-        return {
-          status: 503,
-          body: {
-            error: "hire committed but moderation/activation is incomplete; retry with the same idempotency key",
-            task: progress.taskPda,
-            phase: progress.phase,
-          },
-        };
-      }
-      admission.preserve(recovery({ ambiguous: true }));
-    } catch {
-      admission.preserve(recovery({ ambiguous: true }));
-    }
+    // The SDK contract wraps every post-send outcome in HireAndActivateError.
+    // A generic error therefore carries no resumable send evidence and is
+    // treated as preflight: release the idempotency key instead of fabricating
+    // an account-state recovery token.
+    admission.abort();
     return {
       status: 503,
-      body: { error: "hire outcome is ambiguous; retry only with the same idempotency key" },
+      body: { error: "hire was not submitted; fix the preflight failure and retry this idempotency key" },
     };
   }
 }
@@ -1722,6 +1768,7 @@ import { createKeyPairSignerFromBytes, createSolanaRpc } from "@solana/kit";
 import { createMarketplaceClient, taskThread } from "@tetsuo-ai/marketplace-sdk";
 import {
   configFromEnv,
+  createSolanaAccountReaders,
   DEFAULT_ENDPOINT,
   defaultConfigPath,
   findVerifiedSettlementSignature,
@@ -1758,16 +1805,20 @@ const signer = await createKeyPairSignerFromBytes(
 );
 const rpc = createSolanaRpc(config.rpcUrl);
 const client = createMarketplaceClient({ rpc, signer });
+const { readAccount, readAccountInfo } = createSolanaAccountReaders(async (address) => {
+  const { value } = await rpc
+    .getAccountInfo(address, { commitment: "confirmed", encoding: "base64" })
+    .send();
+  return value;
+});
 
 const ctx = {
   config,
   client,
   signer,
   gpa: rpc,
-  readAccount: async (address) => {
-    const { value } = await rpc.getAccountInfo(address, { encoding: "base64" }).send();
-    return value === null ? null : new Uint8Array(Buffer.from(value.data[0], "base64"));
-  },
+  readAccount,
+  readAccountInfo,
   getBalance: async (address) =>
     BigInt((await rpc.getBalance(address, { commitment: "confirmed" }).send()).value),
   getMinimumBalanceForRentExemption: async (space) =>

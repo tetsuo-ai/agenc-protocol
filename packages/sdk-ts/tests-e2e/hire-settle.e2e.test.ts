@@ -130,6 +130,7 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
     // 4) Buyer hires the listing -> mints an Open Task + escrow + HireRecord in one ix.
     //    authority == creator == buyer (enforced on-chain), so buyer is the fee payer.
     const taskId = new Uint8Array(32).fill(44);
+    const jobHash = new Uint8Array(32).fill(55);
     await send(svm, buyer, [
       await facade.hireFromListing({
         listing,
@@ -141,13 +142,13 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
         expectedPrice: price,
         expectedVersion: 1n,
         listingSpecHash,
+        taskJobSpecHash: jobHash,
         moderator: moderator.address,
       }),
     ]);
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
 
     // 5) Moderation authority records a CLEAN task moderation, keyed by (task, jobHash).
-    const jobHash = new Uint8Array(32).fill(55);
     await send(svm, moderator, [
       await facade.recordTaskModeration({
         moderator,

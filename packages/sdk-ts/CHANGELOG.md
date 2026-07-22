@@ -10,9 +10,38 @@
   revision-4 program; publish 0.12.0 only in the coordinated revision-5 cutover.
 - Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
   revision-5 package train.
+- Treat the three funded-hire/activation writes as an atomic revision-5 flag
+  day. `hire_from_listing`, `hire_from_listing_humanless`, and full-surface
+  `set_task_job_spec` use explicit v2 discriminators, so old clients fail on the
+  new program and 0.12 clients fail on revision 4 instead of silently signing a
+  transaction with different semantics. Read and historical-replay consumers
+  can use the frozen revision-4 decoder alongside the generated v2 client.
+
+### Breaking changes
+
+- Both listing-hire facades require a non-zero 32-byte `taskJobSpecHash` before
+  escrow funding. The program snapshots the listing hash and this buyer-specific
+  hash separately in `Task.description`; activation and claim require the pinned
+  `TaskJobSpec` to match the buyer commitment exactly.
+- `setTaskJobSpec` now appends the canonical `HireRecord` account. Direct tasks
+  pass the empty system-owned PDA; hired tasks prove their immutable commitment.
+- Legacy revision-4 listing hires have no buyer-specific commitment. Open legacy
+  hires must be cancelled/refunded and re-hired after cutover. Already-assigned
+  legacy hires keep settlement and exit paths, but cannot be activated or freshly
+  claimed under revision 5.
 
 ### Reliability and bounded reads
 
+- Export the SDK's canonical `stabilizeTransactionSigner` identity guard for
+  higher-level money-path adapters. It installs the canonical `address` as a
+  non-writable, non-configurable own property while preserving unrelated mutable
+  wallet/session state, including for inherited/configurable-address signers, so
+  async instruction construction cannot switch public keys without creating a
+  new signer object.
+- Generated fixed-array encoders now reject every wrong-length `[u8; N]` input
+  instead of inheriting Kit's silent padding/truncation. The three revision-5
+  buyer/job-spec commitments additionally reject the all-zero unset sentinel,
+  including through the publicly exported raw generated builders.
 - Raw-RPC program-account transports now send an explicit commitment, defaulting
   to `confirmed` like the rest of the SDK, and accept a `finalized` override.
   This prevents consumers from accidentally combining provider-default list
@@ -28,10 +57,19 @@
 - Expiry retries now fail closed when a post-broadcast signature cannot be
   reconciled, preventing a duplicate non-idempotent submission. A proven
   preflight `BlockhashNotFound` remains safe to retry.
-- Hire-and-activate now returns durable, typed reconciliation state for every
-  ambiguous send and resumes the landed attempt instead of re-hiring. Task
-  identity, listing terms, signer intent, and finalized on-chain state are
-  revalidated before the orchestration advances.
+- Hire-and-activate now returns durable, intent-bound reconciliation state for
+  every ambiguous send and resumes only the exact landed transaction instead of
+  re-hiring. An occupied Task PDA is never adopted by account resemblance alone:
+  recovery decodes the attributable finalized revision-5 hire transaction, then
+  verifies its signature, complete hire arguments/account surface, funded escrow,
+  listing version/spec/provider terms, operator/referral snapshots, capabilities,
+  deadline, protocol fee, task commitment, and CreatorReview configuration before
+  the orchestration advances.
+- An attributable hire transaction that finalized with an execution error is
+  surfaced as `HireAndActivateFinalizedFailure` with `retrySafe: true` before
+  account-state reconciliation, so a terminal atomic failure cannot wedge a
+  recovery token indefinitely. Candidate recovery signatures must also decode
+  canonically to exactly 64 bytes.
 - Indexer responses are byte- and intent-validated before a transaction crosses
   the signing boundary. Pagination, response bytes, metadata, numeric fields,
   and transport deadlines are bounded and fail closed.

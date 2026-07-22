@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed,
-  injectBidMarketplace, setMultisig, freshWorld,
+  injectBidMarketplace, setMultisig, setProtocolPaused, freshWorld,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
 import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
@@ -34,6 +34,24 @@ async function setupBidTask(w, { bidExpiresIn = 1800, minBond = 100_000 } = {}) 
 }
 
 const BID_CFG_PDA = () => pda([enc("bid_marketplace")])[0];
+
+async function setProtocolVersion(svm, protocolPda, protocolVersion) {
+  const account = svm.getAccount(protocolPda);
+  if (!account) throw new Error("ProtocolConfig is missing");
+  const config = coder.accounts.decode(
+    "ProtocolConfig",
+    Buffer.from(account.data),
+  );
+  config.protocol_version = protocolVersion;
+  const data = await coder.accounts.encode("ProtocolConfig", config);
+  svm.setAccount(protocolPda, {
+    lamports: Number(account.lamports),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // initialize_bid_marketplace
@@ -68,6 +86,126 @@ test("initialize_bid_marketplace: 2-of-2 multisig creates the config with the gi
   assert.notEqual(cfg.bump, 0, "bump set (config is live)");
 });
 
+test("initialize_bid_marketplace: paused bootstrap succeeds with the full 2-of-2 approval", async () => {
+  const w = await freshWorld();
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  await setProtocolPaused(w.svm, true);
+
+  const bidCfg = BID_CFG_PDA();
+  const signerMetas = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+  ];
+  const ix = await makeProgram(w.admin).methods
+    .initializeBidMarketplace(new BN(250_000), new BN(0), 100, 10, new BN(86_400), 0)
+    .accounts({
+      protocolConfig: w.protocolPda,
+      bidMarketplace: bidCfg,
+      authority: w.admin.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts(signerMetas)
+    .instruction();
+
+  expectOk(
+    send(w.svm, ix, [w.admin, owner2]),
+    "paused init bid marketplace (2-of-2)",
+  );
+  const cfg = decode(w.svm, "BidMarketplaceConfig", bidCfg);
+  assert.ok(cfg !== null, "paused bootstrap creates the singleton");
+  assert.equal(cfg.authority.toBase58(), w.admin.publicKey.toBase58());
+});
+
+test("initialize_bid_marketplace: paused bootstrap rejects an incompatible protocol version atomically", async () => {
+  const w = await freshWorld();
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  await setProtocolPaused(w.svm, true);
+  await setProtocolVersion(w.svm, w.protocolPda, 2);
+
+  const bidCfg = BID_CFG_PDA();
+  const signerMetas = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+  ];
+  const ix = await makeProgram(w.admin).methods
+    .initializeBidMarketplace(new BN(250_000), new BN(0), 100, 10, new BN(86_400), 0)
+    .accounts({
+      protocolConfig: w.protocolPda,
+      bidMarketplace: bidCfg,
+      authority: w.admin.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts(signerMetas)
+    .instruction();
+
+  const result = send(w.svm, ix, [w.admin, owner2]);
+  expectFail(
+    result,
+    "AccountVersionTooNew",
+    "paused bootstrap with an incompatible protocol version",
+  );
+  assert.ok(isClosed(w.svm, bidCfg), "incompatible bootstrap creates no singleton");
+});
+
+test("initialize_bid_marketplace: a second initialization cannot replace the live singleton", async () => {
+  const w = await freshWorld();
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+
+  const bidCfg = BID_CFG_PDA();
+  const signerMetas = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+  ];
+  const buildIx = (minBidBondLamports) =>
+    makeProgram(w.admin).methods
+      .initializeBidMarketplace(
+        new BN(minBidBondLamports),
+        new BN(0),
+        100,
+        10,
+        new BN(86_400),
+        0,
+      )
+      .accounts({
+        protocolConfig: w.protocolPda,
+        bidMarketplace: bidCfg,
+        authority: w.admin.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .remainingAccounts(signerMetas)
+      .instruction();
+
+  expectOk(
+    send(w.svm, await buildIx(250_000), [w.admin, owner2]),
+    "first bid marketplace initialization",
+  );
+  const before = decode(w.svm, "BidMarketplaceConfig", bidCfg);
+  assert.equal(before.min_bid_bond_lamports.toString(), "250000");
+
+  const second = send(
+    w.svm,
+    await buildIx(500_000),
+    [w.admin, owner2],
+  );
+  expectFail(
+    second,
+    "already in use",
+    "second bid marketplace initialization",
+  );
+  const after = decode(w.svm, "BidMarketplaceConfig", bidCfg);
+  assert.equal(
+    after.min_bid_bond_lamports.toString(),
+    "250000",
+    "failed second initialization leaves the original singleton unchanged",
+  );
+});
+
 test("initialize_bid_marketplace: a single signer fails the multisig gate (MultisigNotEnoughSigners)", async () => {
   const w = await freshWorld();
   const owner2 = Keypair.generate(); w.svm.airdrop(owner2.publicKey, BigInt(10e9));
@@ -82,6 +220,36 @@ test("initialize_bid_marketplace: a single signer fails the multisig gate (Multi
     .instruction(), [w.admin]);
   expectFail(res, "MultisigNotEnoughSigners", "single signer cannot initialize the bid marketplace");
   assert.ok(isClosed(w.svm, bidCfg), "config NOT created (tx reverted)");
+});
+
+test("initialize_bid_marketplace: pause does not weaken the multisig threshold", async () => {
+  const w = await freshWorld();
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  await setProtocolPaused(w.svm, true);
+
+  const bidCfg = BID_CFG_PDA();
+  const ix = await makeProgram(w.admin).methods
+    .initializeBidMarketplace(new BN(250_000), new BN(0), 100, 10, new BN(86_400), 0)
+    .accounts({
+      protocolConfig: w.protocolPda,
+      bidMarketplace: bidCfg,
+      authority: w.admin.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts([
+      { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    ])
+    .instruction();
+
+  const result = send(w.svm, ix, [w.admin]);
+  expectFail(
+    result,
+    "MultisigNotEnoughSigners",
+    "paused bootstrap still requires 2-of-2",
+  );
+  assert.ok(isClosed(w.svm, bidCfg), "failed paused bootstrap is atomic");
 });
 
 // ---------------------------------------------------------------------------

@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -40,6 +38,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -52,9 +52,7 @@ export const UPDATE_SKILL_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getUpdateSkillDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_SKILL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_SKILL_DISCRIMINATOR);
 }
 
 export type UpdateSkillInstruction<
@@ -103,10 +101,10 @@ export type UpdateSkillInstructionDataArgs = {
 export function getUpdateSkillInstructionDataEncoder(): Encoder<UpdateSkillInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
       ["price", getU64Encoder()],
-      ["tags", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 64))],
+      ["tags", getOptionEncoder(getFixedBytesEncoder(64))],
       ["isActive", getOptionEncoder(getBooleanEncoder())],
     ]),
     (value) => ({ ...value, discriminator: UPDATE_SKILL_DISCRIMINATOR }),

@@ -1,6 +1,6 @@
 # P3.6 — The Referrer Leg Beyond CreatorReview: Extend or Bound?
 
-> **Historical decision record (banner added 2026-07-17).** Dated design/decision document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
+> **Historical decision record (banner added 2026-07-17).** Dated design/decision document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 > **Status:** DESIGN / DECISION RECORD — draft for founder review. No code.
 > Examines the deliberate lockout that keeps referred tasks out of the

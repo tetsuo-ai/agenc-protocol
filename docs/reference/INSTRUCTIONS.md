@@ -1048,6 +1048,11 @@ _None._
 Hire a provider from a standing service listing, minting a one-shot task
 that snapshots the listing's terms and funds escrow from the buyer.
 
+The explicit v2 discriminator (`sha256("global:hire_from_listing_v2")[0..8]`)
+is an atomic rollout boundary: the old
+program rejects new clients instead of silently ignoring the appended
+task-job-spec commitment, and the upgraded program rejects old clients.
+
 ### Accounts (15)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
@@ -1068,7 +1073,7 @@ that snapshots the listing's terms and funds escrow from the buyer.
 | 14 | `creator` | yes | yes |  |  | The buyer who pays for and owns the hired task. Must match authority to prevent social-engineering attacks (#375). |
 | 15 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (6)
+### Args (7)
 
 | # | Arg | Type |
 |---|---|---|
@@ -1078,6 +1083,7 @@ that snapshots the listing's terms and funds escrow from the buyer.
 | 4 | `referrer` | `Option<pubkey>` |
 | 5 | `referrer_fee_bps` | `u16` |
 | 6 | `moderator` | `pubkey` |
+| 7 | `task_job_spec_hash` | `[u8; 32]` |
 
 ## hire_from_listing_humanless
 
@@ -1085,6 +1091,9 @@ Hire a provider from a standing service listing as a human buyer with NO
 registered agent (single-agent storefront). Funds SOL escrow, carries the
 listing's operator-fee leg (the embedding site's cut), and pins
 ValidationMode::CreatorReview so the human reviews the work before payout.
+Its discriminator is
+`sha256("global:hire_from_listing_humanless_v2")[0..8]` so the
+required task commitment cannot be silently ignored by the old binary.
 
 ### Accounts (14)
 
@@ -1105,7 +1114,7 @@ ValidationMode::CreatorReview so the human reviews the work before payout.
 | 13 | `creator` | yes | yes |  |  | The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. |
 | 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (7)
+### Args (8)
 
 | # | Arg | Type |
 |---|---|---|
@@ -1116,6 +1125,7 @@ ValidationMode::CreatorReview so the human reviews the work before payout.
 | 5 | `referrer` | `Option<pubkey>` |
 | 6 | `referrer_fee_bps` | `u16` |
 | 7 | `moderator` | `pubkey` |
+| 8 | `task_job_spec_hash` | `[u8; 32]` |
 
 ## initialize_bid_book
 
@@ -2067,8 +2077,9 @@ Attach or update a content-addressed off-chain job specification pointer for a
 task. P1.2 §4.4: `moderator` names the attestor whose moderation record the
 caller consumes (the record slot is v2-else-legacy; the required
 `moderation_block` account is the §5.2 takedown floor).
+Discriminator = sha256("global:set_task_job_spec_v2")[0..8].
 
-### Accounts (9)
+### Accounts (10)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2081,6 +2092,7 @@ caller consumes (the record slot is v2-else-legacy; the required
 | 7 | `task_job_spec` | yes |  |  | PDA ["task_job_spec", account:task] |  |
 | 8 | `creator` | yes | yes |  |  |  |
 | 9 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | Canonical hire-link PDA. A program-owned record proves this task came from a listing and binds the published job spec to the immutable hash snapshotted in `Task.description[32..64]` at hire time. A direct task must supply the empty system-owned account at the same canonical address.  bump, and immutable hash commitment are validated in the handler. |
 
 ### Args (3)
 

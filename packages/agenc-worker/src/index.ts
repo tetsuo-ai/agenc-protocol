@@ -5,6 +5,13 @@
 // your own transports (litesvm, sandbox, kit RPC), then run ticks or the
 // long-running watch.
 export {
+  createSolanaAccountReaders,
+  type AccountInfoReader,
+  type AccountSnapshot,
+  type Base64AccountInfoFetcher,
+  type SolanaAccountReaders,
+} from "./account-reader.js";
+export {
   ConfigError,
   assertActiveWorkerConfig,
   configFromEnv,

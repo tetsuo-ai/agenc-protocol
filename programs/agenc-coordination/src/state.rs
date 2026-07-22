@@ -279,6 +279,12 @@ pub enum DisputeStatus {
     Resolved = 1,
     Expired = 2,
     Cancelled = 3,
+    /// The ruling is recorded and every principal effect is applied, but one
+    /// or more deferred collaborative peer claims still await the
+    /// permissionless `settle_dispute_claim` crank (chunked settlement — the
+    /// ruling no longer enumerates peer bundles in one transaction). Reads as
+    /// non-terminal everywhere existing code requires Resolved/Expired.
+    SettlementPending = 4,
 }
 
 /// Reason for slashing an agent's stake
@@ -1549,6 +1555,18 @@ pub struct Dispute {
     /// authority or a threshold-seated assigned resolver who signed
     /// `resolve_dispute`. Default pubkey until resolved.
     pub resolved_by: Pubkey,
+    /// Chunked settlement — APPENDED fields. A ruling on a collaborative task
+    /// records the peer count and defers each peer's sweep to the
+    /// permissionless `settle_dispute_claim` crank (one worker per
+    /// transaction), so ruling transactions are O(1) in accounts. Zero on
+    /// single-worker disputes and on every dispute predating the redesign.
+    pub peer_workers_total: u8,
+    /// Peers settled so far; the dispute reaches its recorded terminal status
+    /// when this equals `peer_workers_total`.
+    pub peer_workers_settled: u8,
+    /// Raw `DisputeStatus` discriminant (Resolved/Expired) to apply when the
+    /// final peer settles. Only meaningful while `status == SettlementPending`.
+    pub pending_terminal_status: u8,
 }
 
 impl Dispute {
@@ -1681,6 +1699,29 @@ pub struct TaskBidBook {
     pub created_at: i64,
     pub updated_at: i64,
     pub bump: u8,
+    /// Cached deterministic policy winner. `Pubkey::default()` = no tracked
+    /// winner. Maintained incrementally by every bid mutation so `accept_bid`
+    /// never has to enumerate competitors (the O(1)-accept redesign,
+    /// docs/design/bid-accept-o1-redesign.md). Fields appended for layout
+    /// stability; the revision-5 cutover preflight requires zero live books.
+    pub best_bid: Pubkey,
+    /// Score components of `best_bid`, snapshotted at install so comparisons
+    /// never need to load the incumbent's account. Scores are pure functions
+    /// of these values plus the frozen `score_window_secs`.
+    pub best_reward_lamports: u64,
+    pub best_eta_seconds: u32,
+    pub best_confidence_bps: u16,
+    pub best_reputation_bps: u16,
+    /// Set when the tracked winner is removed (cancel/expiry/demotion).
+    /// `accept_bid` is blocked until the re-promotion grace elapses so every
+    /// remaining bidder gets a fair window to promote before acceptance.
+    /// 0 = fresh.
+    pub winner_stale_since: i64,
+    /// Frozen WeightedScore eta-normalization window, recorded once at
+    /// `initialize_bid_book` as `task.deadline - now`. Freezing it makes all
+    /// policy orderings pure functions of immutable bid fields (the winner no
+    /// longer depends on when the creator calls accept).
+    pub score_window_secs: u32,
 }
 
 impl TaskBidBook {
@@ -2419,7 +2460,10 @@ impl DisputeResolver {
 /// exist before a task is minted, so it can't gate `hire_from_listing` at hire
 /// time. This listing/spec-keyed attestation does: the moderation authority attests
 /// the listing's `spec_hash` once, and the hire checks it. Recorded by
-/// `record_listing_moderation`. PDA seeds: ["listing_moderation", service_listing, job_spec_hash]
+/// `record_listing_moderation`. Revision-5 writes use moderator-keyed PDA seeds:
+/// ["listing_moderation_v2", service_listing, job_spec_hash, moderator]. Frozen
+/// pre-P1.2 ["listing_moderation", service_listing, job_spec_hash] records remain
+/// read-only compatibility inputs and are never written by revision 5.
 #[account]
 #[derive(Default, InitSpace)]
 pub struct ListingModeration {
@@ -3263,12 +3307,15 @@ mod tests {
         // The three P6.4 fields: [u8;32] hash + (4-byte len prefix + max_len) String
         // + Pubkey resolver.
         let append_delta = 32 + (4 + Dispute::MAX_RATIONALE_URI_LEN) + 32;
+        // The three chunked-settlement fields appended after P6.4:
+        // peer_workers_total + peer_workers_settled + pending_terminal_status.
+        let chunked_settlement_delta = 1 + 1 + 1;
         // Pre-P6.4 Dispute INIT_SPACE was 255 bytes (ending at `defendant: Pubkey`).
         const OLD_DISPUTE_INIT_SPACE: usize = 255;
         assert_eq!(
             <Dispute as anchor_lang::Space>::INIT_SPACE,
-            OLD_DISPUTE_INIT_SPACE + append_delta,
-            "Dispute must equal the pre-P6.4 prefix (255B) + the appended rationale/resolver fields"
+            OLD_DISPUTE_INIT_SPACE + append_delta + chunked_settlement_delta,
+            "Dispute must equal the pre-P6.4 prefix (255B) + the appended rationale/resolver fields + the chunked-settlement counters"
         );
         assert_eq!(
             Dispute::MAX_RATIONALE_URI_LEN,

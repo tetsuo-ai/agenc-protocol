@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,14 +39,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const TASK_MODERATION_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
   [170, 214, 132, 159, 229, 119, 11, 43],
 );
 
 export function getTaskModerationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_MODERATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_MODERATION_DISCRIMINATOR);
 }
 
 export type TaskModeration = {
@@ -114,20 +112,20 @@ export type TaskModerationArgs = {
 export function getTaskModerationEncoder(): FixedSizeEncoder<TaskModerationArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["creator", getAddressEncoder()],
-      ["jobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["jobSpecHash", getFixedBytesEncoder(32, "jobSpecHash")],
       ["status", getU8Encoder()],
       ["riskScore", getU8Encoder()],
       ["categoryMask", getU64Encoder()],
-      ["policyHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["scannerHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["policyHash", getFixedBytesEncoder(32, "policyHash")],
+      ["scannerHash", getFixedBytesEncoder(32, "scannerHash")],
       ["recordedAt", getI64Encoder()],
       ["expiresAt", getI64Encoder()],
       ["moderator", getAddressEncoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 7)],
+      ["reserved", getFixedBytesEncoder(7, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: TASK_MODERATION_DISCRIMINATOR }),
   );

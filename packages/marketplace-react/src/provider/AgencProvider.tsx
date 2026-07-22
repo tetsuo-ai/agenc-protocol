@@ -231,6 +231,17 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
       config.rpcUrl,
       config.rpcSubscriptionsUrl,
     );
+    // A custom write client is an opaque deployment seam. Never couple it to
+    // the selected network's implicit endpoint: reconciliation against the
+    // wrong cluster can block a valid local/custom transaction or, worse,
+    // produce misleading state evidence. An explicitly supplied URL remains
+    // opt-in; an injected RPC wins over either URL path.
+    const orchestrationRpcUrl =
+      config.orchestrationRpc !== undefined
+        ? null
+        : config.client !== undefined
+          ? (config.rpcUrl ?? null)
+          : (rpcUrl ?? null);
     const cacheNamespace = resolveCacheNamespace(
       config,
       network,
@@ -243,6 +254,8 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
       read,
       client,
       rpcUrl: rpcUrl ?? null,
+      orchestrationRpc: config.orchestrationRpc ?? null,
+      orchestrationRpcUrl,
       indexerBaseUrl: config.indexer?.baseUrl ?? null,
       signer: config.signer ?? null,
       referrer,

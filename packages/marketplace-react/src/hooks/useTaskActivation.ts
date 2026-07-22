@@ -5,6 +5,8 @@ import { useAgencContext } from "../provider/context.js";
 import {
   mutationStatusOf,
   requireClient,
+  snapshotFixedBytes32,
+  stabilizeSelectedTransactionSigner,
   type MutationStatus,
 } from "./internal.js";
 import { resolveActivationModerationAccounts } from "./moderation-attestor.js";
@@ -27,13 +29,30 @@ export interface UseTaskActivationResult {
   reset: () => void;
 }
 
+interface TaskActivationMutationVariables {
+  client: ReturnType<typeof requireClient>;
+  input: TaskActivationInput;
+  taskPda: Parameters<typeof facadeNs.setTaskJobSpec>[0]["task"];
+  creator: Parameters<typeof facadeNs.setTaskJobSpec>[0]["creator"];
+  orchestrationRpcUrl: ReturnType<
+    typeof useAgencContext
+  >["orchestrationRpcUrl"];
+  orchestrationRpc: ReturnType<typeof useAgencContext>["orchestrationRpc"];
+}
+
 export function useTaskActivation(
   taskPda: Parameters<typeof facadeNs.setTaskJobSpec>[0]["task"],
 ): UseTaskActivationResult {
   const ctx = useAgencContext();
-  const mutation = useMutation<string, Error, TaskActivationInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const mutation = useMutation<string, Error, TaskActivationMutationVariables>({
+    mutationFn: async ({
+      client,
+      input,
+      taskPda: snapshottedTaskPda,
+      creator,
+      orchestrationRpcUrl,
+      orchestrationRpc,
+    }) => {
       // P1.2: the publish gate names an explicit `moderator` (supplied by the
       // caller — the trust decision) and needs the roster-entry PDA when that
       // moderator is a registered attestor, plus a record override when the
@@ -46,24 +65,47 @@ export function useTaskActivation(
       const resolved = callerResolved
         ? {}
         : await resolveActivationModerationAccounts({
-            rpcUrl: ctx.rpcUrl,
-            task: taskPda,
+            rpcUrl: orchestrationRpcUrl,
+            ...(orchestrationRpc === null ? {} : { rpc: orchestrationRpc }),
+            task: snapshottedTaskPda,
             jobSpecHash: input.jobSpecHash,
             moderator: input.moderator,
           });
       const { signature } = await client.setTaskJobSpec({
         ...input,
         ...resolved,
-        task: taskPda,
-        creator: input.creator ?? client.signer,
+        task: snapshottedTaskPda,
+        creator,
       } as Parameters<typeof facadeNs.setTaskJobSpec>[0]);
       return signature;
     },
   });
 
   const activate = useCallback(
-    (input: TaskActivationInput) => mutation.mutateAsync(input),
-    [mutation],
+    async (input: TaskActivationInput) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = { ...input };
+      const snapshottedInput = {
+        ...detachedInput,
+        jobSpecHash: snapshotFixedBytes32(
+          detachedInput.jobSpecHash,
+          "useTaskActivation: jobSpecHash",
+        ),
+      };
+      const creator = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.creator,
+      );
+      return mutation.mutateAsync({
+        client,
+        input: snapshottedInput,
+        taskPda,
+        creator,
+        orchestrationRpcUrl: ctx.orchestrationRpcUrl,
+        orchestrationRpc: ctx.orchestrationRpc,
+      });
+    },
+    [ctx, mutation],
   );
 
   return {

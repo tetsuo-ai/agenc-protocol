@@ -19,6 +19,7 @@ import {
   type RecordAgentVerificationAsyncInput,
   type RevokeAgentVerificationAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
 
 export { findAgentVerificationPda };
 
@@ -46,7 +47,9 @@ export type AgentVerificationMethod =
 export async function recordAgentVerification(
   input: RecordAgentVerificationAsyncInput,
 ) {
-  return getRecordAgentVerificationInstructionAsync(input);
+  return getRecordAgentVerificationInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["attestor"]),
+  );
 }
 
 /**
@@ -66,7 +69,8 @@ export async function revokeAgentVerification(
     agentVerification?: Address;
   },
 ) {
-  const { agent, agentVerification, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["attestor"]);
+  const { agent, agentVerification, ...rest } = stableInput;
   let verification = agentVerification;
   if (!verification) {
     if (!agent) {

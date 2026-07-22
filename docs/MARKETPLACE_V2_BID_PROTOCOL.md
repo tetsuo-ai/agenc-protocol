@@ -1,6 +1,6 @@
 # RFC: Marketplace V2 Bid Protocol
 
-> **Historical design record (banner added 2026-07-17).** This accepted RFC is a dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
+> **Historical design record (banner added 2026-07-17).** This accepted RFC is a dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 Status: Accepted
 

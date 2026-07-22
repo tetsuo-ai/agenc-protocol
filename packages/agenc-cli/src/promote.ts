@@ -2,14 +2,22 @@
 // signs, never flips config, never touches money paths; it prints pass/fail
 // with the exact next action for each gap.
 //
-// The version matrix mirrors docs/VERSIONING.md §1.1 (published/live lines)
-// plus §1.1.1 (the explicitly unreleased coordinated candidate set). Update
+// The version matrix mirrors docs/VERSIONING.md §1.1 (published revision 4)
+// and §1.1.1 (the explicitly unreleased revision-5 candidate set). Update
 // both the document and this constant on a candidate bump or lockstep publish.
-// A package may have MULTIPLE compatible minor lines when a program upgrade
-// was additive (batch-2…4: sdk 0.8.x–0.11.x all speak the live wire; the 0.12
-// candidate remains backward-compatible while adding the revision-5 wire).
+// Compatibility is selected by the finalized on-chain surface revision; the
+// two sets must never be unioned because the revision-5 write wire deliberately
+// fails against revision 4 and the revision-4 writers fail against revision 5.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+} from "node:fs";
 import path from "node:path";
 import {
   address,
@@ -26,7 +34,13 @@ import {
   SURFACE_REVISION_FULL,
 } from "@tetsuo-ai/marketplace-sdk";
 import { loadSolanaKeypairFile } from "@tetsuo-ai/agenc-worker";
-import { loadConfig, type AgencConfig, AgencConfigError, CONFIG_FILENAME } from "./config.js";
+import { satisfies, validRange } from "semver";
+import {
+  loadConfig,
+  type AgencConfig,
+  AgencConfigError,
+  CONFIG_FILENAME,
+} from "./config.js";
 
 export const SOLANA_MAINNET_GENESIS_HASH =
   "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
@@ -42,27 +56,102 @@ export const REVIEWED_MAINNET_RELEASES = [
     programDataAddress: "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
     programDataSlot: 431_918_664,
     upgradeAuthority: "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
-    executableHash: "c6ddc7fdc19f59bb1fcd2f0c87582e09fc1959ee3e615f299c909e07854b4199",
+    executableHash:
+      "c6ddc7fdc19f59bb1fcd2f0c87582e09fc1959ee3e615f299c909e07854b4199",
     sourceCommit: "097ded12b03d27e8c89d50ad6ed8813493700129",
   },
 ] as const;
 
+type PackageSupportMatrix = Readonly<Record<string, readonly string[]>>;
+
 /**
- * docs/VERSIONING.md §1.1/§1.1.1 — compatible `major.minor` lines per package,
- * oldest first (the LAST entry is the current line install hints point at).
+ * docs/VERSIONING.md §1.1/§1.1.1 — compatible package versions selected
+ * by the finalized deployed surface revision. A `major.minor` entry admits
+ * stable patches in that line; a full SemVer entry admits only that reviewed
+ * artifact. Entries are oldest first and install hints point at the last entry.
  */
-export const SUPPORT_MATRIX: Record<string, readonly string[]> = {
-  "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9", "0.10", "0.11", "0.12"],
-  "@tetsuo-ai/agenc-worker": ["0.1", "0.2"],
-  "@tetsuo-ai/marketplace-react": ["0.4"],
-  "@tetsuo-ai/marketplace-tools": ["0.4", "0.5"],
-  "@tetsuo-ai/marketplace-mcp": ["0.4", "0.5"],
-  "@tetsuo-ai/marketplace-moderation": ["0.1", "0.2"],
-  "@tetsuo-ai/store-core": ["0.5", "0.6"],
-};
+export const SUPPORT_MATRIX_BY_SURFACE_REVISION = {
+  4: {
+    "@tetsuo-ai/protocol": ["0.3"],
+    "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9", "0.10", "0.11"],
+    "@tetsuo-ai/agenc-worker": ["0.1"],
+    "@tetsuo-ai/marketplace-react": ["0.4"],
+    "@tetsuo-ai/marketplace-tools": ["0.4"],
+    "@tetsuo-ai/marketplace-mcp": ["0.4"],
+    "@tetsuo-ai/marketplace-moderation": ["0.1"],
+    // 0.6.1 is the coordinated revision-5 store cutover, despite sharing the
+    // pre-1.0 minor with the published revision-4-compatible 0.6.0 artifact.
+    "@tetsuo-ai/store-core": ["0.5", "0.6.0"],
+  },
+  5: {
+    "@tetsuo-ai/protocol": ["0.4"],
+    "@tetsuo-ai/marketplace-sdk": ["0.12"],
+    "@tetsuo-ai/agenc-worker": ["0.2"],
+    "@tetsuo-ai/marketplace-react": ["0.5"],
+    "@tetsuo-ai/marketplace-tools": ["0.5"],
+    "@tetsuo-ai/marketplace-mcp": ["0.5"],
+    "@tetsuo-ai/marketplace-moderation": ["0.2"],
+    // The external store release contract identifies 0.6.1, not the whole
+    // 0.6.x line: 0.6.0 is the published revision-4 artifact.
+    "@tetsuo-ai/store-core": ["0.6.1"],
+  },
+} as const satisfies Readonly<Record<4 | 5, PackageSupportMatrix>>;
+
+/**
+ * Published revision-4 matrix retained for compatibility with the CLI 0.2
+ * programmatic export. New code must select from
+ * `SUPPORT_MATRIX_BY_SURFACE_REVISION` using finalized chain evidence.
+ *
+ * @deprecated Use `SUPPORT_MATRIX_BY_SURFACE_REVISION`.
+ */
+export const SUPPORT_MATRIX: PackageSupportMatrix =
+  SUPPORT_MATRIX_BY_SURFACE_REVISION[4];
+
+// These are dependencies of the application being promoted. Do not infer the
+// running CLI's version from a possibly unrelated project-local CLI package:
+// `agenc promote` may itself be running from npx, a global install, or an
+// embedding process. The unscoped CLI alias and create-agenc-store are
+// distribution/scaffolding packages, not application runtime dependencies.
+const SUPPORTED_PACKAGES = [
+  "@tetsuo-ai/protocol",
+  "@tetsuo-ai/marketplace-sdk",
+  "@tetsuo-ai/agenc-worker",
+  "@tetsuo-ai/marketplace-react",
+  "@tetsuo-ai/marketplace-tools",
+  "@tetsuo-ai/marketplace-mcp",
+  "@tetsuo-ai/marketplace-moderation",
+  "@tetsuo-ai/store-core",
+] as const;
+
+type SupportedPackage = (typeof SUPPORTED_PACKAGES)[number];
+
+const SUPPORTED_PACKAGE_SET = new Set<string>(SUPPORTED_PACKAGES);
+
+/**
+ * Relationships that materially couple first-party runtime APIs. Their exact
+ * ranges are read from each installed artifact rather than duplicated here.
+ * This list only prevents a malformed/tampered manifest from deleting a
+ * relationship and thereby bypassing the coherence check.
+ */
+const MATERIAL_FIRST_PARTY_RELATIONSHIPS = {
+  "@tetsuo-ai/agenc-worker": ["@tetsuo-ai/marketplace-sdk"],
+  "@tetsuo-ai/marketplace-react": ["@tetsuo-ai/marketplace-sdk"],
+  "@tetsuo-ai/marketplace-tools": ["@tetsuo-ai/marketplace-sdk"],
+  "@tetsuo-ai/marketplace-mcp": [
+    "@tetsuo-ai/marketplace-sdk",
+    "@tetsuo-ai/marketplace-tools",
+  ],
+  "@tetsuo-ai/store-core": [
+    "@tetsuo-ai/marketplace-sdk",
+    "@tetsuo-ai/marketplace-react",
+  ],
+} as const satisfies Partial<
+  Readonly<Record<SupportedPackage, readonly SupportedPackage[]>>
+>;
 
 const SDK_PACKAGE = "@tetsuo-ai/marketplace-sdk";
 const WORKER_RUNTIME_PACKAGE = "@tetsuo-ai/agenc-worker";
+const MAX_PACKAGE_MANIFEST_BYTES = 256 * 1024;
 
 export type CheckStatus = "pass" | "fail" | "warn";
 
@@ -80,8 +169,14 @@ export interface PromoteInput {
   configPath: string;
   /** Config-parse failure, when the file exists but is invalid. */
   configError?: string;
-  /** Installed `@tetsuo-ai/*` versions (null = not installed). */
+  /**
+   * Installed `@tetsuo-ai/*` versions (null = not installed or unreadable).
+   * Retained for the pre-0.3 programmatic API; `installedPackages` is the
+   * authoritative, fail-closed source when deciding readiness.
+   */
   installedVersions: Record<string, string | null>;
+  /** Manifest state and dependency metadata for every supported package. */
+  installedPackages?: InstalledPackageInventory;
   /** Does the configured wallet file exist on disk? */
   walletExists: boolean;
   /** Strict read-only validation of the configured keypair file. */
@@ -89,6 +184,26 @@ export interface PromoteInput {
   /** Finalized, read-only evidence gathered from the configured RPC. */
   chainEvidence?: PromoteChainEvidence;
 }
+
+export type InstalledPackageManifest =
+  | { readonly status: "absent"; readonly path: string }
+  | {
+      readonly status: "invalid";
+      readonly path: string;
+      readonly error: string;
+    }
+  | {
+      readonly status: "present";
+      readonly path: string;
+      readonly version: string;
+      readonly dependencies: Readonly<Record<string, string>>;
+      readonly peerDependencies: Readonly<Record<string, string>>;
+      readonly optionalPeerDependencies: readonly string[];
+    };
+
+export type InstalledPackageInventory = Readonly<
+  Record<string, InstalledPackageManifest>
+>;
 
 export interface PromoteChainEvidence {
   genesisHash?: string;
@@ -173,16 +288,20 @@ function parseCanonicalSemver(version: string): CanonicalSemver | null {
   // Build metadata is intentionally outside the accepted production policy:
   // two differently built artifacts must not collapse to the same readiness
   // decision. Numeric identifiers are canonical (no leading zeroes).
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(
-    version,
-  );
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(
+      version,
+    );
   if (match === null) return null;
   const prerelease = match[4] ?? null;
   if (
     prerelease !== null &&
     prerelease
       .split(".")
-      .some((identifier) => /^\d+$/u.test(identifier) && !/^(0|[1-9]\d*)$/u.test(identifier))
+      .some(
+        (identifier) =>
+          /^\d+$/u.test(identifier) && !/^(0|[1-9]\d*)$/u.test(identifier),
+      )
   ) {
     return null;
   }
@@ -194,9 +313,10 @@ function isCanonicalMinorLine(entry: string): boolean {
 }
 
 /**
- * Stable versions match an admitted canonical `major.minor` line. A
- * prerelease is rejected unless its full canonical SemVer is listed as an
- * exact matrix entry. Build metadata is always rejected.
+ * Stable versions match an admitted canonical `major.minor` line or a full
+ * canonical SemVer listed as an exact matrix entry. A prerelease is rejected
+ * unless its full canonical SemVer is listed exactly. Build metadata is always
+ * rejected.
  */
 export function versionInMatrix(
   version: string,
@@ -204,16 +324,210 @@ export function versionInMatrix(
 ): boolean {
   const parsed = parseCanonicalSemver(version);
   if (parsed === null) return false;
-  if (parsed.prerelease !== null) {
-    return entries.some(
-      (entry) => entry === version && parseCanonicalSemver(entry)?.prerelease !== null,
-    );
+  return entries.some((entry) => {
+    if (isCanonicalMinorLine(entry)) {
+      return (
+        parsed.prerelease === null &&
+        entry === `${parsed.major}.${parsed.minor}`
+      );
+    }
+    return parseCanonicalSemver(entry) !== null && entry === version;
+  });
+}
+
+function matrixForRevision(
+  revision: number | undefined,
+): PackageSupportMatrix | null {
+  if (revision !== 4 && revision !== 5) return null;
+  return SUPPORT_MATRIX_BY_SURFACE_REVISION[revision];
+}
+
+function displayMatrixEntry(entry: string): string {
+  return isCanonicalMinorLine(entry) ? `${entry}.x` : entry;
+}
+
+function installSpecifier(entry: string): string {
+  return isCanonicalMinorLine(entry) ? `^${entry}.0` : entry;
+}
+
+function installedVersion(
+  input: PromoteInput,
+  pkg: SupportedPackage,
+): string | null {
+  const manifest = input.installedPackages?.[pkg];
+  if (manifest !== undefined) {
+    return manifest.status === "present" ? manifest.version : null;
   }
-  return entries.some(
-    (entry) =>
-      isCanonicalMinorLine(entry) &&
-      entry === `${parsed.major}.${parsed.minor}`,
-  );
+  // A missing inventory is reported as a readiness failure below. Retaining
+  // this fallback lets pre-0.3 embedders receive useful pin diagnostics too.
+  return input.installedVersions[pkg] ?? null;
+}
+
+function firstPartyRelations(
+  pkg: SupportedPackage,
+  manifest: Extract<InstalledPackageManifest, { status: "present" }>,
+): readonly SupportedPackage[] {
+  const materialRelationships = MATERIAL_FIRST_PARTY_RELATIONSHIPS as Partial<
+    Readonly<Record<SupportedPackage, readonly SupportedPackage[]>>
+  >;
+  const relations = new Set<SupportedPackage>(materialRelationships[pkg] ?? []);
+  for (const candidate of [
+    ...Object.keys(manifest.dependencies),
+    ...Object.keys(manifest.peerDependencies),
+  ]) {
+    if (SUPPORTED_PACKAGE_SET.has(candidate)) {
+      relations.add(candidate as SupportedPackage);
+    }
+  }
+  return [...relations].sort();
+}
+
+function pushPackageCoherenceChecks(
+  checks: PromoteCheck[],
+  input: PromoteInput,
+): void {
+  const inventory = input.installedPackages;
+  if (inventory === undefined) {
+    checks.push({
+      id: "manifest:inventory",
+      label: "installed package manifests",
+      status: "fail",
+      detail:
+        "manifest inventory was not supplied, so installed artifacts and their dependency ranges cannot be verified",
+      action:
+        "gather promotion input with gatherPromoteInputAsync() from this CLI version",
+    });
+    return;
+  }
+
+  for (const pkg of SUPPORTED_PACKAGES) {
+    const manifest = inventory[pkg];
+    if (manifest === undefined) {
+      checks.push({
+        id: `manifest:${pkg}`,
+        label: `${pkg} manifest`,
+        status: "fail",
+        detail:
+          "package inventory omitted this package, so absence cannot be distinguished from an unreadable manifest",
+        action: "re-run promotion from the project root with the current CLI",
+      });
+      continue;
+    }
+    if (manifest.status === "invalid") {
+      checks.push({
+        id: `manifest:${pkg}`,
+        label: `${pkg} manifest`,
+        status: "fail",
+        detail: `installed manifest is invalid: ${manifest.error}`,
+        action: `remove and reinstall ${pkg}, then run \`agenc promote\` again`,
+      });
+      continue;
+    }
+    if (manifest.status === "absent") {
+      const legacyVersion = input.installedVersions[pkg];
+      if (legacyVersion != null) {
+        checks.push({
+          id: `manifest:${pkg}`,
+          label: `${pkg} manifest`,
+          status: "fail",
+          detail: `version inventory reports ${legacyVersion}, but the package manifest is absent`,
+          action: "re-run promotion from the project root with the current CLI",
+        });
+      }
+      continue;
+    }
+
+    const legacyVersion = input.installedVersions[pkg];
+    if (legacyVersion !== manifest.version) {
+      checks.push({
+        id: `manifest:${pkg}`,
+        label: `${pkg} manifest`,
+        status: "fail",
+        detail:
+          `version inventory mismatch (manifest ${manifest.version}; version view ` +
+          `${legacyVersion ?? "missing"})`,
+        action: "re-run promotion from the project root with the current CLI",
+      });
+    }
+
+    for (const target of firstPartyRelations(pkg, manifest)) {
+      const dependencyRange = manifest.dependencies[target];
+      const peerRange = manifest.peerDependencies[target];
+      const relationId = `coherence:${pkg}->${target}`;
+      if (dependencyRange !== undefined && peerRange !== undefined) {
+        checks.push({
+          id: relationId,
+          label: `${pkg} / ${target} coherence`,
+          status: "fail",
+          detail: `${pkg}@${manifest.version} declares ${target} as both a dependency and a peer dependency`,
+          action: `reinstall a reviewed ${pkg} artifact with one unambiguous ${target} relationship`,
+        });
+        continue;
+      }
+      const range = dependencyRange ?? peerRange;
+      if (range === undefined) {
+        checks.push({
+          id: relationId,
+          label: `${pkg} / ${target} coherence`,
+          status: "fail",
+          detail: `${pkg}@${manifest.version} is missing its required first-party ${target} dependency/peer declaration`,
+          action: `reinstall a reviewed ${pkg} artifact and its coordinated package train`,
+        });
+        continue;
+      }
+      if (validRange(range, { loose: false }) === null) {
+        checks.push({
+          id: relationId,
+          label: `${pkg} / ${target} coherence`,
+          status: "fail",
+          detail: `${pkg}@${manifest.version} declares malformed ${target} range ${JSON.stringify(range)}`,
+          action: `reinstall a reviewed ${pkg} artifact`,
+        });
+        continue;
+      }
+
+      const targetManifest = inventory[target];
+      const optionalPeer =
+        peerRange !== undefined &&
+        manifest.optionalPeerDependencies.includes(target);
+      if (targetManifest?.status === "absent" && optionalPeer) continue;
+      if (targetManifest?.status !== "present") {
+        checks.push({
+          id: relationId,
+          label: `${pkg} / ${target} coherence`,
+          status: "fail",
+          detail:
+            `${pkg}@${manifest.version} requires ${target}@${range}, but that package is ` +
+            (targetManifest?.status === "invalid"
+              ? "installed with an invalid manifest"
+              : "not installed"),
+          action: `install a ${target} version satisfying ${range}, then run \`agenc promote\` again`,
+        });
+        continue;
+      }
+      if (
+        !satisfies(targetManifest.version, range, { includePrerelease: false })
+      ) {
+        checks.push({
+          id: relationId,
+          label: `${pkg} / ${target} coherence`,
+          status: "fail",
+          detail:
+            `${pkg}@${manifest.version} declares ${target}@${range}, but ` +
+            `${targetManifest.version} is installed`,
+          action:
+            "install a mutually compatible first-party package combination documented in VERSIONING.md",
+        });
+        continue;
+      }
+      checks.push({
+        id: relationId,
+        label: `${pkg} / ${target} coherence`,
+        status: "pass",
+        detail: `${target}@${targetManifest.version} satisfies ${pkg}@${manifest.version} range ${range}`,
+      });
+    }
+  }
 }
 
 /** Pure checklist logic (unit-testable without a filesystem). */
@@ -250,7 +564,10 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       id: "network",
       label: "production network",
       status: "fail",
-      detail: config === null ? "network is unavailable" : `network is ${config.network}`,
+      detail:
+        config === null
+          ? "network is unavailable"
+          : `network is ${config.network}`,
       action: `set "network" in ${CONFIG_FILENAME} to "mainnet-beta"`,
     });
   } else {
@@ -364,7 +681,8 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
         (evidence?.genesisHash === undefined
           ? "RPC identity was not verified"
           : `unexpected genesis hash ${evidence.genesisHash}`),
-      action: "use a healthy Solana mainnet-beta RPC and run `agenc promote` again",
+      action:
+        "use a healthy Solana mainnet-beta RPC and run `agenc promote` again",
     });
   } else if (
     evidence.finalizedSlot === undefined ||
@@ -468,48 +786,77 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
     });
   }
 
-  // 4) installed package pins inside the VERSIONING.md support matrix
-  for (const [pkg, lines] of Object.entries(SUPPORT_MATRIX)) {
-    const version = input.installedVersions[pkg];
+  // 4) installed package pins inside the matrix for the finalized revision.
+  // Never union revision 4 and revision 5: their write wires are intentionally
+  // bidirectionally incompatible. Independent version buckets are necessary
+  // but insufficient: every installed artifact's own first-party dependency
+  // and peer ranges must also admit the selected installed package train.
+  pushPackageCoherenceChecks(checks, input);
+  const revisionMatrix = matrixForRevision(revision);
+  for (const pkg of SUPPORTED_PACKAGES) {
+    const version = installedVersion(input, pkg);
     if (version == null) continue; // not a dependency of this project — fine
-    const supported = lines
-      .map((entry) => (isCanonicalMinorLine(entry) ? `${entry}.x` : entry))
-      .join(" / ");
-    const current = [...lines].reverse().find(isCanonicalMinorLine);
+    const lines = revisionMatrix?.[pkg];
+    if (lines === undefined) {
+      checks.push({
+        id: `pin:${pkg}`,
+        label: `${pkg} pin`,
+        status: "fail",
+        detail:
+          `${version} cannot be matched to a client release because deployed ` +
+          `surface revision ${revision ?? "unknown"} has no reviewed compatibility matrix`,
+        action:
+          "verify the finalized deployed surface and run `agenc promote` again",
+      });
+      continue;
+    }
+    const supported = lines.map(displayMatrixEntry).join(" / ");
+    const current = lines[lines.length - 1];
     if (versionInMatrix(version, lines)) {
       checks.push({
         id: `pin:${pkg}`,
         label: `${pkg} pin`,
         status: "pass",
-        detail: `${version} (matrix: ${supported})`,
+        detail: `${version} (surface revision ${revision}; matrix: ${supported})`,
       });
     } else {
       checks.push({
         id: `pin:${pkg}`,
         label: `${pkg} pin`,
         status: "fail",
-        detail: `${version} is OUTSIDE the supported ${supported} lines — it fails closed against the live mainnet program`,
+        detail:
+          `${version} is OUTSIDE the surface-revision-${revision} ` +
+          `supported set ${supported} — this client/program skew fails closed`,
         action:
           current === undefined
             ? `install an explicitly supported ${pkg} version (see agenc-protocol docs/VERSIONING.md §1.1)`
-            : `npm install ${pkg}@^${current}.0 (see agenc-protocol docs/VERSIONING.md §1.1)`,
+            : `npm install ${pkg}@${installSpecifier(current)} (see agenc-protocol docs/VERSIONING.md §1.1)`,
       });
     }
   }
-  if (input.installedVersions[SDK_PACKAGE] == null) {
+  if (installedVersion(input, SDK_PACKAGE) == null) {
+    const sdkEntries = revisionMatrix?.[SDK_PACKAGE];
+    const sdkCurrent = sdkEntries?.[sdkEntries.length - 1];
     checks.push({
       id: "pin:sdk",
       label: "@tetsuo-ai/marketplace-sdk pin",
       status: "fail",
       detail: "@tetsuo-ai/marketplace-sdk is not installed in this project",
       action:
-        "npm install @tetsuo-ai/marketplace-sdk@^0.12.0 (run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
+        sdkCurrent === undefined
+          ? "verify the finalized deployed surface before selecting an SDK version"
+          : `npm install ${SDK_PACKAGE}@${installSpecifier(sdkCurrent)} ` +
+            "(run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
     });
   }
   if (
     config?.kind === "worker" &&
-    input.installedVersions[WORKER_RUNTIME_PACKAGE] == null
+    installedVersion(input, WORKER_RUNTIME_PACKAGE) == null
   ) {
+    const workerEntries = revisionMatrix?.[WORKER_RUNTIME_PACKAGE];
+    const workerCurrent = workerEntries?.[workerEntries.length - 1];
+    const sdkEntries = revisionMatrix?.[SDK_PACKAGE];
+    const sdkCurrent = sdkEntries?.[sdkEntries.length - 1];
     checks.push({
       id: "pin:worker-runtime",
       label: "@tetsuo-ai/agenc-worker runtime",
@@ -517,23 +864,30 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       detail:
         "this worker template cannot run because @tetsuo-ai/agenc-worker is not installed in the project",
       action:
-        "npm install @tetsuo-ai/agenc-worker@^0.2.0 @tetsuo-ai/marketplace-sdk@^0.12.0",
-      });
+        workerCurrent === undefined || sdkCurrent === undefined
+          ? "verify the finalized deployed surface before selecting worker dependencies"
+          : `npm install ${WORKER_RUNTIME_PACKAGE}@${installSpecifier(workerCurrent)} ` +
+            `${SDK_PACKAGE}@${installSpecifier(sdkCurrent)}`,
+    });
   }
 
   // Wire compatibility is broader than the API surface emitted by this CLI.
   // Generated recovery/listing-verification code requires the current SDK line.
-  const sdkVersion = input.installedVersions[SDK_PACKAGE];
-  if (config !== null && (sdkVersion == null || !versionInMatrix(sdkVersion, ["0.12"]))) {
+  const sdkVersion = installedVersion(input, SDK_PACKAGE);
+  if (
+    config !== null &&
+    (sdkVersion == null || !versionInMatrix(sdkVersion, ["0.12"]))
+  ) {
     checks.push({
       id: "pin:template-sdk",
       label: "generated-template SDK API",
       status: "fail",
       detail: `generated ${config.kind} code requires @tetsuo-ai/marketplace-sdk 0.12.x (installed: ${sdkVersion ?? "missing"})`,
-      action: "npm install @tetsuo-ai/marketplace-sdk@^0.12.0 and rebuild the generated surface",
+      action:
+        "npm install @tetsuo-ai/marketplace-sdk@^0.12.0 and rebuild the generated surface",
     });
   }
-  const workerVersion = input.installedVersions[WORKER_RUNTIME_PACKAGE];
+  const workerVersion = installedVersion(input, WORKER_RUNTIME_PACKAGE);
   if (
     config?.kind === "worker" &&
     (workerVersion == null || !versionInMatrix(workerVersion, ["0.2"]))
@@ -543,7 +897,8 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       label: "generated-worker runtime API",
       status: "fail",
       detail: `generated worker.mjs requires @tetsuo-ai/agenc-worker 0.2.x (installed: ${workerVersion ?? "missing"})`,
-      action: "npm install @tetsuo-ai/agenc-worker@^0.2.0 and rebuild worker.mjs",
+      action:
+        "npm install @tetsuo-ai/agenc-worker@^0.2.0 and rebuild worker.mjs",
     });
   }
 
@@ -601,25 +956,204 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
   return { checks, passed, failed, warned, ready: failed === 0 };
 }
 
-/** Read installed versions from the project's node_modules (readonly). */
+function parseManifestStringMap(
+  value: unknown,
+  field: string,
+): Record<string, string> {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  const result: Record<string, string> = {};
+  for (const [name, range] of Object.entries(value)) {
+    if (typeof range !== "string" || range.trim() === "") {
+      throw new TypeError(`${field}.${name} must be a non-empty string`);
+    }
+    result[name] = range;
+  }
+  return result;
+}
+
+function parseOptionalPeerDependencies(value: unknown): readonly string[] {
+  if (value === undefined) return [];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("peerDependenciesMeta must be an object");
+  }
+  const optional: string[] = [];
+  for (const [name, metadata] of Object.entries(value)) {
+    if (
+      typeof metadata !== "object" ||
+      metadata === null ||
+      Array.isArray(metadata)
+    ) {
+      throw new TypeError(`peerDependenciesMeta.${name} must be an object`);
+    }
+    const flag = (metadata as { optional?: unknown }).optional;
+    if (flag !== undefined && typeof flag !== "boolean") {
+      throw new TypeError(
+        `peerDependenciesMeta.${name}.optional must be a boolean`,
+      );
+    }
+    if (flag === true) optional.push(name);
+  }
+  return optional.sort();
+}
+
+function readPackageManifestFile(file: string): string {
+  const descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = fstatSync(descriptor);
+    if (!before.isFile()) throw new Error("package.json is not a regular file");
+    if (before.size <= 0 || before.size > MAX_PACKAGE_MANIFEST_BYTES) {
+      throw new Error(
+        `package.json size must be 1..${MAX_PACKAGE_MANIFEST_BYTES} bytes`,
+      );
+    }
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const count = readSync(
+        descriptor,
+        bytes,
+        offset,
+        bytes.byteLength - offset,
+        offset,
+      );
+      if (count === 0) throw new Error("package.json changed while being read");
+      offset += count;
+    }
+    if (readSync(descriptor, Buffer.alloc(1), 0, 1, offset) !== 0) {
+      throw new Error("package.json changed while being read");
+    }
+    const after = fstatSync(descriptor);
+    if (
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs
+    ) {
+      throw new Error("package.json changed while being read");
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function locateInstalledPackage(
+  dir: string,
+  pkg: SupportedPackage,
+):
+  | { status: "absent"; path: string }
+  | { status: "found"; path: string }
+  | { status: "invalid"; path: string; error: string } {
+  let current = path.resolve(dir);
+  const directPath = path.join(
+    current,
+    "node_modules",
+    ...pkg.split("/"),
+    "package.json",
+  );
+  while (true) {
+    const pkgDir = path.join(current, "node_modules", ...pkg.split("/"));
+    const pkgJson = path.join(pkgDir, "package.json");
+    try {
+      // Match Node's upward node_modules lookup so promotion sees the same
+      // hoisted workspace artifact as the application. The package directory,
+      // rather than package.json alone, defines true absence.
+      lstatSync(pkgDir);
+      return { status: "found", path: pkgJson };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return {
+          status: "invalid",
+          path: pkgJson,
+          error:
+            error instanceof Error
+              ? error.message
+              : "unknown package read error",
+        };
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return { status: "absent", path: directPath };
+    current = parent;
+  }
+}
+
+/**
+ * Read exact installed first-party manifests without conflating absence with a
+ * broken artifact. This function is readonly and bounds every manifest before
+ * parsing it.
+ */
+export function readInstalledPackageManifests(
+  dir: string,
+): InstalledPackageInventory {
+  const manifests: Record<string, InstalledPackageManifest> = {};
+  for (const pkg of SUPPORTED_PACKAGES) {
+    const location = locateInstalledPackage(dir, pkg);
+    if (location.status === "absent" || location.status === "invalid") {
+      manifests[pkg] = location;
+      continue;
+    }
+    const pkgJson = location.path;
+    try {
+      const parsed: unknown = JSON.parse(readPackageManifestFile(pkgJson));
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        throw new TypeError("package.json root must be an object");
+      }
+      const record = parsed as Record<string, unknown>;
+      if (record.name !== pkg) {
+        throw new TypeError(`package name must be exactly ${pkg}`);
+      }
+      if (
+        typeof record.version !== "string" ||
+        parseCanonicalSemver(record.version) === null
+      ) {
+        throw new TypeError("version must be a canonical SemVer string");
+      }
+      manifests[pkg] = {
+        status: "present",
+        path: pkgJson,
+        version: record.version,
+        dependencies: parseManifestStringMap(
+          record.dependencies,
+          "dependencies",
+        ),
+        peerDependencies: parseManifestStringMap(
+          record.peerDependencies,
+          "peerDependencies",
+        ),
+        optionalPeerDependencies: parseOptionalPeerDependencies(
+          record.peerDependenciesMeta,
+        ),
+      };
+    } catch (error) {
+      manifests[pkg] = {
+        status: "invalid",
+        path: pkgJson,
+        error: error instanceof Error ? error.message : "unknown read error",
+      };
+    }
+  }
+  return manifests;
+}
+
+/**
+ * Legacy version-only view. Use `readInstalledPackageManifests` for readiness
+ * decisions so invalid manifests cannot masquerade as absent optional packages.
+ */
 export function readInstalledVersions(
   dir: string,
 ): Record<string, string | null> {
   const versions: Record<string, string | null> = {};
-  for (const pkg of Object.keys(SUPPORT_MATRIX)) {
-    const pkgJson = path.join(dir, "node_modules", ...pkg.split("/"), "package.json");
-    if (!existsSync(pkgJson)) {
-      versions[pkg] = null;
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(readFileSync(pkgJson, "utf8")) as {
-        version?: unknown;
-      };
-      versions[pkg] = typeof parsed.version === "string" ? parsed.version : null;
-    } catch {
-      versions[pkg] = null;
-    }
+  for (const [pkg, manifest] of Object.entries(
+    readInstalledPackageManifests(dir),
+  )) {
+    versions[pkg] = manifest.status === "present" ? manifest.version : null;
   }
   return versions;
 }
@@ -639,25 +1173,37 @@ export function gatherPromoteInput(dir: string): PromoteInput {
   const walletExists =
     walletPath !== null &&
     walletPath.trim() !== "" &&
-    existsSync(path.isAbsolute(walletPath) ? walletPath : path.join(dir, walletPath));
+    existsSync(
+      path.isAbsolute(walletPath) ? walletPath : path.join(dir, walletPath),
+    );
   let walletValidation: PromoteInput["walletValidation"];
   if (walletExists && walletPath !== null) {
-    const resolved = path.isAbsolute(walletPath) ? walletPath : path.join(dir, walletPath);
+    const resolved = path.isAbsolute(walletPath)
+      ? walletPath
+      : path.join(dir, walletPath);
     try {
       loadSolanaKeypairFile(resolved);
       walletValidation = {
         valid: false,
-        error: "keypair bytes passed parsing but signer address has not been derived",
+        error:
+          "keypair bytes passed parsing but signer address has not been derived",
       };
     } catch (error) {
       walletValidation = { valid: false, error: (error as Error).message };
     }
   }
+  const installedPackages = readInstalledPackageManifests(dir);
+  const installedVersions: Record<string, string | null> = {};
+  for (const [pkg, manifest] of Object.entries(installedPackages)) {
+    installedVersions[pkg] =
+      manifest.status === "present" ? manifest.version : null;
+  }
   return {
     config,
     configPath,
     ...(configError !== undefined ? { configError } : {}),
-    installedVersions: readInstalledVersions(dir),
+    installedVersions,
+    installedPackages,
     walletExists,
     ...(walletValidation !== undefined ? { walletValidation } : {}),
   };
@@ -706,11 +1252,16 @@ async function rpcCall(
   });
   if (!response.ok) throw new Error(`RPC answered HTTP ${response.status}`);
   const envelope = await readBoundedRpcResponse(response);
-  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) {
+  if (
+    typeof envelope !== "object" ||
+    envelope === null ||
+    Array.isArray(envelope)
+  ) {
     throw new Error("RPC returned an invalid JSON-RPC envelope");
   }
   const record = envelope as Record<string, unknown>;
-  if (record.error !== undefined) throw new Error(`RPC ${method} returned an error`);
+  if (record.error !== undefined)
+    throw new Error(`RPC ${method} returned an error`);
   if (!("result" in record)) throw new Error(`RPC ${method} omitted result`);
   return record.result;
 }
@@ -778,31 +1329,45 @@ function hashProgramData(data: Buffer): string {
   }
   let end = data.length;
   while (end > 45 && data[end - 1] === 0) end -= 1;
-  if (end === 45) throw new Error("ProgramData account contains no executable bytes");
+  if (end === 45)
+    throw new Error("ProgramData account contains no executable bytes");
   return createHash("sha256").update(data.subarray(45, end)).digest("hex");
 }
 
 /** Gather the sync filesystem checks plus finalized mainnet deployment evidence. */
 export async function gatherPromoteInputAsync(
   dir: string,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; rpcUrl?: string } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    rpcUrl?: string;
+  } = {},
 ): Promise<PromoteInput> {
   const input = gatherPromoteInput(dir);
   const injectedRpcUrl = options.rpcUrl ?? process.env.AGENC_RPC_URL?.trim();
-  if (input.config !== null && injectedRpcUrl !== undefined && injectedRpcUrl !== "") {
+  if (
+    input.config !== null &&
+    injectedRpcUrl !== undefined &&
+    injectedRpcUrl !== ""
+  ) {
     input.config = { ...input.config, rpcUrl: injectedRpcUrl };
   }
   const rpcUrl = input.config?.rpcUrl ?? null;
   const walletPath = input.config?.walletPath ?? null;
   if (input.walletExists && walletPath !== null) {
-    const resolved = path.isAbsolute(walletPath) ? walletPath : path.join(dir, walletPath);
+    const resolved = path.isAbsolute(walletPath)
+      ? walletPath
+      : path.join(dir, walletPath);
     try {
       const signer = await createKeyPairSignerFromBytes(
         loadSolanaKeypairFile(resolved),
       );
       input.walletValidation = { valid: true, address: String(signer.address) };
     } catch (error) {
-      input.walletValidation = { valid: false, error: (error as Error).message };
+      input.walletValidation = {
+        valid: false,
+        error: (error as Error).message,
+      };
     }
   }
   if (
@@ -863,10 +1428,7 @@ export async function gatherPromoteInputAsync(
       finalizedSlot,
     );
     const programBytes = accountData(program, "program");
-    if (
-      programBytes.length !== 36 ||
-      programBytes.readUInt32LE(0) !== 2
-    ) {
+    if (programBytes.length !== 36 || programBytes.readUInt32LE(0) !== 2) {
       throw new Error("program account is not an upgradeable-loader Program");
     }
     const programDataAddress = String(
@@ -885,7 +1447,10 @@ export async function gatherPromoteInputAsync(
       finalizedSlot,
     );
     const programDataBytes = accountData(programData, "ProgramData");
-    if (programDataBytes.length <= 45 || programDataBytes.readUInt32LE(0) !== 3) {
+    if (
+      programDataBytes.length <= 45 ||
+      programDataBytes.readUInt32LE(0) !== 3
+    ) {
       throw new Error("ProgramData account has an invalid loader layout");
     }
     const authorityTag = programDataBytes[12];
@@ -894,7 +1459,9 @@ export async function gatherPromoteInputAsync(
     }
     const programDataSlotBigint = programDataBytes.readBigUInt64LE(4);
     if (programDataSlotBigint > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error("ProgramData deployment slot is outside the safe integer range");
+      throw new Error(
+        "ProgramData deployment slot is outside the safe integer range",
+      );
     }
     const programDataSlot = Number(programDataSlotBigint);
     const upgradeAuthority = String(
@@ -905,9 +1472,7 @@ export async function gatherPromoteInputAsync(
     const configBuffer = accountData(protocolConfig, "ProtocolConfig");
     const configBytes = Uint8Array.from(configBuffer);
     const discriminator = getProtocolConfigDiscriminatorBytes();
-    if (
-      discriminator.some((byte, index) => configBytes[index] !== byte)
-    ) {
+    if (discriminator.some((byte, index) => configBytes[index] !== byte)) {
       throw new Error("ProtocolConfig account discriminator is invalid");
     }
     const decodedConfig = getProtocolConfigDecoder().decode(configBytes);
@@ -921,7 +1486,9 @@ export async function gatherPromoteInputAsync(
         release.executableHash === executableHash,
     );
     if (String(protocolConfigAddress) !== AGENC_PROTOCOL_CONFIG_ADDRESS) {
-      throw new Error("derived ProtocolConfig address does not match this CLI build");
+      throw new Error(
+        "derived ProtocolConfig address does not match this CLI build",
+      );
     }
     Object.assign(evidence, {
       genesisHash: typeof genesis === "string" ? genesis : undefined,

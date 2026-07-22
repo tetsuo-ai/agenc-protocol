@@ -174,6 +174,8 @@ export async function main() {
     expectedVersion: 1n,
     reviewWindowSecs: 86_400n,
     listingSpecHash,
+    // Revision 5 commits the buyer-specific contract before escrow funding.
+    taskJobSpecHash: jobSpecHash,
     // P1.2: name the attestation author; the facade derives the v2
     // listing-moderation record and the required BLOCK-floor PDA from
     // listingSpecHash + moderator.

@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -31,6 +29,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -43,9 +43,7 @@ export const UPDATE_TREASURY_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getUpdateTreasuryDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_TREASURY_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_TREASURY_DISCRIMINATOR);
 }
 
 export type UpdateTreasuryInstruction<
@@ -81,7 +79,9 @@ export type UpdateTreasuryInstructionDataArgs = {};
 
 export function getUpdateTreasuryInstructionDataEncoder(): FixedSizeEncoder<UpdateTreasuryInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: UPDATE_TREASURY_DISCRIMINATOR }),
   );
 }

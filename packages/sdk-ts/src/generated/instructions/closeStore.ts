@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -31,6 +29,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -44,7 +44,7 @@ export const CLOSE_STORE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getCloseStoreDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(CLOSE_STORE_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(CLOSE_STORE_DISCRIMINATOR);
 }
 
 export type CloseStoreInstruction<
@@ -73,7 +73,9 @@ export type CloseStoreInstructionDataArgs = {};
 
 export function getCloseStoreInstructionDataEncoder(): FixedSizeEncoder<CloseStoreInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: CLOSE_STORE_DISCRIMINATOR }),
   );
 }

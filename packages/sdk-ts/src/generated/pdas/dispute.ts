@@ -7,13 +7,14 @@
  */
 
 import {
-  fixEncoderSize,
   getBytesEncoder,
   getProgramDerivedAddress,
   type Address,
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type DisputeSeeds = {
   disputeId: ReadonlyUint8Array;
@@ -32,7 +33,7 @@ export async function findDisputePda(
       getBytesEncoder().encode(
         new Uint8Array([100, 105, 115, 112, 117, 116, 101]),
       ),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.disputeId),
+      getFixedBytesEncoder(32).encode(seeds.disputeId),
     ],
   });
 }

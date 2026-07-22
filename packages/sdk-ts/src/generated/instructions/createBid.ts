@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -40,6 +38,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -60,7 +60,7 @@ export const CREATE_BID_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getCreateBidDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(CREATE_BID_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(CREATE_BID_DISCRIMINATOR);
 }
 
 export type CreateBidInstruction<
@@ -140,14 +140,17 @@ export type CreateBidInstructionDataArgs = {
 export function getCreateBidInstructionDataEncoder(): FixedSizeEncoder<CreateBidInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["requestedRewardLamports", getU64Encoder()],
       ["etaSeconds", getU32Encoder()],
       ["confidenceBps", getU16Encoder()],
-      ["qualityGuaranteeHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      [
+        "qualityGuaranteeHash",
+        getFixedBytesEncoder(32, "qualityGuaranteeHash"),
+      ],
+      ["metadataHash", getFixedBytesEncoder(32, "metadataHash")],
       ["expiresAt", getI64Encoder()],
-      ["expectedJobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["expectedJobSpecHash", getFixedBytesEncoder(32, "expectedJobSpecHash")],
       ["expectedJobSpecUpdatedAt", getI64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: CREATE_BID_DISCRIMINATOR }),

@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -50,7 +50,7 @@ export const CLOSE_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getCloseTaskDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(CLOSE_TASK_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(CLOSE_TASK_DISCRIMINATOR);
 }
 
 export type CloseTaskInstruction<
@@ -107,7 +107,9 @@ export type CloseTaskInstructionDataArgs = {};
 
 export function getCloseTaskInstructionDataEncoder(): FixedSizeEncoder<CloseTaskInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: CLOSE_TASK_DISCRIMINATOR }),
   );
 }

@@ -53,8 +53,6 @@ const MULTISIG_APPROVER_A = createNoopSigner(
 const MULTISIG_APPROVER_B = createNoopSigner(
   a("SysvarC1ock11111111111111111111111111111111"),
 );
-const PEER_CLAIM = a("SysvarRecentB1ockHashes11111111111111111111");
-const PEER_WORKER = a("AddressLookupTab1e1111111111111111111111111");
 const PARENT_TASK = a("Config1111111111111111111111111111111111111");
 const ACCEPTED_BID = a("ComputeBudget111111111111111111111111111111");
 const BIDDER_STATE = a("Ed25519SigVerify111111111111111111111111111");
@@ -97,6 +95,33 @@ describe("disputes facade (structural)", () => {
     expect(Array.from(decoded.evidenceHash)).toEqual(Array.from(evidenceHash));
   });
 
+  it("initiateDispute detaches every fixed-width commitment before derivation yields", async () => {
+    const disputeId = new Uint8Array(32).fill(11);
+    const taskId = new Uint8Array(32).fill(12);
+    const evidenceHash = new Uint8Array(32).fill(13);
+    const instructionPromise = facade.initiateDispute({
+      task: TASK,
+      agent: AGENT,
+      authority: AUTHORITY,
+      disputeId,
+      taskId,
+      evidenceHash,
+      resolutionType: 1,
+      evidence: "ipfs://stable-evidence",
+    });
+
+    disputeId.fill(91);
+    taskId.fill(92);
+    evidenceHash.fill(93);
+
+    const decoded = getInitiateDisputeInstructionDataDecoder().decode(
+      (await instructionPromise).data,
+    );
+    expect(decoded.disputeId).toEqual(new Uint8Array(32).fill(11));
+    expect(decoded.taskId).toEqual(new Uint8Array(32).fill(12));
+    expect(decoded.evidenceHash).toEqual(new Uint8Array(32).fill(13));
+  });
+
   // P6.3: the `voteDispute` structural test is removed — the per-case arbiter
   // vote/quorum model is retired. A threshold-approved protocol authority or
   // threshold-seated assigned resolver decides via `resolveDispute`, covered below.
@@ -118,7 +143,6 @@ describe("disputes facade (structural)", () => {
       workerWallet: WORKER_WALLET,
       bondTreasury: TREASURY,
       dependencyParent: PARENT_TASK,
-      peerWorkers: [{ claim: PEER_CLAIM, worker: PEER_WORKER }],
       bidSettlement: {
         acceptedBid: ACCEPTED_BID,
         bidderMarketState: BIDDER_STATE,
@@ -146,13 +170,9 @@ describe("disputes facade (structural)", () => {
     expect(accs).toContain(TREASURY);
     const [submission] = await findTaskSubmissionPda({ claim: CLAIM });
     expect(accs).toContain(submission);
-    const [peerSubmission] = await findTaskSubmissionPda({ claim: PEER_CLAIM });
     const [bidBook] = await findBidBookPda({ task: TASK });
-    expect(accs.slice(-9)).toEqual([
+    expect(accs.slice(-6)).toEqual([
       PARENT_TASK,
-      PEER_CLAIM,
-      PEER_WORKER,
-      peerSubmission,
       bidBook,
       ACCEPTED_BID,
       BIDDER_STATE,
@@ -178,6 +198,45 @@ describe("disputes facade (structural)", () => {
     expect(decoded.rationaleUri).toBe(rationaleUri);
   });
 
+  it("resolveDispute snapshots ruling and settlement records before derivation yields", async () => {
+    const rationaleHash = new Uint8Array(32).fill(61);
+    const bidSettlement = {
+      acceptedBid: ACCEPTED_BID,
+      bidderMarketState: BIDDER_STATE,
+    };
+    const instructionPromise = facade.resolveDispute({
+      dispute: DISPUTE,
+      task: TASK,
+      authority: AUTHORITY,
+      approve: true,
+      rationaleHash,
+      rationaleUri: "agenc://ruling/stable",
+      creator: CREATOR,
+      workerClaim: CLAIM,
+      worker: WORKER_AGENT,
+      workerWallet: WORKER_WALLET,
+      bondTreasury: TREASURY,
+      dependencyParent: PARENT_TASK,
+      bidSettlement,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+    });
+
+    rationaleHash.fill(99);
+    bidSettlement.acceptedBid = TASK;
+    bidSettlement.bidderMarketState = AGENT;
+
+    const ix = await instructionPromise;
+    expect(
+      getResolveDisputeInstructionDataDecoder().decode(ix.data).rationaleHash,
+    ).toEqual(new Uint8Array(32).fill(61));
+    const [bidBook] = await findBidBookPda({ task: TASK });
+    expect(order(ix).slice(-5, -2)).toEqual([
+      bidBook,
+      ACCEPTED_BID,
+      BIDDER_STATE,
+    ]);
+  });
+
   it("expireDispute: program, derives + passes both bond PDAs in order, data round-trips", async () => {
     const ix = await facade.expireDispute({
       dispute: DISPUTE,
@@ -188,7 +247,6 @@ describe("disputes facade (structural)", () => {
       worker: WORKER_AGENT,
       workerWallet: WORKER_WALLET,
       dependencyParent: PARENT_TASK,
-      peerWorkers: [{ claim: PEER_CLAIM, worker: PEER_WORKER }],
       bidSettlement: {
         acceptedBid: ACCEPTED_BID,
         bidderMarketState: BIDDER_STATE,
@@ -213,22 +271,15 @@ describe("disputes facade (structural)", () => {
     expect(accs).toContain(workerBond);
     const [submission] = await findTaskSubmissionPda({ claim: CLAIM });
     expect(accs).toContain(submission);
-    const [peerSubmission] = await findTaskSubmissionPda({ claim: PEER_CLAIM });
     const [bidBook] = await findBidBookPda({ task: TASK });
-    expect(accs.slice(-7)).toEqual([
+    expect(accs.slice(-4)).toEqual([
       PARENT_TASK,
-      PEER_CLAIM,
-      PEER_WORKER,
-      peerSubmission,
       bidBook,
       ACCEPTED_BID,
       BIDDER_STATE,
     ]);
-    expect(ix.accounts.slice(-7).map((account) => account.role)).toEqual([
+    expect(ix.accounts.slice(-4).map((account) => account.role)).toEqual([
       AccountRole.READONLY,
-      AccountRole.WRITABLE,
-      AccountRole.WRITABLE,
-      AccountRole.WRITABLE,
       AccountRole.WRITABLE,
       AccountRole.WRITABLE,
       AccountRole.WRITABLE,
@@ -237,6 +288,34 @@ describe("disputes facade (structural)", () => {
     expect(() =>
       getExpireDisputeInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
+  });
+
+  it("expireDispute snapshots bid settlement records", async () => {
+    const bidSettlement = {
+      acceptedBid: ACCEPTED_BID,
+      bidderMarketState: BIDDER_STATE,
+    };
+    const instructionPromise = facade.expireDispute({
+      dispute: DISPUTE,
+      task: TASK,
+      creator: CREATOR,
+      authority: AUTHORITY,
+      workerClaim: CLAIM,
+      worker: WORKER_AGENT,
+      workerWallet: WORKER_WALLET,
+      bidSettlement,
+    });
+
+    bidSettlement.acceptedBid = TASK;
+    bidSettlement.bidderMarketState = AGENT;
+
+    const ix = await instructionPromise;
+    const [bidBook] = await findBidBookPda({ task: TASK });
+    expect(order(ix).slice(-3)).toEqual([
+      bidBook,
+      ACCEPTED_BID,
+      BIDDER_STATE,
+    ]);
   });
 
   it("cancelDispute: program, account order, data round-trip", async () => {

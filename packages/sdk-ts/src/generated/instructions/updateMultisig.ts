@@ -9,13 +9,11 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getArrayDecoder,
   getArrayEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU8Decoder,
@@ -37,6 +35,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -49,9 +49,7 @@ export const UPDATE_MULTISIG_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getUpdateMultisigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_MULTISIG_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_MULTISIG_DISCRIMINATOR);
 }
 
 export type UpdateMultisigInstruction<
@@ -88,7 +86,7 @@ export type UpdateMultisigInstructionDataArgs = {
 export function getUpdateMultisigInstructionDataEncoder(): Encoder<UpdateMultisigInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["newThreshold", getU8Encoder()],
       ["newOwners", getArrayEncoder(getAddressEncoder())],
     ]),

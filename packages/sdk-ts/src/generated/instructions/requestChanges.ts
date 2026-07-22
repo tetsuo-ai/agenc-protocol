@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -49,9 +49,7 @@ export const REQUEST_CHANGES_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getRequestChangesDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REQUEST_CHANGES_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REQUEST_CHANGES_DISCRIMINATOR);
 }
 
 export type RequestChangesInstruction<
@@ -102,8 +100,8 @@ export type RequestChangesInstructionDataArgs = {
 export function getRequestChangesInstructionDataEncoder(): FixedSizeEncoder<RequestChangesInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["changesHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["changesHash", getFixedBytesEncoder(32, "changesHash")],
     ]),
     (value) => ({ ...value, discriminator: REQUEST_CHANGES_DISCRIMINATOR }),
   );

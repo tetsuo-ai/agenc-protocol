@@ -518,7 +518,7 @@ export function moderationBlockPda(contentHash) {
 /// P1.2: `moderator` names the attestor whose record the hire consumes (defaults to
 /// the world's global moderation authority); the required `moderationBlock` floor
 /// account is derived from the listing's pinned spec hash.
-export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null } = {}) {
+export async function hireIx(w, { taskId, expectedPrice, expectedVersion, taskJobSpecHash = null, asProvider = false, listingModeration = null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;
@@ -528,8 +528,9 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProv
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [authorityRateLimit] = pda([enc("authority_rate_limit"), signer.publicKey.toBuffer()]);
   const [moderationBlock] = moderationBlockPda(w.specHash);
+  const committedTaskJobSpecHash = taskJobSpecHash ?? id32();
   const ix = await prog.methods
-    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps, moderator ?? w.modAuth.publicKey)
+    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps, moderator ?? w.modAuth.publicKey, arr(committedTaskJobSpecHash))
     .accounts({
       task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda,
@@ -538,7 +539,7 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProv
       creator: signer.publicKey, systemProgram: SystemProgram.programId,
     })
     .instruction();
-  return { ix, signer, task, escrow, hireRecord };
+  return { ix, signer, task, escrow, hireRecord, taskJobSpecHash: committedTaskJobSpecHash };
 }
 
 

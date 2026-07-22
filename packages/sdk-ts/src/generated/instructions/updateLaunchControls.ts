@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -37,6 +35,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -48,9 +48,7 @@ export const UPDATE_LAUNCH_CONTROLS_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([156, 19, 63, 86, 117, 245, 196, 182]);
 
 export function getUpdateLaunchControlsDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_LAUNCH_CONTROLS_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_LAUNCH_CONTROLS_DISCRIMINATOR);
 }
 
 export type UpdateLaunchControlsInstruction<
@@ -89,7 +87,7 @@ export type UpdateLaunchControlsInstructionDataArgs = {
 export function getUpdateLaunchControlsInstructionDataEncoder(): FixedSizeEncoder<UpdateLaunchControlsInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["protocolPaused", getBooleanEncoder()],
       ["disabledTaskTypeMask", getU8Encoder()],
       ["surfaceRevision", getU16Encoder()],

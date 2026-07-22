@@ -7,7 +7,6 @@
  */
 
 import {
-  fixEncoderSize,
   getAddressEncoder,
   getBytesEncoder,
   getProgramDerivedAddress,
@@ -15,6 +14,8 @@ import {
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type StateSeeds = {
   authority: Address;
@@ -33,7 +34,7 @@ export async function findStatePda(
     seeds: [
       getBytesEncoder().encode(new Uint8Array([115, 116, 97, 116, 101])),
       getAddressEncoder().encode(seeds.authority),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.stateKey),
+      getFixedBytesEncoder(32).encode(seeds.stateKey),
     ],
   });
 }

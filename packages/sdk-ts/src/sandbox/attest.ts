@@ -17,8 +17,8 @@ export type SandboxAttestationKind = "listing" | "task";
 
 /**
  * Minimal structural slice of `fetch` used by
- * {@link requestSandboxAttestation}. The global `fetch` satisfies it; tests
- * inject a fake.
+ * the sandbox/public moderation HTTP helpers. The global `fetch` satisfies it;
+ * tests and embedders may inject a compatible implementation.
  */
 export type SandboxFetchLike = (
   url: string,

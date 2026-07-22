@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { AccountRole, address, createNoopSigner } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  createNoopSigner,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   getPostCompletionBondInstructionDataDecoder,
   getReclaimCompletionBondInstructionDataDecoder,
@@ -20,6 +26,25 @@ const SYSTEM_PROGRAM = address("11111111111111111111111111111111");
 const task = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 const party = address("So11111111111111111111111111111111111111112");
 const worker = address("Vote111111111111111111111111111111111111111");
+
+function mutableSigner(initialAddress: Address): {
+  signer: TransactionSigner;
+  setAddress(nextAddress: Address): void;
+} {
+  let liveAddress = initialAddress;
+  const signer = { ...createNoopSigner(initialAddress) } as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setAddress(nextAddress) {
+      liveAddress = nextAddress;
+    },
+  };
+}
 
 describe("postCompletionBond (facade)", () => {
   const authority = createNoopSigner(
@@ -98,6 +123,46 @@ describe("postCompletionBond (facade)", () => {
       postCompletionBond({ task, authority, role: 0, worker } as never),
     ).rejects.toThrow(/creator role must omit/);
   });
+
+  it("binds the posting authority before any PDA derivation", async () => {
+    const stableAddress = address(
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    );
+    const authority = mutableSigner(stableAddress);
+    const pending = postCompletionBond({
+      task,
+      authority: authority.signer,
+      role: 0,
+    });
+    authority.setAddress(party);
+
+    const ix = await pending;
+    expect(ix.accounts[5]).toMatchObject({
+      address: stableAddress,
+      signer: authority.signer,
+    });
+  });
+
+  it("rejects an accessor-backed authority without invoking it", async () => {
+    let authorityReads = 0;
+    const authority = createNoopSigner(party);
+    const hostile = { task, role: 0 } as unknown as Parameters<
+      typeof postCompletionBond
+    >[0];
+    Object.defineProperty(hostile, "authority", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        authorityReads += 1;
+        return authority;
+      },
+    });
+
+    await expect(postCompletionBond(hostile)).rejects.toThrow(
+      /authority.*own data property/u,
+    );
+    expect(authorityReads).toBe(0);
+  });
 });
 
 describe("reclaimCompletionBond (facade)", () => {
@@ -122,5 +187,23 @@ describe("reclaimCompletionBond (facade)", () => {
       ix.data,
     );
     expect(decoded.role).toBe(0);
+  });
+
+  it("rejects accessor-backed permissionless crank inputs without invoking them", async () => {
+    let taskReads = 0;
+    const hostile = { party, role: 0 } as unknown as Parameters<
+      typeof reclaimCompletionBond
+    >[0];
+    Object.defineProperty(hostile, "task", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        taskReads += 1;
+        return task;
+      },
+    });
+
+    await expect(reclaimCompletionBond(hostile)).rejects.toThrow(/accessor/u);
+    expect(taskReads).toBe(0);
   });
 });

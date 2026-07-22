@@ -5,9 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  TransactionInstruction,
-} from "@solana/web3.js";
+import { TransactionInstruction } from "@solana/web3.js";
 import {
   REPO,
   SO,
@@ -133,6 +131,62 @@ test(
       /Instruction: CreateDependentTask/,
       "canary binary must not dispatch production-only instructions",
     );
+
+    // Strongest locally reproducible compiled proxy for the other side of the
+    // revision-5 flag day: this frozen legacy dispatcher must not recognize any
+    // of the three v2 discriminators. The canary is NOT the deployed 99-entry
+    // revision-4 full binary (the two listing-hire entries are intentionally
+    // absent), so this does not replace the revision-4 mainnet simulation gate.
+    // It does prove against an actual SBF dispatcher that the unchanged legacy
+    // set_task_job_spec entry and the absent hire entries all fail closed on the
+    // exact v2 bytes.
+    const revision5ChangedWrites = [
+      ["hire_from_listing", "f15e7f0768aef074"],
+      ["hire_from_listing_humanless", "e5a3ab722674d755"],
+      ["set_task_job_spec", "7609633ad7573a3b"],
+    ];
+    for (const [name, expectedHex] of revision5ChangedWrites) {
+      const current = IDL.instructions.find(
+        (instruction) => instruction.name === name,
+      );
+      assert.ok(current, `full revision-5 IDL must expose ${name}`);
+      assert.equal(
+        Buffer.from(current.discriminator).toString("hex"),
+        expectedHex,
+        `${name}: unexpected revision-5 discriminator`,
+      );
+      assert.equal(
+        CANARY_IDL.instructions.some((instruction) =>
+          Buffer.from(instruction.discriminator).equals(
+            Buffer.from(current.discriminator),
+          ),
+        ),
+        false,
+        `${name}: v2 discriminator must be absent from the frozen canary IDL`,
+      );
+
+      svm.expireBlockhash();
+      const result = send(
+        svm,
+        new TransactionInstruction({
+          programId: PID,
+          keys: [],
+          data: Buffer.from(current.discriminator),
+        }),
+        [payer],
+      );
+      assert.ok(
+        result instanceof FailedTransactionMetadata,
+        `${name}: v2 discriminator must fail against the frozen canary binary`,
+      );
+      const logs = result.meta().logs().join("\n");
+      assert.match(logs, /InstructionFallbackNotFound/);
+      assert.doesNotMatch(
+        logs,
+        /Instruction: (HireFromListing|HireFromListingHumanless|SetTaskJobSpec)/,
+        `${name}: frozen canary binary must not dispatch the v2 instruction`,
+      );
+    }
   },
 );
 

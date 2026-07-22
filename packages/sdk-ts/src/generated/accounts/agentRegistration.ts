@@ -16,11 +16,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -47,6 +45,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -62,9 +62,7 @@ export const AGENT_REGISTRATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([130, 53, 100, 103, 121, 77, 148, 19]);
 
 export function getAgentRegistrationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    AGENT_REGISTRATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(AGENT_REGISTRATION_DISCRIMINATOR);
 }
 
 export type AgentRegistration = {
@@ -246,8 +244,8 @@ export type AgentRegistrationArgs = {
 export function getAgentRegistrationEncoder(): Encoder<AgentRegistrationArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["agentId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["agentId", getFixedBytesEncoder(32, "agentId")],
       ["authority", getAddressEncoder()],
       ["capabilities", getU64Encoder()],
       ["status", getAgentStatusEncoder()],
@@ -276,7 +274,7 @@ export function getAgentRegistrationEncoder(): Encoder<AgentRegistrationArgs> {
       ["lastVoteTimestamp", getI64Encoder()],
       ["lastStateUpdate", getI64Encoder()],
       ["disputesAsDefendant", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 4)],
+      ["reserved", getFixedBytesEncoder(4, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: AGENT_REGISTRATION_DISCRIMINATOR }),
   );

@@ -43,10 +43,9 @@ async function hireDriveComplete(w, { referrer = null, referrerFeeBps = 0 } = {}
   const listingMod = await recordListingClean(w);
 
   const taskId = id32();
-  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod, referrer, referrerFeeBps });
+  const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod, referrer, referrerFeeBps });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
 
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
@@ -230,11 +229,10 @@ test("REFERRER PROTECTION: a referred task cannot be completed without paying th
 
   // Drive a referred hire up to (but not through) completion.
   const taskId = id32();
-  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod, referrer: referrerKp.publicKey, referrerFeeBps: 500 });
+  const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod, referrer: referrerKp.publicKey, referrerFeeBps: 500 });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
 
   const modProg = makeProgram(w.modAuth);
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

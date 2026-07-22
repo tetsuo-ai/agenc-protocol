@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -49,9 +49,7 @@ export const CLAIM_TASK_WITH_JOB_SPEC_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([230, 40, 107, 109, 208, 228, 175, 31]);
 
 export function getClaimTaskWithJobSpecDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CLAIM_TASK_WITH_JOB_SPEC_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(CLAIM_TASK_WITH_JOB_SPEC_DISCRIMINATOR);
 }
 
 export type ClaimTaskWithJobSpecInstruction<
@@ -115,7 +113,9 @@ export type ClaimTaskWithJobSpecInstructionDataArgs = {};
 
 export function getClaimTaskWithJobSpecInstructionDataEncoder(): FixedSizeEncoder<ClaimTaskWithJobSpecInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: CLAIM_TASK_WITH_JOB_SPEC_DISCRIMINATOR,

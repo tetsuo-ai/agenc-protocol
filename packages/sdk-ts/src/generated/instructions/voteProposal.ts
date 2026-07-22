@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -47,9 +47,7 @@ export const VOTE_PROPOSAL_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getVoteProposalDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    VOTE_PROPOSAL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(VOTE_PROPOSAL_DISCRIMINATOR);
 }
 
 export type VoteProposalInstruction<
@@ -99,7 +97,7 @@ export type VoteProposalInstructionDataArgs = { approve: boolean };
 export function getVoteProposalInstructionDataEncoder(): FixedSizeEncoder<VoteProposalInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["approve", getBooleanEncoder()],
     ]),
     (value) => ({ ...value, discriminator: VOTE_PROPOSAL_DISCRIMINATOR }),

@@ -418,11 +418,16 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
 
   // 1) buyer hires the provider's listing -> Open task + escrow + HireRecord.
   const taskId = id32();
-  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod });
+  const {
+    ix: hix,
+    task,
+    escrow,
+    hireRecord,
+    taskJobSpecHash: jobHash,
+  } = await hireIx(w, { taskId, listingModeration: listingMod });
   expectOk(send(w.svm, hix, [w.buyer]), "hire-settle:hire");
 
   // 2) task moderation -> publish job spec -> worker claims.
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

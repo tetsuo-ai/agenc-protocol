@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU64Decoder,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -48,9 +48,7 @@ export const PURCHASE_GOOD_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getPurchaseGoodDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    PURCHASE_GOOD_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(PURCHASE_GOOD_DISCRIMINATOR);
 }
 
 export type PurchaseGoodInstruction<
@@ -147,10 +145,13 @@ export type PurchaseGoodInstructionDataArgs = {
 export function getPurchaseGoodInstructionDataEncoder(): FixedSizeEncoder<PurchaseGoodInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["expectedSerial", getU64Encoder()],
       ["expectedPrice", getU64Encoder()],
-      ["expectedMetadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      [
+        "expectedMetadataHash",
+        getFixedBytesEncoder(32, "expectedMetadataHash"),
+      ],
     ]),
     (value) => ({ ...value, discriminator: PURCHASE_GOOD_DISCRIMINATOR }),
   );

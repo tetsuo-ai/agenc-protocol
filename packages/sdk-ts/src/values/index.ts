@@ -5,7 +5,28 @@
 // Everything here is browser-safe (no Node built-ins, no `Buffer`).
 
 export { randomId32 } from "./random.js";
-export { sha256, descriptionHash, bytesToHex, hexToBytes } from "./hash.js";
+export { DISPUTE_SAFE_MAX_WORKERS } from "./protocol-limits.js";
+export {
+  snapshotByteArray,
+  snapshotFixedBytes,
+  snapshotOptionalFixedBytes,
+} from "./fixed-bytes.js";
+export {
+  snapshotOptionOrNullable,
+  snapshotOptionalAddress,
+  type ExplicitOption,
+} from "./options.js";
+export {
+  assertNoReachableSharedMemory,
+  snapshotStructuredClone,
+} from "./structured-clone.js";
+export {
+  assertCanonicalHash32,
+  sha256,
+  descriptionHash,
+  bytesToHex,
+  hexToBytes,
+} from "./hash.js";
 export {
   LISTING_NAME_BYTES,
   LISTING_CATEGORY_BYTES,

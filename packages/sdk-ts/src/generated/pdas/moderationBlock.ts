@@ -7,13 +7,14 @@
  */
 
 import {
-  fixEncoderSize,
   getBytesEncoder,
   getProgramDerivedAddress,
   type Address,
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type ModerationBlockSeeds = {
   contentHash: ReadonlyUint8Array;
@@ -35,7 +36,7 @@ export async function findModerationBlockPda(
           107,
         ]),
       ),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.contentHash),
+      getFixedBytesEncoder(32).encode(seeds.contentHash),
     ],
   });
 }

@@ -25,11 +25,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 import type { facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
+import type { MarketplaceClient } from "../types.js";
 import {
   mutationStatusOf,
   pdaKey,
   queryKeys,
   requireClient,
+  snapshotRecord,
+  stabilizeSelectedTransactionSigner,
   type MutationStatus,
 } from "./internal.js";
 
@@ -61,6 +64,11 @@ export type ReclaimCompletionBondInput = Omit<
 
 /** Lifecycle status of a bond verb. */
 export type CompletionBondStatus = MutationStatus;
+
+interface QueuedCompletionBondInput<TInput> {
+  readonly client: MarketplaceClient;
+  readonly input: TInput;
+}
 
 /** Return value of {@link useCompletionBond}. */
 export interface UseCompletionBondResult {
@@ -95,33 +103,34 @@ export function useCompletionBond(
 
   const invalidateGuarantee = useCallback(() => {
     void queryClient.invalidateQueries({
-      queryKey: queryKeys.taskGuarantee(
-        pdaKey(taskPda),
-        ctx.cacheNamespace,
-      ),
+      queryKey: queryKeys.taskGuarantee(pdaKey(taskPda), ctx.cacheNamespace),
     });
   }, [ctx.cacheNamespace, queryClient, taskPda]);
 
-  const postMut = useMutation<string, Error, PostCompletionBondInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const postMut = useMutation<
+    string,
+    Error,
+    QueuedCompletionBondInput<PostCompletionBondInput>
+  >({
+    mutationFn: async ({ client, input }) => {
       const { signature } = await client.postCompletionBond({
         ...input,
         task: taskPda,
-        authority: input.authority ?? client.signer,
       } as Parameters<typeof facadeNs.postCompletionBond>[0]);
       invalidateGuarantee();
       return signature;
     },
   });
 
-  const reclaimMut = useMutation<string, Error, ReclaimCompletionBondInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const reclaimMut = useMutation<
+    string,
+    Error,
+    QueuedCompletionBondInput<ReclaimCompletionBondInput>
+  >({
+    mutationFn: async ({ client, input }) => {
       const { signature } = await client.reclaimCompletionBond({
         ...input,
         task: taskPda,
-        party: input.party ?? client.signer.address,
       } as Parameters<typeof facadeNs.reclaimCompletionBond>[0]);
       invalidateGuarantee();
       return signature;
@@ -129,18 +138,35 @@ export function useCompletionBond(
   });
 
   const post = useCallback(
-    (input: PostCompletionBondInput) => {
+    async (input: PostCompletionBondInput) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const authority = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.authority,
+      );
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        authority,
+      }) as PostCompletionBondInput;
       lastAction.current = "post";
-      return postMut.mutateAsync(input);
+      return postMut.mutateAsync({ client, input: snapshottedInput });
     },
-    [postMut],
+    [ctx.client, postMut],
   );
   const reclaim = useCallback(
-    (input: ReclaimCompletionBondInput) => {
+    async (input: ReclaimCompletionBondInput) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const feePayer = stabilizeSelectedTransactionSigner(client.signer);
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        party: detachedInput.party ?? feePayer.address,
+      }) as ReclaimCompletionBondInput;
       lastAction.current = "reclaim";
-      return reclaimMut.mutateAsync(input);
+      return reclaimMut.mutateAsync({ client, input: snapshottedInput });
     },
-    [reclaimMut],
+    [ctx.client, reclaimMut],
   );
 
   const isPending = postMut.isPending || reclaimMut.isPending;
