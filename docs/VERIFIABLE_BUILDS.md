@@ -3,11 +3,14 @@
 How to prove that the on-chain `agenc-coordination` program deployed at
 `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` was built from this source.
 
-> This is PLAN.md **P8.3 — SHIPPED**. The repo is **public**, and as of
-> 2026-07-10 the deployed program carries a **live OtterSec verified-build
-> registration**: <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>
-> reports `is_verified: true` against this repo at the deployed commit
-> (`097ded1`, the revision-4 99-instruction surface). The program custodies escrow,
+> This is PLAN.md **P8.3 — SHIPPED**. The repo is **public**. Revision 5 is the
+> currently deployed program (executable SHA-256
+> `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, deployed
+> 2026-07-22). The prior OtterSec verified-build registration
+> (<https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>)
+> reported `is_verified: true` at the revision-4 deployed commit (`097ded1`, the
+> 99-instruction surface); re-running the reusable verifiable build re-registers
+> the revision-5 bytecode. The program custodies escrow,
 > completion bonds, and agent stakes; the reproducible, hash-pinned build is the
 > supply-chain control on the money path. **Keeping the badge across upgrades is
 > a deploy invariant** — see
@@ -24,13 +27,14 @@ How to prove that the on-chain `agenc-coordination` program deployed at
 | Every release **records a hash** of the built program (`verifiable-build-hashes.txt`) | ✅ Works (`.github/workflows/verify.yml`) | — |
 | Anyone can confirm the **deployed** program hash matches the **locally built** hash (`get-program-hash` vs `get-executable-hash`) | ✅ Works | — |
 | A **third party** can independently verify the deployed program against the source (`solana-verify verify-from-repo`) | ✅ **Works — repo public** | executed 2026-07-03 |
-| An **on-chain verification PDA** + OtterSec (osec.io) public registration | ✅ **LIVE** (`is_verified: true`) | PDA written by the Squads upgrade-authority vault; runbook §2.5 |
+| An **on-chain verification PDA** + OtterSec (osec.io) public registration | ⏳ **re-register for revision 5** | prior registration attested revision 4; re-run the reusable build to re-attest `049a66…`; PDA written by the Squads upgrade-authority vault (runbook §2.5) |
 | npm **publish provenance** (`--provenance`) | ✅ Enabled | tag-triggered publishes use GitHub OIDC |
 
-The honest one-line summary: **the deployed revision-4 program is third-party
-verifiable today** — reproduce deployed commit `097ded1` with
-`verify-from-repo`, or read the OtterSec registry entry that already attests it.
-Current HEAD remains a distinct candidate until an approved upgrade.
+The honest one-line summary: **the deployed program is revision 5** (executable
+`049a66…`, deployed 2026-07-22) and is third-party verifiable by reproducing the
+reviewed revision-5 source with `verify-from-repo`; the OtterSec registry still
+carries the prior revision-4 attestation (`097ded1`) until the reusable build is
+re-run against revision 5.
 
 ---
 
@@ -62,24 +66,24 @@ bytecode and different hashes**:
 
 | Surface | Cargo build args | What it is |
 |---------|------------------|------------|
-| **production / default** (**98** instructions at current HEAD) | *(default features)* | The pending revision-5 production candidate. It is not live until an approved upgrade is confirmed. |
-| **private-ZK development** (**101** instructions at current HEAD) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
-| **deployed revision 4** (**99** instructions at `097ded1`) | *(default features at the deployed commit)* | The build live at `HJsZ…` on mainnet (`surface_revision = 4`, last slot **431918664**). |
+| **production / default** (**101** instructions) | *(default features)* | The live revision-5 production surface (deployed 2026-07-22, executable SHA-256 `049a66…`). |
+| **private-ZK development** (**104** instructions) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
+| **deployed revision 4** (**99** instructions at `097ded1`) | *(default features at the deployed commit)* | The **superseded** prior build that was live at `HJsZ…` (`surface_revision = 4`, slot **431918664**, 2026-07-09 → 2026-07-22). |
 | **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative restricted BUILD. Still in source, but **no longer live on mainnet** (it was the surface live before 2026-06-11). |
 
-> **Critical:** since 2026-06-11 the mainnet program runs a **full / default**
-> surface, but feature names do not identify a source revision. To match the
-> *currently deployed* program you MUST build default features at deployed commit
-> `097ded1`. Current HEAD is the different, 98-instruction revision-5 candidate
-> and must not be described as live before an upgrade. Building `private-zk` or
-> `mainnet-canary` also produces different bytecode and a non-matching hash;
+> **Critical:** the mainnet program runs a **full / default** surface, but
+> feature names do not identify a source revision. To match the *currently
+> deployed* program (revision 5, executable SHA-256 `049a66…`) you MUST build
+> default features at the reviewed revision-5 source; the prior deployed commit
+> `097ded1` reproduces the superseded revision-4 bytecode. Building `private-zk`
+> or `mainnet-canary` also produces different bytecode and a non-matching hash;
 > `private-zk` must never be substituted for a production artifact.
 
 The `verify.yml` workflow builds and hashes **both release surfaces** (production
 and frozen canary, not the private development variant) on every `protocol-v*`
-tag so the production candidate and frozen canary each have a
-reproducible hash. A candidate hash becomes a live-program claim only after an
-approved upgrade and an on-chain hash comparison.
+tag so the production surface and frozen canary each have a
+reproducible hash. A build hash becomes a live-program claim only after an
+on-chain hash comparison against the deployed bytecode.
 
 ---
 
@@ -115,7 +119,7 @@ Requires Docker and Rust. Targets **solana-verify v0.5.x**
 cargo install solana-verify --version 0.5.0 --locked
 
 # 2. Build the production/default surface deterministically from the program
-#    crate directory. At current HEAD this is the revision-5 candidate.
+#    crate directory. At current HEAD this is the live revision-5 surface.
 cd programs/agenc-coordination
 solana-verify build --library-name agenc_coordination
 
@@ -134,9 +138,9 @@ solana-verify get-executable-hash target/deploy/agenc_coordination.so
 ```
 
 The hash from step 3 must equal the corresponding entry in the release's
-`verifiable-build-hashes.txt`. To reproduce the binary live today, first check
-out deployed commit `097ded1`; current HEAD intentionally produces a different
-candidate hash.
+`verifiable-build-hashes.txt`. To reproduce the binary live today, build the
+reviewed revision-5 source (deployed executable SHA-256 `049a66…`); the prior
+deployed commit `097ded1` reproduces the superseded revision-4 bytecode.
 
 ---
 
@@ -153,17 +157,19 @@ solana-verify get-program-hash \
 ```
 
 If the deployed-program hash equals your locally reproduced **default-feature**
-hash, you have proven the live program matches that source commit. It is expected
-not to match current HEAD until revision 5 is actually deployed.
+hash, you have proven the live program matches that source. The live program is
+revision 5 (executable SHA-256 `049a66…`) as of 2026-07-22.
 
 ---
 
-## Full third-party verification — EXECUTED (2026-07-10, badge live)
+## Full third-party verification — EXECUTED for revision 4 (2026-07-10); RE-RUN PENDING for revision 5
 
 The repo is public, so all of the below works for anyone. It was last executed on
 2026-07-10 for revision 4: the verification PDA is written by the
 Squads upgrade-authority vault and the OtterSec registry reports
-`is_verified: true`. One wrinkle vs. the vanilla flow: since the upgrade
+`is_verified: true`. Revision 5 (deployed 2026-07-22, executable SHA-256
+`049a66…`) requires re-running this flow to re-attest the new bytecode. One
+wrinkle vs. the vanilla flow: since the upgrade
 authority is a Squads vault, the PDA transaction is routed through a vault
 transaction rather than `--keypair` — the as-executed procedure is in
 [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.5 and MUST be
@@ -188,7 +194,8 @@ Use the deployed commit for `--commit-hash`; the OtterSec registry entry for the
 program currently names `097ded1`.)
 
 PLAN.md P8.3 done-criterion: **this command passes against the deployed
-program** — satisfied for revision 4 since 2026-07-10.
+program** — satisfied for revision 4 since 2026-07-10; re-run against revision 5
+(deployed 2026-07-22).
 
 ### 2. On-chain verification PDA
 
@@ -225,7 +232,8 @@ solana-verify remote get-job --job-id <JOB_ID>
 
 After this, `HJsZ…` shows a green "verified" badge in explorers that read the
 OtterSec registry — the third-party verification property in P8.3 is live.
-**Last executed 2026-07-10; the revision-4 badge is live.** Note that because the upgrade
+**Last executed 2026-07-10 for revision 4; re-run pending to re-attest revision 5
+(deployed 2026-07-22).** Note that because the upgrade
 authority is the Squads vault, the export-pda-tx transaction needs the
 ComputeBudget instruction dropped and must be wrapped as a Squads vault
 transaction — the exact as-executed steps are in
@@ -285,10 +293,11 @@ an open item below.
       2026-07-19 verified bypass-free tag rules for every release-train family and
       immutable releases enabled; the readiness gate continuously detects drift.
 - [x] Run `verify-from-repo` against mainnet for the live tag; create the PDA
-      (export-and-multisig-sign via the Squads vault — current revision-4
-      record verified 2026-07-10).
+      (export-and-multisig-sign via the Squads vault — revision-4
+      record verified 2026-07-10; **re-run pending to re-attest revision 5**,
+      deployed 2026-07-22).
 - [x] Submit the OtterSec remote job; confirm the verified badge
-      (`is_verified: true` live).
+      (`is_verified: true` for revision 4; **re-run pending for revision 5**).
 - [x] Update this doc's TL;DR table to mark the third-party rows ✅.
 - [x] Reference the verified badge from the README security section.
 

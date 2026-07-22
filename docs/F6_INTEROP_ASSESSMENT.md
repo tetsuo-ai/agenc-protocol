@@ -1,6 +1,6 @@
 # WP-F6 — Ecosystem interop assessment (x402 / A2A / ERC-8004 / ACP / adjacent)
 
-> **Historical assessment record (banner added 2026-07-17).** Web-verified 2026-07-04; the in-repo baseline it cites (e.g. the 90-instruction P1.2 build) is that day's state — mainnet has run the 99-instruction surface since 2026-07-09. See `./MAINNET_MAINLINE.md` for current state and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
+> **Historical assessment record (banner added 2026-07-17).** Web-verified 2026-07-04; the in-repo baseline it cites (e.g. the 90-instruction P1.2 build) is that day's state — mainnet has run the 101-instruction revision-5 surface since 2026-07-22. See `./MAINNET_MAINLINE.md` for current state and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 > **Status: ASSESSMENT — decision-grade, web-verified 2026-07-04.**
 > This document is the WP-F6 deliverable: an adversarially honest read of the

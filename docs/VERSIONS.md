@@ -5,19 +5,23 @@ release surfaces:
 
 - the restricted **25-instruction canary** surface (`--features mainnet-canary`) —
   a conservative BUILD that still exists in the source; and
-- the full production surface (the pending revision-5 candidate is **98
-  instructions** with default features).
+- the full production surface (revision 5 is **101 instructions** with default
+  features — live on mainnet since 2026-07-22).
 
 An explicit development-only `private-zk` feature adds three quarantined proof
-instructions, producing a 101-instruction build. It is not a release surface and
+instructions, producing a 104-instruction build. It is not a release surface and
 the deployment preflight rejects a production build or IDL that contains it.
 
-> **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
-> (`surface_revision = 4` / `BATCH4`, last deployed slot **431918664**, all task
+> **As of 2026-07-22 the full 101-instruction revision-5 surface is live on
+> mainnet** (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`, deployed
+> executable SHA-256
+> `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, all task
 > types enabled, bid marketplace / store / contest / goods live, `ZkConfig`
-> deferred). The canary build is no longer what is live on mainnet; it remains
-> the surface for any cluster still running `--features mainnet-canary`. Deploy
-> SoT: [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
+> deferred). The prior 99-instruction revision-4 surface (`surface_revision = 4` /
+> `BATCH4`, slot 431918664) was live 2026-07-09 → 2026-07-22. The canary build is
+> no longer what is live on mainnet; it remains the surface for any cluster still
+> running `--features mainnet-canary`. Deploy SoT:
+> [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
 Because both surfaces can share one program ID, a client cannot tell which one is live
 just from the address. P6.5 makes that knowable on-chain and answerable from the SDK.
@@ -33,7 +37,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `2` (`SURFACE_REVISION_BATCH2`) | Batch-2: **94 ix** — store identity, moderation heartbeat, dispute/freeze-exit referrer legs, `rate_hire` rollup | full-surface capabilities `true`; **`goods: false`** |
 | `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest: **96 ix** — submission-rent return, contest rails (`distribute_ghost_share`, `reclaim_terminal_claim`, entry deposit, selection window) | full-surface capabilities `true`; **`goods: false`** |
 | `4` (`SURFACE_REVISION_BATCH4`) | Batch-4 goods: **99 ix** — `create_goods_listing` / `purchase_good` / `update_goods_listing` (handlers require `surface_revision >= 4`) | full-surface capabilities `true`; **`goods: true`** |
-| `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | Pending 2026-07 audit-hardening contract: **98 production ix**; explicitly retires the three unaudited private-ZK entrypoints, adds orphan-child recovery and an atomic release-boundary stamp, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
+| `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | **Live on mainnet since 2026-07-22.** 2026-07 audit-hardening contract: **101 production ix**; retires the three unaudited private-ZK entrypoints, adds orphan-child recovery, the O(1) bid-accept redesign (`promote_bid` / `demote_ineligible_best` / `settle_dispute_claim`), and an atomic release-boundary stamp, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
 
 > **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
 > pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
@@ -42,7 +46,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 `getDeployedSurface` **tolerates the pre-migration on-chain layout**: before the
 2026-06-11 migration the live mainnet `ProtocolConfig` was the OLD 349-byte layout with
 no `surface_revision` (it is now the migrated 351-byte layout — stamped
-revision `1` at migration time, `4` on mainnet today). The SDK reads the raw
+revision `1` at migration time, `5` on mainnet today). The SDK reads the raw
 account bytes and treats any account
 shorter than the new 351-byte layout (or a missing account) as `surface_revision = 0` —
 so it returns `listings: false` **without throwing**, never feeding an old account through
@@ -87,17 +91,18 @@ unpaused on that conservative surface.
 
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
 |---|---|---|---|---|---|---|
-| full | **99 ix** | **mainnet** (live as of 2026-07-09) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| production audit-hardening candidate | **98 ix** | pending next mainnet upgrade | `5` | `@tetsuo-ai/marketplace-sdk` **0.12.0 candidate** (unreleased) | `true` | `true` |
-| explicit `private-zk` development build | 101 ix | local development only | not releasable | unsupported | n/a | n/a |
+| full (revision 5) | **101 ix** | **mainnet** (live since 2026-07-22) | `5` (AUDIT_HARDENING) | `@tetsuo-ai/marketplace-sdk` **0.12.x** (revision-5 client) | `true` | `true` |
+| full (revision 4, superseded) | **99 ix** | mainnet (live 2026-07-09 → 2026-07-22) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
+| explicit `private-zk` development build | 104 ix | local development only | not releasable | unsupported | n/a | n/a |
 | historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 
-Current published packages at the time of writing: `@tetsuo-ai/protocol` **0.3.0**
-and `@tetsuo-ai/marketplace-sdk` **0.11.0** speak the live revision-4 wire. The
-unreleased candidates are protocol **0.4.0** and SDK **0.12.0**. The revision-5
-program and regenerated 98-instruction clients must be released as one coordinated
-compatibility set; they are not yet live.
+The revision-5 program is live on mainnet as of 2026-07-22; its coordinated
+client set is protocol **0.4.0** and SDK **0.12.0** (regenerated 101-instruction
+clients). The prior published revision-4 pins (`@tetsuo-ai/protocol` **0.3.0**,
+`@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x**) spoke the revision-4 wire and
+fail closed against revision 5. See [`VERSIONING.md`](./VERSIONING.md) §1.1 for
+the published-pin support contract.
 
 ## Release runbook — `anchor idl init` per cluster (fetchable on-chain IDL)
 
@@ -113,7 +118,7 @@ program deploy/upgrade:
    `scripts/mainnet-upgrade.mjs` reads the live account sizes and runs only the idempotent
    migrations that are actually required; it must never assume a historical account count.
    Mainnet's `ProtocolConfig` is already 351 bytes and its Tasks are already 466 bytes, so
-   the pending revision-5 cutover is expected to verify those layouts without reallocating
+   the revision-5 cutover (2026-07-22) verified those layouts without reallocating
    them. Any newly discovered undersized account is a stop condition until the reviewed
    sweep plan accounts for it.
 

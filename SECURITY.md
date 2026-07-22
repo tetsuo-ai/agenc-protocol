@@ -42,10 +42,10 @@ active policy.
 Severity and reward priority follow the **money-path-first** ordering also used
 by the bug bounty (`docs/BUG_BOUNTY.md`).
 
-Scope must distinguish the deployed and candidate contracts. Mainnet currently
-runs revision 4 (99 instructions, deployed commit `097ded1`); current production
-source is an undeployed revision-5 candidate (98 instructions). The explicit
-101-instruction `private-zk` build is development-only and is rejected by the
+Mainnet runs revision 5 (101 instructions, `surface_revision = 5`), deployed
+2026-07-22 through the Squads v4 2-of-3 vault (deployed executable SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`). The explicit
+104-instruction `private-zk` build is development-only and is rejected by the
 production deployment rail.
 
 ### In scope — TIER 1: program money paths (highest priority)
@@ -55,9 +55,9 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 
 - **Escrow custody and settlement** — `create_task`, `cancel_task`,
   `accept_task_result` / `auto_accept_task_result`, `reject_task_result`,
-  `complete_task`, and the dispute settlement paths. The dormant
-  `complete_task_private` ABI remains in deployed revision 4 but cannot run while
-  live `ZkConfig` is uninitialized; revision-5 production removes it entirely.
+  `complete_task`, and the dispute settlement paths. Deployed revision 5 excludes
+  the `complete_task_private` ABI entirely; the ZK/private-task surface remains
+  deferred (no `ZkConfig` initialized).
   Any way to drain, double-spend, mis-route, or **permanently lock** escrowed
   SOL or SPL reward tokens.
 - **Completion bonds** — `post_completion_bond`, `reclaim_completion_bond`, and
@@ -198,8 +198,8 @@ but this inventory is not a claim of formal verification:
 
 **Exit paths present in the 25-instruction canary build (allowlist —
 `scripts/check-canary-idl.mjs`) and live on the full mainnet surface
-(revision 4 is 99 instructions; the first 84-instruction full build went live
-on 2026-06-11):**
+(the live full surface is revision 5 at 101 instructions; the first
+84-instruction full build went live on 2026-06-11):**
 
 - **`cancel_task`** — creator refund. Refunds `escrow.amount - escrow.distributed`
   to the creator (SOL or SPL), closes the escrow PDA, closes worker claim
@@ -260,13 +260,14 @@ Multisig:     7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY   (program SQDS4ep65T
 
 No individual key can now unilaterally push an upgrade — the escrow-custodying
 program requires 2-of-3 signatures for any bytecode change. The migration runbook
-and full record are in `docs/UPGRADE_AUTHORITY.md`. Revision 5 is also blocked
-on a separately reviewed 101,272-byte top-level legacy `ExtendProgram` action.
+and full record are in `docs/UPGRADE_AUTHORITY.md`. The revision-5 upgrade
+(deployed 2026-07-22) required a separately reviewed top-level legacy
+`ExtendProgram` action that grew ProgramData by 120,384 bytes.
 ProgramData extension is permissionless and does not change executable bytes;
-current Agave rejects it through Squads CPI. The pinned rail therefore requires
-official Agave CLI 4.1.0, snapshots one private payer keypair inode for address
-derivation and execution, and performs two-RPC pre/postflight. Extension
-and the separately governed upgrade must execute in different slots, and the
+current Agave rejects it through Squads CPI. The pinned rail therefore required
+official Agave CLI 4.1.0, snapshotted one private payer keypair inode for address
+derivation and execution, and performed two-RPC pre/postflight. Extension
+and the separately governed upgrade executed in different slots, and the
 deployment rail refuses implicit auto-extension. **Residual (tracked, not yet
 done):** the three member keys are currently co-located on one operator host;
 distributing at least one onto separate hardware (a Ledger) is the remaining
@@ -286,12 +287,13 @@ hardening — a Squads config change, no program-authority re-transfer required.
 
 A reproducible / verifiable build (`solana-verify`, on-chain verification PDA
 via osec.io) proves the deployed bytecode matches the source **at a public tag**.
-**This repository is public.** The deployed program is OtterSec-verified against
-this repo (`is_verified: true` at
-[verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK)).
-That badge attests deployed revision 4 at commit `097ded1`; it does not attest the
-different revision-5 candidate at current HEAD before an approved upgrade and
-new verification.
+**This repository is public.** Revision 5 is now the deployed program (executable
+SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`,
+deployed 2026-07-22). The prior OtterSec badge
+([verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK))
+attested deployed revision 4 at commit `097ded1`; re-running the reusable
+verifiable build against the revision-5 source is the outstanding follow-up to
+re-attest the newly deployed bytecode.
 Every `protocol-v*` release also records a reproducible SHA-256 of the program
 built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
 with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
@@ -306,7 +308,7 @@ with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
 ## 7. References
 
 - Bug bounty scope & rewards: `docs/BUG_BOUNTY.md`
-- Upgrade-authority and pending capacity runbook: `docs/UPGRADE_AUTHORITY.md`
+- Upgrade-authority and capacity runbook: `docs/UPGRADE_AUTHORITY.md`
 - Threat model: `docs/audit/THREAT_MODEL.md`
 - Audit prep / invariants / coverage: `docs/BATCH_1_3_AUDIT_PREP.md`
 - Program surface & PDAs: `docs/PROGRAM_SURFACE.md`

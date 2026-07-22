@@ -1,9 +1,16 @@
 # Revision 5 coordinated cutover
 
-> **Status: prepared, not authorized or deployed.** Mainnet remains revision 4.
-> This runbook is an execution checklist, not permission to sign, publish, pause,
-> extend, deploy, stamp, or unpause. Every mutation still needs the documented
-> human/Squads approval.
+> **Status: EXECUTED 2026-07-22.** Revision 5 is live on mainnet
+> (`surface_revision = 5`, deployed executable SHA-256
+> `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, 2,303,608
+> bytes). The upgrade was executed through the Squads v4 2-of-3 vault
+> `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` (loader upgrade execute tx
+> `5iZiPGmU5pYSGEaNBHkTR1cpGhmGtffGp8ZSufD71ActwNyTSt4cFkLoGqiucFmQ3DveSRthCK5fuZHb3NB7Smh7`),
+> after a top-level ProgramData extension of +120,384 bytes and preceded/followed
+> by an `update_launch_controls` pause/unpause; `protocol_paused = false`. The
+> live production surface is 101 instructions (the O(1) bid-accept redesign added
+> `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`). The
+> procedure below is retained as the execution record.
 
 Revision 5 is intentionally a flag-day upgrade for the three funded-hire and
 activation instructions. It closes the gap where a buyer could fund a listing

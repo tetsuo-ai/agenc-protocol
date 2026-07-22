@@ -11,8 +11,8 @@ proposals. Everything else listed here is a living doc.
 ## Start Here
 
 - [../README.md](../README.md) - repo overview, ownership, and top-level layout
-- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full **99-ix** surface live as of 2026-07-09, `surface_revision = 4`)
-- [./REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md) - pending, operator-reviewed revision-5 flag-day procedure: exact v2 discriminators, coordinated consumers, historical decoding, legacy-hire exits, and execution order (**not an authorization to deploy**)
+- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full **101-ix** revision-5 surface live as of 2026-07-22, `surface_revision = 5`)
+- [./REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md) - **EXECUTED 2026-07-22** — the revision-5 flag-day procedure (exact v2 discriminators, coordinated consumers, historical decoding, legacy-hire exits, execution order); retained as the execution record
 - [./MAINNET_ROLLOUT_RUNBOOK.md](./MAINNET_ROLLOUT_RUNBOOK.md) - **HISTORICAL** — the Phase 9 full-surface rollout choreography, **COMPLETED 2026-06-11** (execution record + post-rollout state)
 - [./POLICY_CHANGES.md](./POLICY_CHANGES.md) - dated log of authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys)
 - [./CODEBASE_MAP.md](./CODEBASE_MAP.md) - path-by-path map for programs, artifacts, packages, scripts, migrations, zkVM, and workflows
@@ -45,7 +45,7 @@ proposals. Everything else listed here is a living doc.
 - [../packages/protocol/README.md](../packages/protocol/README.md) - npm package consumer view
 - [../migrations/README.md](../migrations/README.md) - migration authority and current-state guidance
 - [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - core protocol security invariants/assumptions; its active 77-test model/property companion is `programs/agenc-coordination/fuzz/` (the retired `vote_dispute` target has been removed)
-- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - **HISTORICAL** revision-4 external-auditor handoff: 99-instruction scope, invariants, prior internal audits, test inventory, and migration choreography; use `THREAT_MODEL.md`, `PROGRAM_SURFACE.md`, and `VALIDATION.md` for the pending revision-5 candidate
+- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - **HISTORICAL** revision-4 external-auditor handoff: 99-instruction scope, invariants, prior internal audits, test inventory, and migration choreography; use `THREAT_MODEL.md`, `PROGRAM_SURFACE.md`, and `VALIDATION.md` for the live revision-5 surface
 - [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; later 2026-07-16/17 remediation is recorded in [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md))
 - [./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md](./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md) - **HISTORICAL** — the 2026-06-11 multi-agent adversarial-verification verdicts (94 findings × 3 lens-skeptics + adjudicator) that gated the full-surface deploy
 - [./audit/PREDEPLOY_AUDIT_FIXES_20260611.md](./audit/PREDEPLOY_AUDIT_FIXES_20260611.md) - **HISTORICAL** — pre-mainnet audit: fixes applied + remaining human-owned items for the 2026-06-11 full-surface deploy
@@ -55,7 +55,7 @@ proposals. Everything else listed here is a living doc.
 - [./design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** contest tasks (batch-3, `surface_revision = 3`, 96 ix)
 - [./design/batch-4-goods.md](./design/batch-4-goods.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** goods market (batch-4, `surface_revision = 4`, 99 ix)
 - [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - moderation heartbeat / deadman (batch-2)
-- [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the pending ProgramData-capacity ceremony
+- [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the ProgramData-capacity ceremony (executed for the revision-5 upgrade)
 - [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
 - [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 "the operator vanishes and it still works": the executed, reproducible zero-hosted-dependency hire→settle proof (`scripts/credible-exit.mjs`), with the honest gap list (source/verifiable-build deferred)
 - [./ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md) - **DESIGN ONLY [HUMAN: approve]** P7.2 layer 2: optional on-chain `key_commitment` at submit + `reveal_key` on accept with hash-match enforcement and deadline bounds, for trustless fair-exchange (child `SubmissionKeyEscrow` PDA, no migration)
@@ -65,7 +65,7 @@ proposals. Everything else listed here is a living doc.
 
 ## Read By Task
 
-- I need the pending revision-5 upgrade procedure: [REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md)
+- I need the revision-5 upgrade procedure / execution record: [REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md)
 - I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
 - I need the open-roster moderation model (P1.2): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
 - I need moderation heartbeat/liveness behavior: [MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md)
