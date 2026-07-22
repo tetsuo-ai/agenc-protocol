@@ -98,7 +98,7 @@
     "@ladle/react": "^5.1.1",
     "@solana/kit": "6.9.0",
     "@solana/program-client-core": "^6.4.0",
-    "@solana/react": "6.9.0",
+    "@solana/react": "7.0.0",
     "@testing-library/react": "^16.1.0",
     "@tetsuo-ai/marketplace-sdk": "file:../sdk-ts",
     "@types/react": "^18.3.12",
