@@ -141,6 +141,7 @@ pub fn handler(_ctx: Context<ClaimTask>) -> Result<()> {
 
 pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
     validate_job_spec_pointer(ctx.accounts.task_job_spec.as_ref())?;
+    validate_public_claim_route(ctx.accounts.task.as_ref())?;
 
     #[cfg(not(feature = "mainnet-canary"))]
     {
@@ -182,7 +183,6 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
         worker_key,
         ctx.accounts.worker.as_mut(),
         ctx.bumps.claim,
-        ClaimRoute::Public,
     )?;
 
     // FIX 4 (anti-slop contest entry deposit): a contest-configured claim carries
@@ -301,23 +301,11 @@ pub(crate) fn has_required_assignment_stake(stake: u64, minimum_stake: u64) -> b
     stake >= minimum_stake
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClaimRoute {
-    Public,
-    DirectAssignment,
-}
-
-pub(crate) fn validate_claim_route(task: &Task, route: ClaimRoute) -> Result<()> {
-    match route {
-        ClaimRoute::Public => require!(
-            !task.is_direct_assignment(),
-            CoordinationError::DirectAssignmentRequiresAcceptance
-        ),
-        ClaimRoute::DirectAssignment => require!(
-            task.is_direct_assignment(),
-            CoordinationError::TaskNotDirectAssignment
-        ),
-    }
+pub(crate) fn validate_public_claim_route(task: &Task) -> Result<()> {
+    require!(
+        !task.is_direct_assignment(),
+        CoordinationError::DirectAssignmentRequiresAcceptance
+    );
     Ok(())
 }
 
@@ -329,7 +317,6 @@ pub(crate) fn process_claim(
     worker_key: Pubkey,
     worker: &mut Account<AgentRegistration>,
     claim_bump: u8,
-    route: ClaimRoute,
 ) -> Result<()> {
     let clock = Clock::get()?;
 
@@ -374,8 +361,6 @@ pub(crate) fn process_claim(
         task.task_type != TaskType::BidExclusive,
         CoordinationError::BidTaskRequiresAcceptance
     );
-    validate_claim_route(task, route)?;
-
     // Validate status transition is allowed (fix #538)
     require!(
         task.status.can_transition_to(TaskStatus::InProgress),
@@ -543,12 +528,11 @@ mod tests {
     fn public_claim_route_rejects_direct_assignment_tasks() {
         let mut task = Task::default();
         task.set_direct_assignment(true);
-        let err = validate_claim_route(&task, ClaimRoute::Public).unwrap_err();
+        let err = validate_public_claim_route(&task).unwrap_err();
         assert_eq!(
             err,
             CoordinationError::DirectAssignmentRequiresAcceptance.into()
         );
-        assert!(validate_claim_route(&task, ClaimRoute::DirectAssignment).is_ok());
     }
 
     fn task_job_spec(job_spec_hash: [u8; 32], job_spec_uri: &str) -> TaskJobSpec {

@@ -7,7 +7,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
-use crate::instructions::claim_task::{process_claim, validate_job_spec_pointer, ClaimRoute};
+use crate::instructions::claim_task::{process_claim, validate_job_spec_pointer};
 use crate::instructions::completion_helpers::validate_task_dependency_for_assignment;
 use crate::instructions::launch_controls::require_direct_assignment_enabled;
 use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
@@ -186,7 +186,6 @@ pub fn handler(
         worker_key,
         ctx.accounts.worker.as_mut(),
         ctx.bumps.claim,
-        ClaimRoute::DirectAssignment,
     )
 }
 
