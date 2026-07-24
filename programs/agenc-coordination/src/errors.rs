@@ -1198,4 +1198,16 @@ pub enum CoordinationError {
     DisputeDefendantNotPeer,
     #[msg("The dispute's recorded terminal status is invalid")]
     DisputeTerminalStatusCorrupt,
+    // Appended (bilateral direct assignment): keep these LAST so every existing
+    // Anchor error discriminant remains stable.
+    #[msg("This task is reserved for bilateral direct assignment acceptance")]
+    DirectAssignmentRequiresAcceptance,
+    #[msg("This instruction requires a direct-assignment exclusive task")]
+    TaskNotDirectAssignment,
+    #[msg("Direct assignment tasks must be Exclusive with exactly one worker")]
+    InvalidDirectAssignmentTask,
+    #[msg("Direct assignment requires ExternalAttestation by the signed attestor")]
+    DirectAssignmentExternalAttestationRequired,
+    #[msg("The direct-assignment job-spec or validation snapshot changed before acceptance")]
+    StaleDirectAssignmentAcceptance,
 }

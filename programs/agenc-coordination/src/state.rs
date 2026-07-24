@@ -1201,7 +1201,9 @@ pub struct Task {
     ///     creates a canonical `TaskClaim` increments it atomically, allowing
     ///     watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
     ///     having observed the intermediate state.
-    /// Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
+    ///   * `_reserved[11]` = direct-assignment flag (0 = public claim rail,
+    ///     1 = creator + intended worker must co-sign `accept_direct_assignment_with_job_spec`).
+    ///   * Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
@@ -1279,6 +1281,9 @@ impl Task {
     /// permissionless `distribute_ghost_share` after; auto-accept disabled; cancel
     /// requires zero live submissions).
     pub const TASK_SCHEMA_CONTEST_AWARE: u8 = 1;
+    /// Direct-assignment tasks are intentionally non-public: only the dedicated
+    /// bilateral acceptance instruction may create their claim.
+    pub const DIRECT_ASSIGNMENT_FLAG: u8 = 1;
 
     /// Batch-3 carve-out accessor: the task's schema byte (`_reserved[0]`).
     pub fn task_schema(&self) -> u8 {
@@ -1346,6 +1351,22 @@ impl Task {
         Ok(next)
     }
 
+    /// Whether this task was created on the bilateral direct-assignment rail.
+    /// The flag is stored in existing reserved space, so it is zero for every
+    /// historical task and introduces no account migration.
+    pub fn is_direct_assignment(&self) -> bool {
+        self._reserved[11] == Self::DIRECT_ASSIGNMENT_FLAG
+    }
+
+    /// Mark a newly initialized exclusive task as requiring bilateral acceptance.
+    pub fn set_direct_assignment(&mut self, enabled: bool) {
+        self._reserved[11] = if enabled {
+            Self::DIRECT_ASSIGNMENT_FLAG
+        } else {
+            0
+        };
+    }
+
     /// A contest task: schema-1 (contest-aware) AND `Competitive`. Every batch-3
     /// behavior change gates on this predicate, so schema-0 tasks and every other
     /// task type keep byte-identical semantics.
@@ -1357,10 +1378,13 @@ impl Task {
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
     /// Batch 3, the deferred-slash guard, and claim-generation tracking carve
-    /// `_reserved[0..11]`. The slash byte is a canonical boolean, the generation
-    /// is an unconstrained `u64`, and the remaining tail must stay zeroed.
+    /// `_reserved[0..12]`. The slash byte and direct-assignment byte are canonical
+    /// booleans, the generation is an unconstrained `u64`, and the remaining tail
+    /// must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved[2] <= 1 && self._reserved[11..] == [0u8; 5]
+        self._reserved[2] <= 1
+            && self._reserved[11] <= Self::DIRECT_ASSIGNMENT_FLAG
+            && self._reserved[12..] == [0u8; 4]
     }
 }
 
@@ -4044,6 +4068,22 @@ mod tests {
         task.set_worker_slash_pending(false);
         assert!(!task.worker_slash_pending());
         assert_eq!(task._reserved[2], 0);
+        assert!(task.validate_reserved_fields());
+    }
+
+    #[test]
+    fn test_direct_assignment_carveout_round_trip() {
+        let mut task = Task::default();
+        assert!(!task.is_direct_assignment());
+
+        task.set_direct_assignment(true);
+        assert!(task.is_direct_assignment());
+        assert_eq!(task._reserved[11], Task::DIRECT_ASSIGNMENT_FLAG);
+        assert!(task.validate_reserved_fields());
+
+        task.set_direct_assignment(false);
+        assert!(!task.is_direct_assignment());
+        assert_eq!(task._reserved[11], 0);
         assert!(task.validate_reserved_fields());
     }
 

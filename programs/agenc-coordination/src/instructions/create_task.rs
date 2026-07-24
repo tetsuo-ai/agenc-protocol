@@ -133,6 +133,100 @@ pub fn handler(
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
 ) -> Result<()> {
+    handler_with_assignment(
+        ctx,
+        task_id,
+        required_capabilities,
+        description,
+        reward_amount,
+        max_workers,
+        deadline,
+        task_type,
+        constraint_hash,
+        min_reputation,
+        reward_mint,
+        referrer,
+        referrer_fee_bps,
+        false,
+    )
+}
+
+/// Create an Exclusive task that cannot be claimed through the public rail.
+/// Its worker must later co-sign `accept_direct_assignment_with_job_spec` with
+/// the creator, binding both parties to the published job spec and attestor.
+#[allow(clippy::too_many_arguments)]
+pub fn direct_assignment_handler(
+    ctx: Context<CreateTask>,
+    task_id: [u8; 32],
+    required_capabilities: u64,
+    description: [u8; 64],
+    reward_amount: u64,
+    max_workers: u8,
+    deadline: i64,
+    task_type: u8,
+    constraint_hash: Option<[u8; 32]>,
+    min_reputation: u16,
+    reward_mint: Option<Pubkey>,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
+) -> Result<()> {
+    validate_direct_assignment_params(task_type, max_workers, referrer, referrer_fee_bps)?;
+    handler_with_assignment(
+        ctx,
+        task_id,
+        required_capabilities,
+        description,
+        reward_amount,
+        max_workers,
+        deadline,
+        task_type,
+        constraint_hash,
+        min_reputation,
+        reward_mint,
+        referrer,
+        referrer_fee_bps,
+        true,
+    )
+}
+
+pub(crate) fn validate_direct_assignment_params(
+    task_type: u8,
+    max_workers: u8,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
+) -> Result<()> {
+    require!(
+        task_type == crate::state::TaskType::Exclusive as u8 && max_workers == 1,
+        CoordinationError::InvalidDirectAssignmentTask
+    );
+    // Bilateral assignment is deliberately settled through ExternalAttestation.
+    // That validation route cannot distribute a demand-side referrer leg, so
+    // reject it before escrow funding rather than leaving a task that cannot
+    // later be configured for its required settlement mode.
+    require!(
+        referrer.is_none() && referrer_fee_bps == 0,
+        CoordinationError::InvalidInput
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handler_with_assignment(
+    ctx: Context<CreateTask>,
+    task_id: [u8; 32],
+    required_capabilities: u64,
+    description: [u8; 64],
+    reward_amount: u64,
+    max_workers: u8,
+    deadline: i64,
+    task_type: u8,
+    constraint_hash: Option<[u8; 32]>,
+    min_reputation: u16,
+    reward_mint: Option<Pubkey>,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
+    direct_assignment: bool,
+) -> Result<()> {
     validate_task_params(
         &task_id,
         &description,
@@ -227,6 +321,9 @@ pub fn handler(
         min_reputation,
         reward_mint,
     )?;
+    if direct_assignment {
+        task.set_direct_assignment(true);
+    }
     // P6.2 demand-side referral leg: a creator may credit the embedder who brought
     // them (referrer + bps). No operator leg exists on a direct create_task, so the
     // combined cap is checked against protocol + referrer only. Validated + stamped
@@ -390,6 +487,43 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod direct_assignment_tests {
+    use super::*;
+
+    #[test]
+    fn direct_assignment_requires_one_worker_and_no_referrer_fee_leg() {
+        assert!(validate_direct_assignment_params(
+            crate::state::TaskType::Exclusive as u8,
+            1,
+            None,
+            0,
+        )
+        .is_ok());
+
+        let wrong_shape = validate_direct_assignment_params(
+            crate::state::TaskType::Collaborative as u8,
+            2,
+            None,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(
+            wrong_shape,
+            CoordinationError::InvalidDirectAssignmentTask.into()
+        );
+
+        let referrer = validate_direct_assignment_params(
+            crate::state::TaskType::Exclusive as u8,
+            1,
+            Some(Pubkey::new_unique()),
+            100,
+        )
+        .unwrap_err();
+        assert_eq!(referrer, CoordinationError::InvalidInput.into());
+    }
 }
 
 #[cfg(all(test, feature = "mainnet-canary"))]
