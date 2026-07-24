@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**405 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**411 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -416,3 +416,9 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6402 | 0x1902 | `DisputeSettlementNotPending` | The dispute has no deferred worker settlement pending |
 | 6403 | 0x1903 | `DisputeDefendantNotPeer` | The defendant claim settles through the ruling, not peer settlement |
 | 6404 | 0x1904 | `DisputeTerminalStatusCorrupt` | The dispute's recorded terminal status is invalid |
+| 6405 | 0x1905 | `DirectAssignmentRequiresAcceptance` | This task is reserved for bilateral direct assignment acceptance |
+| 6406 | 0x1906 | `TaskNotDirectAssignment` | This instruction requires a direct-assignment exclusive task |
+| 6407 | 0x1907 | `InvalidDirectAssignmentTask` | Direct assignment tasks must be Exclusive with exactly one worker |
+| 6408 | 0x1908 | `DirectAssignmentExternalAttestationRequired` | Direct assignment requires ExternalAttestation by the signed attestor |
+| 6409 | 0x1909 | `StaleDirectAssignmentAcceptance` | The direct-assignment job-spec or validation snapshot changed before acceptance |
+| 6410 | 0x190a | `DirectAssignmentSurfaceNotEnabled` | The bilateral direct-assignment surface has not been release-stamped |

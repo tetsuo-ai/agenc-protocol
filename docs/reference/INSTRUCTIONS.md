@@ -7,11 +7,12 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**101 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**103 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
 - [`accept_bid`](#accept_bid)
+- [`accept_direct_assignment_with_job_spec`](#accept_direct_assignment_with_job_spec)
 - [`accept_task_result`](#accept_task_result)
 - [`apply_dispute_slash`](#apply_dispute_slash)
 - [`apply_initiator_slash`](#apply_initiator_slash)
@@ -32,6 +33,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`configure_task_validation`](#configure_task_validation)
 - [`create_bid`](#create_bid)
 - [`create_dependent_task`](#create_dependent_task)
+- [`create_direct_assignment_task`](#create_direct_assignment_task)
 - [`create_goods_listing`](#create_goods_listing)
 - [`create_proposal`](#create_proposal)
 - [`create_service_listing`](#create_service_listing)
@@ -138,6 +140,36 @@ Accept a Marketplace V2 bid and convert it into a normal task claim.
 | # | Arg | Type |
 |---|---|---|
 | 1 | `expected_bid_terms_hash` | `[u8; 32]` |
+
+## accept_direct_assignment_with_job_spec
+
+Atomically bind an Exclusive direct-assignment task to the exact worker
+who co-signs this transaction with its creator.
+
+### Accounts (12)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `task_job_spec` |  |  |  | PDA ["task_job_spec", account:task] |  |
+| 3 | `task_validation_config` |  |  |  | PDA ["task_validation", account:task] |  |
+| 4 | `task_attestor_config` |  |  |  | PDA ["task_attestor", account:task] |  |
+| 5 | `hire_record` |  |  |  | PDA ["hire", account:task] | Direct tasks are created without a listing hire. Pinning this canonical empty PDA prevents a caller from smuggling a different assignment policy. |
+| 6 | `moderation_block` |  |  |  |  | a content hash that has been blocked after publication. |
+| 7 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
+| 8 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 9 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
+| 10 | `creator` |  | yes |  |  | The task funder must co-sign the exact worker, job-spec and attestor snapshot in this instruction. |
+| 11 | `worker_authority` | yes | yes |  |  | The intended worker must co-sign before its claim and obligation exist. |
+| 12 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (3)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `expected_job_spec_hash` | `[u8; 32]` |
+| 2 | `expected_job_spec_updated_at` | `i64` |
+| 3 | `expected_attestor` | `pubkey` |
 
 ## accept_task_result
 
@@ -648,6 +680,46 @@ The parent task must not be cancelled or disputed.
 | 9 | `dependency_type` | `u8` |
 | 10 | `min_reputation` | `u16` |
 | 11 | `reward_mint` | `Option<pubkey>` |
+
+## create_direct_assignment_task
+
+Create an Exclusive task that is only assignable through a bilateral,
+creator-and-worker-signed acceptance after its job-spec and attestor are set.
+
+### Accounts (13)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task` | yes |  |  | PDA ["task", account:creator, arg:task_id] |  |
+| 2 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
+| 3 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 4 | `creator_agent` |  |  |  | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | Creator's agent registration for identity/authorization checks |
+| 5 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents |
+| 6 | `authority` |  | yes |  |  | The authority that owns the creator_agent — has_one → creator_agent |
+| 7 | `creator` | yes | yes |  |  | The creator who pays for and owns the task Must match authority to prevent social engineering attacks (#375) |
+| 8 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 9 | `reward_mint` |  |  | yes |  | SPL token mint for reward denomination (optional) |
+| 10 | `creator_token_account` | yes |  | yes |  | Creator's token account holding reward tokens (optional) |
+| 11 | `token_escrow_ata` | yes |  | yes |  | Escrow's associated token account for holding reward tokens (optional). Created via ATA CPI during handler if token task. |
+| 12 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | SPL Token program (optional, required for token tasks) |
+| 13 | `associated_token_program` |  |  | yes | address `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL` | Associated Token Account program (optional, required for token tasks) |
+
+### Args (12)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `task_id` | `[u8; 32]` |
+| 2 | `required_capabilities` | `u64` |
+| 3 | `description` | `[u8; 64]` |
+| 4 | `reward_amount` | `u64` |
+| 5 | `max_workers` | `u8` |
+| 6 | `deadline` | `i64` |
+| 7 | `task_type` | `u8` |
+| 8 | `constraint_hash` | `Option<[u8; 32]>` |
+| 9 | `min_reputation` | `u16` |
+| 10 | `reward_mint` | `Option<pubkey>` |
+| 11 | `referrer` | `Option<pubkey>` |
+| 12 | `referrer_fee_bps` | `u16` |
 
 ## create_goods_listing
 
