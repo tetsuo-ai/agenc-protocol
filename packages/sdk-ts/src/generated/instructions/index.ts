@@ -7,6 +7,7 @@
  */
 
 export * from "./acceptBid";
+export * from "./acceptDirectAssignmentWithJobSpec";
 export * from "./acceptTaskResult";
 export * from "./applyDisputeSlash";
 export * from "./applyInitiatorSlash";
@@ -27,6 +28,7 @@ export * from "./configureTaskModeration";
 export * from "./configureTaskValidation";
 export * from "./createBid";
 export * from "./createDependentTask";
+export * from "./createDirectAssignmentTask";
 export * from "./createGoodsListing";
 export * from "./createProposal";
 export * from "./createServiceListing";

@@ -775,18 +775,20 @@ test("derives the full instruction surface from Rust and rejects stale IDL inven
     "utf8",
   );
   const names = deriveFullProgramInstructionNames(source);
-  assert.equal(names.length, 101);
+  assert.equal(names.length, 103);
   assert.ok(names.includes("reclaim_orphan_task_child"));
   assert.ok(names.includes("promote_bid"));
   assert.ok(names.includes("demote_ineligible_best"));
   assert.ok(names.includes("settle_dispute_claim"));
+  assert.ok(names.includes("create_direct_assignment_task"));
+  assert.ok(names.includes("accept_direct_assignment_with_job_spec"));
   assert.ok(!names.includes("complete_task_private"));
   assert.equal(new Set(names).size, names.length);
 
   const privateNames = deriveProgramInstructionNames(source, {
     privateZk: true,
   });
-  assert.equal(privateNames.length, 104);
+  assert.equal(privateNames.length, 106);
   assert.ok(privateNames.includes("complete_task_private"));
   assert.equal(
     deriveProgramInstructionNames(source, { mainnetCanary: true }).length,

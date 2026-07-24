@@ -24,9 +24,11 @@ import {
   findModerationBlockPda,
   findTaskModerationPda,
   getCreateTaskInstructionAsync,
+  getCreateDirectAssignmentTaskInstructionAsync,
   getCreateTaskHumanlessInstructionAsync,
   getCreateDependentTaskInstructionAsync,
   getClaimTaskWithJobSpecInstructionAsync,
+  getAcceptDirectAssignmentWithJobSpecInstructionAsync,
   getSubmitTaskResultInstructionAsync,
   getAcceptTaskResultInstructionAsync,
   getRejectTaskResultInstructionAsync,
@@ -56,9 +58,11 @@ import {
   findWorkerCompletionBondPda,
   findBidBookPda,
   type CreateTaskAsyncInput,
+  type CreateDirectAssignmentTaskAsyncInput,
   type CreateTaskHumanlessAsyncInput,
   type CreateDependentTaskAsyncInput,
   type ClaimTaskWithJobSpecAsyncInput,
+  type AcceptDirectAssignmentWithJobSpecAsyncInput,
   type SubmitTaskResultAsyncInput,
   type AcceptTaskResultAsyncInput,
   type RejectTaskResultAsyncInput,
@@ -208,6 +212,56 @@ export async function createTask(
 }
 
 /**
+ * Create an Exclusive task that is assignable only through the bilateral
+ * creator-and-worker acceptance rail. The caller cannot select a public task
+ * type, more than one worker, or a referrer leg: ExternalAttestation settlement
+ * intentionally has no referrer payout path.
+ *
+ * Before building this instruction against a live cluster, read its surface and
+ * require `directAssignment`; an upgraded-but-unstamped program rejects the
+ * instruction on-chain as well.
+ */
+export type CreateDirectAssignmentTaskInput = Omit<
+  CreateDirectAssignmentTaskAsyncInput,
+  "maxWorkers" | "taskType" | "referrer" | "referrerFeeBps"
+>;
+
+export async function createDirectAssignmentTask(
+  input: CreateDirectAssignmentTaskInput,
+) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+    "creator",
+  ] as const);
+  return getCreateDirectAssignmentTaskInstructionAsync({
+    ...stableInput,
+    taskId: snapshotFixedBytes(
+      stableInput.taskId,
+      32,
+      "createDirectAssignmentTask: taskId",
+    ),
+    description: snapshotFixedBytes(
+      stableInput.description,
+      64,
+      "createDirectAssignmentTask: description",
+    ),
+    constraintHash: snapshotOptionalFixedBytes(
+      stableInput.constraintHash,
+      32,
+      "createDirectAssignmentTask: constraintHash",
+    ),
+    rewardMintArg: snapshotOptionalAddress(
+      stableInput.rewardMintArg,
+      "createDirectAssignmentTask: rewardMintArg",
+    ),
+    maxWorkers: 1,
+    taskType: 0,
+    referrer: null,
+    referrerFeeBps: 0,
+  });
+}
+
+/**
  * Create a "humanless" task owned by a plain buyer wallet (no AgentRegistration).
  * Forces a CreatorReview validation config so it can never settle on the auto-pay
  * path. Auto-derives task, escrow, validation config, protocol config, and the
@@ -328,6 +382,50 @@ export async function claimTaskWithJobSpec(input: ClaimTaskWithJobSpecInput) {
         : []),
     ],
   };
+}
+
+/**
+ * Bind a direct-assignment task to one worker. Both the creator and the worker
+ * must sign the same transaction, and the signed data pins the job-spec hash,
+ * its exact update timestamp, and the external attestor. The moderation block
+ * PDA derives from that exact hash unless explicitly supplied.
+ */
+export type AcceptDirectAssignmentWithJobSpecInput = Omit<
+  AcceptDirectAssignmentWithJobSpecAsyncInput,
+  "moderationBlock" | "expectedJobSpecHash"
+> & {
+  /** SHA-256 of the pinned job specification to which both parties consent. */
+  expectedJobSpecHash: Uint8Array;
+  /** Override for the canonical [moderation_block, expectedJobSpecHash] PDA. */
+  moderationBlock?: Address;
+};
+
+export async function acceptDirectAssignmentWithJobSpec(
+  input: AcceptDirectAssignmentWithJobSpecInput,
+) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "creator",
+    "workerAuthority",
+  ] as const);
+  const stableJobSpecHash = snapshotFixedBytes(
+    stableInput.expectedJobSpecHash,
+    32,
+    "acceptDirectAssignmentWithJobSpec: expectedJobSpecHash",
+  );
+  assertCanonicalHash32(
+    stableJobSpecHash,
+    "acceptDirectAssignmentWithJobSpec: expectedJobSpecHash",
+  );
+  const { moderationBlock, ...generatedInput } = stableInput;
+  const block =
+    moderationBlock ??
+    (await findModerationBlockPda({ contentHash: stableJobSpecHash }))[0];
+  return getAcceptDirectAssignmentWithJobSpecInstructionAsync({
+    ...generatedInput,
+    expectedJobSpecHash: stableJobSpecHash,
+    expectedAttestor: address(stableInput.expectedAttestor),
+    moderationBlock: block,
+  });
 }
 
 /**

@@ -525,7 +525,7 @@ describe("runPromoteChecks", () => {
 
   it("fails every installed pin closed for an unknown surface revision", () => {
     const input = readyInput();
-    input.chainEvidence!.surfaceRevision = 6;
+    input.chainEvidence!.surfaceRevision = 7;
     setInstalledTrain(input, REVISION_5_CLIENTS);
     const report = runPromoteChecks(input);
     expect(statusOf(report, "chain:surface")).toBe("fail");

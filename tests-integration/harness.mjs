@@ -30,6 +30,9 @@ export const IDL = JSON.parse(
 );
 export const PID = new PublicKey(IDL.address);
 export const coder = new BorshCoder(IDL);
+// Keep compiled-program rehearsals pinned to the current release surface.
+// Bump this together with ProtocolConfig's current surface revision.
+export const CURRENT_SURFACE_REVISION = 6;
 
 export const enc = (s) => Buffer.from(s, "utf8");
 export const arr = (buf) => Array.from(buf);

@@ -43,6 +43,8 @@ pub mod validation;
 #[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 pub mod zk_config_helpers;
 
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod accept_direct_assignment;
 pub mod accept_task_result;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod apply_dispute_slash;
@@ -201,6 +203,9 @@ pub mod withdraw_reputation_stake;
 
 // Glob re-exports are required for Anchor's #[program] macro to access generated
 // types from #[derive(Accounts)]. See module documentation for details.
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use accept_direct_assignment::*;
 #[allow(ambiguous_glob_reexports)]
 pub use accept_task_result::*;
 #[cfg(not(feature = "mainnet-canary"))]

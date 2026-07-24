@@ -166,6 +166,7 @@ import {
 } from "../accounts";
 import {
   getAcceptBidInstructionAsync,
+  getAcceptDirectAssignmentWithJobSpecInstructionAsync,
   getAcceptTaskResultInstructionAsync,
   getApplyDisputeSlashInstructionAsync,
   getApplyInitiatorSlashInstructionAsync,
@@ -186,6 +187,7 @@ import {
   getConfigureTaskValidationInstructionAsync,
   getCreateBidInstructionAsync,
   getCreateDependentTaskInstructionAsync,
+  getCreateDirectAssignmentTaskInstructionAsync,
   getCreateGoodsListingInstructionAsync,
   getCreateProposalInstructionAsync,
   getCreateServiceListingInstructionAsync,
@@ -267,6 +269,7 @@ import {
   getVoteProposalInstructionAsync,
   getWithdrawReputationStakeInstructionAsync,
   parseAcceptBidInstruction,
+  parseAcceptDirectAssignmentWithJobSpecInstruction,
   parseAcceptTaskResultInstruction,
   parseApplyDisputeSlashInstruction,
   parseApplyInitiatorSlashInstruction,
@@ -287,6 +290,7 @@ import {
   parseConfigureTaskValidationInstruction,
   parseCreateBidInstruction,
   parseCreateDependentTaskInstruction,
+  parseCreateDirectAssignmentTaskInstruction,
   parseCreateGoodsListingInstruction,
   parseCreateProposalInstruction,
   parseCreateServiceListingInstruction,
@@ -368,6 +372,7 @@ import {
   parseVoteProposalInstruction,
   parseWithdrawReputationStakeInstruction,
   type AcceptBidAsyncInput,
+  type AcceptDirectAssignmentWithJobSpecAsyncInput,
   type AcceptTaskResultAsyncInput,
   type ApplyDisputeSlashAsyncInput,
   type ApplyInitiatorSlashAsyncInput,
@@ -388,6 +393,7 @@ import {
   type ConfigureTaskValidationAsyncInput,
   type CreateBidAsyncInput,
   type CreateDependentTaskAsyncInput,
+  type CreateDirectAssignmentTaskAsyncInput,
   type CreateGoodsListingAsyncInput,
   type CreateProposalAsyncInput,
   type CreateServiceListingAsyncInput,
@@ -414,6 +420,7 @@ import {
   type MigrateTaskInput,
   type ModerationHeartbeatAsyncInput,
   type ParsedAcceptBidInstruction,
+  type ParsedAcceptDirectAssignmentWithJobSpecInstruction,
   type ParsedAcceptTaskResultInstruction,
   type ParsedApplyDisputeSlashInstruction,
   type ParsedApplyInitiatorSlashInstruction,
@@ -434,6 +441,7 @@ import {
   type ParsedConfigureTaskValidationInstruction,
   type ParsedCreateBidInstruction,
   type ParsedCreateDependentTaskInstruction,
+  type ParsedCreateDirectAssignmentTaskInstruction,
   type ParsedCreateGoodsListingInstruction,
   type ParsedCreateProposalInstruction,
   type ParsedCreateServiceListingInstruction,
@@ -1160,6 +1168,7 @@ export function identifyAgencCoordinationAccount(
 
 export enum AgencCoordinationInstruction {
   AcceptBid,
+  AcceptDirectAssignmentWithJobSpec,
   AcceptTaskResult,
   ApplyDisputeSlash,
   ApplyInitiatorSlash,
@@ -1180,6 +1189,7 @@ export enum AgencCoordinationInstruction {
   ConfigureTaskValidation,
   CreateBid,
   CreateDependentTask,
+  CreateDirectAssignmentTask,
   CreateGoodsListing,
   CreateProposal,
   CreateServiceListing,
@@ -1276,6 +1286,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.AcceptBid;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([154, 237, 117, 198, 205, 83, 41, 234]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.AcceptDirectAssignmentWithJobSpec;
   }
   if (
     containsBytes(
@@ -1496,6 +1517,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.CreateDependentTask;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([197, 16, 37, 117, 65, 18, 112, 237]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.CreateDirectAssignmentTask;
   }
   if (
     containsBytes(
@@ -2390,6 +2422,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.AcceptBid;
     } & ParsedAcceptBidInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.AcceptDirectAssignmentWithJobSpec;
+    } & ParsedAcceptDirectAssignmentWithJobSpecInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.AcceptTaskResult;
     } & ParsedAcceptTaskResultInstruction<TProgram>)
   | ({
@@ -2449,6 +2484,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.CreateDependentTask;
     } & ParsedCreateDependentTaskInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.CreateDirectAssignmentTask;
+    } & ParsedCreateDirectAssignmentTaskInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.CreateGoodsListing;
     } & ParsedCreateGoodsListingInstruction<TProgram>)
@@ -2702,6 +2740,14 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseAcceptBidInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.AcceptDirectAssignmentWithJobSpec: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType:
+          AgencCoordinationInstruction.AcceptDirectAssignmentWithJobSpec,
+        ...parseAcceptDirectAssignmentWithJobSpecInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.AcceptTaskResult: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2840,6 +2886,14 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.CreateDependentTask,
         ...parseCreateDependentTaskInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.CreateDirectAssignmentTask: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType:
+          AgencCoordinationInstruction.CreateDirectAssignmentTask,
+        ...parseCreateDirectAssignmentTaskInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.CreateGoodsListing: {
@@ -3514,6 +3568,10 @@ export type AgencCoordinationPluginInstructions = {
     input: AcceptBidAsyncInput,
   ) => ReturnType<typeof getAcceptBidInstructionAsync> &
     SelfPlanAndSendFunctions;
+  acceptDirectAssignmentWithJobSpec: (
+    input: AcceptDirectAssignmentWithJobSpecAsyncInput,
+  ) => ReturnType<typeof getAcceptDirectAssignmentWithJobSpecInstructionAsync> &
+    SelfPlanAndSendFunctions;
   acceptTaskResult: (
     input: AcceptTaskResultAsyncInput,
   ) => ReturnType<typeof getAcceptTaskResultInstructionAsync> &
@@ -3593,6 +3651,10 @@ export type AgencCoordinationPluginInstructions = {
   createDependentTask: (
     input: CreateDependentTaskAsyncInput,
   ) => ReturnType<typeof getCreateDependentTaskInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  createDirectAssignmentTask: (
+    input: CreateDirectAssignmentTaskAsyncInput,
+  ) => ReturnType<typeof getCreateDirectAssignmentTaskInstructionAsync> &
     SelfPlanAndSendFunctions;
   createGoodsListing: (
     input: CreateGoodsListingAsyncInput,
@@ -3921,11 +3983,12 @@ export type AgencCoordinationPluginPdas = {
   bid: typeof findBidPda;
   bidderMarketState: typeof findBidderMarketStatePda;
   taskJobSpec: typeof findTaskJobSpecPda;
+  taskValidationConfig: typeof findTaskValidationConfigPda;
+  taskAttestorConfig: typeof findTaskAttestorConfigPda;
+  hireRecord: typeof findHireRecordPda;
   acceptTaskResultClaim: typeof findAcceptTaskResultClaimPda;
   escrow: typeof findEscrowPda;
-  taskValidationConfig: typeof findTaskValidationConfigPda;
   taskSubmission: typeof findTaskSubmissionPda;
-  hireRecord: typeof findHireRecordPda;
   creatorCompletionBond: typeof findCreatorCompletionBondPda;
   workerCompletionBond: typeof findWorkerCompletionBondPda;
   disputeResolver: typeof findDisputeResolverPda;
@@ -3935,7 +3998,6 @@ export type AgencCoordinationPluginPdas = {
   cancelTaskWorkerCompletionBond: typeof findCancelTaskWorkerCompletionBondPda;
   agentStats: typeof findAgentStatsPda;
   store: typeof findStorePda;
-  taskAttestorConfig: typeof findTaskAttestorConfigPda;
   bidMarketplace: typeof findBidMarketplacePda;
   task: typeof findTaskPda;
   authorityRateLimit: typeof findAuthorityRateLimitPda;
@@ -4114,6 +4176,11 @@ export function agencCoordinationProgram() {
               client,
               getAcceptBidInstructionAsync(input),
             ),
+          acceptDirectAssignmentWithJobSpec: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getAcceptDirectAssignmentWithJobSpecInstructionAsync(input),
+            ),
           acceptTaskResult: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4213,6 +4280,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getCreateDependentTaskInstructionAsync(input),
+            ),
+          createDirectAssignmentTask: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getCreateDirectAssignmentTaskInstructionAsync(input),
             ),
           createGoodsListing: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4628,11 +4700,12 @@ export function agencCoordinationProgram() {
           bid: findBidPda,
           bidderMarketState: findBidderMarketStatePda,
           taskJobSpec: findTaskJobSpecPda,
+          taskValidationConfig: findTaskValidationConfigPda,
+          taskAttestorConfig: findTaskAttestorConfigPda,
+          hireRecord: findHireRecordPda,
           acceptTaskResultClaim: findAcceptTaskResultClaimPda,
           escrow: findEscrowPda,
-          taskValidationConfig: findTaskValidationConfigPda,
           taskSubmission: findTaskSubmissionPda,
-          hireRecord: findHireRecordPda,
           creatorCompletionBond: findCreatorCompletionBondPda,
           workerCompletionBond: findWorkerCompletionBondPda,
           disputeResolver: findDisputeResolverPda,
@@ -4643,7 +4716,6 @@ export function agencCoordinationProgram() {
           cancelTaskWorkerCompletionBond: findCancelTaskWorkerCompletionBondPda,
           agentStats: findAgentStatsPda,
           store: findStorePda,
-          taskAttestorConfig: findTaskAttestorConfigPda,
           bidMarketplace: findBidMarketplacePda,
           task: findTaskPda,
           authorityRateLimit: findAuthorityRateLimitPda,

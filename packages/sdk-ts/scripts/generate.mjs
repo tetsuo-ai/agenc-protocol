@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -164,6 +165,49 @@ function generatedTypeScriptFiles(directory) {
     if (entry.isDirectory()) return generatedTypeScriptFiles(absolute);
     return entry.isFile() && entry.name.endsWith(".ts") ? [absolute] : [];
   });
+}
+
+/**
+ * The task-claim PDA has long been exported as `acceptTaskResultClaim`.
+ *
+ * Direct assignment intentionally uses the same canonical seeds
+ * `["claim", task, worker]`. Codama sees the additional account occurrence,
+ * picks its instruction-local name, and would otherwise rename the existing
+ * public helper to `acceptDirectAssignmentWithJobSpecClaim`. The address and
+ * bytes are identical, so preserve the established SDK name after rendering
+ * rather than make integrators change an import for a new instruction.
+ */
+async function preserveTaskClaimPdaName() {
+  const pdasDirectory = path.join(OUT, "pdas");
+  const generatedName = "acceptDirectAssignmentWithJobSpecClaim";
+  const stableName = "acceptTaskResultClaim";
+  const generatedTypeName = "AcceptDirectAssignmentWithJobSpecClaim";
+  const stableTypeName = "AcceptTaskResultClaim";
+  const generatedPath = path.join(pdasDirectory, `${generatedName}.ts`);
+  const stablePath = path.join(pdasDirectory, `${stableName}.ts`);
+
+  if (!generatedTypeScriptFiles(pdasDirectory).includes(generatedPath)) {
+    throw new Error(
+      "Expected Codama to emit the canonical task-claim PDA before applying the compatibility name",
+    );
+  }
+  if (generatedTypeScriptFiles(pdasDirectory).includes(stablePath)) {
+    throw new Error(
+      "Codama emitted both task-claim PDA names; refusing an ambiguous compatibility rewrite",
+    );
+  }
+
+  for (const file of generatedTypeScriptFiles(OUT)) {
+    let source = readFileSync(file, "utf8");
+    if (!source.includes(generatedName) && !source.includes(generatedTypeName)) {
+      continue;
+    }
+    source = source.replaceAll(generatedTypeName, stableTypeName);
+    source = source.replaceAll(generatedName, stableName);
+    writeFileSync(file, await format(source, { filepath: file }));
+  }
+  renameSync(generatedPath, stablePath);
+  console.log("OK — preserved canonical task-claim PDA SDK name");
 }
 
 /**
@@ -431,6 +475,7 @@ const inner = path.join(tmp, "src", "generated");
 rmSync(OUT, { recursive: true, force: true });
 cpSync(inner, OUT, { recursive: true });
 rmSync(tmp, { recursive: true, force: true });
+await preserveTaskClaimPdaName();
 await installBorshStringCodecs();
 await installCommitmentCodecs();
 console.log("OK — generated @solana/kit client into", path.relative(REPO, OUT));

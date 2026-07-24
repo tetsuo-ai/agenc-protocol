@@ -59,6 +59,17 @@ pub fn require_goods_enabled(protocol_config: &ProtocolConfig) -> Result<()> {
     Ok(())
 }
 
+/// Bilateral direct assignment is a new money-bearing rail. It stays unavailable
+/// until the release ceremony has verified the exact binary/IDL and stamped the
+/// corresponding surface revision; an upgraded-but-unstamped program fails closed.
+pub fn require_direct_assignment_enabled(protocol_config: &ProtocolConfig) -> Result<()> {
+    require!(
+        protocol_config.surface_revision >= ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT,
+        CoordinationError::DirectAssignmentSurfaceNotEnabled
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +115,17 @@ mod tests {
         // Monotonic: any future revision keeps goods enabled.
         config.surface_revision = ProtocolConfig::SURFACE_REVISION_BATCH4 + 1;
         assert!(require_goods_enabled(&config).is_ok());
+    }
+
+    #[test]
+    fn direct_assignment_gate_requires_revision_six() {
+        let mut config = ProtocolConfig {
+            surface_revision: ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING,
+            ..ProtocolConfig::default()
+        };
+        assert!(require_direct_assignment_enabled(&config).is_err());
+
+        config.surface_revision = ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT;
+        assert!(require_direct_assignment_enabled(&config).is_ok());
     }
 }

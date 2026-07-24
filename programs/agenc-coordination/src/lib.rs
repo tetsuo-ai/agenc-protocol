@@ -181,6 +181,41 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Create an Exclusive task that is only assignable through a bilateral,
+    /// creator-and-worker-signed acceptance after its job-spec and attestor are set.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_direct_assignment_task(
+        ctx: Context<CreateTask>,
+        task_id: [u8; 32],
+        required_capabilities: u64,
+        description: [u8; 64],
+        reward_amount: u64,
+        max_workers: u8,
+        deadline: i64,
+        task_type: u8,
+        constraint_hash: Option<[u8; 32]>,
+        min_reputation: u16,
+        reward_mint: Option<Pubkey>,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
+    ) -> Result<()> {
+        instructions::create_task::direct_assignment_handler(
+            ctx,
+            task_id,
+            required_capabilities,
+            description,
+            reward_amount,
+            max_workers,
+            deadline,
+            task_type,
+            constraint_hash,
+            min_reputation,
+            reward_mint,
+            referrer,
+            referrer_fee_bps,
+        )
+    }
+
     /// Configure the moderation authority required before task job-spec publication.
     pub fn configure_task_moderation(
         ctx: Context<ConfigureTaskModeration>,
@@ -453,6 +488,22 @@ pub mod agenc_coordination {
     /// Claim a task only when its content-addressed job specification pointer exists.
     pub fn claim_task_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
         instructions::claim_task::handler_with_job_spec(ctx)
+    }
+
+    /// Atomically bind an Exclusive direct-assignment task to the exact worker
+    /// who co-signs this transaction with its creator.
+    pub fn accept_direct_assignment_with_job_spec(
+        ctx: Context<AcceptDirectAssignmentWithJobSpec>,
+        expected_job_spec_hash: [u8; 32],
+        expected_job_spec_updated_at: i64,
+        expected_attestor: Pubkey,
+    ) -> Result<()> {
+        instructions::accept_direct_assignment::handler(
+            ctx,
+            expected_job_spec_hash,
+            expected_job_spec_updated_at,
+            expected_attestor,
+        )
     }
 
     /// Enable Task Validation V2 creator review for an open task.

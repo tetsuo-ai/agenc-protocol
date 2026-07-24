@@ -121,7 +121,7 @@ for (const arg of process.argv.slice(2)) {
 const EXECUTE = process.argv.includes("--execute");
 
 // Mirrors ProtocolConfig::SURFACE_REVISION_CURRENT (state.rs).
-const SURFACE_REVISION_CURRENT = 5;
+const SURFACE_REVISION_CURRENT = 6;
 // Allowed task-type bits (state.rs ProtocolConfig::TASK_TYPE_DISABLE_MASK = 0b0000_1111).
 const TASK_TYPE_DISABLE_MASK = 0b0000_1111;
 

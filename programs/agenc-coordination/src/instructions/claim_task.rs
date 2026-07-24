@@ -141,6 +141,7 @@ pub fn handler(_ctx: Context<ClaimTask>) -> Result<()> {
 
 pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
     validate_job_spec_pointer(ctx.accounts.task_job_spec.as_ref())?;
+    validate_public_claim_route(ctx.accounts.task.as_ref())?;
 
     #[cfg(not(feature = "mainnet-canary"))]
     {
@@ -283,7 +284,7 @@ fn validate_hired_provider(
     Ok(())
 }
 
-fn validate_job_spec_pointer(task_job_spec: &TaskJobSpec) -> Result<()> {
+pub(crate) fn validate_job_spec_pointer(task_job_spec: &TaskJobSpec) -> Result<()> {
     require!(
         task_job_spec.job_spec_hash.iter().any(|byte| *byte != 0),
         CoordinationError::InvalidTaskJobSpecHash
@@ -300,7 +301,15 @@ pub(crate) fn has_required_assignment_stake(stake: u64, minimum_stake: u64) -> b
     stake >= minimum_stake
 }
 
-fn process_claim(
+pub(crate) fn validate_public_claim_route(task: &Task) -> Result<()> {
+    require!(
+        !task.is_direct_assignment(),
+        CoordinationError::DirectAssignmentRequiresAcceptance
+    );
+    Ok(())
+}
+
+pub(crate) fn process_claim(
     task_key: Pubkey,
     task: &mut Account<Task>,
     claim: &mut Account<TaskClaim>,
@@ -352,7 +361,6 @@ fn process_claim(
         task.task_type != TaskType::BidExclusive,
         CoordinationError::BidTaskRequiresAcceptance
     );
-
     // Validate status transition is allowed (fix #538)
     require!(
         task.status.can_transition_to(TaskStatus::InProgress),
@@ -514,6 +522,17 @@ mod tests {
         assert!(!has_required_assignment_stake(9_999_999, 10_000_000));
         assert!(has_required_assignment_stake(10_000_000, 10_000_000));
         assert!(has_required_assignment_stake(10_000_001, 10_000_000));
+    }
+
+    #[test]
+    fn public_claim_route_rejects_direct_assignment_tasks() {
+        let mut task = Task::default();
+        task.set_direct_assignment(true);
+        let err = validate_public_claim_route(&task).unwrap_err();
+        assert_eq!(
+            err,
+            CoordinationError::DirectAssignmentRequiresAcceptance.into()
+        );
     }
 
     fn task_job_spec(job_spec_hash: [u8; 32], job_spec_uri: &str) -> TaskJobSpec {

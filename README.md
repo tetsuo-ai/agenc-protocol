@@ -50,15 +50,17 @@ The protocol covers that lifecycle plus advanced primitives:
   (fail-closed); permissionless bonded attestor roster (P1.2) — see
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
-  governance (multisig), and a social feed** round out the surface. The live
-  default production surface and committed IDL contain **101 instructions**;
-  the restricted canary remains 25 and explicit private-ZK development is 104.
+  governance (multisig), and a social feed** round out the surface. Mainnet is
+  live on the **101-instruction revision-5** surface. This source tree contains
+  the pending **103-instruction revision-6** direct-assignment candidate; the
+  restricted canary remains 25 and explicit private-ZK development is 106.
 
-> **Build surfaces.** `lib.rs` has a default production module (101 instructions in
-> live revision 5) and a conservative **mainnet-canary** module (the
+> **Build surfaces.** `lib.rs` has a default production module (103 instructions in
+> the pending revision-6 candidate; mainnet remains 101 instructions at revision 5)
+> and a conservative **mainnet-canary** module (the
 > frozen 25-instruction build). Enabling `private-zk` adds three quarantined
-> development instructions to production, yielding 104; deployment rails reject
-> that feature for a production release. Mainnet runs the 101-instruction
+> development instructions to production, yielding 106; deployment rails reject
+> that feature for a production release. Mainnet still runs the 101-instruction
 > revision-5 binary as of 2026-07-22.
 
 ## Mainnet source of truth
@@ -124,8 +126,8 @@ surface.
 
 | Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed 101-instruction revision-5 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 targets the prior revision-4 wire (superseded by live revision 5).                                                                                 |
-| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **101-instruction revision-5 surface** + ergonomic facade. The published 0.11.0 release targets the prior revision-4 wire (superseded by live revision 5); program and SDK ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed **103-instruction revision-6 candidate** IDL + TS types + manifest, derived from `artifacts/anchor/*`. Mainnet remains the 101-instruction revision-5 deployment until the reviewed upgrade ceremony completes. |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **revision-6 candidate**, including the gated bilateral direct-assignment facade. Program and SDK ship together; see [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
 | `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | 0.5.0 candidate (published: 0.4.1)   | React hooks/components for embeddable marketplace UIs; the candidate requires the revision-5 SDK and buyer job-spec commitment.                                                                                                                                       |
 | `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | 0.5.0 candidate (published: 0.4.0)   | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers.                                                                                                                                                                                      |
 | `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | 0.5.0 candidate (published: 0.4.0)   | MCP server exposing marketplace tools.                                                                                                                                                                                                                                |
@@ -134,10 +136,10 @@ surface.
 | `agenc-cli`                         | `packages/agenc-cli-alias`        | 0.3.0 candidate (published: 0.2.0)   | Thin unscoped alias; ships with the scoped CLI.                                                                                                                                                                                                                       |
 | `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | 0.2.0 candidate (published: 0.1.1)   | Worker claim/submit runtime loop.                                                                                                                                                                                                                                     |
 
-Every version labeled **candidate** above belongs to the coordinated revision-5
-release train that matches the live program (deployed 2026-07-22); confirm each is
-published at its coordinated version. The prior published revision-4 pins now fail
-closed against the live revision-5 program.
+The source-level revision-6 candidate is not published or live: it must pass the
+full release gates, be upgraded, and receive the atomic revision-6 surface stamp
+before it is advertised. The prior published revision-4 pins fail closed against the
+live revision-5 program.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 

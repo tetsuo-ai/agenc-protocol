@@ -20,14 +20,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import {
-  PID, pda, enc, makeProgram, send, expectOk, expectFail, decode, freshWorld,
+  CURRENT_SURFACE_REVISION, PID, pda, enc, makeProgram, send, expectOk, expectFail, decode, freshWorld,
   setMultisig, getSurfaceRevision,
 } from "./harness.mjs";
 
 const OLD_CONFIG_SIZE = 349;
 const NEW_CONFIG_SIZE = 351;
 const SURFACE_REVISION_FULL = 1;
-const SURFACE_REVISION_CURRENT = 5;
+const SURFACE_REVISION_CURRENT = CURRENT_SURFACE_REVISION;
 
 // Build the 2-of-2 multisig signer metas the migrate/admin gate requires.
 async function arm2of2(w) {
