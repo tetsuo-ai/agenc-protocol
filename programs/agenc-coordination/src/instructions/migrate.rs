@@ -73,7 +73,8 @@ pub(crate) fn classify_config_migration(len: usize) -> Result<ConfigMigrationAct
 /// Validate an operator-supplied `surface_revision`: only `0` (unstamped),
 /// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`,
 /// `SURFACE_REVISION_BATCH3`, `SURFACE_REVISION_BATCH4`, or
-/// `SURFACE_REVISION_AUDIT_HARDENING` are accepted. Pure, unit-testable.
+/// `SURFACE_REVISION_AUDIT_HARDENING`, or `SURFACE_REVISION_DIRECT_ASSIGNMENT`
+/// are accepted. Pure, unit-testable.
 /// NOTE (batch 4): stamping BATCH4 or any later revision is ENFORCING — it
 /// turns the goods market on (`require_goods_enabled`); rolling back to
 /// BATCH3 turns it off (the coarse kill switch).
@@ -84,6 +85,7 @@ pub(crate) fn is_valid_surface_revision(surface_revision: u16) -> bool {
         || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH3
         || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH4
         || surface_revision == ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
+        || surface_revision == ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT
 }
 
 /// Migrate protocol configuration: realloc to the P6.5 surface-versioning layout
@@ -709,15 +711,23 @@ mod tests {
         assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
         assert_eq!(
             ProtocolConfig::SURFACE_REVISION_CURRENT,
-            ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
+            ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT
         );
+    }
+
+    #[test]
+    fn test_surface_revision_direct_assignment_is_valid() {
+        assert!(is_valid_surface_revision(
+            ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT
+        ));
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT, 6);
     }
 
     #[test]
     fn test_surface_revision_unknown_rejected() {
         // Unknown revisions are rejected so an operator cannot stamp a surface the SDK
-        // does not understand. (5 is the audit-hardening surface.)
-        for bad in [6u16, 7, u16::MAX] {
+        // does not understand. (6 is the bilateral direct-assignment surface.)
+        for bad in [7u16, 8, u16::MAX] {
             assert!(
                 !is_valid_surface_revision(bad),
                 "revision {bad} must be rejected"

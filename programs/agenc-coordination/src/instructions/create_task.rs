@@ -14,7 +14,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use super::completion_helpers::{
     resolve_referrer_snapshot, validate_marketplace_payee_destinations,
 };
-use super::launch_controls::require_task_type_index_enabled;
+use super::launch_controls::{require_direct_assignment_enabled, require_task_type_index_enabled};
 use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields,
@@ -170,6 +170,7 @@ pub fn direct_assignment_handler(
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
 ) -> Result<()> {
+    require_direct_assignment_enabled(ctx.accounts.protocol_config.as_ref())?;
     validate_direct_assignment_params(task_type, max_workers, referrer, referrer_fee_bps)?;
     handler_with_assignment(
         ctx,

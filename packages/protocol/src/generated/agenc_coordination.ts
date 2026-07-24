@@ -272,6 +272,279 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "acceptDirectAssignmentWithJobSpec",
+      "docs": [
+        "Atomically bind an Exclusive direct-assignment task to the exact worker",
+        "who co-signs this transaction with its creator."
+      ],
+      "discriminator": [
+        154,
+        237,
+        117,
+        198,
+        205,
+        83,
+        41,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskJobSpec",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskAttestorConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "Direct tasks are created without a listing hire. Pinning this canonical",
+            "empty PDA prevents a caller from smuggling a different assignment policy."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationBlock",
+          "docs": [
+            "a content hash that has been blocked after publication."
+          ]
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "The task funder must co-sign the exact worker, job-spec and attestor",
+            "snapshot in this instruction."
+          ],
+          "signer": true
+        },
+        {
+          "name": "workerAuthority",
+          "docs": [
+            "The intended worker must co-sign before its claim and obligation exist."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "expectedJobSpecHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedJobSpecUpdatedAt",
+          "type": "i64"
+        },
+        {
+          "name": "expectedAttestor",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "acceptTaskResult",
       "docs": [
         "Accept a creator-reviewed submission and settle rewards."
@@ -4067,6 +4340,293 @@ export type AgencCoordination = {
           "type": {
             "option": "pubkey"
           }
+        }
+      ]
+    },
+    {
+      "name": "createDirectAssignmentTask",
+      "docs": [
+        "Create an Exclusive task that is only assignable through a bilateral,",
+        "creator-and-worker-signed acceptance after its job-spec and attestor are set."
+      ],
+      "discriminator": [
+        197,
+        16,
+        37,
+        117,
+        65,
+        18,
+        112,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "arg",
+                "path": "taskId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorAgent",
+          "docs": [
+            "Creator's agent registration for identity/authorization checks"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityRateLimit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The authority that owns the creator_agent"
+          ],
+          "signer": true,
+          "relations": [
+            "creatorAgent"
+          ]
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "The creator who pays for and owns the task",
+            "Must match authority to prevent social engineering attacks (#375)"
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rewardMint",
+          "docs": [
+            "SPL token mint for reward denomination (optional)"
+          ],
+          "optional": true
+        },
+        {
+          "name": "creatorTokenAccount",
+          "docs": [
+            "Creator's token account holding reward tokens (optional)"
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "tokenEscrowAta",
+          "docs": [
+            "Escrow's associated token account for holding reward tokens (optional).",
+            "Created via ATA CPI during handler if token task."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "SPL Token program (optional, required for token tasks)"
+          ],
+          "optional": true,
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "docs": [
+            "Associated Token Account program (optional, required for token tasks)"
+          ],
+          "optional": true,
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        }
+      ],
+      "args": [
+        {
+          "name": "taskId",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "requiredCapabilities",
+          "type": "u64"
+        },
+        {
+          "name": "description",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        },
+        {
+          "name": "rewardAmount",
+          "type": "u64"
+        },
+        {
+          "name": "maxWorkers",
+          "type": "u8"
+        },
+        {
+          "name": "deadline",
+          "type": "i64"
+        },
+        {
+          "name": "taskType",
+          "type": "u8"
+        },
+        {
+          "name": "constraintHash",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        },
+        {
+          "name": "minReputation",
+          "type": "u16"
+        },
+        {
+          "name": "rewardMint",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -20781,6 +21341,36 @@ export type AgencCoordination = {
       "code": 6404,
       "name": "disputeTerminalStatusCorrupt",
       "msg": "The dispute's recorded terminal status is invalid"
+    },
+    {
+      "code": 6405,
+      "name": "directAssignmentRequiresAcceptance",
+      "msg": "This task is reserved for bilateral direct assignment acceptance"
+    },
+    {
+      "code": 6406,
+      "name": "taskNotDirectAssignment",
+      "msg": "This instruction requires a direct-assignment exclusive task"
+    },
+    {
+      "code": 6407,
+      "name": "invalidDirectAssignmentTask",
+      "msg": "Direct assignment tasks must be Exclusive with exactly one worker"
+    },
+    {
+      "code": 6408,
+      "name": "directAssignmentExternalAttestationRequired",
+      "msg": "Direct assignment requires ExternalAttestation by the signed attestor"
+    },
+    {
+      "code": 6409,
+      "name": "staleDirectAssignmentAcceptance",
+      "msg": "The direct-assignment job-spec or validation snapshot changed before acceptance"
+    },
+    {
+      "code": 6410,
+      "name": "directAssignmentSurfaceNotEnabled",
+      "msg": "The bilateral direct-assignment surface has not been release-stamped"
     }
   ],
   "types": [
@@ -28047,7 +28637,9 @@ export type AgencCoordination = {
               "creates a canonical `TaskClaim` increments it atomically, allowing",
               "watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without",
               "having observed the intermediate state.",
-              "Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields)."
+              "* `_reserved[11]` = direct-assignment flag (0 = public claim rail,",
+              "1 = creator + intended worker must co-sign `accept_direct_assignment_with_job_spec`).",
+              "* Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [

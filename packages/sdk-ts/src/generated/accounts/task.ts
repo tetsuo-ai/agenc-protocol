@@ -162,7 +162,9 @@ export type Task = {
    * creates a canonical `TaskClaim` increments it atomically, allowing
    * watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
    * having observed the intermediate state.
-   * Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[11]` = direct-assignment flag (0 = public claim rail,
+   * 1 = creator + intended worker must co-sign `accept_direct_assignment_with_job_spec`).
+   * * Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
@@ -272,7 +274,9 @@ export type TaskArgs = {
    * creates a canonical `TaskClaim` increments it atomically, allowing
    * watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
    * having observed the intermediate state.
-   * Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[11]` = direct-assignment flag (0 = public claim rail,
+   * 1 = creator + intended worker must co-sign `accept_direct_assignment_with_job_spec`).
+   * * Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**

@@ -19,6 +19,7 @@ import {
   SurfaceNotDeployedError,
   SURFACE_REVISION_FULL,
   SURFACE_REVISION_AUDIT_HARDENING,
+  SURFACE_REVISION_DIRECT_ASSIGNMENT,
   SURFACE_REVISION_CURRENT,
   SURFACE_REVISION_OFFSET,
   OLD_PROTOCOL_CONFIG_SIZE,
@@ -103,6 +104,7 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     expect(caps.disputes).toBe(false);
     expect(caps.bonds).toBe(false);
     expect(caps.referrals).toBe(false);
+    expect(caps.directAssignment).toBe(false);
     expect(caps.surfaceRevision).toBe(0);
   });
 
@@ -118,8 +120,10 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     expect(caps.reputation).toBe(true);
     expect(caps.bids).toBe(true);
     // goods is revision-GATED (batch 4): NOT implied by the full surface at
-    // revision 1 — it needs surface_revision >= 4.
+    // revision 1 - it needs surface_revision >= 4.
     expect(caps.goods).toBe(false);
+    // Direct assignment is independently gated on revision 6.
+    expect(caps.directAssignment).toBe(false);
     expect(caps.surfaceRevision).toBe(SURFACE_REVISION_FULL);
   });
 
@@ -143,13 +147,36 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     ).not.toThrow();
   });
 
-  it("maps the audit-hardening/current revision as a monotonic full surface", () => {
+  it("gates bilateral direct assignment on surface_revision >= 6", () => {
     expect(SURFACE_REVISION_AUDIT_HARDENING).toBe(5);
-    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_AUDIT_HARDENING);
+    expect(SURFACE_REVISION_DIRECT_ASSIGNMENT).toBe(6);
+    expect(capabilitiesForRevision(SURFACE_REVISION_AUDIT_HARDENING).directAssignment).toBe(
+      false,
+    );
+    expect(capabilitiesForRevision(SURFACE_REVISION_DIRECT_ASSIGNMENT).directAssignment).toBe(
+      true,
+    );
+    expect(() =>
+      assertCapability(
+        capabilitiesForRevision(SURFACE_REVISION_AUDIT_HARDENING),
+        "directAssignment",
+      ),
+    ).toThrow();
+    expect(() =>
+      assertCapability(
+        capabilitiesForRevision(SURFACE_REVISION_DIRECT_ASSIGNMENT),
+        "directAssignment",
+      ),
+    ).not.toThrow();
+  });
+
+  it("maps the current revision as a monotonic full surface", () => {
+    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_DIRECT_ASSIGNMENT);
     const caps = capabilitiesForRevision(SURFACE_REVISION_CURRENT);
     expect(caps.fullSurface).toBe(true);
     expect(caps.goods).toBe(true);
-    expect(caps.surfaceRevision).toBe(5);
+    expect(caps.directAssignment).toBe(true);
+    expect(caps.surfaceRevision).toBe(6);
   });
 
   it("fails closed for a future revision this SDK does not understand", () => {
@@ -158,6 +185,7 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     expect(caps.fullSurface).toBe(false);
     expect(caps.listings).toBe(false);
     expect(caps.goods).toBe(false);
+    expect(caps.directAssignment).toBe(false);
     expect(() => assertCapability(caps, "listings")).toThrow(
       SurfaceNotDeployedError,
     );

@@ -1,9 +1,9 @@
 // Facade: P6.5 surface-versioning contract.
 //
 // One program ID historically served the restricted 25-instruction canary surface on
-// mainnet and the full surface on dev/devnet. The live revision-4 deployment has
-// 99 instructions; this revision-5 production candidate has 98 after quarantining
-// private-ZK entrypoints and retiring the dispute-vote path.
+// mainnet and the full surface on dev/devnet. Mainnet is live on the revision-5
+// 101-instruction deployment; this source tree contains the revision-6
+// 103-instruction direct-assignment candidate.
 // `getDeployedSurface` lets a client ask, against a live RPC, WHICH surface a given
 // cluster actually exposes — so the facade/client can fail-closed (throw
 // `SurfaceNotDeployedError`) before building a transaction that calls an instruction
@@ -64,14 +64,20 @@ export const SURFACE_REVISION_FULL = 1;
 export const SURFACE_REVISION_BATCH4 = 4;
 
 /**
- * Audit-hardening release revision. The production inventory is 98 instructions, and
- * several existing instructions gained stricter remaining-account conventions.
+ * Audit-hardening release revision. Mainnet's 101-instruction production inventory
+ * includes stricter remaining-account conventions on existing instructions.
  * Mirrors `ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING` on-chain.
  */
 export const SURFACE_REVISION_AUDIT_HARDENING = 5;
 
+/**
+ * Bilateral direct-assignment release revision. This is the first revision
+ * whose program contains the creator-and-worker co-signed assignment rail.
+ */
+export const SURFACE_REVISION_DIRECT_ASSIGNMENT = 6;
+
 /** Highest surface revision understood by this SDK build. */
-export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_AUDIT_HARDENING;
+export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_DIRECT_ASSIGNMENT;
 
 /**
  * Reviewed release evidence plus the current ProtocolConfig approval set.
@@ -156,6 +162,8 @@ export type CapabilitySet = {
   readonly bids: boolean;
   /** Rivalrous goods-market instructions (batch 4 — requires `surface_revision >= 4`). */
   readonly goods: boolean;
+  /** Bilateral creator-and-worker task assignment (requires revision 6). */
+  readonly directAssignment: boolean;
 };
 
 /** The conservative capability set: the canary / unstamped / old-layout surface. */
@@ -172,6 +180,7 @@ function canarySurface(surfaceRevision: number): CapabilitySet {
     reputation: false,
     bids: false,
     goods: false,
+    directAssignment: false,
   };
 }
 
@@ -190,6 +199,7 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
     reputation: true,
     bids: true,
     goods: surfaceRevision >= SURFACE_REVISION_BATCH4,
+    directAssignment: surfaceRevision >= SURFACE_REVISION_DIRECT_ASSIGNMENT,
   };
 }
 

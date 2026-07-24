@@ -20,10 +20,13 @@ import {
   findTaskModerationPda,
   findModerationAttestorPda,
   findModerationBlockPda,
+  findAcceptTaskResultClaimPda,
   getCreateTaskInstructionDataDecoder,
+  getCreateDirectAssignmentTaskInstructionDataDecoder,
   getCreateTaskHumanlessInstructionDataDecoder,
   getCreateDependentTaskInstructionDataDecoder,
   getClaimTaskWithJobSpecInstructionDataDecoder,
+  getAcceptDirectAssignmentWithJobSpecInstructionDataDecoder,
   getSubmitTaskResultInstructionDataDecoder,
   getAcceptTaskResultInstructionDataDecoder,
   getRejectTaskResultInstructionDataDecoder,
@@ -52,9 +55,11 @@ import {
 } from "../src/index.js";
 import {
   createTask,
+  createDirectAssignmentTask,
   createTaskHumanless,
   createDependentTask,
   claimTaskWithJobSpec,
+  acceptDirectAssignmentWithJobSpec,
   submitTaskResult,
   acceptTaskResult,
   rejectTaskResult,
@@ -630,6 +635,39 @@ describe("createTask facade instruction", () => {
   });
 });
 
+describe("direct-assignment task facade instructions", () => {
+  it("creates only the private Exclusive single-worker shape", async () => {
+    const ix = await createDirectAssignmentTask({
+      creatorAgent: A,
+      authority: signerA,
+      creator: signerA,
+      taskId: ID32,
+      requiredCapabilities: 5n,
+      description: DESC64,
+      rewardAmount: 1000n,
+      deadline: 9999n,
+      constraintHash: null,
+      minReputation: 0,
+      rewardMintArg: null,
+    });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const names = ix.accounts.map((account) => account.address);
+    expect(names[3]).toBe(A); // creator agent
+    expect(names[5]).toBe(signerA.address); // authority
+    expect(names[6]).toBe(signerA.address); // creator / funder
+    expect(names[7]).toBe(SYSTEM_PROGRAM);
+
+    const decoded = getCreateDirectAssignmentTaskInstructionDataDecoder().decode(
+      ix.data,
+    );
+    expect(decoded.taskType).toBe(0); // Exclusive
+    expect(decoded.maxWorkers).toBe(1);
+    expect(decoded.referrer).toEqual({ __option: "None" });
+    expect(decoded.referrerFeeBps).toBe(0);
+  });
+});
+
 describe("createTaskHumanless facade instruction", () => {
   it("targets the program, orders accounts, and round-trips data", async () => {
     const ix = await createTaskHumanless({
@@ -768,6 +806,77 @@ describe("claimTaskWithJobSpec facade instruction", () => {
       role: AccountRole.READONLY,
     });
     expect(ix.accounts).toHaveLength(11);
+  });
+});
+
+describe("acceptDirectAssignmentWithJobSpec facade instruction", () => {
+  it("pins the moderated spec, attestor, and both consent signatures", async () => {
+    const expectedJobSpecHash = new Uint8Array(32).fill(0x44);
+    const [moderationBlock] = await findModerationBlockPda({
+      contentHash: expectedJobSpecHash,
+    });
+    const ix = await acceptDirectAssignmentWithJobSpec({
+      task: A,
+      worker: B,
+      creator: signerA,
+      workerAuthority: signerB,
+      expectedJobSpecHash,
+      expectedJobSpecUpdatedAt: 42n,
+      expectedAttestor: D,
+    });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const names = ix.accounts.map((account) => account.address);
+    const [claim] = await findAcceptTaskResultClaimPda({ task: A, worker: B });
+    expect(names[0]).toBe(A); // task
+    expect(names[5]).toBe(moderationBlock); // job-spec hash BLOCK floor
+    expect(names[6]).toBe(claim); // canonical ["claim", task, worker] PDA
+    expect(names[8]).toBe(B); // worker agent
+    expect(names[9]).toBe(signerA.address); // task funder consent
+    expect(names[10]).toBe(signerB.address); // intended worker consent
+    expect(names[11]).toBe(SYSTEM_PROGRAM);
+
+    const decoded =
+      getAcceptDirectAssignmentWithJobSpecInstructionDataDecoder().decode(
+        ix.data,
+      );
+    expect(decoded.expectedJobSpecHash).toEqual(expectedJobSpecHash);
+    expect(decoded.expectedJobSpecUpdatedAt).toBe(42n);
+    expect(decoded.expectedAttestor).toBe(D);
+  });
+
+  it("copies the signed job-spec hash before deriving the moderation PDA", async () => {
+    const expectedJobSpecHash = new Uint8Array(32).fill(0x51);
+    const pending = acceptDirectAssignmentWithJobSpec({
+      task: A,
+      worker: B,
+      creator: signerA,
+      workerAuthority: signerB,
+      expectedJobSpecHash,
+      expectedJobSpecUpdatedAt: 42n,
+      expectedAttestor: D,
+    });
+    expectedJobSpecHash.fill(0xa1);
+
+    const decoded =
+      getAcceptDirectAssignmentWithJobSpecInstructionDataDecoder().decode(
+        (await pending).data,
+      );
+    expect(decoded.expectedJobSpecHash).toEqual(new Uint8Array(32).fill(0x51));
+  });
+
+  it("rejects an all-zero direct-assignment job-spec hash", async () => {
+    await expect(
+      acceptDirectAssignmentWithJobSpec({
+        task: A,
+        worker: B,
+        creator: signerA,
+        workerAuthority: signerB,
+        expectedJobSpecHash: new Uint8Array(32),
+        expectedJobSpecUpdatedAt: 42n,
+        expectedAttestor: D,
+      }),
+    ).rejects.toThrow(/must not be all zeroes/);
   });
 });
 

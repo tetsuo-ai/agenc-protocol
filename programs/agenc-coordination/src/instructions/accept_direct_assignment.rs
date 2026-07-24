@@ -9,6 +9,7 @@ use anchor_lang::prelude::*;
 use crate::errors::CoordinationError;
 use crate::instructions::claim_task::{process_claim, validate_job_spec_pointer, ClaimRoute};
 use crate::instructions::completion_helpers::validate_task_dependency_for_assignment;
+use crate::instructions::launch_controls::require_direct_assignment_enabled;
 use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
 use crate::instructions::task_validation_helpers::ensure_validation_config;
 use crate::state::{
@@ -140,6 +141,7 @@ pub fn handler(
     expected_job_spec_updated_at: i64,
     expected_attestor: Pubkey,
 ) -> Result<()> {
+    require_direct_assignment_enabled(ctx.accounts.protocol_config.as_ref())?;
     let task = ctx.accounts.task.as_ref();
     validate_direct_assignment_task(task)?;
     validate_direct_assignment_snapshot(

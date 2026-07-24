@@ -824,6 +824,18 @@ export const AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING = 0x1902; 
 export const AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER = 0x1903; // 6403
 /** DisputeTerminalStatusCorrupt: The dispute's recorded terminal status is invalid */
 export const AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT = 0x1904; // 6404
+/** DirectAssignmentRequiresAcceptance: This task is reserved for bilateral direct assignment acceptance */
+export const AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_REQUIRES_ACCEPTANCE = 0x1905; // 6405
+/** TaskNotDirectAssignment: This instruction requires a direct-assignment exclusive task */
+export const AGENC_COORDINATION_ERROR__TASK_NOT_DIRECT_ASSIGNMENT = 0x1906; // 6406
+/** InvalidDirectAssignmentTask: Direct assignment tasks must be Exclusive with exactly one worker */
+export const AGENC_COORDINATION_ERROR__INVALID_DIRECT_ASSIGNMENT_TASK = 0x1907; // 6407
+/** DirectAssignmentExternalAttestationRequired: Direct assignment requires ExternalAttestation by the signed attestor */
+export const AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_EXTERNAL_ATTESTATION_REQUIRED = 0x1908; // 6408
+/** StaleDirectAssignmentAcceptance: The direct-assignment job-spec or validation snapshot changed before acceptance */
+export const AGENC_COORDINATION_ERROR__STALE_DIRECT_ASSIGNMENT_ACCEPTANCE = 0x1909; // 6409
+/** DirectAssignmentSurfaceNotEnabled: The bilateral direct-assignment surface has not been release-stamped */
+export const AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_SURFACE_NOT_ENABLED = 0x190a; // 6410
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -910,6 +922,9 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__DEADLINE_PASSED
   | typeof AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED
+  | typeof AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_EXTERNAL_ATTESTATION_REQUIRED
+  | typeof AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_REQUIRES_ACCEPTANCE
+  | typeof AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_SURFACE_NOT_ENABLED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE
@@ -969,6 +984,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_DEADLINE
   | typeof AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE
   | typeof AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION
+  | typeof AGENC_COORDINATION_ERROR__INVALID_DIRECT_ASSIGNMENT_TASK
   | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER
   | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD
   | typeof AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH
@@ -1150,6 +1166,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__SLASH_WINDOW_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__STAKE_TOO_LOW
   | typeof AGENC_COORDINATION_ERROR__STALE_BID_ACCEPTANCE
+  | typeof AGENC_COORDINATION_ERROR__STALE_DIRECT_ASSIGNMENT_ACCEPTANCE
   | typeof AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS
   | typeof AGENC_COORDINATION_ERROR__STATE_NOT_FOUND
   | typeof AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION
@@ -1180,6 +1197,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_BID_EXCLUSIVE
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_CLOSABLE
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_COMPLETED_FOR_RATING
+  | typeof AGENC_COORDINATION_ERROR__TASK_NOT_DIRECT_ASSIGNMENT
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_FOUND
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_IN_PROGRESS
@@ -1321,6 +1339,9 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__DEADLINE_PASSED]: `Task deadline has passed`,
     [AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED]: `Delegation must be active for minimum duration before revocation`,
     [AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED]: `Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use.`,
+    [AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_EXTERNAL_ATTESTATION_REQUIRED]: `Direct assignment requires ExternalAttestation by the signed attestor`,
+    [AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_REQUIRES_ACCEPTANCE]: `This task is reserved for bilateral direct assignment acceptance`,
+    [AGENC_COORDINATION_ERROR__DIRECT_ASSIGNMENT_SURFACE_NOT_ENABLED]: `The bilateral direct-assignment surface has not been release-stamped`,
     [AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED]: `Dispute has already been resolved`,
     [AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER]: `The defendant claim settles through the ruling, not peer settlement`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE]: `Dispute is not active`,
@@ -1380,6 +1401,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_DEADLINE]: `Invalid deadline: deadline must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE]: `Invalid dependency type`,
     [AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION]: `Invalid description: cannot be empty`,
+    [AGENC_COORDINATION_ERROR__INVALID_DIRECT_ASSIGNMENT_TASK]: `Direct assignment tasks must be Exclusive with exactly one worker`,
     [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER]: `Invalid dispute resolver: pubkey must be non-zero`,
     [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD]: `Invalid dispute threshold: must be 1-100 (percentage of votes required)`,
     [AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH]: `Invalid evidence hash: cannot be all zeros`,
@@ -1561,6 +1583,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__SLASH_WINDOW_EXPIRED]: `Slash window expired: must apply slashing within 7 days of resolution`,
     [AGENC_COORDINATION_ERROR__STAKE_TOO_LOW]: `Stake value is below minimum required (0.001 SOL)`,
     [AGENC_COORDINATION_ERROR__STALE_BID_ACCEPTANCE]: `Selected bid terms changed since the creator signed acceptance`,
+    [AGENC_COORDINATION_ERROR__STALE_DIRECT_ASSIGNMENT_ACCEPTANCE]: `The direct-assignment job-spec or validation snapshot changed before acceptance`,
     [AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS]: `State key already exists`,
     [AGENC_COORDINATION_ERROR__STATE_NOT_FOUND]: `State not found`,
     [AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION]: `State ownership violation: only the creator agent can update this state`,
@@ -1591,6 +1614,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TASK_NOT_BID_EXCLUSIVE]: `Task is not a Marketplace V2 bid-exclusive task`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_CLOSABLE]: `Task can only be closed once it is in a terminal state with no active workers`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_COMPLETED_FOR_RATING]: `Only a completed hired task can be rated`,
+    [AGENC_COORDINATION_ERROR__TASK_NOT_DIRECT_ASSIGNMENT]: `This instruction requires a direct-assignment exclusive task`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_EXPIRED]: `Task deadline has not passed`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_FOUND]: `Task not found`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_IN_PROGRESS]: `Task is not in progress`,

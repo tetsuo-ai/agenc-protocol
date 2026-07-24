@@ -546,9 +546,14 @@ impl ProtocolConfig {
     /// clients distinguish this wire contract from the deployed batch-4 binary.
     pub const SURFACE_REVISION_AUDIT_HARDENING: u16 = 5;
 
+    /// `surface_revision` value for bilateral direct assignment. This release
+    /// adds a non-public Exclusive-task rail where creator and worker must
+    /// co-sign the exact job-spec and ExternalAttestation snapshot.
+    pub const SURFACE_REVISION_DIRECT_ASSIGNMENT: u16 = 6;
+
     /// Highest surface revision implemented by this binary. Deployment tooling
     /// stamps this value only after the matching artifact has been verified live.
-    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_AUDIT_HARDENING;
+    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_DIRECT_ASSIGNMENT;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -3971,6 +3976,7 @@ mod tests {
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH4, 4);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT, 6);
         const {
             assert!(
                 ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL
@@ -3984,6 +3990,10 @@ mod tests {
             assert!(
                 ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
                     > ProtocolConfig::SURFACE_REVISION_BATCH4
+            );
+            assert!(
+                ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT
+                    > ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
             );
         }
     }

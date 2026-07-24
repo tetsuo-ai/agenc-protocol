@@ -5,11 +5,12 @@ release surfaces:
 
 - the restricted **25-instruction canary** surface (`--features mainnet-canary`) —
   a conservative BUILD that still exists in the source; and
-- the full production surface (revision 5 is **101 instructions** with default
-  features — live on mainnet since 2026-07-22).
+- the full production surface: revision 5 is **101 instructions** and live on
+  mainnet since 2026-07-22; this source tree additionally contains the pending
+  revision-6 **103-instruction** direct-assignment candidate.
 
 An explicit development-only `private-zk` feature adds three quarantined proof
-instructions, producing a 104-instruction build. It is not a release surface and
+instructions, producing a 106-instruction revision-6 candidate build. It is not a release surface and
 the deployment preflight rejects a production build or IDL that contains it.
 
 > **As of 2026-07-22 the full 101-instruction revision-5 surface is live on
@@ -38,6 +39,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest: **96 ix** — submission-rent return, contest rails (`distribute_ghost_share`, `reclaim_terminal_claim`, entry deposit, selection window) | full-surface capabilities `true`; **`goods: false`** |
 | `4` (`SURFACE_REVISION_BATCH4`) | Batch-4 goods: **99 ix** — `create_goods_listing` / `purchase_good` / `update_goods_listing` (handlers require `surface_revision >= 4`) | full-surface capabilities `true`; **`goods: true`** |
 | `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | **Live on mainnet since 2026-07-22.** 2026-07 audit-hardening contract: **101 production ix**; retires the three unaudited private-ZK entrypoints, adds orphan-child recovery, the O(1) bid-accept redesign (`promote_bid` / `demote_ineligible_best` / `settle_dispute_claim`), and an atomic release-boundary stamp, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
+| `6` (`SURFACE_REVISION_DIRECT_ASSIGNMENT`) | **Pending review/upgrade; not live.** **103 production ix**; adds `create_direct_assignment_task` plus bilateral `accept_direct_assignment_with_job_spec`. The creator and intended worker co-sign the exact job-spec hash, version timestamp, and ExternalAttestation attestor; public claim is rejected for this task rail. | full-surface capabilities `true`; **`goods: true`; `directAssignment: true`** |
 
 > **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
 > pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
@@ -74,10 +76,10 @@ singletons, ProgramData metadata, on-chain IDL, and upgrade-custody account.
 A **fresh production deploy** initializes with `protocol_paused = true` and
 `surface_revision = 0`; initialization alone is not proof that the reviewed
 release singletons, IDL, and custody boundary are present. Production reaches
-`SURFACE_REVISION_CURRENT` (`5` in this source) only through
+`SURFACE_REVISION_CURRENT` (`6` in this source) only through
 `stamp_release_surface`. After that stamp, `update_launch_controls` may unpause
 only when the resulting stored revision is CURRENT; rolling back to revision
-`0`–`4` pauses conservatively and requires a new atomic stamp before another
+`0`–`5` pauses conservatively and requires a new atomic stamp before another
 unpause. Goods handlers are enabled at every revision `>= 4`. The restricted
 **canary** has no atomic stamp instruction, remains at revision `0`, and may be
 unpaused on that conservative surface.
@@ -89,20 +91,23 @@ unpaused on that conservative surface.
 > live wire), see [`VERSIONING.md`](./VERSIONING.md) §1.1 — that file is the
 > consumer support contract.
 
-| Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
-|---|---|---|---|---|---|---|
-| full (revision 5) | **101 ix** | **mainnet** (live since 2026-07-22) | `5` (AUDIT_HARDENING) | `@tetsuo-ai/marketplace-sdk` **0.12.x** (revision-5 client) | `true` | `true` |
-| full (revision 4, superseded) | **99 ix** | mainnet (live 2026-07-09 → 2026-07-22) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| explicit `private-zk` development build | 104 ix | local development only | not releasable | unsupported | n/a | n/a |
-| historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
-| `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
+| Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` | `directAssignment` |
+|---|---|---|---|---|---|---|---|
+| full (revision 6, pending) | **103 ix** | no cluster; review/upgrade candidate | `6` (DIRECT_ASSIGNMENT) | unreleased revision-6 client | `true` | `true` | `true` |
+| full (revision 5) | **101 ix** | **mainnet** (live since 2026-07-22) | `5` (AUDIT_HARDENING) | `@tetsuo-ai/marketplace-sdk` **0.12.x** (revision-5 client) | `true` | `true` | `false` |
+| full (revision 4, superseded) | **99 ix** | mainnet (live 2026-07-09 → 2026-07-22) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` | `false` |
+| explicit `private-zk` development build | 106 ix | local development only | not releasable | unsupported | n/a | n/a | n/a |
+| historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 | `false` |
+| `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` | `false` |
 
 The revision-5 program is live on mainnet as of 2026-07-22; its coordinated
 client set is protocol **0.4.0** and SDK **0.12.0** (regenerated 101-instruction
-clients). The prior published revision-4 pins (`@tetsuo-ai/protocol` **0.3.0**,
-`@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x**) spoke the revision-4 wire and
-fail closed against revision 5. See [`VERSIONING.md`](./VERSIONING.md) §1.1 for
-the published-pin support contract.
+clients). Revision 6 is a source candidate only: its packages must not be
+published or used against mainnet until the reviewed binary and IDL have been
+upgraded and atomically stamped to `6`. The prior published revision-4 pins
+(`@tetsuo-ai/protocol` **0.3.0**, `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x**)
+spoke the revision-4 wire and fail closed against revision 5. See
+[`VERSIONING.md`](./VERSIONING.md) §1.1 for the published-pin support contract.
 
 ## Release runbook — `anchor idl init` per cluster (fetchable on-chain IDL)
 
@@ -135,10 +140,12 @@ program deploy/upgrade:
    authority and capacity, and checks every published non-`docs` value. Do not invoke
    `anchor idl init/upgrade` directly with the oversized documented full IDL.
 4. **Stamp the surface last**: use `update_launch_controls(..., 4)` only for the
-   historical revision-4 artifact. Establish revision `5` only with the atomic
-   `stamp_release_surface` rail after every reviewed dependency is verified and
-   locked in that transaction; otherwise leave `0` or the last verified lower
-   revision.
+   historical revision-4 artifact. Establish the source's current revision (`6`)
+   only with the atomic `stamp_release_surface` rail after every reviewed
+   dependency is verified and locked in that transaction; otherwise leave `0` or
+   the last verified lower revision. For this direct-assignment release that means
+   the program binary, 103-instruction IDL, generated SDK, and the designated
+   ExternalAttestation operator are all reviewed before the stamp.
 5. Update the matrix above (program build, cluster, `surface_revision`, SDK semver) and
    `docs/MAINNET_MAINLINE.md` in the same release window.
 
@@ -151,7 +158,9 @@ program deploy/upgrade:
   Retiring an unsafe capability requires a new revision plus a coordinated client
   release; it never silently changes an existing revision's meaning. Revision 5 is the
   first such retirement: private-ZK was never advertised by `CapabilitySet`, and its
-  three entrypoints are absent from the production build and IDL.
+  three entrypoints are absent from the production build and IDL. Revision 6 adds a
+  separately gated `directAssignment` capability; it remains `false` until its
+  atomic release stamp is on-chain.
 - **Conservative by default.** Any ambiguity (old layout, missing account, unknown
   revision) resolves to the smallest safe surface (`false`). Clients fail-closed via
   `SurfaceNotDeployedError`, never by emitting an instruction the cluster lacks.

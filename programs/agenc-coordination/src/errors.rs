@@ -1210,4 +1210,6 @@ pub enum CoordinationError {
     DirectAssignmentExternalAttestationRequired,
     #[msg("The direct-assignment job-spec or validation snapshot changed before acceptance")]
     StaleDirectAssignmentAcceptance,
+    #[msg("The bilateral direct-assignment surface has not been release-stamped")]
+    DirectAssignmentSurfaceNotEnabled,
 }
