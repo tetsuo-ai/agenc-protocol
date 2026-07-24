@@ -119,8 +119,10 @@ mod tests {
 
     #[test]
     fn direct_assignment_gate_requires_revision_six() {
-        let mut config = ProtocolConfig::default();
-        config.surface_revision = ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING;
+        let mut config = ProtocolConfig {
+            surface_revision: ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING,
+            ..ProtocolConfig::default()
+        };
         assert!(require_direct_assignment_enabled(&config).is_err());
 
         config.surface_revision = ProtocolConfig::SURFACE_REVISION_DIRECT_ASSIGNMENT;

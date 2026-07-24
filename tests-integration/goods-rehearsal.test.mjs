@@ -3,7 +3,7 @@
 // Rehearses the current post-release choreography on the real program:
 //   1. the program is deployed (the compiled .so is loaded);
 //   2. the goods surface is DARK below revision 4;
-//   3. the fixture models the output of the separately tested atomic revision-5
+//   3. the fixture models the output of the separately tested atomic current-release
 //      stamp (CURRENT + paused), then the REAL update_launch_controls unpauses
 //      through the 2-of-N multisig while preserving or changing the live mask;
 //   4. a real create_goods_listing -> purchase_good settles, paying the split;
@@ -18,12 +18,12 @@ import {
   makeProgram, send, expectOk, expectFail, decode, getSurfaceRevision,
   freshWorld, setMultisig, setProtocolFeeBps, setProtocolPaused,
   setSurfaceRevision, moderationBlockPda,
-  BN, Keypair, PublicKey, SystemProgram,
+  BN, CURRENT_SURFACE_REVISION, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
 import { decodeGoodPurchased } from "../scripts/goods-purchase-watcher.mjs";
 
 const MIN_GOOD_PRICE = 1_000;
-const REV_CURRENT = 5;
+const REV_CURRENT = CURRENT_SURFACE_REVISION;
 const LIVE_MASK = 0b0000_0100; // a nonzero launch-control mask to preserve
 const KEEP_MASK = 0xff;
 const KEEP_REV = 0xffff;
