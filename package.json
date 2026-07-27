@@ -53,7 +53,7 @@
     "test:deployment-scripts": "node --test scripts/preflight-*.test.mjs scripts/anchor-idl-publication.test.mjs scripts/env-flags.test.mjs scripts/mainnet-release-boundary.test.mjs scripts/mainnet-init-and-stamp-boundary.test.mjs scripts/mainnet-migrate-sweep-boundary.test.mjs scripts/program-extend-mainnet.test.mjs"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0",
+    "@changesets/cli": "^2.31.1",
     "@types/node": "^25.4.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
