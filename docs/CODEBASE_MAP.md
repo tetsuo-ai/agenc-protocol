@@ -78,6 +78,7 @@ Support matrix: [VERSIONING.md](./VERSIONING.md).
 - `scripts/generate-idl-reference.mjs` / `check-idl-reference.mjs` - docs drift gate
 - `scripts/localnet-up.mjs` / `localnet-down.mjs` / `localnet-status.mjs`
 - `scripts/mainnet-*.mjs` / `scripts/credible-exit.mjs`
+- `scripts/explorer-metadata.mjs` - Explorer security.txt + OtterSec re-attest exports for the Squads vault
 - `scripts/marketplace-devnet-*.mjs` / `validation-*.mjs`
 - `packages/sdk-ts` scripts: `sdk:generate`, `sdk:drift`, testing-asset sync
 - `.github/workflows/ci.yml` - formatting, artifact verification, package gates
