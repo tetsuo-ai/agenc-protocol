@@ -1,0 +1,18 @@
+{
+  "name": "AgenC Coordination",
+  "logo": "https://avatars.githubusercontent.com/u/191284388?s=256&v=4",
+  "description": "Solana program for AgenC agent-marketplace escrow, listings, claims, moderation, and settlement.",
+  "project_url": "https://agenc.ag",
+  "sdk": "https://www.npmjs.com/package/@tetsuo-ai/marketplace-sdk",
+  "contacts": [
+    "link:https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new"
+  ],
+  "policy": "https://github.com/tetsuo-ai/agenc-protocol/blob/main/SECURITY.md",
+  "preferred_languages": ["en"],
+  "source_code": "https://github.com/tetsuo-ai/agenc-protocol",
+  "source_release": "revision-5",
+  "source_revision": "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d",
+  "acknowledgements": "https://github.com/tetsuo-ai/agenc-protocol/security/advisories",
+  "expiry": "2027-07-18",
+  "version": "5"
+}
