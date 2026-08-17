@@ -57,6 +57,7 @@ proposals. Everything else listed here is a living doc.
 - [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - **HISTORICAL — IMPLEMENTED + LIVE** moderation heartbeat / deadman (batch-2)
 - [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the ProgramData-capacity ceremony (executed for the revision-5 upgrade)
 - [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
+- [./EXPLORER_METADATA.md](./EXPLORER_METADATA.md) - Canonical Explorer metadata and verified-build ceremony
 - [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 hire to settle with zero tetsuo-ai hosted dependencies (`scripts/credible-exit.mjs`). Source is public; OtterSec attested revision 4; revision 5 still needs re-attest.
 - [./ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md) - **DESIGN ONLY [HUMAN: approve]** P7.2 layer 2: optional on-chain `key_commitment` at submit + `reveal_key` on accept with hash-match enforcement and deadline bounds, for trustless fair-exchange (child `SubmissionKeyEscrow` PDA, no migration)
 - [./MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.4: bounded (≤8) milestone schedule via child `TaskMilestone` PDAs (not a Task realloc), `submit_milestone`/`accept_milestone` releasing tranches through the existing split, creator-signed `release_partial`, listing default templates, facade `Engagement`
@@ -77,6 +78,7 @@ proposals. Everything else listed here is a living doc.
 
 ## Read By Task
 
+- I need Explorer Verified Build / security.txt (two Squads approvals): [EXPLORER_METADATA.md](./EXPLORER_METADATA.md)
 - I need the revision-5 upgrade procedure / execution record: [REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md)
 - I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
 - I need the open-roster moderation model (P1.2): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
