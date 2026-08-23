@@ -196,6 +196,8 @@ await buyerClient.closeTask({
   workerCompletionBond: null,
   authority: buyer,
 });
+// close_task decrements listing open_jobs and keeps the Task as a rent-exempt
+// tombstone. It does not close the Task PDA.
 
 const elapsed = (Date.now() - started) / 1000;
 console.log(
@@ -307,8 +309,8 @@ revision 5.
 | Disputes                                | initiate / resolve / expire / `settleDisputeClaim`                  | single-resolver model (no `vote_dispute`); chunked peer crank after a recorded ruling |
 | Bids                                    | create / update / cancel / accept / expire, plus `promoteBid` / `demoteIneligibleBest` | Marketplace V2; `acceptBid` is O(1) and does not take competitor pairs |
 | Store identity (0.9.0)                  | `registerStore`, `updateStore`, `closeStore`, `moderationHeartbeat` | batch-2                                                                 |
-| Contests (0.10.0)                       | `createContestTask`, `distributeGhostShare`, `reclaimTerminalClaim` | batch-3                                                                 |
-| Goods (0.11.0)                          | `createGoodsListing`, `purchaseGood`, `updateGoodsListing`          | requires `surface_revision >= 4` (`assertCapability(surface, 'goods')`) |
+| Contests (0.10.0)                       | `createContestTask`, `distributeGhostShare`, `reclaimTerminalClaim` | `createContestTask` is a facade (`create_task` + `configure_task_validation`); there is no `create_contest_task` ix |
+| Goods (0.11.0)                          | `createGoodsListing`, `purchaseGood`, `updateGoodsListing`          | SOL or SPL; requires `surface_revision >= 4` (`assertCapability(surface, 'goods')`) |
 | Governance / reputation / skills / feed | generated client + selected facade wrappers                         | advanced                                                                |
 
 Treat advanced surfaces as integration work: match UX, policy, and tests to the
@@ -397,8 +399,9 @@ metadataValid: false })` (or the gPA `queries` module, which applies no
 metadata filter) to also surface nonconforming listings. For writes, build
 unsigned transactions with the SDK facade, React hooks, MCP prepare tools, or
 your own transaction-builder backend, then sign locally and broadcast through
-your own RPC. The indexer client also includes webhook helpers
-(`verifyAgencWebhookSignature`) so polling loops can go away entirely.
+your own RPC. Webhook signature checks use root `verifyAgencWebhookSignature`.
+The indexer client registers/lists/deletes webhook endpoints; it does not
+verify signatures.
 
 **Local development: the localnet stack.** Don't burn devnet rate limits
 iterating — the `agenc-protocol` repo ships a one-command local stack
@@ -467,7 +470,7 @@ Pre-1.0. The generated client covers all program instructions; the facade wraps 
 core marketplace lifecycle and most advanced instruction groups. It intentionally
 omits legacy `claim_task` (fail-closed in the program) and keeps
 `complete_task_private` out of the production client. That instruction exists
-only in the separate, unsupported 101-instruction `private-zk` development
+only in the separate, unsupported 104-instruction `private-zk` development
 surface. On-chain coverage is via litesvm e2e tests.
 
 ## License

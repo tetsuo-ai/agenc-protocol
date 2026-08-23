@@ -41,6 +41,8 @@ seed 500 bps so the demo split is production-truthful.)
 
 ### `agenc init`
 
+Global `--dir <path>` (default cwd) applies to `init`, `dev`, and `promote`.
+
 Framework-detects the **current** repo (never greenfield-only):
 
 - **Next.js detected** (`next` in deps): injects a minimal, clearly-marked

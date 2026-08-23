@@ -1615,13 +1615,12 @@ _None._
 
 ## record_agent_verification
 
-Record a domain-verification attestation for an agent (P7.3). A TRUSTED attestor
-(the global moderation authority OR a registered, non-revoked `ModerationAttestor`)
-records that operator domain `verified_domain` was proven to control the agent. The
-off-chain domain-control proof (TXT record / `.well-known` + signed challenge) is the
-attestor SERVICE's job; on-chain this only records the trusted verdict. `method`:
-0 = TxtRecord, 1 = WellKnown. `expires_at`: 0 = no expiry. Re-verification overwrites
-the `["agent_verification", agent]` PDA in place.
+Record a domain-verification attestation for an agent (P7.3). Only the
+global moderation authority may write. Roster attestors cannot.
+Off-chain domain-control proof (TXT / `.well-known` + signed challenge)
+is the attestor service's job; on-chain this only records the verdict.
+`method`: 0 = TxtRecord, 1 = WellKnown. `expires_at`: 0 = no expiry.
+Re-verification overwrites the `["agent_verification", agent]` PDA.
 
 ### Accounts (5)
 
@@ -1976,8 +1975,8 @@ Exit path — settles even while paused (money never locks).
 
 ## revoke_agent_verification
 
-Revoke an agent's domain verification (P7.3), marking it `revoked = true` so the
-record stays readable. Same trusted-roster authorization as
+Revoke an agent's domain verification (P7.3), marking it `revoked = true`
+so the record stays readable. Same global-authority-only gate as
 `record_agent_verification`.
 
 ### Accounts (3)

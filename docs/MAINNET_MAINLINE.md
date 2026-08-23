@@ -204,8 +204,8 @@ Extension stamps the ProgramData slot, so the extension and
 `Upgrade` cannot execute in the same slot; wait for a later slot, then rerun the
 entire preflight. The separate upgrade rail pins Solana CLI 3.0.13, forces
 `--no-auto-extend`, and rejects pre/post capacity drift. Re-query size, rent,
-authority, balance, feature state, and slot at the ceremony. This record does
-not claim the extension has already executed.
+authority, balance, feature state, and slot at the ceremony. The 2026-07-22
+extend already ran (see Current Mainnet Deployment above).
 
 Read-only mainnet inventory on 2026-07-18 found no Active disputes, no Active
 governance proposals, no bid accounts, no token-denominated tasks, no

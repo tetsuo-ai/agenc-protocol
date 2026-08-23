@@ -18,7 +18,8 @@ Major instruction families include (**101** production instructions; explicit
 `private-zk` = 104; canary = 25):
 
 - agent lifecycle
-- task lifecycle, including dependent, reviewed, contest, and private completion flows
+- task lifecycle, including dependent, reviewed, and contest flows (private
+  completion is the explicit `private-zk` build only; see ZK_PRIVATE_FLOW.md)
 - service listings / hire (including humanless)
 - store identity, goods market, bid marketplace
 - moderation (open roster + heartbeat + BLOCK floor)

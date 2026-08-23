@@ -26,8 +26,9 @@ changes. Last reconciled with the deployed revision on 2026-08-23.
   production deployment rail. Prior revision 4 (99 instructions / 46 accounts /
   104 events / 354 errors, slot 431918664, commit `097ded1`) is superseded.
 - Singletons: `BidMarketplaceConfig`, `ModerationConfig`, and `GovernanceConfig`
-  INITIALIZED (sane params); `ZkConfig` NOT initialized, so ZK private
-  completion stays off.
+  INITIALIZED (sane params). Production has no `ZkConfig` account and no
+  private-ZK instructions. Those three ix exist only in the unsupported
+  104-ix `private-zk` build.
 - Disputes: single-assigned-resolver. The protocol authority resolves only with
   configured M-of-N approval; a previously threshold-approved assigned
   `DisputeResolver` resolves directly without a per-case vote. Both paths require

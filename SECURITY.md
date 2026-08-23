@@ -39,8 +39,8 @@ active policy.
 
 ## 2. Scope
 
-Severity and reward priority follow the **money-path-first** ordering also used
-by the bug bounty (`docs/BUG_BOUNTY.md`).
+Severity and reward priority follow the **money-path-first** ordering in
+`docs/BUG_BOUNTY.md` (draft rubric; paid bounty is not live).
 
 Mainnet runs revision 5 (101 instructions, `surface_revision = 5`), deployed
 2026-07-22 through the Squads v4 2-of-3 vault (deployed executable SHA-256
@@ -91,8 +91,9 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
   the hosted indexer via the on-chain gPA path (`listActiveListings`); a hosted
   read-path issue that returns wrong data influencing a signed transaction is in
   scope.
-- **Artifact storage** — the hosted job-spec / artifact pipeline
-  (`docs/ARTIFACT_PIPELINE.md`).
+- **Artifact storage** — hosted job-spec / deliverable URIs that buyers and
+  workers fetch after an on-chain hash commitment. `docs/ARTIFACT_PIPELINE.md`
+  is the on-chain IDL/npm sync, not that hosted store.
 
 > These are operated on hosted domains **[HUMAN: enumerate the exact hostnames]**.
 > Test only against your own tasks/listings; do not attack other users' data.

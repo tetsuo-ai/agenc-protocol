@@ -28,8 +28,9 @@ LISTING_METADATA v1 covers:
 
 1. The encoding of the three fixed-width `ServiceListing` string fields
    (`name`, `category`, `tags`). `create_service_listing` writes all three.
-   `update_service_listing` can replace `tags` only (opaque 64 bytes). Name
-   and category are create-time.
+   `update_service_listing` can change price, spec hash/URI, tags, capabilities,
+   deadline, max open jobs, and operator fee fields. Name and category are
+   create-time. Tags stay opaque 64 bytes.
 2. The canonical category taxonomy (20 values).
 3. The listing-level `spec_hash` / `spec_uri` commitment and the listing display
    document embedded in that envelope payload. The separate buyer-specific task

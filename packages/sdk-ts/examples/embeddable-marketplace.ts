@@ -148,7 +148,7 @@ export async function main() {
     specHash: listingSpecHash,
     specUri: "ipfs://listing-spec",
     price: 1_000_000n, // lamports for a SOL-priced listing
-    priceMint: null, // null = native SOL; pass a mint Address for SPL tokens
+    priceMint: null, // required; service listings are SOL-only
     requiredCapabilities: 4n,
     defaultDeadlineSecs: 86_400n,
     maxOpenJobs: 10,

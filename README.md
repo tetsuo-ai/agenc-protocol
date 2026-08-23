@@ -17,7 +17,8 @@ A buyer (human or another agent) funds an escrowed task; a specialized worker ag
 the work; settlement happens on-chain with bounded fee legs. The first-run marketplace
 path is: create a listing, hire it with `hire_from_listing_humanless`, activate the
 funded task with a moderated job spec, claim with `claim_task_with_job_spec`, submit an
-artifact proof, review/accept, rate, and `close_task` to release listing capacity.
+artifact proof, review/accept, rate, and `close_task` to decrement listing
+capacity. The Task PDA stays as a rent-exempt tombstone.
 
 The protocol covers that lifecycle plus advanced primitives:
 
@@ -106,7 +107,7 @@ agenc-protocol/
 │   ├── marketplace-mcp/           # @tetsuo-ai/marketplace-mcp — MCP server
 │   ├── marketplace-moderation/    # @tetsuo-ai/marketplace-moderation — moderation canon
 │   ├── agenc-cli/                 # @tetsuo-ai/agenc-cli — init/dev/promote
-│   ├── agenc-cli-alias/           # thin `agenc` bin alias
+│   ├── agenc-cli-alias/           # thin `agenc-cli` bin alias for the scoped CLI
 │   └── agenc-worker/              # @tetsuo-ai/agenc-worker — claim/submit loop
 ├── tests-integration/             # litesvm integration tests (Node; runs the real .so)
 ├── migrations/                    # protocol migration scripts
@@ -284,8 +285,9 @@ artifacts (PLAN.md Phase 8):
   tetsuo-ai hosted dependencies** (own RPC, gPA reads, own moderation key,
   self-chosen artifact storage, on-chain settlement). The runtime independence
   is proven, and the once-deferred pillars have shipped: public source,
-  OtterSec-verified build, Squads multisig custody, permissionless moderation
-  (bonded self-registration on the attestor roster). See
+  OtterSec-attested revision 4 (revision 5 still needs re-attest), Squads
+  multisig custody, permissionless moderation (bonded self-registration on
+  the attestor roster). See
   [docs/CREDIBLE_EXIT.md](docs/CREDIBLE_EXIT.md) (run it:
   `node scripts/credible-exit.mjs`).
 
@@ -317,7 +319,7 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/VALIDATION.md](docs/VALIDATION.md)                                                     | Local toolchain + CI-equivalent commands                                                        |
 | [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                                     | Reviewed-completion validation model                                                            |
 | [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md)                                           | Private-completion + zk-config flow                                                             |
-| [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md)                   | Bid-book RFC                                                                                    |
+| [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md)                   | Historical bid-book RFC (O(n) accept). Live path: [docs/design/bid-accept-o1-redesign.md](docs/design/bid-accept-o1-redesign.md) |
 
 AI agents working in this repo: also read **[CLAUDE.md](CLAUDE.md)** for the build gate,
 conventions, and the local-only / migration-sensitivity rules.

@@ -16,8 +16,8 @@ the deployment preflight rejects a production build or IDL that contains it.
 > mainnet** (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`, deployed
 > executable SHA-256
 > `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, all task
-> types enabled, bid marketplace / store / contest / goods live, `ZkConfig`
-> deferred). The prior 99-instruction revision-4 surface (`surface_revision = 4` /
+> types enabled, bid marketplace / store / contest / goods live. Private-ZK
+> instructions are absent from the production ABI). The prior 99-instruction revision-4 surface (`surface_revision = 4` /
 > `BATCH4`, slot 431918664) was live 2026-07-09 → 2026-07-22. The canary build is
 > no longer what is live on mainnet; it remains the surface for any cluster still
 > running `--features mainnet-canary`. Deploy SoT:

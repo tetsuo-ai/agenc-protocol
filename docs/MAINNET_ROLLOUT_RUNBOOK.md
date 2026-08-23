@@ -283,7 +283,7 @@ program. The rehearsal extends that to the full 169-task sweep choreography.
 - [x] `BidMarketplaceConfig` initialized; bid marketplace LIVE (step 4).
 - [ ] **`ZkConfig` DEFERRED** — `complete_task_private` stays OFF until `initialize_zk_config` runs with the audited agenc-prover image id.
 - [x] `getDeployedSurface(rpc)` reports the full capability set.
-- [ ] Historical Phase 9 IDL publication evidence captured for its **84-instruction** surface (not the canary IDL). This unchecked historical item is not a statement about the current 99-instruction deployment or the 98-instruction revision-5 candidate.
+- [ ] Historical Phase 9 IDL publication evidence captured for its **84-instruction** surface (not the canary IDL). This unchecked historical item is not a statement about live mainnet (101-ix revision 5 since 2026-07-22; see `MAINNET_MAINLINE.md`).
 - [x] `MAINNET_MAINLINE.md` "Current Mainnet Deployment" updated (scope = full surface).
 - [ ] Buffer account refund received by the payer.
 - [ ] Published SDK semver compatible with the now-live surface (see `VERSIONS.md`).

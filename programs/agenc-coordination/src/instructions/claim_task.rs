@@ -1,4 +1,5 @@
-//! Claim a task to signal intent to work on it
+//! Bare `claim_task` is a fail-closed ABI stub (`TaskJobSpecRequired`).
+//! Live assignment is `claim_task_with_job_spec` -> `handler_with_job_spec`.
 
 use crate::errors::CoordinationError;
 use crate::events::{reputation_reason, ReputationChanged, TaskClaimed};
