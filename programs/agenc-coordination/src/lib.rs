@@ -443,8 +443,8 @@ pub mod agenc_coordination {
         instructions::bid_marketplace::demote_ineligible_best_handler(ctx)
     }
 
-    /// Claim a task to signal intent to work on it.
-    /// Agent must have required capabilities and task must be claimable.
+    /// Legacy claim without a job-spec pointer. Always returns
+    /// `TaskJobSpecRequired`. Use `claim_task_with_job_spec`.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn claim_task(ctx: Context<ClaimTask>) -> Result<()> {
         instructions::claim_task::handler(ctx)
@@ -595,8 +595,9 @@ pub mod agenc_coordination {
         instructions::cancel_task::process_cancel_task(ctx)
     }
 
-    /// Cancel a dispute before any votes are cast.
-    /// Only the dispute initiator can cancel, and only if no arbiter has voted yet.
+    /// Cancel an active dispute. Only the initiator can cancel, and only while
+    /// the dispute is still active. The retired voter-count byte must be
+    /// historical zero or the current `0xff` initiator-outcome provenance marker.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn cancel_dispute(ctx: Context<CancelDispute>) -> Result<()> {
         instructions::cancel_dispute::handler(ctx)
@@ -621,7 +622,8 @@ pub mod agenc_coordination {
     }
 
     /// Initiate a conflict resolution process.
-    /// Creates a dispute that requires multi-sig consensus to resolve.
+    /// Resolution is an assigned single resolver or protocol authority plus
+    /// configured M-of-N. `vote_dispute` is retired.
     ///
     /// # Arguments
     /// * `ctx` - Context with dispute account
@@ -674,8 +676,8 @@ pub mod agenc_coordination {
     /// Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The
     /// assigned wallet may then record moderation attestations
     /// (`record_task_moderation` / `record_listing_moderation`) in addition to the single
-    /// global moderation authority. Registry MECHANISM only — the neutrality model is a
-    /// separate [HUMAN] decision (`docs/MODERATION_NEUTRALITY.md`).
+    /// global moderation authority. P1.2 also added permissionless bonded
+    /// self-registration; see `docs/P1_2_OPEN_ROSTER_SPEC.md`.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn assign_moderation_attestor(
         ctx: Context<AssignModerationAttestor>,
@@ -1581,8 +1583,7 @@ pub mod agenc_coordination {
         instructions::withdraw_reputation_stake::handler(ctx, amount)
     }
 
-    /// Delegate reputation points to a trusted peer.
-    /// One delegation per (delegator, delegatee) pair.
+    /// Retired. Always returns `ReputationDelegationDisabled`.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn delegate_reputation(
         ctx: Context<DelegateReputation>,

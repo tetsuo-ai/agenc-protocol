@@ -137,12 +137,12 @@ Then, all with throwaway funded wallets:
    dev sandboxes the printed split + transaction signature are the proof, and
    the output says so.)
 
-Flags: `--sandbox` (force the in-process litesvm mode, skip localnet
-discovery), `--localnet` (require the localnet stack — fail with setup
-instructions instead of falling back), `--env-file <path>` (explicit
-`.localnet/env.json`; implies `--localnet`), `--purge` (run the SDK tooling's
-verified stop-and-ledger-purge rail to completion, then re-boot; implies
-`--localnet`).
+Flags: `--dir <path>` (project root; default cwd), `--sandbox` (force the
+in-process litesvm mode, skip localnet discovery), `--localnet` (require the
+localnet stack; fail with setup instructions instead of falling back),
+`--env-file <path>` (explicit `.localnet/env.json`; implies `--localnet`),
+`--purge` (run the SDK tooling's verified stop-and-ledger-purge rail to
+completion, then re-boot; implies `--localnet`).
 
 Optional localnet setup, for the full-validator experience (from an
 [agenc-protocol](https://github.com/tetsuo-ai/agenc-protocol) clone):

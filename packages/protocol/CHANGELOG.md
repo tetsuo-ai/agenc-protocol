@@ -1,16 +1,15 @@
 # @tetsuo-ai/protocol
 
-## 0.4.0 (unreleased candidate)
+## 0.4.0 (published 2026-07-22)
 
 ### Release coordination
 
-- Regenerate the public artifacts for the 98-instruction revision-5 production
-  candidate. The surface adds the atomic `stamp_release_surface` release boundary
-  and orphan-child recovery while keeping the three private-ZK instructions out
-  of the production IDL.
-- This package describes a pending program artifact, not the revision-4 binary
-  currently on mainnet. Publish 0.4.0 only with the coordinated revision-5 program
-  and SDK 0.12.0 cutover; published protocol 0.3.0 remains the live-wire artifact.
+- Regenerated the public artifacts for the 101-instruction revision-5 production
+  IDL. The surface adds the atomic `stamp_release_surface` release boundary,
+  O(1) bid-accept cranks, and orphan-child recovery while keeping the three
+  private-ZK instructions out of the production IDL.
+- This package matches the live revision-5 mainnet program. Older protocol
+  0.3.0 is the superseded revision-4 wire.
 - Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
   revision-5 package train.
 

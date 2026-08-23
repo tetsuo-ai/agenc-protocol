@@ -6,7 +6,7 @@ This file maps the full `agenc-protocol` repo for developers and AI agents.
 
 ```text
 agenc-protocol/
-  programs/agenc-coordination/   Anchor source (98 prod / 101 private-ZK / 25 canary)
+  programs/agenc-coordination/   Anchor source (101 prod / 104 private-ZK / 25 canary)
   artifacts/anchor/              committed canonical IDL, types, and manifest
   packages/
     protocol/                    @tetsuo-ai/protocol — published IDL/types
@@ -43,7 +43,7 @@ agenc-protocol/
 
 ### Canonical artifacts
 
-- `artifacts/anchor/idl/agenc_coordination.json` (**98** production-candidate instructions)
+- `artifacts/anchor/idl/agenc_coordination.json` (**101** production instructions)
 - `artifacts/anchor/types/agenc_coordination.ts`
 - `artifacts/anchor/manifest.json`
 - `scripts/idl/verifier_router.json`
@@ -80,9 +80,11 @@ Support matrix: [VERSIONING.md](./VERSIONING.md).
 - `scripts/mainnet-*.mjs` / `scripts/credible-exit.mjs`
 - `scripts/marketplace-devnet-*.mjs` / `validation-*.mjs`
 - `packages/sdk-ts` scripts: `sdk:generate`, `sdk:drift`, testing-asset sync
-- `.github/workflows/ci.yml` - formatting, artifact verification, package gates
-- `.github/workflows/sdk.yml` - SDK drift / tests
-- `.github/workflows/verify.yml` - verifiable builds on `protocol-v*` tags
+- `.github/workflows/ci.yml` - formatting, clippy, cargo tests, artifact existence check, protocol pack, `check:idl-reference`
+- `.github/workflows/sdk.yml` - SDK drift / tests / LiteSVM e2e
+- `.github/workflows/idl-drift.yml` - built-artifact compare (`artifacts:check:built`) and canary IDL freeze
+- `.github/workflows/verify.yml` - reusable verifiable build; `release.yml` calls it on `protocol-v*` tags
+- other workflows in `.github/workflows/`: `compatibility.yml`, `coverage.yml`, `react-fixtures.yml`, `release.yml`, `rust-supply-chain.yml`, `sandbox-nightly.yml`, `supply-chain.yml`
 
 ## Ownership Boundaries
 

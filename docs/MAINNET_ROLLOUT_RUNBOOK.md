@@ -4,8 +4,8 @@
 > executed on mainnet. At that moment the live program became the **full
 > 84-instruction surface** (`surface_revision = FULL (1)`, all task types enabled,
 > bid marketplace live, `ZkConfig` deferred). Later additive deploys grew the
-> surface to 90/94/96/**99** ix — see [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md)
-> for **current** live state. This document is retained as the **historical
+> surface to 90/94/96/99 ix, then to **101-ix revision 5** on 2026-07-22. See
+> [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md) for **current** live state. This document is retained as the **historical
 > choreography and record** of the Phase 9 rollout; it is no longer a pending plan.
 > The §0/§1 numbers below have been corrected to the as-executed values (169 tasks
 > migrated, ~1.95 MB binary, ~7.15 SOL permanent extension).

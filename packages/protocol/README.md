@@ -36,11 +36,10 @@ Raw artifact subpaths are also exported:
 - `@tetsuo-ai/protocol/verifier-router.json`
 - `@tetsuo-ai/protocol/daemon-json-rpc.schema.json`
 
-**Workspace version:** unreleased `0.4.0` candidate. The committed workspace IDL
-is the **98-instruction revision-5 candidate**; the already-published `0.3.0`
-package contains the live revision-4 **99-instruction** IDL. Publish `0.4.0` only
-as part of the coordinated revision-5 program/client cutover. Requires
-**Node ≥ 22.23.1**.
+**Published version:** `0.4.0` (npm, 2026-07-22) is the **101-instruction
+revision-5** IDL that matches the live mainnet program. The older `0.3.0`
+package is the superseded revision-4 **99-instruction** IDL and fails closed
+against revision 5. Requires **Node ≥ 22.23.1**.
 
 ## Consumer Guidance
 

@@ -79,11 +79,13 @@ bytecode and different hashes**:
 > or `mainnet-canary` also produces different bytecode and a non-matching hash;
 > `private-zk` must never be substituted for a production artifact.
 
-The `verify.yml` workflow builds and hashes **both release surfaces** (production
-and frozen canary, not the private development variant) on every `protocol-v*`
-tag so the production surface and frozen canary each have a
-reproducible hash. A build hash becomes a live-program claim only after an
-on-chain hash comparison against the deployed bytecode.
+`release.yml` runs on `protocol-v*` tags and calls reusable `verify.yml`
+(`workflow_call`; also available as `workflow_dispatch`). `verify.yml` itself
+does not trigger on tags. It builds and hashes both release surfaces
+(production and frozen canary, not the private development variant).
+`release.yml` attaches those hashes to the GitHub Release. A build hash
+becomes a live-program claim only after an on-chain comparison against the
+deployed bytecode.
 
 ---
 
@@ -243,7 +245,9 @@ transaction — the exact as-executed steps are in
 
 ## What the CI workflow does (`.github/workflows/verify.yml`)
 
-On every `protocol-v*` tag (and on manual dispatch):
+`verify.yml` is `workflow_call` plus `workflow_dispatch`. A `protocol-v*` tag
+starts `release.yml`, which calls `verify.yml`. Manual dispatch is the other
+entry. When it runs:
 
 1. Installs the pinned `solana-verify` (`SOLANA_VERIFY_VERSION`, currently
    `0.5.0`).
@@ -251,11 +255,11 @@ On every `protocol-v*` tag (and on manual dispatch):
    production) in the pinned Docker image.
 3. Emits `get-executable-hash` for each into `verifiable-build-hashes.txt`,
    stamped with the program ID, tag, commit, verifier version, and timestamp.
-4. Uploads that file as a workflow artifact **and** attaches it to the GitHub
-   Release created by `release.yml`.
+4. Uploads that file as a workflow artifact. `release.yml` attaches it to the
+   GitHub Release.
 
-`verify.yml` is also a reusable `workflow_call` job. For a `protocol-v*` tag,
-`release.yml` cannot enter publication unless that job succeeds. The release
+For a `protocol-v*` tag, `release.yml` cannot enter publication unless that
+job succeeds. The release
 rail verifies that the tag commit is on `main`, validates the semantic version
 and both executable hashes, and passes tag-derived package/hash values to shell
 through environment variables rather than direct workflow-expression

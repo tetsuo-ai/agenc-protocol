@@ -133,8 +133,8 @@ selected signer.
 
 ## Referrers
 
-Referral settlement is live on the full protocol surface (99 instructions as of
-batch-4). When `referrer: { wallet, feeBps }` is configured:
+Referral settlement is live on the full protocol surface (101-instruction
+revision 5). When `referrer: { wallet, feeBps }` is configured:
 
 - the provider validates and stores it (bad base58 throws; out-of-range basis
   points are rejected);
@@ -187,19 +187,19 @@ Prebuilt, themable components are exported from the root (and tree-shakeable via
 Accessibility is structural: `HireCheckoutModal` ships a focus trap, full
 keyboard navigation, ARIA dialog roles, and live-region status — it is a money
 modal published to third parties. The `ModerationBadge` shows the attestation
-**state only**; the unattested-listing render toggle is gated on the P6.8
-[HUMAN] neutrality decision and is intentionally not built.
+**state only**. Unattested-listing render policy is integrator-owned; P1.2
+open roster is live.
 
 ```tsx
 import { HireButton } from "@tetsuo-ai/marketplace-react";
-import { randomId32 } from "@tetsuo-ai/marketplace-sdk";
+import { values } from "@tetsuo-ai/marketplace-sdk";
 
 <HireButton
   listing={row}
   buildHireInput={(l) => ({
     listing: l.address,
     creatorAgent: myAgentPda,
-    taskId: randomId32(),
+    taskId: values.randomId32(),
     expectedPrice: l.account.price,
     expectedVersion: l.account.version,
   })}

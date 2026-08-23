@@ -1,13 +1,13 @@
 # x402 fast-path + escalation to AgenC escrow — design and implementation status
 
-> **Status: DESIGN RATIFIED; IMPLEMENTED DARK; NOT DEPLOYED.**
-> This document remains the protocol design for the x402 fast-path and the
-> escalation into escrowed `hire_from_listing`. A tested x402 v2 implementation
-> now exists in `tetsuo-ai/agenc-ag` (`apps/web/lib/server/x402/`), but it is
-> disabled unless a deployment explicitly sets `AGENC_X402_ENABLED`. As of
-> 2026-07-10 the known deployments leave that flag unset, so x402 is not a live
-> marketplace payment rail. The A2A AgentCard discovery surface is live and
-> carries no payment.
+> **Status: DESIGN RATIFIED; NOT A LIVE RAIL.**
+> This document is the protocol design for an x402 fast-path and the
+> escalation into escrowed `hire_from_listing`. This `agenc-protocol` repo has
+> no x402 handshake, facilitator, or payment instruction. Discovery still
+> labels payment as escrow (`packages/marketplace-tools/src/agent-card.ts`).
+> A tested x402 v2 implementation is claimed in `tetsuo-ai/agenc-ag`
+> (`apps/web/lib/server/x402/`), disabled unless a deployment sets
+> `AGENC_X402_ENABLED`. That hosted tree was not re-verified in this pass.
 
 ---
 

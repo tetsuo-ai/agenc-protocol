@@ -12,7 +12,7 @@ proposals. Everything else listed here is a living doc.
 
 - [../README.md](../README.md) - repo overview, ownership, and top-level layout
 - [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full **101-ix** revision-5 surface live as of 2026-07-22, `surface_revision = 5`)
-- [./REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md) - **EXECUTED 2026-07-22** — the revision-5 flag-day procedure (exact v2 discriminators, coordinated consumers, historical decoding, legacy-hire exits, execution order); retained as the execution record
+- [./REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md) - **HISTORICAL / EXECUTED 2026-07-22** - the revision-5 flag-day procedure (exact v2 discriminators, coordinated consumers, historical decoding, legacy-hire exits, execution order); retained as the execution record
 - [./MAINNET_ROLLOUT_RUNBOOK.md](./MAINNET_ROLLOUT_RUNBOOK.md) - **HISTORICAL** — the Phase 9 full-surface rollout choreography, **COMPLETED 2026-06-11** (execution record + post-rollout state)
 - [./POLICY_CHANGES.md](./POLICY_CHANGES.md) - dated log of authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys)
 - [./CODEBASE_MAP.md](./CODEBASE_MAP.md) - path-by-path map for programs, artifacts, packages, scripts, migrations, zkVM, and workflows
@@ -20,7 +20,7 @@ proposals. Everything else listed here is a living doc.
 - [./DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) - reviewed decisions and resolved residuals (do not re-file): canary timeout acceptance, Collaborative/schema-0 terminal straggler cleanup, hire_record optionality, no-deadline refund, dispute preflight result, and omission-proof slash reclaim
 - [./reference/INSTRUCTIONS.md](./reference/INSTRUCTIONS.md) - **generated** per-instruction reference (docs, accounts with writable/signer/optional flags and PDA seeds, args with types) built from the committed IDL; regenerate with `npm run docs:idl-reference` — drift fails `npm run check:idl-reference` (part of `validate` + CI)
 - [./reference/ERRORS.md](./reference/ERRORS.md) - **generated** error catalog (every program error: code, name, message) from the same IDL pipeline
-- [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md) - **HISTORICAL** design RFC (Accepted; the bid marketplace it specifies is now LIVE on mainnet): bid-book accounts, lifecycle, settlement hooks, and anti-spam controls
+- [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md) - **HISTORICAL** design RFC (Accepted; marketplace live). The RFC still describes the old O(n) `accept_bid` enumeration. Live revision 5 is the O(1) winner-cache path in [./design/bid-accept-o1-redesign.md](./design/bid-accept-o1-redesign.md)
 - [./ARTIFACT_PIPELINE.md](./ARTIFACT_PIPELINE.md) - how `anchor build` output becomes committed and published artifacts
 - [./VALIDATION.md](./VALIDATION.md) - local toolchain and CI-equivalent commands
 - [./LOCALNET.md](./LOCALNET.md) - one-command local stack (localnet-up/status/down), the env-file convention, and the localnet-to-devnet-to-hosted switchover map
@@ -31,13 +31,13 @@ proposals. Everything else listed here is a living doc.
 - [./AGENT_METADATA.md](./AGENT_METADATA.md) - AGENT_METADATA v1 (P7.3 step 1): the versioned off-chain agent-identity document (name/description/operatorDomain/contact/logo/tosUri), its JSON Schema, the SDK validator/renderer, and the claim-vs-verified trust boundary
 - [./VERSIONS.md](./VERSIONS.md) - P6.5 surface-versioning: program build ↔ SDK semver ↔ cluster matrix, `surface_revision` / `getDeployedSurface`, the `anchor idl init` release-runbook note, and the deprecation policy
 - [./VERSIONING.md](./VERSIONING.md) - **WP-D3 versioning & deprecation contract**: the cross-package support matrix (program surface × sdk × react × tools/mcp × store-core), the dated break-event history (2026-06-11 / 2026-07-02 / 2026-07-03), required capability detection, the announce-before-deploy rule, the flag-day lockstep policy, and the template pin check
-- [./P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md) - **HISTORICAL** spec — **P1.2 hardened open roster** (**IMPLEMENTED + LIVE** on mainnet since 2026-07-03): permissionless bonded attestor registration + two-step exit, v2 moderator-keyed moderation records, explicit `moderator` gate argument, the multisig BLOCK-only takedown floor, and the on-chain default trust list; supersedes MODERATION_NEUTRALITY.md
+- [./P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md) - **HISTORICAL** spec - **P1.2 hardened open roster** (**IMPLEMENTED + LIVE** on mainnet since 2026-07-03): permissionless bonded attestor registration + two-step exit, v2 moderator-keyed moderation records, explicit `moderator` gate argument, the multisig BLOCK-only takedown floor, and the on-chain default trust list; supersedes [./MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md)
 - [./P5_2_STORE_IDENTITY_SPEC.md](./P5_2_STORE_IDENTITY_SPEC.md) - **HISTORICAL** spec — **P5.2 store/marketplace identity** (**IMPLEMENTED + LIVE** on-chain Store PDA since batch-2; manifest first shipped in store-core): address-keyed display handles, mutual self-serve domain binding; pre-designs the P5.3 referrer attachment (§7.6)
-- [./P6_4_SPAM_SYBIL_DESIGN.md](./P6_4_SPAM_SYBIL_DESIGN.md) - **HISTORICAL** design — **P6.4 spam/sybil defense** (DESIGN, RATIFIED 2026-07-03): costed threat model at live parameters (wash ratings ≈0.004 SOL, sybil attestors ≈free), provenance-weighted discovery as the primary defense, tripwire-gated program knobs (rating reward floor), never rank by attestor count or raw reputation
-- [./P5_3_REFERRAL_ATTRIBUTION_SPEC.md](./P5_3_REFERRAL_ATTRIBUTION_SPEC.md) - **HISTORICAL** design — **P5.3 verifiable referral attribution** (WP-A6 batch-2 DESIGN): today's client-supplied referrer pubkey + strippable `?ref=` model, the costed theft/self-referral/wash economics, the buyer-priced-bps asymmetry, and the recommendation — document limits + weighting now, registered-referrer (`referrer_store` = the P5.2 Store PDA) as a tripwire-gated rider after the Store batch; referrer-signed vouchers deferred
+- [./P6_4_SPAM_SYBIL_DESIGN.md](./P6_4_SPAM_SYBIL_DESIGN.md) - **DESIGN ONLY** (ratified 2026-07-03, unbuilt program knobs) - **P6.4 spam/sybil defense**: costed threat model at live parameters, provenance-weighted discovery as the primary defense, tripwire-gated program knobs
+- [./P5_3_REFERRAL_ATTRIBUTION_SPEC.md](./P5_3_REFERRAL_ATTRIBUTION_SPEC.md) - **DESIGN ONLY** rider - **P5.3 verifiable referral attribution**: client-supplied referrer pubkey is live; registered-referrer (`referrer_store`) and vouchers are not. P5.2 Store identity is live.
 - [./P3_6_REFERRER_BEYOND_CREATORREVIEW.md](./P3_6_REFERRER_BEYOND_CREATORREVIEW.md) - **HISTORICAL** decision record — **P3.6 referrer beyond CreatorReview** (WP-A6 batch-2 DECISION RECORD): the `configure_task_validation.rs:115-120` lockout, the full per-mode fee-leg settlement matrix, verdict — ratify CreatorReview-only as the product boundary for quorum/external/ZK, and fix the real leak (disputes + freeze-overturns pay no referrer leg) in batch 2 with P3.4
 - [./SCALE_COST_MODEL.md](./SCALE_COST_MODEL.md) - **HISTORICAL** analysis — **Scale-to-millions cost model** (WP-A6): verified per-account byte/rent table, per-task lifecycle footprints (~0.020 SOL peak reviewed / ~0.010 hire), capital-at-rest curves, settlement tx account budgets vs Solana limits, the gPA→indexer thresholds (10k/100k), snapshot staleness targets, and the numeric WP-C3 target contract (T1-T8); findings: stranded `TaskAttestorConfig` rent (F1), collaborative-dispute account cliff (F2)
-- [./A6_WSH_BATCH2_ADDENDA.md](./A6_WSH_BATCH2_ADDENDA.md) - **WS-H batch-2 design stubs** (one page each, full specs later): `SpendingBudget` agent budgets (bleed-rate bound, native-vs-compose open), `award_best_bid` (revisits the Marketplace V2 auto-match Non-Goal), WP-H3 phase-2 bond-forfeit redirect (current per-path forfeit routing table + the counterparty-bounty griefing problem)
+- [./A6_WSH_BATCH2_ADDENDA.md](./A6_WSH_BATCH2_ADDENDA.md) - **DESIGN ONLY** WS-H batch-2 stubs (unbuilt): `SpendingBudget`, `award_best_bid`, WP-H3 phase-2 bond-forfeit redirect. Live `promote_bid` is a different O(1) winner cache, not auto-award.
 
 ## Other Docs
 
@@ -49,19 +49,31 @@ proposals. Everything else listed here is a living doc.
 - [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; later 2026-07-16/17 remediation is recorded in [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md))
 - [./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md](./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md) - **HISTORICAL** — the 2026-06-11 multi-agent adversarial-verification verdicts (94 findings × 3 lens-skeptics + adjudicator) that gated the full-surface deploy
 - [./audit/PREDEPLOY_AUDIT_FIXES_20260611.md](./audit/PREDEPLOY_AUDIT_FIXES_20260611.md) - **HISTORICAL** — pre-mainnet audit: fixes applied + remaining human-owned items for the 2026-06-11 full-surface deploy
-- [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md) - detailed remediation record for the 2026-07-16/17 adversarial audit (F-1..F-19 are marked complete; current candidate evidence and deployment status live in `CHANGELOG.md` and `MAINNET_MAINLINE.md`)
+- [./audit/ENTERPRISE_REMEDIATION_2026-07.md](./audit/ENTERPRISE_REMEDIATION_2026-07.md) - **HISTORICAL** remediation record for the 2026-07-16/17 adversarial audit (F-1..F-19 complete). Live state is `CHANGELOG.md` and `MAINNET_MAINLINE.md`.
 - [../PLAN.md](../PLAN.md) - **HISTORICAL** — the master roadmap authored 2026-06-09 (the phase/P-track plan that drove the protocol through the full-surface rollout); dated plan, not a current-state source
 - [../PLAN_2.md](../PLAN_2.md) - **HISTORICAL** — PLAN.md's Phase-4 companion spec for the embeddable surface (hooks → components → widget → store templates), authored 2026-06-09
 - [./design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** contest tasks (batch-3, `surface_revision = 3`, 96 ix)
 - [./design/batch-4-goods.md](./design/batch-4-goods.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** goods market (batch-4, `surface_revision = 4`, 99 ix)
-- [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - moderation heartbeat / deadman (batch-2)
+- [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - **HISTORICAL — IMPLEMENTED + LIVE** moderation heartbeat / deadman (batch-2)
 - [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the ProgramData-capacity ceremony (executed for the revision-5 upgrade)
 - [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
-- [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 "the operator vanishes and it still works": the executed, reproducible zero-hosted-dependency hire→settle proof (`scripts/credible-exit.mjs`), with the honest gap list (source/verifiable-build deferred)
+- [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 hire to settle with zero tetsuo-ai hosted dependencies (`scripts/credible-exit.mjs`). Source is public; OtterSec attested revision 4; revision 5 still needs re-attest.
 - [./ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md) - **DESIGN ONLY [HUMAN: approve]** P7.2 layer 2: optional on-chain `key_commitment` at submit + `reveal_key` on accept with hash-match enforcement and deadline bounds, for trustless fair-exchange (child `SubmissionKeyEscrow` PDA, no migration)
 - [./MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.4: bounded (≤8) milestone schedule via child `TaskMilestone` PDAs (not a Task realloc), `submit_milestone`/`accept_milestone` releasing tranches through the existing split, creator-signed `release_partial`, listing default templates, facade `Engagement`
 - [./ENGAGEMENTS_DESIGN.md](./ENGAGEMENTS_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.5 retainers: an `Engagement` PDA referencing a `ServiceListing`, one prefunded escrow for N locked-price periods, permissionless `renew_period` minting each period's Task (reusing the lifecycle), pro-rata `cancel_engagement`, one-approval kit policy model
-- [./F6_INTEROP_ASSESSMENT.md](./F6_INTEROP_ASSESSMENT.md) - **HISTORICAL** — **WP-F6 ecosystem interop assessment** (web-verified 2026-07-04): x402 v2 / A2A v1.0 AgentCard / ERC-8004 + Virtuals ACP / AP2-MPP-MCP adjacents — per-standard go/no-go/defer with revisit dates; pairs with [X402_FAST_PATH.md](./X402_FAST_PATH.md)
+- [./F6_INTEROP_ASSESSMENT.md](./F6_INTEROP_ASSESSMENT.md) - **HISTORICAL** WP-F6 interop assessment (web-verified 2026-07-04). In-repo AgentCard projection is now `a2a/v1.0`. Pairs with [X402_FAST_PATH.md](./X402_FAST_PATH.md)
+- [./ENTERPRISE_READINESS.md](./ENTERPRISE_READINESS.md) - living evidence gate (`scripts/enterprise-readiness.mjs`) for GitHub protection, security.txt, and hosted schema URLs
+- [./BUG_BOUNTY.md](./BUG_BOUNTY.md) - **DESIGN ONLY / DRAFT** bounty scope and severity rubric; platform/budget TBD; reporting stays in `SECURITY.md`
+- [./DISPUTE_CHALLENGE_WINDOW.md](./DISPUTE_CHALLENGE_WINDOW.md) - **DESIGN ONLY** challenge window + resolver stake (`execute_resolution`); not implemented
+- [./design/create-task-moderation-gate.md](./design/create-task-moderation-gate.md) - **DESIGN ONLY** pre-task moderation + hash-only `description`; not in the program
+- [./WP-A1-DEPLOY-READINESS.md](./WP-A1-DEPLOY-READINESS.md) - **HISTORICAL** roster-honored moderation-gate deploy record (PR #93 / 2026-07-02)
+- [./MARKETPLACE_EMBED_UPGRADE_SPEC.md](./MARKETPLACE_EMBED_UPGRADE_SPEC.md) - **HISTORICAL** embeddable-marketplace plan v3 (batches shipped)
+- [./SDK_AUTOMATION_PLAN.md](./SDK_AUTOMATION_PLAN.md) - **HISTORICAL** 2026-06-09 SDK loop-automation plan (executed)
+- [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md) - **HISTORICAL** 2026-03-27 Marketplace V2 DV matrix; dated JSON/MD evidence stays under `artifacts/devnet-readiness/`
+- [./design/bid-accept-o1-redesign.md](./design/bid-accept-o1-redesign.md) - **HISTORICAL — IMPLEMENTED + LIVE** O(1) bid accept + chunked dispute settlement (revision 5)
+- [./mainnet-canary-minimal-program.md](./mainnet-canary-minimal-program.md) - **HISTORICAL** 25-ix canary surface (no longer live; still the CI-frozen canary-build inventory)
+- [./MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md) - **HISTORICAL — SUPERSEDED** by [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md); kept as the pre-open-roster decision record
+- [./X402_FAST_PATH.md](./X402_FAST_PATH.md) - **DESIGN ONLY** in this repo (no x402 payment instruction). Hosted dark-impl claims live in `agenc-ag`, not here.
 
 ## Read By Task
 
@@ -84,7 +96,11 @@ proposals. Everything else listed here is a living doc.
 
 - I need the repo layout: [CODEBASE_MAP.md](./CODEBASE_MAP.md)
 - I need the on-chain surface: [PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md)
-- I need the Marketplace V2 bid design: [MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md)
+- I need the Marketplace V2 bid RFC: [MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md)
+- I need the live O(1) bid-accept / chunked dispute path: [design/bid-accept-o1-redesign.md](./design/bid-accept-o1-redesign.md)
+- I need the frozen 25-ix canary build: [mainnet-canary-minimal-program.md](./mainnet-canary-minimal-program.md)
+- I need the enterprise-readiness evidence gate: [ENTERPRISE_READINESS.md](./ENTERPRISE_READINESS.md)
+- I need the draft bounty rubric: [BUG_BOUNTY.md](./BUG_BOUNTY.md)
 - I need artifact sync rules: [ARTIFACT_PIPELINE.md](./ARTIFACT_PIPELINE.md)
 - I need CI or local validation: [VALIDATION.md](./VALIDATION.md)
 - I need reviewed public-task completion: [TASK_VALIDATION_V2.md](./TASK_VALIDATION_V2.md)

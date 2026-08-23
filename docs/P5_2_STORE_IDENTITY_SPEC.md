@@ -1,8 +1,9 @@
 # P5.2 — Store/Marketplace Identity Primitive
 
-> **Status:** **IMPLEMENTED + LIVE** — on-chain `Store` PDA +
+> **Status:** **IMPLEMENTED + LIVE** - on-chain `Store` PDA +
 > `register_store` / `update_store` / `close_store` shipped in batch-2
-> (`surface_revision = 2`, live on mainnet; see `docs/MAINNET_MAINLINE.md`).
+> (`surface_revision = 2`). Mainnet now runs revision 5; Store is still live
+> (see `docs/MAINNET_MAINLINE.md`).
 > The signed manifest half (`agenc.storeManifest.v1`) ships in store-core with
 > no program change. This document remains the design reference for the
 > primitive; treat the status banner above as authoritative over any later

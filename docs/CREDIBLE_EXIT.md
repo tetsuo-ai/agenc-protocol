@@ -14,10 +14,11 @@ end-to-end **hire → settle** cycle that completes with **zero tetsuo-ai hosted
 dependencies**. This document states what is proven, shows the executed proof,
 and is honest about the residuals that remain.
 
-> **Status refresh (2026-07-03, post-P1.2).** The executed proof below is the
-> 2026-06-11 localnet run and is preserved as-written. The pillars that were
-> deferred when it was written have since **shipped**: the repo is **public**,
-> the deployed program is **OtterSec-verified**, upgrade custody is a **Squads
+> **Status refresh (2026-07-03, post-P1.2; OtterSec note 2026-08-23).** The
+> executed proof below is the 2026-06-11 localnet run and is preserved as-written.
+> The pillars that were deferred when it was written have since **shipped**: the
+> repo is **public**, revision 4 was **OtterSec-verified** (revision 5 still needs
+> re-attest), upgrade custody is a **Squads
 > 2-of-3 vault**, and moderation is **permissionless** (the §3 gate boundary is
 > closed — WP-A1 made the gates honor roster attestations, P1.2 made roster
 > registration self-service). The remaining honest residuals are listed in §5.
@@ -270,9 +271,10 @@ hire/claim**, and letting a delegated roster attestor's record satisfy the
 gate was "a protocol change, not done here". WP-A1 + P1.2 were exactly that
 protocol change; the pre-P1.2 transcript line (`consumption gates honor only
 moderation_authority — boundary noted`) was retired with the gates. This is
-consistent with [MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md): the
-registry is a _mechanism_, and the neutrality decision it now carries is
-live on mainnet.
+consistent with [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md):
+permissionless bonded self-registration is live on mainnet.
+[MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md) is the superseded
+pre-open-roster decision record.
 
 ---
 
@@ -388,7 +390,8 @@ today (2026-07-03):
 - Executable proof: [`scripts/credible-exit.mjs`](../scripts/credible-exit.mjs)
 - Local stack it runs against: [LOCALNET.md](./LOCALNET.md),
   [`scripts/localnet-up.mjs`](../scripts/localnet-up.mjs)
-- Moderation neutrality + P6.8 registry rationale:
+- Open-roster moderation (live): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
+- Pre-open-roster neutrality decision (superseded):
   [MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md)
 - Verifiable builds (P8.3) and its public-repo dependency:
   [VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md)

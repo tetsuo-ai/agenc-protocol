@@ -5,12 +5,18 @@ This directory is the repo-local home for migration notes and helpers.
 ## Current State
 
 - The live protocol version constants still target version `1`.
-- One real account migration has executed: the 2026-06-11 task-layout migration
-  (schema-0 legacy → schema-1) swept all 169 live mainnet tasks with 0 failures,
-  alongside the full-surface upgrade. `migrations/v1_to_v2.rs` remains a template
-  for a future `ProtocolConfig` version bump, not a record of that sweep.
-- Migration authority lives in the public protocol repo, not in `agenc-core` or other workspace repos.
-- `programs/agenc-coordination/src/instructions/migrate.rs` is the source of truth for migration logic when versioned state changes are introduced.
+- Live instructions: `migrate_protocol` (349B → 351B `ProtocolConfig`,
+  zero-init `surface_revision`, multisig, `target_version` still 1) and
+  `migrate_task` (382B or 432B → 466B Task, operator/referrer tail
+  zero-init). Logic is in
+  `programs/agenc-coordination/src/instructions/migrate.rs`.
+- One real account migration has executed: the 2026-06-11 `migrate_task`
+  sweep of 169 live mainnet Tasks, alongside the full-surface upgrade.
+  Contest schema bits live in Task reserved bytes; they are not what
+  `migrate_task` writes. `migrations/v1_to_v2.rs` is a template for a
+  future `ProtocolConfig` version bump, not a record of that sweep.
+- Migration authority lives in this public protocol repo, not in a sibling
+  `agenc-core` tree.
 
 ## What Belongs Here
 

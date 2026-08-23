@@ -91,8 +91,8 @@ as `providerAgent` later.
 ### 2. Provider publishes a service listing
 
 The listing PDA (from `providerAgent` + `listingId`), `protocolConfig`, and
-`systemProgram` all auto-derive. `priceMint: null` means the listing is priced in
-native SOL; pass a mint `Address` for an SPL-token-priced listing.
+`systemProgram` all auto-derive. Service listings are SOL-priced.
+`priceMint` must be `null`; hire handlers reject a mint.
 
 ```ts
 const createListingIx = await facade.createServiceListing({
@@ -105,7 +105,7 @@ const createListingIx = await facade.createServiceListing({
   specHash,
   specUri: "ipfs://listing-spec",
   price: 1_000_000n, // lamports for a SOL-priced listing
-  priceMint: null, // null = native SOL; pass a mint Address for SPL tokens
+  priceMint: null, // required; service listings are SOL-only
   requiredCapabilities: 4n,
   defaultDeadlineSecs: 86_400n,
   maxOpenJobs: 10,
@@ -205,11 +205,9 @@ immutable `listing` as `legacyListing`. Revision-5 hires and direct tasks omit i
 
 For any dependent task, also pass its exact parent as `parentTask`. The SDK
 appends that account read-only, and the program refuses to assign the child
-unless the parent exists and is already `Completed`. For bid assignment, pass
-that parent first and enumerate every other open bid together with its canonical
-agent account using
-`facade.acceptBid({ ..., parentTask, otherOpenBidPairs: [{ bid, bidder }] })`;
-use `otherOpenBidPairs: []` when the selected bid is the only open bid.
+unless the parent exists and is already `Completed`. Bid assignment is O(1):
+`facade.acceptBid({ ..., parentTask })` does not take competitor pairs. If the
+tracked winner is stale, crank `promoteBid` or `demoteIneligibleBest` first.
 
 ### 6. Worker submits, buyer reviews
 
@@ -228,7 +226,7 @@ const submitIx = await facade.submitTaskResult({
 
 const acceptIx = await facade.acceptTaskResult({
   task,
-  workerAgent,
+  worker: workerAgent,
   treasury,
   creator: buyerAuthority,
   workerAuthority: workerAuthority.address,
@@ -443,6 +441,7 @@ custom setups. The repo also has deeper lifecycle coverage in
 - Full runnable source:
   [`examples/embeddable-marketplace.ts`](../../examples/embeddable-marketplace.ts).
 - Generated API reference (typedoc): [`../api/README.md`](../api/README.md).
-- The facade also covers bids (`facade.createBid`, `facade.acceptBid`, ...),
-  governance, reputation, and moderation — see the facade exports re-exported
-  from the package root.
+- The facade also covers bids (`facade.createBid`, `facade.acceptBid`,
+  `facade.promoteBid`, `facade.demoteIneligibleBest`), chunked dispute
+  settlement (`facade.settleDisputeClaim`), governance, reputation, and
+  moderation. See the facade exports re-exported from the package root.

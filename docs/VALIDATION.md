@@ -93,9 +93,12 @@ quiescent release snapshot:
 | Package release train            | **OPEN:** late SDK/React/worker/CLI fixes invalidated prior SRIs; all-nine double-pack/rebind/smoke is pending                          |
 | Supply/artifact checks           | npm production audit 0; built artifact sync, IDL reference, stack, and integration dependency audit pass                                |
 
-These local gates do not substitute for protected CI, live revision-4
-compatibility simulations, consumer convergence, or the controlled mainnet
-ceremony.
+These local gates do not substitute for protected CI. The 2026-07-21 table is
+dated candidate evidence from before the 2026-07-22 deploy; the package train
+on that row is no longer OPEN (scoped packages published 2026-07-22). Re-run
+the commands before claiming a current local total. Coverage ratchet lives in
+`coverage-policy.json` and `.github/workflows/coverage.yml` (not in the table
+above).
 
 Deployed revision-5 identities. Revision 5 was deployed 2026-07-22; the deployed
 executable is byte-equal to the reviewed revision-5 candidate (thrice-reproduced:

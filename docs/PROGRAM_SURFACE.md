@@ -10,13 +10,15 @@ multisig custody) has run the full **101-instruction** revision-5 surface since
 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`).
 `ProtocolConfig` is 351B with `surface_revision = 5`
 (audit hardening). Singleton state: `BidMarketplaceConfig`, `ModerationConfig`,
-and `GovernanceConfig` are INITIALIZED (sane params); `ZkConfig` is NOT
-initialized, so `complete_task_private` is off and `initialize_zk_config` is
-multisig-gated (audit H-5).
+and `GovernanceConfig` are INITIALIZED (sane params). Production has no
+`ZkConfig` account and no private-ZK instructions. `complete_task_private`,
+`initialize_zk_config`, and `update_zk_image_id` exist only in the explicit
+`private-zk` development build.
 
 Build breakdown (verified from `src/lib.rs`, Cargo features, and generated IDL):
-default production is **101 instructions**, explicit `private-zk` is **104**, and
-`mainnet-canary` is **25**. `lib.rs` therefore contains 129 raw `pub fn`
+default production (`spl-token-rewards`) is **101 instructions**, explicit
+`private-zk` is **104**, and `mainnet-canary` is **25**. `validation-timings`
+only shortens constants. `mainnet-canary` cannot combine with rewards or ZK. `lib.rs` therefore contains 129 raw `pub fn`
 declarations across its mutually exclusive modules but 104 unique names; the
 canary repeats 25 full-module names. Revision 5 retired the three private-ZK
 entrypoints from production and added `reclaim_orphan_task_child` and the O(1)
@@ -67,7 +69,7 @@ Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
 - complete task
 - complete task private (**private-zk development build only; absent from production**)
 - cancel task
-- close task (reclaim terminal-task rent)
+- close task (keep the Task PDA as a rent-exempt tombstone; refund surplus, children, and listing capacity)
 - distribute ghost share (permissionless contest fallback after the selection window)
 - reclaim terminal claim (return residual claim rent after a contest/task terminates)
 - reclaim orphan task child (return rent for a canonically bound abandoned child,
@@ -91,7 +93,7 @@ Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
 ### Goods market (revision 4)
 
 - create / update goods listing
-- purchase good (direct SOL payment + permanent `SaleReceipt`)
+- purchase good (direct SOL or SPL token payment + permanent `SaleReceipt`)
 
 ### Moderation
 
@@ -127,7 +129,7 @@ floor remains unconditional. See `P1_2_OPEN_ROSTER_SPEC.md` and
 
 ### Moderation liveness (batch-2)
 
-- moderation heartbeat (deadman for hosted attestor liveness)
+- moderation heartbeat (deadman on protocol/moderation-authority silence; not a per-attestor heartbeat)
 
 ### Contest tasks (batch-3)
 
@@ -135,7 +137,9 @@ floor remains unconditional. See `P1_2_OPEN_ROSTER_SPEC.md` and
 - reclaim terminal claim (permissionless janitor for stranded claims on
   terminal tasks)
 - Contest rails are a **schema-1 Competitive + CreatorReview** conjunction on
-  an existing task (entry deposit, selection window, cancel guard) — see
+  an existing task (entry deposit, selection window, cancel guard). There is no
+  on-chain `create_contest_task`; the SDK `createContestTask` facade composes
+  `create_task` + `configure_task_validation`. See
   [`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md).
 
 ### Goods market (batch-4)
@@ -193,6 +197,7 @@ they were signed instruction data.
 - initialize / update bid marketplace config
 - initialize bid book
 - create / update / cancel / accept / expire bid
+- promote bid / demote ineligible best (permissionless O(1) winner-cache cranks)
 
 ### Disputes and slashing
 
@@ -206,6 +211,7 @@ they were signed instruction data.
 - cancel / expire dispute
 - apply dispute slash
 - apply initiator slash
+- settle dispute claim (permissionless chunked collaborative-peer crank after a recorded ruling)
 
 ### Protocol administration
 
@@ -217,7 +223,7 @@ they were signed instruction data.
 - update treasury
 - update multisig
 - update launch controls (pause / task-type disable kill switch)
-- atomically stamp the reviewed release surface (ProgramData/IDL/singleton/custody locks)
+- `stamp_release_surface` (atomically stamp the reviewed ProgramData/IDL/singleton/custody locks; this is how `surface_revision = 5` is written)
 - update min version
 - update state
 - migrate protocol / migrate task (Task/ProtocolConfig layout migration; multisig + version gated — the 2026-06-11 mainnet upgrade migrated 169 live tasks 382B→466B)
@@ -231,7 +237,9 @@ they were signed instruction data.
 
 - register / update skill
 - purchase / rate skill
-- stake / withdraw / delegate / revoke reputation
+- stake / withdraw reputation
+- `delegate_reputation` always returns `ReputationDelegationDisabled`
+- `revoke_delegation` is a permissionless rent reclaim and does not restore reputation
 - post to feed / upvote post
 
 ## PDA And State Families
@@ -261,8 +269,8 @@ The complete model lives in `src/state.rs`. Important state families include:
 
 - `initialize_bid_book` allocates a `TaskBidBook`; `create_bid` allocates a `TaskBid` and, on a bidder's first bid, a `BidderMarketState`.
 - `create_bid` also transfers the minimum bid bond into the `TaskBid` PDA, so rent + bond funding are both part of bidder-side cost.
-- `accept_bid` enforces the stored matching policy by requiring every other canonical open bid as an exact repeating `[TaskBid, AgentRegistration]` pair; a dependency parent, when present, is the first remaining-account prefix. Omitted, duplicate, closed, foreign, identity-substituted, and non-canonical accounts fail closed. Only bidders that still pass the selected bidder's live status, registration-stake floor, capability, current-reputation, and active-task-cap checks participate in ranking.
-- `max_active_bids_per_task` is hard-capped at 20 so policy enforcement stays transaction-feasible. At that ceiling, an acceptance with a dependency uses 11 typed accounts + 1 parent + 19 bid/agent pairs = 50 instruction accounts (52 conservative transaction keys including program/compute-budget keys); clients should use a v0 transaction with an address lookup table when needed. Bond, cooldown, lifetime, and daily-bid configuration also have protocol ceilings; governance cannot configure unbounded or operationally bricking values.
+- `accept_bid` is O(1): the book tracks its policy winner incrementally, and acceptance requires that tracked winner with exact cached-component equality. It does not enumerate competing bids. The only remaining account is an optional dependency parent; extra remaining accounts fail closed. Winner exits open a re-promotion grace window served by permissionless `promote_bid` / `demote_ineligible_best`. See [design/bid-accept-o1-redesign.md](./design/bid-accept-o1-redesign.md).
+- `max_active_bids_per_task` is a state/spam cap (hard-capped at 20). It is not a wire-size bound for `accept_bid`. Bond, cooldown, lifetime, and daily-bid configuration also have protocol ceilings; governance cannot configure unbounded values.
 - Accepted-bid settlement happens later through `bid_settlement_helpers` in task completion/cancellation/dispute flows, using appended `remaining_accounts`; private proof-dependent completion shifts that settlement suffix by one parent-task account.
 - Closing an unaccepted bid returns its remaining lamports to the bidder authority by closing the bid account; accepted bids stay resident until settlement closes the accepted bid and either reopens or closes the bid book.
 

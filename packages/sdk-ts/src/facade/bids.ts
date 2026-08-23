@@ -306,8 +306,8 @@ export type BidTermsSnapshot = {
 /**
  * Compute the exact `agenc:bid-terms:v1` CAS digest accepted by `accept_bid`.
  * Callers should decode the selected bid and TaskJobSpec in one fresh read,
- * hash that snapshot, then pass this digest. Competing bids are independently
- * enumerated for deterministic policy enforcement.
+ * hash that snapshot, then pass this digest. Acceptance is O(1): the book
+ * tracks its policy winner, so callers do not enumerate competing bids.
  */
 export async function calculateBidTermsHash(
   snapshot: BidTermsSnapshot,

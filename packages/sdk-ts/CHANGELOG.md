@@ -1,13 +1,13 @@
 # @tetsuo-ai/marketplace-sdk
 
-## 0.12.0 (unreleased candidate)
+## 0.12.0 (published 2026-07-22)
 
 ### Release coordination
 
-- Regenerate the client for the 98-instruction revision-5 production candidate,
-  including the atomic release-surface stamp and hardened terminal-claim recovery.
-  The published 0.11.0 package remains the client release paired with the live
-  revision-4 program; publish 0.12.0 only in the coordinated revision-5 cutover.
+- Regenerated the client for the 101-instruction revision-5 production IDL,
+  including the atomic release-surface stamp, O(1) bid-accept cranks, and
+  hardened terminal-claim recovery. The older 0.11.0 package remains the client
+  paired with the superseded revision-4 program.
 - Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
   revision-5 package train.
 - Treat the three funded-hire/activation writes as an atomic revision-5 flag

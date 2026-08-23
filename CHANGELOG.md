@@ -28,8 +28,9 @@ authoritative deployed-state record is
 - **Package train published** to npm: protocol 0.4.0, marketplace-sdk 0.12.0,
   marketplace-react 0.5.0, marketplace-tools/mcp 0.5.0, marketplace-moderation
   0.2.0, agenc-worker 0.2.0, agenc-cli 0.3.0, store-core 0.6.2.
-- **Still deferred:** `ZkConfig` / `complete_task_private` remain disabled
-  pending an independently reviewed guest + mainnet verifier.
+- **Still deferred:** private-ZK is absent from the production ABI (not a
+  dormant live instruction). A future launch needs a reviewed production
+  revision plus guest and mainnet verifier.
 
 ## 2026-07-21 — verified lookup-table resolution + candidate rebind (superseded by the 2026-07-22 deploy)
 

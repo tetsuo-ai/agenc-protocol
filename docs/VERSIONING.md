@@ -84,43 +84,36 @@ risk, but the flow is down). See §1.2 for exactly which upgrade broke which ran
 This repository contains the following coordinated revision-5 clients. The
 store-core and `create-agenc-store` candidates live in their separate
 coordinated store repositories; they are not agenc-protocol workspace packages.
-The revision-5 program cutover executed on 2026-07-22, so these clients — not the
-revision-4 pins above — speak the live wire. Confirm each is published at its
-coordinated version before relying on it:
+The revision-5 program cutover executed on 2026-07-22, so these clients, not the
+revision-4 pins above, speak the live wire. Scoped packages in this table were
+on npm at these versions when checked 2026-08-23:
 
-| Package                                        | Unreleased candidate | Coordination note                                                                                                               |
-| ---------------------------------------------- | -------------------: | ------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`                          |            **0.4.0** | 101-instruction revision-5 IDL/types; must not be published as 0.3.0                                                            |
-| `@tetsuo-ai/marketplace-sdk`                   |           **0.12.0** | revision-5 generated client; its changed hire/activation writes intentionally reject revision 4                                 |
-| `@tetsuo-ai/marketplace-react`                 |            **0.5.0** | breaking revision-5 input and SDK-peer cutover; not a patch-level peer widening                                                 |
-| `@tetsuo-ai/marketplace-tools`                 |            **0.5.0** | depends on SDK `^0.12.0`                                                                                                        |
-| `@tetsuo-ai/marketplace-mcp`                   |            **0.5.0** | depends on tools `^0.5.0` and SDK `^0.12.0`                                                                                     |
-| `@tetsuo-ai/marketplace-moderation`            |            **0.2.0** | strict JSON canonicalization plus capability-gated complete semantic-v2 payloads; 0.1.0 remains the immutable legacy-v1 release |
-| `@tetsuo-ai/agenc-worker`                      |            **0.2.0** | depends on SDK `^0.12.0`; security-hardening release                                                                            |
-| `@tetsuo-ai/agenc-cli` / `agenc-cli`           |            **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together                                                  |
-| `@tetsuo-ai/store-core` / `create-agenc-store` |            **0.6.1** | widens the SDK/React peers and scaffolds only the revision-5 client set                                                         |
+| Package                                        | Published (2026-07-22 train) | Coordination note                                                                                                               |
+| ---------------------------------------------- | ---------------------------: | ------------------------------------------------------------------------------------------------------------------------------- |
+| `@tetsuo-ai/protocol`                          |                    **0.4.0** | 101-instruction revision-5 IDL/types                                                                                            |
+| `@tetsuo-ai/marketplace-sdk`                   |                   **0.12.0** | revision-5 generated client; its changed hire/activation writes reject revision 4                                               |
+| `@tetsuo-ai/marketplace-react`                 |                    **0.5.0** | breaking revision-5 input and SDK-peer cutover                                                                                  |
+| `@tetsuo-ai/marketplace-tools`                 |                    **0.5.0** | depends on SDK `^0.12.0`                                                                                                        |
+| `@tetsuo-ai/marketplace-mcp`                   |                    **0.5.0** | depends on tools `^0.5.0` and SDK `^0.12.0`                                                                                     |
+| `@tetsuo-ai/marketplace-moderation`            |                    **0.2.0** | strict JSON canonicalization plus capability-gated complete semantic-v2 payloads; 0.1.0 remains the immutable legacy-v1 release |
+| `@tetsuo-ai/agenc-worker`                      |                    **0.2.0** | depends on SDK `^0.12.0`                                                                                                        |
+| `@tetsuo-ai/agenc-cli`                         |                    **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`                                                                                          |
+| `agenc-cli` (unscoped alias)                   | workspace **0.3.0**; npm **0.2.0** | alias workspace tracks 0.3.0; npm still served 0.2.0 as of 2026-08-23                                                     |
+| `@tetsuo-ai/store-core`                        |                    **0.6.2** | external store repo; published 0.6.2 per CHANGELOG 2026-07-22 (npm 2026-08-23)                                                  |
+| `create-agenc-store`                           |                    **0.6.1** | external scaffolder; npm still 0.6.1 as of 2026-08-23                                                                           |
 
 Every revision-5 package requires Node **22.23.1 or newer**. Node 20 is EOL and
-is intentionally outside the new release train's support contract.
+is intentionally outside this release train's support contract.
 
-The `agenc init` and `agenc promote` code in the unreleased CLI intentionally
-knows this candidate set. `promote` selects it only when finalized chain evidence
-reports surface revision 5; revision 4 selects only the published set above.
-The sets are never unioned, including when a consumer directly installs the
-generated `@tetsuo-ai/protocol` IDL/types package. The source-generated
-revision-5 templates therefore remain explicitly blocked on revision 4 even
-though the published revision-4 client set is still recognized correctly.
-Candidate compatibility is not a claim that those versions are already on npm
-or that revision 5 is live.
+`agenc init` and `agenc promote` know this set. `promote` selects it only when
+finalized chain evidence reports surface revision 5; revision 4 selects only
+the published set above. The sets are never unioned.
 
-Revision-5 promotion is intentionally blocked even if an RPC reports
-`surface_revision = 5`: no revision-5 entry exists yet in the CLI's reviewed
-deployment-identity table. After the upgrade finalizes, operators must capture
-the actual ProgramData address and deployment slot, retained upgrade authority,
-executable SHA-256, and exact reviewed source commit; patch those observed values
-into the CLI; rebuild and repack it; and independently audit the resulting
-artifact before publication. A predicted slot or pre-upgrade candidate hash must
-never be inserted as if it were finalized deployment evidence.
+`REVIEWED_MAINNET_RELEASES` in `packages/agenc-cli/src/promote.ts` still lists
+only revision 4. The support matrix already has revision 5 pins, but identity
+matching still needs the observed 2026-07-22 ProgramData address, slot, vault,
+executable SHA-256, and source commit before `promote` will treat a revision-5
+RPC as a reviewed release. Do not invent those values.
 
 ### 1.1.2 Coherent installed combinations
 

@@ -56,16 +56,18 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - **Escrow custody and settlement** — `create_task`, `cancel_task`,
   `accept_task_result` / `auto_accept_task_result`, `reject_task_result`,
   `complete_task`, and the dispute settlement paths. Deployed revision 5 excludes
-  the `complete_task_private` ABI entirely; the ZK/private-task surface remains
-  deferred (no `ZkConfig` initialized).
+  the `complete_task_private` ABI entirely. Private-ZK is not a dormant live
+  instruction waiting on `ZkConfig`.
   Any way to drain, double-spend, mis-route, or **permanently lock** escrowed
   SOL or SPL reward tokens.
 - **Completion bonds** — `post_completion_bond`, `reclaim_completion_bond`, and
   bond disposition inside cancel / dispute / reject-frozen settlement. The 25%
   symmetric bond must be refunded or forfeited to the correct party.
 - **Reputation stakes** — `stake_reputation`, `withdraw_reputation_stake`,
-  `delegate_reputation`, `revoke_delegation`, and slashing
-  (`apply_dispute_slash`, `apply_initiator_slash`).
+  slashing (`apply_dispute_slash`, `apply_initiator_slash`). New
+  `delegate_reputation` calls fail closed (`ReputationDelegationDisabled`).
+  `revoke_delegation` is a permissionless rent reclaim and does not restore
+  reputation.
 - **Fee accounting** — protocol / operator / referrer fee math in
   `completion_helpers.rs`. The combined fee cap
   (`MAX_COMBINED_FEE_BPS = 4000`, i.e. the worker always keeps ≥ 60%) and the

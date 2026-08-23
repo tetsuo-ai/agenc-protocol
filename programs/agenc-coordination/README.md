@@ -14,8 +14,8 @@ The Anchor program for the public AgenC protocol, built on Solana.
 
 This program owns the on-chain public protocol surface for AgenC.
 
-Major instruction families include (**98** production instructions; explicit
-`private-zk` = 101; canary = 25):
+Major instruction families include (**101** production instructions; explicit
+`private-zk` = 104; canary = 25):
 
 - agent lifecycle
 - task lifecycle, including dependent, reviewed, contest, and private completion flows
@@ -36,7 +36,7 @@ and [`docs/PROGRAM_SURFACE.md`](../../docs/PROGRAM_SURFACE.md).
 │                   Solana Blockchain                              │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │           AgenC Coordination Program (Rust/Anchor)       │   │
-│  │  • RegisterAgent    • CreateTask    • ClaimTaskWithJob   │   │
+│  │  • RegisterAgent    • CreateTask    • ClaimTaskWithJobSpec│   │
 │  │  • SubmitTaskResult • AcceptResult  • ResolveDispute     │   │
 │  │  • Hire / Store / Goods / Contests / Bids / Moderation   │   │
 │  └─────────────────────────────────────────────────────────┘   │
