@@ -3,6 +3,11 @@
 How to prove that the on-chain `agenc-coordination` program deployed at
 `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` was built from this source.
 
+> **Operator (revision 5 re-attest + Explorer security.txt):** merging docs is
+> not enough. Explorer reads two on-chain records the Squads vault must sign.
+> Copy-paste ceremony: [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md)
+> (`node scripts/explorer-metadata.mjs`).
+
 > This is PLAN.md **P8.3 — SHIPPED**. The repo is **public**. Revision 5 is the
 > currently deployed program (executable SHA-256
 > `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, deployed

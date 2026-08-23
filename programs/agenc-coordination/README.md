@@ -8,6 +8,7 @@ The Anchor program for the public AgenC protocol, built on Solana.
 - [../../docs/TASK_VALIDATION_V2.md](../../docs/TASK_VALIDATION_V2.md) - reviewed public-task completion and validation modes
 - [../../docs/ZK_PRIVATE_FLOW.md](../../docs/ZK_PRIVATE_FLOW.md) - private-completion and zk-config context
 - [../../docs/VALIDATION.md](../../docs/VALIDATION.md) - toolchain and validation commands
+- [../../docs/EXPLORER_METADATA.md](../../docs/EXPLORER_METADATA.md) - Explorer Verified Build + security.txt (two Squads approvals)
 - [../../README.md](../../README.md) - repo-level ownership and artifact pipeline
 
 ## Overview

@@ -285,6 +285,10 @@ hardening — a Squads config change, no program-authority re-transfer required.
 
 ## 6. Verifiable builds — status
 
+Explorer's Security tab reads the Program Metadata Program account (seed
+`security`), not this file and not `.well-known/security.txt`. The vault-signed
+write is [`docs/EXPLORER_METADATA.md`](docs/EXPLORER_METADATA.md).
+
 A reproducible / verifiable build (`solana-verify`, on-chain verification PDA
 via osec.io) proves the deployed bytecode matches the source **at a public tag**.
 **This repository is public.** Revision 5 is now the deployed program (executable
