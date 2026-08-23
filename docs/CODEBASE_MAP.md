@@ -16,7 +16,7 @@ agenc-protocol/
     marketplace-mcp/             @tetsuo-ai/marketplace-mcp — MCP server
     marketplace-moderation/      @tetsuo-ai/marketplace-moderation — moderation canon
     agenc-cli/                   @tetsuo-ai/agenc-cli — init/dev/promote
-    agenc-cli-alias/             thin `agenc` bin alias
+    agenc-cli-alias/             thin `agenc-cli` bin alias
     agenc-worker/                @tetsuo-ai/agenc-worker — claim/submit loop
   tests-integration/             litesvm integration tests (real .so)
   migrations/                    migration notes and helpers

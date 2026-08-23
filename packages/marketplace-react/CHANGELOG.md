@@ -1,6 +1,6 @@
 # @tetsuo-ai/marketplace-react
 
-## 0.5.0 (unreleased candidate)
+## 0.5.0 (published 2026-07-22)
 
 ### Breaking Changes
 
@@ -14,7 +14,7 @@
   `useHire` and the humanless flow now require the buyer's non-zero
   `taskJobSpecHash` before they can fund escrow, and activation verifies that
   the moderation callback returned that exact hash. This is an intentional API
-  and wire break; published 0.4.1 remains current while mainnet is revision 4.
+  and wire break. Older 0.4.1 is the superseded revision-4 pin.
 - `useHumanlessHireFlow` now delegates to the SDK's non-resubmitting recovery
   orchestration. Post-submission failures surface `HireAndActivateError`,
   `progress.recovery` exposes its durable `hiring`/`moderating`/`activating`

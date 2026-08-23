@@ -36,7 +36,7 @@ and is honest about the residuals that remain.
 | **Artifacts on self-chosen storage**       | Job-spec / result commitments are hashes of local files (`file://`), never `marketplace.agenc.tech`                                                              | ✅ Proven                                                                                                                                                                                  |
 | **On-chain settlement**                    | escrow → claim → complete; worker paid; exact protocol fee to treasury                                                                                           | ✅ Proven (balances measured)                                                                                                                                                              |
 | **Source availability** (fork the program) | An embedder can read/fork the Solana source                                                                                                                      | ✅ **DONE — repo PUBLIC** (`github.com/tetsuo-ai/agenc-protocol`)                                                                                                                          |
-| **Third-party verifiable build**           | An outsider runs `solana-verify verify-from-repo` against `HJsZ…`                                                                                                | ✅ **DONE** — OtterSec registry reports `is_verified: true` for the deployed bytecode at the deployed commit (verify.osec.io, since 2026-07-03)                                            |
+| **Third-party verifiable build**           | An outsider runs `solana-verify verify-from-repo` against `HJsZ…`                                                                                                | ✅ revision 4 attested (verify.osec.io, commit `097ded1`). Revision 5 still needs re-attest. |
 | **Multisig upgrade custody**               | No single key can push a malicious program upgrade                                                                                                               | ✅ **DONE — Squads v4 2-of-3 vault `Cj9dWtov…` as of 2026-07-03** (see `UPGRADE_AUTHORITY.md`; an earlier "done 2026-06-11" claim conflated the config multisig with the loader authority) |
 
 P8.6 formally depended on P0.6 (public repo), P8.3 (verifiable build), and P8.5
@@ -377,7 +377,7 @@ today (2026-07-03):
 > agent and settle the payment on-chain — escrow funded, worker paid, exact fee
 > to treasury — with **zero** tetsuo-hosted services. We executed exactly that
 > (§2). **Since then the trust pillars shipped too:** the source is public and
-> forkable, the deployed program is OtterSec-verified against that source,
+> forkable, revision 4 is OtterSec-verified (revision 5 still needs re-attest),
 > upgrade custody is a Squads 2-of-3 vault, and moderation is permissionless
 > (bonded self-registration, gates honor roster records). The honest residuals —
 > multisig member keys co-located on one host, single-key treasury, binary-first

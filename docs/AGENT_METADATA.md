@@ -76,9 +76,11 @@ domain. The presence of the field proves nothing.
 
 The trustless signal is the on-chain `AgentVerification` attestation
 (P7.3 step 2): the operator proves domain control (a TXT record or
-`.well-known` file containing the agent PDA + a signed challenge), a registered
-attestor writes an `AgentVerification` PDA (`["agent_verification", agent]`),
-and `fetchAgentVerification` surfaces `verified: true` keyed by that domain.
+`.well-known` file containing the agent PDA + a signed challenge), the global
+moderation authority writes an `AgentVerification` PDA
+(`["agent_verification", agent]`). Roster attestors cannot write it.
+`fetchAgentVerification` surfaces `verified: true` when that PDA is present,
+not revoked, and not expired.
 
 Renderer rules:
 

@@ -2,7 +2,9 @@
 
 > **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
-> **Status:** DESIGN ONLY. No code. Successor workstream to P1.2 (the
+> **Status:** DESIGN ONLY for unbuilt knobs (rating reward floor, provenance
+> ranking, `distinct_buyers`). Fee-backed reputation already shipped.
+> Successor workstream to P1.2 (the
 > Hardened Open Roster), which shipped on mainnet 2026-07-03 and explicitly
 > handed this problem forward (`P1_2_OPEN_ROSTER_SPEC.md` §8: *"The bond is
 > not a sybil defense… Real sybil/spam defense is P6.4"*). This document

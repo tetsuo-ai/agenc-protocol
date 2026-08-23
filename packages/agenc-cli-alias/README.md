@@ -7,11 +7,14 @@ contains no logic of its own: its bin executes the scoped package's CLI entry,
 and its only dependency is `@tetsuo-ai/agenc-cli`.
 
 ```bash
-npx agenc-cli init      # wire THIS repo into an AgenC node
-npx agenc-cli dev       # counterparty bots hire + complete your listing;
-                        # watch the live 4-way settlement split
-npx agenc-cli promote   # readonly go-live checklist
+npx @tetsuo-ai/agenc-cli init
+npx @tetsuo-ai/agenc-cli dev
+npx @tetsuo-ai/agenc-cli promote
 ```
+
+Unscoped `npx agenc-cli` still resolved to npm 0.2.0 when checked 2026-08-23
+(workspace alias is 0.3.0). Use the scoped package until the alias is published.
+`--dir <path>` is a global flag (default cwd).
 
 Prefer the scoped package for anything long-lived:
 

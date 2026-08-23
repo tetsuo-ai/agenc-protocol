@@ -44,7 +44,7 @@ added the **goods market** (**96 → 99 instructions**: `create_goods_listing`,
 the goods surface is revision-gated, so pre-0.11 SDKs simply do not expose it.
 The exact live wire artifact is revision 5 (**101 instructions / 43 accounts /
 102 events / 405 errors**). The committed workspace IDL SHA-256 is
-`f0e98af096cb11ae0db149b3e1e663735d71750bfaae54600c7b49ad6e493783`
+`f8eb548c6c521a4a327bc2adf1cd8920fdf0f15597ae831fb7a1824bc31efd2e`
 (instruction docs only vs the prior `8cfd094d…` hash; ABI unchanged). Current
 generated references at
 [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) and
@@ -83,8 +83,8 @@ risk, but the flow is down). See §1.2 for exactly which upgrade broke which ran
 ### 1.1.1 Revision-5 coordinated client set
 
 This repository contains the following coordinated revision-5 clients. The
-store-core and `create-agenc-store` candidates live in their separate
-coordinated store repositories; they are not agenc-protocol workspace packages.
+store-core and `create-agenc-store` packages live in their separate
+store repositories; they are not agenc-protocol workspace packages.
 The revision-5 program cutover executed on 2026-07-22, so these clients, not the
 revision-4 pins above, speak the live wire. Scoped packages in this table were
 on npm at these versions when checked 2026-08-23:
@@ -133,13 +133,13 @@ or peer:
 | revision 4 | store-core `0.6.0`                         | React `^0.4.0` and SDK `^0.8.0`               |
 | revision 5 | React/tools/worker `0.5.0`/`0.5.0`/`0.2.0` | SDK `^0.12.0`                                 |
 | revision 5 | MCP `0.5.0`                                | tools `^0.5.0` and SDK `^0.12.0`              |
-| revision 5 | external store-core `0.6.1` candidate      | React `^0.5.0` and SDK `^0.12.0`              |
+| revision 5 | external store-core `0.6.2`                | React `^0.5.0` and SDK `^0.12.0`              |
 
 This means a full revision-4 installation containing all published consumers
 uses SDK 0.8.2 (or another version admitted by every installed range), even
 though SDK 0.9–0.11 remain valid for applications whose installed consumers
 declare compatible ranges. Revision 5 has one coordinated combination: SDK
-0.12 with the candidate train above.
+0.12 with the published train in §1.1.1.
 
 ### 1.2 Break-event history (why this document exists)
 

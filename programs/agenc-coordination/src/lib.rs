@@ -567,7 +567,8 @@ pub mod agenc_coordination {
         instructions::complete_task_private::complete_task_private(ctx, task_id, proof)
     }
 
-    /// Initialize the trusted ZK image ID config.
+    /// Private-zk development only. Always returns `PrivateTaskCreationDisabled`
+    /// and does not write `ZkConfig`.
     #[cfg(feature = "private-zk")]
     pub fn initialize_zk_config(
         ctx: Context<InitializeZkConfig>,
@@ -580,7 +581,8 @@ pub mod agenc_coordination {
         instructions::initialize_zk_config::handler(ctx, active_image_id)
     }
 
-    /// Rotate the trusted ZK image ID.
+    /// Private-zk development only. Always returns `PrivateTaskCreationDisabled`
+    /// and does not mutate `ZkConfig`.
     #[cfg(feature = "private-zk")]
     pub fn update_zk_image_id(ctx: Context<UpdateZkImageId>, new_image_id: [u8; 32]) -> Result<()> {
         instructions::update_zk_image_id::handler(ctx, new_image_id)
@@ -1289,13 +1291,12 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Record a domain-verification attestation for an agent (P7.3). A TRUSTED attestor
-    /// (the global moderation authority OR a registered, non-revoked `ModerationAttestor`)
-    /// records that operator domain `verified_domain` was proven to control the agent. The
-    /// off-chain domain-control proof (TXT record / `.well-known` + signed challenge) is the
-    /// attestor SERVICE's job; on-chain this only records the trusted verdict. `method`:
-    /// 0 = TxtRecord, 1 = WellKnown. `expires_at`: 0 = no expiry. Re-verification overwrites
-    /// the `["agent_verification", agent]` PDA in place.
+    /// Record a domain-verification attestation for an agent (P7.3). Only the
+    /// global moderation authority may write. Roster attestors cannot.
+    /// Off-chain domain-control proof (TXT / `.well-known` + signed challenge)
+    /// is the attestor service's job; on-chain this only records the verdict.
+    /// `method`: 0 = TxtRecord, 1 = WellKnown. `expires_at`: 0 = no expiry.
+    /// Re-verification overwrites the `["agent_verification", agent]` PDA.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn record_agent_verification(
         ctx: Context<RecordAgentVerification>,
@@ -1306,8 +1307,8 @@ pub mod agenc_coordination {
         instructions::record_agent_verification::handler(ctx, verified_domain, method, expires_at)
     }
 
-    /// Revoke an agent's domain verification (P7.3), marking it `revoked = true` so the
-    /// record stays readable. Same trusted-roster authorization as
+    /// Revoke an agent's domain verification (P7.3), marking it `revoked = true`
+    /// so the record stays readable. Same global-authority-only gate as
     /// `record_agent_verification`.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn revoke_agent_verification(ctx: Context<RevokeAgentVerification>) -> Result<()> {

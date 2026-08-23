@@ -5,13 +5,13 @@ All notable changes to `@tetsuo-ai/marketplace-tools` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.5.0 (unreleased candidate)
+## 0.5.0 (published 2026-07-22)
 
-This candidate depends on `@tetsuo-ai/marketplace-sdk@^0.12.0` and belongs to
-the coordinated revision-5 package set. Published 0.4.0 remains current until
-that cutover.
+This release depends on `@tetsuo-ai/marketplace-sdk@^0.12.0` and belongs to
+the coordinated revision-5 package set. Older 0.4.0 is the superseded
+revision-4 pin.
 
-The revision-5 candidate raises the runtime floor to Node 22.23.1; Node 20 is
+The revision-5 package raises the runtime floor to Node 22.23.1; Node 20 is
 EOL and unsupported.
 
 ### Minor Changes (breaking for consumers of the `a2a` projection shape)

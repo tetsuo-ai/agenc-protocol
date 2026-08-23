@@ -258,6 +258,7 @@ const closeIx = await facade.closeTask({
   workerCompletionBond: null,
   authority: buyerAuthority,
 });
+// Task PDA stays as a rent-exempt tombstone. Listing open_jobs decrements.
 ```
 
 ## Local sandbox — run the whole flow for real
@@ -440,7 +441,8 @@ custom setups. The repo also has deeper lifecycle coverage in
 
 - Full runnable source:
   [`examples/embeddable-marketplace.ts`](../../examples/embeddable-marketplace.ts).
-- Generated API reference (typedoc): [`../api/README.md`](../api/README.md).
+- Generated API reference: run `npm run docs:api` in this package (output is
+  local, not committed).
 - The facade also covers bids (`facade.createBid`, `facade.acceptBid`,
   `facade.promoteBid`, `facade.demoteIneligibleBest`), chunked dispute
   settlement (`facade.settleDisputeClaim`), governance, reputation, and

@@ -6,11 +6,11 @@
 > multisig since 2026-07-03), and verified-build status (OtterSec badge now live)
 > have moved on, and the "0 open findings" summary in §4 is historical — the
 > 2026-07-16/17 adversarial audit found additional issues the earlier audits
-> missed. Its F-1..F-19 remediation queue is now implemented in the pending
-> revision-5 candidate; see `ENTERPRISE_REMEDIATION_2026-07.md` for the
-> remediation record,
-> `docs/MAINNET_MAINLINE.md` for the live/candidate split, and `CHANGELOG.md`
-> for current validation evidence.
+> missed. F-1..F-19 shipped in the live revision-5 binary (2026-07-22). See
+> `ENTERPRISE_REMEDIATION_2026-07.md` for the remediation record,
+> `docs/MAINNET_MAINLINE.md` for live state, and `CHANGELOG.md` for the
+> deploy record. Generated `docs/reference/INSTRUCTIONS.md` is now the 101-ix
+> live surface, not the 98-ix candidate this pack described.
 
 Single entry point for the external security auditor of the AgenC coordination
 program. The program **custodies escrow, completion bonds, and reputation stakes**, so

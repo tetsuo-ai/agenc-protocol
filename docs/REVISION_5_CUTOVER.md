@@ -135,8 +135,11 @@ a human-readable snapshot, not an authority for transaction construction.
 6. Upload the reviewed buffer and execute the Squads program-upgrade proposal.
    Verify on-chain executable hash and authority before continuing.
 7. Run only the required migrations/sweeps. Repeat all post-deploy inventories.
-   Publish and fetch-verify the matching compact on-chain IDL. Stamp
-   `surface_revision = 5` last; never advertise revision 5 over an old IDL.
+   Publish and fetch-verify the matching compact on-chain IDL. Call
+   `stamp_release_surface` last (paused-only; this is the only writer of
+   `surface_revision = 5`). Do not pass 5 to `update_launch_controls`.
+   Unpause is a later `update_launch_controls` after CURRENT is stored.
+   Never advertise revision 5 over an old IDL.
    Then capture the actual finalized ProgramData address/deployment slot,
    retained authority, executable SHA-256, and reviewed source commit. Patch
    that observed identity into `agenc promote`, rebuild and repack the CLI, and

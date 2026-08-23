@@ -72,10 +72,9 @@ revision-5 continuation:
 Those aggregate totals are historical and must not be combined with the final
 revision-5 candidate as if they were one quiescent release run.
 
-Current local candidate evidence, measured on 2026-07-21 during the
+Dated local candidate evidence, measured on 2026-07-21 during the
 post-cutoff continuation (verified address-lookup-table transport resolver,
-canary-profile dead-code gate in `utils/version.rs`). This is not a final
-quiescent release snapshot:
+canary-profile dead-code gate in `utils/version.rs`). Not a live re-measure:
 
 | Gate                             | Latest local evidence / current status                                                                                                  |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -90,7 +89,7 @@ quiescent release snapshot:
 | Minimum toolchains               | Node 22.23.1 typecheck plus focused client/governance 100/100; Rust 1.82 profile checks unchanged from 2026-07-20                       |
 | Deployment/preflight scripts     | 328/328 (expanded suite)                                                                                                                |
 | All `scripts/*.test.mjs`         | Two consecutive Node 24 passes at 451/451                                                                                               |
-| Package release train            | **OPEN:** late SDK/React/worker/CLI fixes invalidated prior SRIs; all-nine double-pack/rebind/smoke is pending                          |
+| Package release train            | OPEN as of this 2026-07-21 snapshot; scoped packages published 2026-07-22 (see CHANGELOG) |
 | Supply/artifact checks           | npm production audit 0; built artifact sync, IDL reference, stack, and integration dependency audit pass                                |
 
 These local gates do not substitute for protected CI. The 2026-07-21 table is
@@ -107,7 +106,7 @@ the 2026-07-20 close-task fix build plus two 2026-07-21 rebuilds):
 | Artifact       | Current local evidence                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Production SBF | SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, 2,303,608 bytes, deployed 2026-07-22; ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` |
-| Canonical IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `f0e98af096cb11ae0db149b3e1e663735d71750bfaae54600c7b49ad6e493783` |
+| Canonical IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `f8eb548c6c521a4a327bc2adf1cd8920fdf0f15597ae831fb7a1824bc31efd2e` |
 
 Mainnet now runs deployed revision 5 (executable `049a66…`, 2026-07-22); the
 superseded revision-4 artifact was commit `097ded1` (99 instructions / 46
@@ -140,9 +139,8 @@ The matrix defines:
 > Historical note (updated 2026-07-22): the mainnet surface has advanced through
 > the full 99-instruction revision-4 surface (`surface_revision = 4`, live
 > 2026-07-09 → 2026-07-22) to the **live 101-instruction revision-5 surface**
-> (`surface_revision = 5`, deployed 2026-07-22). `complete_task_private` remains
-> deferred: `ZkConfig` is not initialized, and revision-5 production removes the
-> entrypoint entirely. See [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md). The
+> (`surface_revision = 5`, deployed 2026-07-22). `complete_task_private` is
+> absent from the production ABI. See [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md). The
 > scope bullets below are the original release-1 definition, kept for reference.
 
 - The first mainnet release includes the public settlement paths and Task Validation V2 review

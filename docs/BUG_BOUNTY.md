@@ -132,9 +132,10 @@ Out of scope (no reward):
   sending funds to a wrong address) and known-limitation items already recorded
   in `docs/audit/` or in published audit findings.
 - Claims that "the repo is private / publicly verifiable builds are
-  unavailable" — the repository is public and OtterSec-verified
-  (`SECURITY.md` §6, `docs/VERIFIABLE_BUILDS.md`). Report real verification
-  failures against the live badge or a tagged release instead.
+  unavailable". The repository is public. OtterSec attested revision 4;
+  revision 5 still needs re-attest (`SECURITY.md` §6,
+  `docs/VERIFIABLE_BUILDS.md`). Report real verification failures against
+  the live badge or a tagged release instead.
 
 ## Safe harbor
 

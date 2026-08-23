@@ -140,22 +140,23 @@ This moves the task into `PendingValidation` and records the result in `TaskSubm
 Resolution depends on mode:
 
 - `CreatorReview`: `accept_task_result`, `reject_task_result`, or `auto_accept_task_result`
-- `ValidatorQuorum`: `validate_task_result`
+- `ValidatorQuorum` (legacy configs only): `validate_task_result`
 - `ExternalAttestation`: `validate_task_result`
 
-Acceptance settles reward distribution and marks the claim as completed and validated.
+Acceptance settles reward distribution, marks the claim completed, and closes
+`TaskSubmission` to the worker.
 
 Rejection:
 
-- clears the claim payload
+- closes the claim and `TaskSubmission` to `worker_authority`
 - releases the worker's active claim slot
-- updates the submission as rejected
-- closes the released claim account
 - reopens the task if no other active claims remain
 
-### 5. Disputes
+After that reject, both PDAs are gone. `initiate_dispute` only admits
+`InProgress` or `PendingValidation` with a live claim.
 
-`initiate_dispute` can use the optional `TaskSubmission` record when the original claim slot is already gone. This keeps rejected or post-review outcomes disputable without requiring the original `TaskClaim` account to remain live forever.
+`close_task` keeps the Task PDA as a rent-exempt tombstone. It refunds surplus
+and children and decrements listing `open_jobs`. It does not close the Task.
 
 ## Status Transitions
 

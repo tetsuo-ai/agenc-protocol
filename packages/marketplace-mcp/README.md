@@ -176,17 +176,18 @@ await server.connect(new StdioServerTransport());
 ## Examples
 
 Two runnable examples drive the **real** compiled agenc-coordination program in-process
-(litesvm, no validator / no RPC / no keys) via the SDK's `startLocalMarketplace()`. Node
-23+ strips the TypeScript types, so they run directly:
+(litesvm, no validator / no RPC / no keys) via the SDK's `startLocalMarketplace()`.
+This package requires Node >= 22.23.1. Run the TypeScript examples with `npx tsx`
+or `node --import tsx`:
 
 ```bash
 # P5.3 — a worker bot that claims a fresh task within milliseconds of creation,
 #         using watchClaimableTasks with NO hand-tuned poll loop.
-node examples/worker-bot.mts
+npx tsx examples/worker-bot.mts
 
 # P5.2 — a LangChain-style agent that browses listings and PREPARES (never signs)
 #         a hire using only the public packages.
-node examples/langchain-agent.mts
+npx tsx examples/langchain-agent.mts
 ```
 
 Both self-assert and exit non-zero on failure. Typecheck them with
