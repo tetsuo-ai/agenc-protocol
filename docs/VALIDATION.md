@@ -107,7 +107,7 @@ the 2026-07-20 close-task fix build plus two 2026-07-21 rebuilds):
 | Artifact       | Current local evidence                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Production SBF | SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, 2,303,608 bytes, deployed 2026-07-22; ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` |
-| Canonical IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `8cfd094dc356f88678ba712a8a167a9fcd94cf3c33852ec1092a7a3ff491a82e` |
+| Canonical IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `f0e98af096cb11ae0db149b3e1e663735d71750bfaae54600c7b49ad6e493783` |
 
 Mainnet now runs deployed revision 5 (executable `049a66…`, 2026-07-22); the
 superseded revision-4 artifact was commit `097ded1` (99 instructions / 46

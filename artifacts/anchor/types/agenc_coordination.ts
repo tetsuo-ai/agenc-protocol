@@ -1046,8 +1046,8 @@ export type AgencCoordination = {
         "Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The",
         "assigned wallet may then record moderation attestations",
         "(`record_task_moderation` / `record_listing_moderation`) in addition to the single",
-        "global moderation authority. Registry MECHANISM only — the neutrality model is a",
-        "separate [HUMAN] decision (`docs/MODERATION_NEUTRALITY.md`)."
+        "global moderation authority. P1.2 also added permissionless bonded",
+        "self-registration; see `docs/P1_2_OPEN_ROSTER_SPEC.md`."
       ],
       "discriminator": [
         236,
@@ -1669,8 +1669,9 @@ export type AgencCoordination = {
     {
       "name": "cancelDispute",
       "docs": [
-        "Cancel a dispute before any votes are cast.",
-        "Only the dispute initiator can cancel, and only if no arbiter has voted yet."
+        "Cancel an active dispute. Only the initiator can cancel, and only while",
+        "the dispute is still active. The retired voter-count byte must be",
+        "historical zero or the current `0xff` initiator-outcome provenance marker."
       ],
       "discriminator": [
         23,
@@ -2119,8 +2120,8 @@ export type AgencCoordination = {
     {
       "name": "claimTask",
       "docs": [
-        "Claim a task to signal intent to work on it.",
-        "Agent must have required capabilities and task must be claimable."
+        "Legacy claim without a job-spec pointer. Always returns",
+        "`TaskJobSpecRequired`. Use `claim_task_with_job_spec`."
       ],
       "discriminator": [
         49,
@@ -5128,8 +5129,7 @@ export type AgencCoordination = {
     {
       "name": "delegateReputation",
       "docs": [
-        "Delegate reputation points to a trusted peer.",
-        "One delegation per (delegator, delegatee) pair."
+        "Retired. Always returns `ReputationDelegationDisabled`."
       ],
       "discriminator": [
         195,
@@ -8250,7 +8250,8 @@ export type AgencCoordination = {
       "name": "initiateDispute",
       "docs": [
         "Initiate a conflict resolution process.",
-        "Creates a dispute that requires multi-sig consensus to resolve.",
+        "Resolution is an assigned single resolver or protocol authority plus",
+        "configured M-of-N. `vote_dispute` is retired.",
         "",
         "# Arguments",
         "* `ctx` - Context with dispute account",
@@ -28955,7 +28956,10 @@ export type AgencCoordination = {
       "name": "taskModeration",
       "docs": [
         "On-chain moderation attestation for a task/job-spec hash.",
-        "PDA seeds: [\"task_moderation\", task, job_spec_hash]"
+        "Revision-5 writes use moderator-keyed PDA seeds:",
+        "[\"task_moderation_v2\", task, job_spec_hash, moderator]. Frozen pre-P1.2",
+        "[\"task_moderation\", task, job_spec_hash] records remain read-only",
+        "compatibility inputs and are never written by revision 5."
       ],
       "type": {
         "kind": "struct",

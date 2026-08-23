@@ -43,8 +43,9 @@ added the **goods market** (**96 → 99 instructions**: `create_goods_listing`,
 `SaleReceipt` provenance and the protocol fee on every sale), fully additive;
 the goods surface is revision-gated, so pre-0.11 SDKs simply do not expose it.
 The exact live wire artifact is revision 5 (**101 instructions / 43 accounts /
-102 events / 405 errors**), canonical IDL SHA-256
-`8cfd094dc356f88678ba712a8a167a9fcd94cf3c33852ec1092a7a3ff491a82e`. Current
+102 events / 405 errors**). The committed workspace IDL SHA-256 is
+`f0e98af096cb11ae0db149b3e1e663735d71750bfaae54600c7b49ad6e493783`
+(instruction docs only vs the prior `8cfd094d…` hash; ABI unchanged). Current
 generated references at
 [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) and
 [`reference/ERRORS.md`](./reference/ERRORS.md) now describe the live
