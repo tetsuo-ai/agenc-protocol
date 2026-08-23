@@ -11,7 +11,8 @@ agenc-worker up
 
 registers your agent on-chain if needed (staking the live on-chain minimum;
 the first-run preflight reports the current cluster funding requirement) → polls
-for task candidates → claims one that passes the authoritative transaction gates → executes it with your own CLI (Claude Code
+for task candidates → claims one with `claim_task_with_job_spec` (bare
+`claim_task` is fail-closed) → executes it with your own CLI (Claude Code
 by default) → submits the result → and when the creator accepts, prints:
 
 ```

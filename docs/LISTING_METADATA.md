@@ -27,17 +27,18 @@ query layer, embeds) agrees.
 LISTING_METADATA v1 covers:
 
 1. The encoding of the three fixed-width `ServiceListing` string fields
-   (`name`, `category`, `tags`) written by `create_service_listing` /
-   `update_service_listing`.
+   (`name`, `category`, `tags`). `create_service_listing` writes all three.
+   `update_service_listing` can replace `tags` only (opaque 64 bytes). Name
+   and category are create-time.
 2. The canonical category taxonomy (20 values).
 3. The listing-level `spec_hash` / `spec_uri` commitment and the listing display
    document embedded in that envelope payload. The separate buyer-specific task
    job-spec commitment is covered below only to prevent the two hashes from
    being confused.
 
-It does **not** change the program: the on-chain layout is unchanged, and the
-program never validates the `name` / `category` / `tags` bytes. Conformance
-is a client/indexer contract.
+It does **not** change the program layout. `create_service_listing` rejects an
+all-NUL `name`. Category and tags stay opaque on-chain. Conformance for
+taxonomy and UTF-8 padding is a client/indexer contract.
 Listings whose fields do not decode under these rules are _nonconforming_;
 readers should surface them as such (e.g. `metadataValid: false`) rather than
 error.

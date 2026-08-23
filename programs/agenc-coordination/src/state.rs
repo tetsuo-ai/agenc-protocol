@@ -1081,7 +1081,10 @@ impl ModerationConfig {
 }
 
 /// On-chain moderation attestation for a task/job-spec hash.
-/// PDA seeds: ["task_moderation", task, job_spec_hash]
+/// Revision-5 writes use moderator-keyed PDA seeds:
+/// ["task_moderation_v2", task, job_spec_hash, moderator]. Frozen pre-P1.2
+/// ["task_moderation", task, job_spec_hash] records remain read-only
+/// compatibility inputs and are never written by revision 5.
 #[account]
 #[derive(Default, InitSpace)]
 pub struct TaskModeration {

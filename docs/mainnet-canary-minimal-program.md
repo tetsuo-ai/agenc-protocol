@@ -11,7 +11,7 @@ anchor build --no-idl -- --no-default-features --features mainnet-canary
 anchor idl build -p agenc_coordination -o target/idl/agenc_coordination.canary.json -- --no-default-features --features mainnet-canary
 ```
 
-The canary build intentionally disables default features. Default/full builds still include SPL token rewards, private ZK completion, bids, disputes, governance, skills, feed, and reputation economy.
+The canary build intentionally disables default features. Default/full builds include SPL token rewards, bids, disputes, governance, skills, feed, and reputation economy. Private ZK completion is **not** in the default production build; it is the explicit `private-zk` feature.
 
 ## Canary Surface
 
@@ -99,4 +99,4 @@ Expected canary IDL instruction count: `25` (frozen in `scripts/canary-idl-basel
 
 The current marketplace kit lifecycle needs the following on-chain instructions for the private rehearsal: `initialize_protocol`, `register_agent`, `create_task`, `configure_task_moderation`, `record_task_moderation`, `set_task_job_spec`, `configure_task_validation`, `claim_task_with_job_spec`, `submit_task_result`, `accept_task_result`, `reject_task_result`, `cancel_task`, and `expire_claim`. All are present in the canary IDL.
 
-During the private rehearsal (when the canary build was live on mainnet), the kit loaded the canary IDL/profile and kept removed tools such as auto-accept, disputes, bids, token rewards, private ZK, governance, skills, feed, and reputation economy disabled. **As of the 2026-06-11 full-surface upgrade this no longer applies on mainnet** — the full surface is live (now 101-ix / rev 5), so the kit should load the full IDL/profile; only `complete_task_private` remains unavailable (ZK) until `ZkConfig` is initialized.
+During the private rehearsal (when the canary build was live on mainnet), the kit loaded the canary IDL/profile and kept removed tools such as auto-accept, disputes, bids, token rewards, private ZK, governance, skills, feed, and reputation economy disabled. **As of the 2026-06-11 full-surface upgrade this no longer applies on mainnet.** The full 101-ix revision-5 surface is live, so the kit should load the full IDL/profile. `complete_task_private` is not in that IDL. Initializing `ZkConfig` is not a production instruction.

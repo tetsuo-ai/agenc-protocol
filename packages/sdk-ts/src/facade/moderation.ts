@@ -201,8 +201,9 @@ export async function recordListingModeration(
  * `attestor`), `moderationConfig`, and `systemProgram` all auto-derive in the generated
  * builder — the caller supplies only the `authority` signer and the `attestor` pubkey.
  *
- * Registry MECHANISM only: a curated roster adds deputies but does not by itself answer
- * the neutrality objection. See `docs/MODERATION_NEUTRALITY.md` (a [HUMAN] decision).
+ * P1.2 also added permissionless bonded self-registration. See
+ * `docs/P1_2_OPEN_ROSTER_SPEC.md`. `docs/MODERATION_NEUTRALITY.md` is the
+ * superseded pre-open-roster decision record.
  */
 export async function assignModerationAttestor(
   input: AssignModerationAttestorAsyncInput,

@@ -267,16 +267,15 @@ pin a moderated job spec → claim → submit → accept/close/rate) is in
 [`examples/embeddable-marketplace.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/embeddable-marketplace.ts), and the
 getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
 
-### Workspace status (revision-5 candidate)
+### Workspace status (revision 5)
 
-- Workspace package version is the unreleased `0.12.0` candidate.
-- Generated client covers the current **98-instruction** production-candidate IDL.
-- The published 0.11.0 package targets the live 99-instruction revision-4 wire;
-  publish 0.12.0 only in the coordinated release with the revision-5 program.
-  Pre-1.0 versioning still applies.
+- Published package version is `0.12.0` (npm, 2026-07-22).
+- Generated client covers the live **101-instruction** revision-5 IDL.
+- The older 0.11.0 package targets the superseded 99-instruction revision-4 wire
+  and fails closed against the live program. Pre-1.0 versioning still applies.
 - Facade intentionally omits bare `claim_task` (program fail-closed).
   `complete_task_private` is not in the production IDL; it exists only in the
-  unsupported 101-instruction `private-zk` development build.
+  unsupported 104-instruction `private-zk` development build.
 
 ### Historical transaction backfills
 
@@ -305,8 +304,8 @@ revision 5.
 | Surface                                 | Facade entry points                                                 | Notes                                                                   |
 | --------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Completion bonds                        | `postCompletionBond`, `reclaimCompletionBond`                       | Exclusive + SOL v1                                                      |
-| Disputes                                | initiate / resolve / expire helpers                                 | single-resolver model (no `vote_dispute`)                               |
-| Bids                                    | bid marketplace lifecycle                                           | Marketplace V2                                                          |
+| Disputes                                | initiate / resolve / expire / `settleDisputeClaim`                  | single-resolver model (no `vote_dispute`); chunked peer crank after a recorded ruling |
+| Bids                                    | create / update / cancel / accept / expire, plus `promoteBid` / `demoteIneligibleBest` | Marketplace V2; `acceptBid` is O(1) and does not take competitor pairs |
 | Store identity (0.9.0)                  | `registerStore`, `updateStore`, `closeStore`, `moderationHeartbeat` | batch-2                                                                 |
 | Contests (0.10.0)                       | `createContestTask`, `distributeGhostShare`, `reclaimTerminalClaim` | batch-3                                                                 |
 | Goods (0.11.0)                          | `createGoodsListing`, `purchaseGood`, `updateGoodsListing`          | requires `surface_revision >= 4` (`assertCapability(surface, 'goods')`) |
@@ -314,6 +313,14 @@ revision 5.
 
 Treat advanced surfaces as integration work: match UX, policy, and tests to the
 on-chain semantics in `docs/PROGRAM_SURFACE.md` and `docs/VERSIONS.md`.
+
+Other root exports that are not in the hire snippet: `hireAndActivate` /
+`resumeHireAndActivate` (orchestration), `watchClaimableTasks`,
+`subscribeMarketplaceEvents`, `getDeployedSurface`, `values.*` (including
+`randomId32` and `canonicalJobSpecHash`), `delivery`, `taskThread`, and
+`settlementReceiptUrl`. `createMarketplaceClient` is a thinner lifecycle
+wrapper than the full facade. Webhook signature check is
+`verifyAgencWebhookSignature` on the package root, not an indexer-client method.
 
 ## Sandbox — `@tetsuo-ai/marketplace-sdk/sandbox`
 

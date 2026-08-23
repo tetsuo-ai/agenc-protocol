@@ -229,9 +229,11 @@ moderator path. The committed React sandbox always selects the deterministic
 moderator-key route explicitly, so a URL preserved from a stopped optional
 attestor cannot hijack a later seed run.
 
-Node scripts/services additionally accept `--env-file <path>` (defaulting to
-`.localnet/env.json` when it exists) and export the `AGENC_SANDBOX_*` variables for
-child processes.
+`localnet-up.mjs` and `localnet-status.mjs` accept `--env-file <path>` and
+default to `.localnet/env.json`. `up` writes that file; `status` requires it.
+`localnet-down.mjs` and `localnet-record-attestor.mjs` do not take `--env-file`.
+`AGENC_SANDBOX_*` is consumer env (SDK seeder), not something the localnet
+scripts export.
 
 ## The switchover: localnet → devnet → hosted
 

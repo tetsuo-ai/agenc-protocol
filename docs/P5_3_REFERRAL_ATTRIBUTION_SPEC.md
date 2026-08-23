@@ -2,11 +2,12 @@
 
 > **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
-> **Status:** DESIGN — draft for founder review. Nothing here is implemented or
-> deployed. Companion to the ratified `P5_2_STORE_IDENTITY_SPEC.md` (whose §7.6
-> pre-designed the attachment point this doc uses) and to the ratified
-> `P6_4_SPAM_SYBIL_DESIGN.md` (whose costed threat model this doc extends to
-> the referral leg). Any program change here is a human-owned deploy Moment.
+> **Status:** DESIGN ONLY for the registered-referrer rider (`referrer_store`,
+> vouchers). P5.2 Store identity is live on-chain; hire/create still take a
+> client-supplied referrer pubkey. Companion to the ratified
+> `P5_2_STORE_IDENTITY_SPEC.md` (whose §7.6 pre-designed the attachment point)
+> and to the ratified `P6_4_SPAM_SYBIL_DESIGN.md`. Any program change here is a
+> human-owned deploy.
 
 ## 1. The current model, precisely
 

@@ -4,19 +4,21 @@ This file documents the protocol-owned private-completion and zk-config surfaces
 
 ## Launch Scope
 
-- Deployed revision 4 contains the three private-ZK entrypoints, but they are not
-  usable on mainnet: `ZkConfig` is **NOT initialized** there.
-- The pending revision-5 production build goes further and removes
-  `complete_task_private`, `initialize_zk_config`, and `update_zk_image_id` from
-  its 98-instruction IDL. They exist only in the explicit, unsupported
-  101-instruction `private-zk` development build; release preflight rejects that
-  feature for production.
+- Live revision 5 (deployed 2026-07-22) removes `complete_task_private`,
+  `initialize_zk_config`, and `update_zk_image_id` from the 101-instruction
+  production IDL. `ZkConfig` is **NOT initialized** on mainnet.
+- Those three instructions exist only in the explicit, unsupported
+  104-instruction `private-zk` development build; release preflight rejects that
+  feature for production. Revision 4 had the entrypoints in the binary but they
+  were unusable because `ZkConfig` was never initialized.
 - Mainnet settlement uses the public and reviewed (Task Validation V2) flows only.
-- `initialize_zk_config` is **multisig-gated** (audit H-5), matching
-  `update_zk_image_id`, inside the quarantined development surface. That guard is
-  necessary defense in depth; it is not permission to deploy the feature. A future
-  mainnet ZK launch requires a new reviewed production revision, verifier/prover
-  policy, coordinated clients, and a separately approved upgrade.
+- Even in the `private-zk` development build, `initialize_zk_config` and
+  `update_zk_image_id` call `reject_zk_activation()` and always return
+  `PrivateTaskCreationDisabled`. Multisig is not a launch switch. A future
+  mainnet ZK launch requires a new reviewed production revision, a real RISC
+  Zero guest (this repo's `zkvm/guest` is only the 192-byte journal layout),
+  verifier/prover policy, coordinated clients, and a separately approved
+  upgrade.
 
 ## DV-03E Runner Inputs
 
@@ -38,7 +40,7 @@ validation deployment when prover infrastructure is available:
 - `programs/agenc-coordination/src/instructions/complete_task_private.rs`
 - `programs/agenc-coordination/src/instructions/initialize_zk_config.rs`
 - `programs/agenc-coordination/src/instructions/update_zk_image_id.rs`
-- `zkvm/guest/src/lib.rs`
+- `zkvm/guest/src/lib.rs` (journal field layout only; not an auditable RISC Zero guest binary)
 - `scripts/idl/verifier_router.json`
 
 ## Journal Layout
@@ -62,8 +64,10 @@ validation deployment when prover infrastructure is available:
 
 ## Cross-Repo Boundaries
 
-- proving-server implementation belongs in `agenc-prover`
-- client-side helper flows belong in `agenc-sdk`
-- runtime/operator orchestration belongs in `agenc-core`
+- proving-server implementation belongs in `agenc-prover` (outside this repo)
+- client helpers for marketplace consumers live in
+  `@tetsuo-ai/marketplace-sdk` (`packages/sdk-ts`)
+- host-side runtime/operator planes live outside this repo (`agenc-core` is a
+  historical sibling name, not a current package)
 
 This repo is the source of truth for the public contract those repos must consume.

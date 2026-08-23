@@ -103,13 +103,15 @@ The deployment rail is deliberately fail-closed:
 - it never pauses, unpauses, signs, deploys, stamps, or publishes an IDL on its
   own.
 
-**Current ProgramData capacity blocker:** read-only mainnet RPC resolved the
-canonical ProgramData account as
-`E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, with data length 2,183,269
-bytes (45 loader metadata + 2,183,224 executable payload). The reviewed final
-production SBF is 2,303,608 bytes, SHA-256
+**Pre-ceremony ProgramData capacity (resolved 2026-07-22):** before the
+revision-5 extend, read-only mainnet RPC resolved the canonical ProgramData
+account as `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, with data length
+2,183,269 bytes (45 loader metadata + 2,183,224 executable payload). The
+reviewed final production SBF is 2,303,608 bytes, SHA-256
 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`,
-and exceeds live payload capacity by exactly 120,384 bytes. This supersedes
+and exceeded that payload by exactly 120,384 bytes. The extension ran; live
+ProgramData is now 2,303,653 account-data bytes (see Current Mainnet
+Deployment above). That target superseded
 the pre-close-task-fix 2,284,496-byte `79f55a68…` identity: the 2026-07-20
 close-task fix build and two isolated 2026-07-21 rebuilds of the canonical
 `programs/agenc-coordination/target/deploy/agenc_coordination.so` all

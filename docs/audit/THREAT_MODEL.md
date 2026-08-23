@@ -5,36 +5,37 @@ This is the lightweight threat-model reference for the public protocol repo.
 ## Scope
 
 It exists as the security reference that the fuzz harness points to. It is a
-living reference — update it when the deployed surface, custody, or trust model
-changes. Last reconciled with the deployed revision and candidate artifacts on
-2026-07-18.
+living reference. Update it when the deployed surface, custody, or trust model
+changes. Last reconciled with the deployed revision on 2026-08-23.
 
-## Current deployment state (2026-07-18)
+## Current deployment state (2026-07-22, checked 2026-08-23)
 
 - Program `agenc-coordination` (Anchor 0.32.1 / Solana 3.0.13), program id
   `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable. Upgrade authority
-  is a Squads v4 2-of-3 multisig (custody since 2026-07-03); the OtterSec
-  verified-build badge is live.
-- Live mainnet surface: the FULL 99-instruction build (since 2026-07-09, slot
-  431918664), `surface_revision = 4` (batch-4 goods); `ProtocolConfig` is 351B.
-  Its deployed source artifact at commit `097ded1` contains 99 instructions / 46
-  accounts / 104 events / 354 errors.
-  The 25-instruction `mainnet-canary` build is a restricted rehearsal/fallback
-  build, CI-frozen, NOT live — do not threat-model it as the production surface.
-- Pending revision-5 candidate: the default production artifact contains 98
-  instructions / 43 accounts / 99 events / 394 errors. Explicit development
-  `private-zk` has 101 instructions and the frozen canary has 25. The candidate
-  is not live until a separately reviewed Squads upgrade and revision stamp.
+  is a Squads v4 2-of-3 multisig (custody since 2026-07-03). The OtterSec
+  verified-build badge attested revision 4 at commit `097ded1`; revision 5 still
+  needs re-attest.
+- Live mainnet surface: the 101-instruction revision-5 build (since 2026-07-22),
+  `surface_revision = 5` (AUDIT_HARDENING); `ProtocolConfig` is 351B. Deployed
+  executable SHA-256
+  `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`
+  (2,303,608 bytes). Canonical IDL: 101 instructions / 43 accounts / 102 events
+  / 405 errors. The 25-instruction `mainnet-canary` build is a restricted
+  rehearsal/fallback, CI-frozen, not live.
+- Explicit development `private-zk` has 104 instructions and is rejected by the
+  production deployment rail. Prior revision 4 (99 instructions / 46 accounts /
+  104 events / 354 errors, slot 431918664, commit `097ded1`) is superseded.
 - Singletons: `BidMarketplaceConfig`, `ModerationConfig`, and `GovernanceConfig`
-  INITIALIZED (sane params); `ZkConfig` NOT initialized — ZK private completion
-  is deferred and `complete_task_private` stays off until it is.
+  INITIALIZED (sane params); `ZkConfig` NOT initialized, so ZK private
+  completion stays off.
 - Disputes: single-assigned-resolver. The protocol authority resolves only with
   configured M-of-N approval; a previously threshold-approved assigned
   `DisputeResolver` resolves directly without a per-case vote. Both paths require
   a reasoned ruling (`rationale_hash` + bounded `rationale_uri`). Arbiter voting /
-  `vote_dispute` is retired (P6.3) and absent from the IDL.
-- Errors are append-only by policy: 354 variants in deployed revision 4 and 394
-  in the candidate artifact. Existing numeric codes are not reordered.
+  `vote_dispute` is retired (P6.3) and absent from the IDL. Collaborative peers
+  after a recorded ruling are swept by permissionless `settle_dispute_claim`.
+- Errors are append-only by policy: 405 variants in deployed revision 5
+  (codes 6000-6404). Existing numeric codes are not reordered.
 - Legacy state: the 169 pre-upgrade Task accounts were migrated 2026-06-11
   (schema-0 vs schema-1); migrations are done, not pending.
 
@@ -43,11 +44,10 @@ changes. Last reconciled with the deployed revision and candidate artifacts on
 Batch 1–3 internal adversarial audits are closed — 0 open findings **at that
 time** (historical, not a current cleanliness claim). The 2026-07-16/17 audit
 and subsequent adversarial runs found issues those passes missed. The resulting
-F-1–F-19 queue and later hardening are implemented in the pending revision-5
-candidate; `ENTERPRISE_REMEDIATION_2026-07.md` is the detailed
-historical/remediation record, not a list
-of still-unimplemented blockers. Treat `CHANGELOG.md` and
-`docs/MAINNET_MAINLINE.md` as the current candidate/deployment split. Passing
+F-1–F-19 queue and later hardening shipped in the live revision-5 binary;
+`ENTERPRISE_REMEDIATION_2026-07.md` is the detailed historical/remediation
+record, not a list of still-unimplemented blockers. Treat `CHANGELOG.md` and
+`docs/MAINNET_MAINLINE.md` as the current deployment record. Passing
 the present gates is evidence, not a guarantee that no unknown vulnerability
 exists.
 

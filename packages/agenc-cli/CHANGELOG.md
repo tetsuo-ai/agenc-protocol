@@ -1,6 +1,6 @@
 # @tetsuo-ai/agenc-cli
 
-## 0.3.0 (unreleased candidate)
+## 0.3.0 (published 2026-07-22)
 
 ### Release coordination
 
@@ -41,8 +41,8 @@
   version-2 `private-unlinked-fd-v1` evidence and the exact validator argument
   `/proc/self/fd/5`. The former mutable build-path binding is intentionally
   rejected, matching the validator that the hardened localnet rail can emit.
-- The unscoped `agenc-cli` alias advances to 0.3.0 with the scoped package. The
-  published 0.2.0 pair remains current until the coordinated cutover.
+- The unscoped `agenc-cli` alias workspace version is 0.3.0 with the scoped
+  package. npm still served unscoped 0.2.0 when checked 2026-08-23.
 - Make `@tetsuo-ai/agenc-cli/cli` a side-effect-free command API. The `agenc`
   executable now uses a dedicated non-exported bin wrapper, and the unscoped
   alias calls `runCliProcess()` explicitly, so importing an advertised module

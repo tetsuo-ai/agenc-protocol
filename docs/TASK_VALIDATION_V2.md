@@ -9,14 +9,24 @@ The live implementation keeps the original `Task` and `TaskClaim` layouts stable
 - standard public tasks can stay on the existing auto-settlement path
 - public tasks can be switched to manual validation before any worker claims them
 - private zk tasks in the explicit development build are not eligible for manual validation
-- competitive tasks are not eligible for manual validation
+- competitive tasks are eligible for CreatorReview only when they use the
+  contest-aware schema (`task_schema >= 1`); canary still rejects Competitive
+  review
 - bid-exclusive tasks remain single-worker flows; review still happens on the accepted claim
 
 ## How A Task Enters Manual Validation
 
-`configure_task_validation` converts an open public task into a Task Validation V2 task.
+A task can enter Task Validation V2 in two ways:
 
-The instruction:
+- `configure_task_validation` on an open public task that is not already hired
+- mint-time pinning on `create_task_humanless` and `hire_from_listing_humanless`
+  (CreatorReview)
+
+`configure_task_validation` rejects a live `HireRecord`. New configs also reject
+`ValidatorQuorum`; that mode remains only so `validate_task_result` can settle
+legacy quorum accounts.
+
+The configure instruction:
 
 - validates that the task is still configurable
 - stores validation settings in task-scoped PDAs
@@ -35,11 +45,14 @@ That sentinel is how the program, runtime, and downstream tooling distinguish:
 The task creator explicitly accepts or rejects a submitted result.
 
 - requires `review_window_secs > 0`
-- supports `auto_accept_task_result` after the review window elapses
+- supports `auto_accept_task_result` after the review window elapses, except
+  contest tasks (`ContestAutoAcceptDisabled`)
 
-### `ValidatorQuorum`
+### `ValidatorQuorum` (legacy settlement only)
 
-Validator agents vote on a submitted result until the configured quorum is reached.
+New `configure_task_validation` calls reject this mode
+(`InvalidValidationMode`). `validate_task_result` remains so a legacy quorum
+config proven by deployment preflight can still settle.
 
 - requires `validator_quorum > 0`
 - validator agents must be active and hold the validator capability
@@ -92,8 +105,8 @@ PDA seeds: `["task_validation_vote", task_submission, reviewer]`
 
 Stores one reviewer vote or attestation for a specific submission round.
 
-If a vote survives after its exact `TaskSubmission` parent is gone, the pending
-revision-5 `reclaim_orphan_task_child` path can close only the canonical
+If a vote survives after its exact `TaskSubmission` parent is gone,
+`reclaim_orphan_task_child` (live in revision 5) can close only the canonical
 `["task_validation_vote", submission, reviewer]` PDA and returns rent to the
 reviewer stored in the vote. A permissionless cranker cannot substitute the
 parent, reviewer, address, bump, or rent recipient.
@@ -152,6 +165,8 @@ Manual validation adds these task transitions:
 - `PendingValidation -> Completed` when a result is accepted
 - `PendingValidation -> InProgress` when a result is rejected but other active claims remain
 - `PendingValidation -> Open` when a result is rejected and no active claims remain
+- `PendingValidation -> RejectFrozen` via `reject_and_freeze` (Exclusive + SOL +
+  CreatorReview only); exits are `resolve_reject_frozen` / `expire_reject_frozen`
 - `PendingValidation -> Disputed` when review is contested
 
 Additional submissions can keep a task in `PendingValidation` while review is active.
@@ -163,9 +178,9 @@ The completion surface is now intentionally split:
 - `complete_task`: immediate settlement for normal public tasks
 - `submit_task_result`: reviewed settlement for manual-validation public tasks
 - `complete_task_private`: zk-backed private completion in the explicit,
-  unsupported 101-instruction `private-zk` development build; it is absent from
-  the 98-instruction production candidate
+  unsupported 104-instruction `private-zk` development build; it is absent from
+  the 101-instruction production IDL
 
 In the explicit `private-zk` development build, private tasks stay on the zk path
-and are not eligible for Task Validation V2. The production candidate rejects
-private-task creation and does not expose the private-completion instructions.
+and are not eligible for Task Validation V2. Production rejects private-task
+creation and does not expose the private-completion instructions.

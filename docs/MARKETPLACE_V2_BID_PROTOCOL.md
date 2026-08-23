@@ -1,6 +1,6 @@
 # RFC: Marketplace V2 Bid Protocol
 
-> **Historical design record (banner added 2026-07-17).** This accepted RFC is a dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
+> **Historical design record (banner added 2026-07-17, successor pointer added 2026-08-23).** This accepted RFC is a dated design document. The bid marketplace is live, but `accept_bid` no longer enumerates competing bids. Revision 5 shipped the O(1) winner-cache path (`promote_bid`, `demote_ineligible_best`, `settle_dispute_claim`). See `./design/bid-accept-o1-redesign.md` for that cutover and `./MAINNET_MAINLINE.md` for live state.
 
 Status: Accepted
 

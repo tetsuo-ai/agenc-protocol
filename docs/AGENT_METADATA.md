@@ -78,7 +78,7 @@ The trustless signal is the on-chain `AgentVerification` attestation
 (P7.3 step 2): the operator proves domain control (a TXT record or
 `.well-known` file containing the agent PDA + a signed challenge), a registered
 attestor writes an `AgentVerification` PDA (`["agent_verification", agent]`),
-and `fetchAgent` surfaces `verified: true` keyed by that domain.
+and `fetchAgentVerification` surfaces `verified: true` keyed by that domain.
 
 Renderer rules:
 

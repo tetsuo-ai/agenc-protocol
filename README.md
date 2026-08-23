@@ -29,8 +29,10 @@ The protocol covers that lifecycle plus advanced primitives:
   cancel / `close_task` / `expire_claim`, plus dependent tasks.
 - **Completion modes:**
   - **auto-settled** public completion via `complete_task`
-  - **reviewed** public completion via Task Validation V2 (CreatorReview / ValidatorQuorum /
-    ExternalAttestation) — see [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)
+  - **reviewed** public completion via Task Validation V2. New configs are
+    CreatorReview (or ExternalAttestation). `ValidatorQuorum` is fail-closed for
+    new `configure_task_validation` calls and remains only to settle legacy
+    quorum accounts. See [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)
   - **private development-only** zk-backed completion via `complete_task_private` — see
     [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md). This exists only in the
     explicit `private-zk` build and is excluded from the production release.
@@ -71,8 +73,8 @@ record are maintained in:
 > **As of 2026-07-22 the full 101-instruction revision-5 surface is live on mainnet**
 > (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`, deployed executable
 > SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, all task
-> types enabled, bid marketplace live, store + contest + goods live, `ZkConfig` deferred so
-> `complete_task_private` is off). Growth path: 25-ix canary → 84-ix full surface
+> types enabled, bid marketplace live, store + contest + goods live. Private-ZK
+> instructions are absent from the production ABI). Growth path: 25-ix canary → 84-ix full surface
 > (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4
 > → 101-ix revision 5 (2026-07-22, O(1) bid-accept redesign).
 > Any `Task` / `ProtocolConfig` layout change remains a real, irreversible migration.
@@ -124,20 +126,17 @@ surface.
 
 | Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed 101-instruction revision-5 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 targets the prior revision-4 wire (superseded by live revision 5).                                                                                 |
-| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **101-instruction revision-5 surface** + ergonomic facade. The published 0.11.0 release targets the prior revision-4 wire (superseded by live revision 5); program and SDK ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
-| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | 0.5.0 candidate (published: 0.4.1)   | React hooks/components for embeddable marketplace UIs; the candidate requires the revision-5 SDK and buyer job-spec commitment.                                                                                                                                       |
-| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | 0.5.0 candidate (published: 0.4.0)   | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers.                                                                                                                                                                                      |
-| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | 0.5.0 candidate (published: 0.4.0)   | MCP server exposing marketplace tools.                                                                                                                                                                                                                                |
-| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | 0.2.0 candidate (published: 0.1.0)   | Shared moderation canon / test vectors.                                                                                                                                                                                                                               |
-| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | 0.3.0 candidate (published: 0.2.0)   | `init` / `dev` / `promote` developer CLI.                                                                                                                                                                                                                             |
-| `agenc-cli`                         | `packages/agenc-cli-alias`        | 0.3.0 candidate (published: 0.2.0)   | Thin unscoped alias; ships with the scoped CLI.                                                                                                                                                                                                                       |
-| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | 0.2.0 candidate (published: 0.1.1)   | Worker claim/submit runtime loop.                                                                                                                                                                                                                                     |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.4.0** (npm)                      | Committed 101-instruction revision-5 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Older 0.3.0 is the superseded revision-4 99-ix wire. |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.12.0** (npm)                     | Codama-generated `@solana/kit` client for the **101-instruction revision-5 surface** + ergonomic facade. Older 0.11.0 is the superseded revision-4 wire. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.5.0** (npm)                      | React hooks/components for embeddable marketplace UIs; requires the revision-5 SDK and buyer job-spec commitment. |
+| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.5.0** (npm)                      | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
+| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.5.0** (npm)                      | MCP server exposing marketplace tools. |
+| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | **0.2.0** (npm)                      | Shared moderation canon / test vectors. |
+| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | **0.3.0** (npm)                      | `init` / `dev` / `promote` developer CLI. |
+| `agenc-cli`                         | `packages/agenc-cli-alias`        | workspace **0.3.0**; npm still **0.2.0** (checked 2026-08-23) | Thin unscoped alias for the scoped CLI. |
+| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | **0.2.0** (npm)                      | Worker claim/submit runtime loop. |
 
-Every version labeled **candidate** above belongs to the coordinated revision-5
-release train that matches the live program (deployed 2026-07-22); confirm each is
-published at its coordinated version. The prior published revision-4 pins now fail
-closed against the live revision-5 program.
+Those scoped packages were published with the 2026-07-22 revision-5 cutover. Older revision-4 pins fail closed against the live program.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
@@ -161,7 +160,8 @@ cargo clippy --lib --manifest-path programs/agenc-coordination/Cargo.toml --no-d
 # Build the program + regenerate/verify committed artifacts
 anchor build
 npm run artifacts:refresh   # regenerate artifacts/anchor/* + packages/protocol/src/generated/*
-npm run artifacts:check     # verify committed artifacts match the build (CI gate)
+npm run artifacts:check     # committed artifacts exist and match each other (no fresh build required)
+npm run artifacts:check:built  # same, but also requires a local `anchor build` (idl-drift CI)
 
 # litesvm integration tests (execute the real compiled .so)
 cd tests-integration && node --test
@@ -170,7 +170,7 @@ cd tests-integration && node --test
 npm run canary:build && npm run canary:idl && npm run canary:check-idl
 
 # npm package distribution gate
-npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/protocol
+npm run validate            # build + typecheck + pack:smoke + check:idl-reference
 
 # SDK (packages/sdk-ts)
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
@@ -192,22 +192,13 @@ implemented and gated ([enterprise remediation record](docs/audit/ENTERPRISE_REM
 criteria); accepted trade-offs are recorded in
 [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md).
 
-That snapshot is historical, not release authority for the dirty revision-5
-continuation. The current tree reproduces **533** production Rust and **323**
-canary tests; its SBF is byte-identical across three isolated builds at
-2,285,640 bytes with SHA-256
-`5112216b5ebdeeed3d83d6fe987ea847cfe44e1e1c7f8d3caa9a5169aef2a1cb`.
-Late accepted SDK/React/worker/CLI fixes invalidate the prior package-train SRIs
-and 1,560-test workspace aggregate. Latest package evidence (2026-07-21) is SDK
-**883/1** twice consecutively, React **312/1**, worker **273/273**, CLI
-**146/146**, tools **98/98**, and starter **36/36** on Node 24, with Node 22
-typecheck plus focused client/governance **100/100**; the full script suite is
-twice green at **451/451**, but the all-nine double-pack/rebind remains open.
-Compiled production integration is twice green at **404/404** plus nine
-canary-only skips that separately pass **11/11**. Remaining release authority
-comes from those reopened local gates, protected CI, live compatibility
-simulations, consumer convergence, and the controlled mainnet ceremony—not this
-paragraph.
+That 2026-07-19 snapshot is historical. The live revision-5 binary (deployed
+2026-07-22) is 2,303,608 bytes, SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`. Dated later
+gate tables, including the 2026-07-21 candidate run, live in
+[docs/VALIDATION.md](docs/VALIDATION.md). Re-run those commands before claiming
+a current local total. The `5112216b…` / 2,285,640-byte identity was a
+superseded 2026-07-21 candidate from before the O(1) bid-accept redesign.
 
 > Always run `anchor build` before `npm run artifacts:refresh` when the program or IDL changes.
 
@@ -321,7 +312,7 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)                                         | Accepted design decisions (do not re-file) with rationale                                       |
 | [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md)                                   | SDK build/automation plan + status                                                              |
 | [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md)                                         | Deployed source-of-truth + branch policy                                                        |
-| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live)            |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge attested revision 4; revision 5 still needs re-attest) |
 | [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md)                                       | How `anchor build` output becomes published artifacts                                           |
 | [docs/VALIDATION.md](docs/VALIDATION.md)                                                     | Local toolchain + CI-equivalent commands                                                        |
 | [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                                     | Reviewed-completion validation model                                                            |
@@ -344,4 +335,5 @@ This repository (including the on-chain program and zkVM guest) is licensed unde
 - [`@tetsuo-ai/marketplace-mcp`](packages/marketplace-mcp/LICENSE) — MIT
 - [`@tetsuo-ai/marketplace-moderation`](packages/marketplace-moderation/LICENSE) — MIT
 - [`@tetsuo-ai/agenc-cli`](packages/agenc-cli/LICENSE) — MIT
+- [`agenc-cli`](packages/agenc-cli-alias/LICENSE) — MIT (unscoped alias)
 - [`@tetsuo-ai/agenc-worker`](packages/agenc-worker/LICENSE) — MIT

@@ -1,9 +1,9 @@
 // Facade: P6.5 surface-versioning contract.
 //
 // One program ID historically served the restricted 25-instruction canary surface on
-// mainnet and the full surface on dev/devnet. The live revision-4 deployment has
-// 99 instructions; this revision-5 production candidate has 98 after quarantining
-// private-ZK entrypoints and retiring the dispute-vote path.
+// mainnet and the full surface on dev/devnet. Live revision 5 (deployed 2026-07-22)
+// has 101 production instructions after quarantining private-ZK entrypoints and
+// retiring the dispute-vote path. The superseded revision-4 deployment had 99.
 // `getDeployedSurface` lets a client ask, against a live RPC, WHICH surface a given
 // cluster actually exposes — so the facade/client can fail-closed (throw
 // `SurfaceNotDeployedError`) before building a transaction that calls an instruction
@@ -64,7 +64,7 @@ export const SURFACE_REVISION_FULL = 1;
 export const SURFACE_REVISION_BATCH4 = 4;
 
 /**
- * Audit-hardening release revision. The production inventory is 98 instructions, and
+ * Audit-hardening release revision. The production inventory is 101 instructions, and
  * several existing instructions gained stricter remaining-account conventions.
  * Mirrors `ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING` on-chain.
  */

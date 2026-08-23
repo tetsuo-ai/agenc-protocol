@@ -5,11 +5,11 @@ All notable changes to `@tetsuo-ai/agenc-worker` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.2.0 (unreleased candidate)
+## 0.2.0 (published 2026-07-22)
 
-This candidate depends on `@tetsuo-ai/marketplace-sdk@^0.12.0` and belongs to
-the coordinated revision-5 release train. Published worker 0.1.1 remains the
-current npm release while mainnet is on revision 4.
+This release depends on `@tetsuo-ai/marketplace-sdk@^0.12.0` and belongs to
+the coordinated revision-5 train. Older worker 0.1.1 is the superseded
+revision-4 pin.
 
 This candidate raises the runtime floor to Node 22.23.1; Node 20 is EOL and
 unsupported.

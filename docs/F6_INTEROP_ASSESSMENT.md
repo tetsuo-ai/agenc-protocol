@@ -1,6 +1,6 @@
 # WP-F6 — Ecosystem interop assessment (x402 / A2A / ERC-8004 / ACP / adjacent)
 
-> **Historical assessment record (banner added 2026-07-17).** Web-verified 2026-07-04; the in-repo baseline it cites (e.g. the 90-instruction P1.2 build) is that day's state — mainnet has run the 101-instruction revision-5 surface since 2026-07-22. See `./MAINNET_MAINLINE.md` for current state and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
+> **Historical assessment record (banner added 2026-07-17, in-repo pointer updated 2026-08-23).** Web-verified 2026-07-04; the in-repo baseline it cites (e.g. the 90-instruction P1.2 build and an `a2a/v0.2` pin) is that day's state. Mainnet has run the 101-instruction revision-5 surface since 2026-07-22. The AgentCard projection in this repo is now `a2a/v1.0` (`packages/marketplace-tools/src/agent-card.ts`). This repo still has no x402 payment path. See `./MAINNET_MAINLINE.md` for current state.
 
 > **Status: ASSESSMENT — decision-grade, web-verified 2026-07-04.**
 > This document is the WP-F6 deliverable: an adversarially honest read of the

@@ -246,8 +246,8 @@ then call `resolve_dispute` directly — no per-case vote tally or quorum.
 Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The
 assigned wallet may then record moderation attestations
 (`record_task_moderation` / `record_listing_moderation`) in addition to the single
-global moderation authority. Registry MECHANISM only — the neutrality model is a
-separate [HUMAN] decision (`docs/MODERATION_NEUTRALITY.md`).
+global moderation authority. P1.2 also added permissionless bonded
+self-registration; see `docs/P1_2_OPEN_ROSTER_SPEC.md`.
 
 ### Accounts (4)
 
@@ -320,8 +320,9 @@ _None._
 
 ## cancel_dispute
 
-Cancel a dispute before any votes are cast.
-Only the dispute initiator can cancel, and only if no arbiter has voted yet.
+Cancel an active dispute. Only the initiator can cancel, and only while
+the dispute is still active. The retired voter-count byte must be
+historical zero or the current `0xff` initiator-outcome provenance marker.
 
 ### Accounts (4)
 
@@ -382,8 +383,8 @@ _None._
 
 ## claim_task
 
-Claim a task to signal intent to work on it.
-Agent must have required capabilities and task must be claimable.
+Legacy claim without a job-spec pointer. Always returns
+`TaskJobSpecRequired`. Use `claim_task_with_job_spec`.
 
 ### Accounts (6)
 
@@ -825,8 +826,7 @@ ValidationMode::CreatorReview so settlement routes through buyer review.
 
 ## delegate_reputation
 
-Delegate reputation points to a trusted peer.
-One delegation per (delegator, delegatee) pair.
+Retired. Always returns `ReputationDelegationDisabled`.
 
 ### Accounts (5)
 
@@ -1252,7 +1252,8 @@ Called once to set up global parameters.
 ## initiate_dispute
 
 Initiate a conflict resolution process.
-Creates a dispute that requires multi-sig consensus to resolve.
+Resolution is an assigned single resolver or protocol authority plus
+configured M-of-N. `vote_dispute` is retired.
 
 # Arguments
 * `ctx` - Context with dispute account

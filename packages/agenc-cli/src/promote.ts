@@ -3,8 +3,9 @@
 // with the exact next action for each gap.
 //
 // The version matrix mirrors docs/VERSIONING.md §1.1 (published revision 4)
-// and §1.1.1 (the explicitly unreleased revision-5 candidate set). Update
-// both the document and this constant on a candidate bump or lockstep publish.
+// and §1.1.1 (published revision-5 set). Update both the document and this
+// constant on a lockstep publish. REVIEWED_MAINNET_RELEASES still lists only
+// revision 4 until the observed 2026-07-22 identity is patched in.
 // Compatibility is selected by the finalized on-chain surface revision; the
 // two sets must never be unioned because the revision-5 write wire deliberately
 // fails against revision 4 and the revision-4 writers fail against revision 5.

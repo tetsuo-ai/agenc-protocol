@@ -11,6 +11,7 @@ anchor build
   -> artifacts/anchor/*
   -> scripts/sync-package-protocol-assets.mjs
   -> packages/protocol/src/generated/*
+  -> scripts/check-mainnet-program-artifacts.mjs  (program-id + SHA-256 identity)
   -> npm package build / dist
 ```
 

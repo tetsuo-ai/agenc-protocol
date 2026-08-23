@@ -199,11 +199,12 @@ Then:
 
 ---
 
-## 6. Pending revision-5 capacity ceremony (artifact bound; not executed)
+## 6. Revision-5 capacity ceremony (EXECUTED 2026-07-22)
 
-This is a future upgrade operation, separate from the completed authority
-migration above. The live ProgramData allocation and final extension target are
-now independently bound:
+This section is the bound pre-ceremony artifact math. The extension and
+Squads upgrade ran on 2026-07-22 (see `MAINNET_MAINLINE.md` and `CHANGELOG.md`).
+The numbers below were the reviewed targets; they are no longer a pending
+blocker. Pre-ceremony ProgramData was:
 
 - live ProgramData: 2,183,269 account-data bytes = 45 bytes of loader metadata
   - 2,183,224 bytes of executable capacity;
@@ -349,9 +350,11 @@ and [SIMD-0431 feature declaration](https://github.com/anza-xyz/agave/blob/v4.1.
    require the post-deploy snapshot to preserve capacity and match the approved
    SBF bytes before any migration or revision stamp proceeds.
 
-Nothing in this document records an already-completed extension or upgrade. The
-extension is permissionless account allocation; the later executable-byte change
-still requires the independently reviewed 2-of-3 Squads upgrade.
+The 2026-07-22 ceremony completed this sequence: top-level legacy
+`ExtendProgram` of +120,384 bytes, then a later-slot Squads v4 2-of-3 upgrade
+to executable SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`
+(2,303,608 bytes). See `MAINNET_MAINLINE.md` for the execute transaction.
 
 ---
 
@@ -366,5 +369,5 @@ still requires the independently reviewed 2-of-3 Squads upgrade.
 - [x] **Post-migration verification** — `solana program show` reports the vault as `Authority:`. Docs and `SECURITY.md` §5.3 are updated. Remaining custody hardening: swap at least one member to a Ledger or independently controlled signer.
 
 The authority migration is complete: `solana program show` reports the Squads
-vault as the mainnet upgrade authority and the custody docs match. The separate
-revision-5 capacity ceremony in §6 remains pending until executed and verified.
+vault as the mainnet upgrade authority and the custody docs match. The
+revision-5 capacity ceremony in §6 executed on 2026-07-22.
