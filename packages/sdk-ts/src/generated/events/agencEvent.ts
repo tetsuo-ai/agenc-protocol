@@ -351,6 +351,10 @@ import {
   type TaskChangesRequestedEventData,
 } from "./taskChangesRequested";
 import {
+  getTaskClaimExpiredEventDecoder,
+  type TaskClaimExpiredEventData,
+} from "./taskClaimExpired";
+import {
   getTaskClaimedEventDecoder,
   type TaskClaimedEventData,
 } from "./taskClaimed";
@@ -513,6 +517,7 @@ export type AgencEvent =
   | { eventName: "StoreUpdated"; data: StoreUpdatedEventData }
   | { eventName: "TaskCancelled"; data: TaskCancelledEventData }
   | { eventName: "TaskChangesRequested"; data: TaskChangesRequestedEventData }
+  | { eventName: "TaskClaimExpired"; data: TaskClaimExpiredEventData }
   | { eventName: "TaskClaimed"; data: TaskClaimedEventData }
   | { eventName: "TaskClosed"; data: TaskClosedEventData }
   | { eventName: "TaskCompleted"; data: TaskCompletedEventData }
@@ -1150,6 +1155,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "TaskChangesRequested",
       data: getTaskChangesRequestedEventDecoder().decode(payload),
+    }),
+  },
+  "5df1986748fd4428": {
+    eventName: "TaskClaimExpired",
+    decode: (payload) => ({
+      eventName: "TaskClaimExpired",
+      data: getTaskClaimExpiredEventDecoder().decode(payload),
     }),
   },
   "d05af374500fe4ca": {

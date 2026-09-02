@@ -18555,6 +18555,19 @@
       ]
     },
     {
+      "name": "TaskClaimExpired",
+      "discriminator": [
+        93,
+        241,
+        152,
+        103,
+        72,
+        253,
+        68,
+        40
+      ]
+    },
+    {
       "name": "TaskClosed",
       "discriminator": [
         158,
@@ -28571,6 +28584,51 @@
           {
             "name": "max_workers",
             "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskClaimExpired",
+      "docs": [
+        "Emitted when a stale claim is expired via `expire_claim` (issue #82).",
+        "Closes the indexer blind spot on claim-timeout fallback transitions."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "docs": [
+              "The expired claim's worker `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "expired_by",
+            "docs": [
+              "Caller who triggered expiry (worker during grace, anyone after)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cleanup_reward",
+            "type": "u64"
+          },
+          {
+            "name": "task_reopened",
+            "docs": [
+              "True when `current_workers` hit zero and the task returned to `Open`."
+            ],
+            "type": "bool"
           },
           {
             "name": "timestamp",
