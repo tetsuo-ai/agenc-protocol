@@ -18561,6 +18561,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "taskClaimExpired",
+      "discriminator": [
+        93,
+        241,
+        152,
+        103,
+        72,
+        253,
+        68,
+        40
+      ]
+    },
+    {
       "name": "taskClosed",
       "discriminator": [
         158,
@@ -28577,6 +28590,51 @@ export type AgencCoordination = {
           {
             "name": "maxWorkers",
             "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskClaimExpired",
+      "docs": [
+        "Emitted when a stale claim is expired via `expire_claim` (issue #82).",
+        "Closes the indexer blind spot on claim-timeout fallback transitions."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "docs": [
+              "The expired claim's worker `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "expiredBy",
+            "docs": [
+              "Caller who triggered expiry (worker during grace, anyone after)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cleanupReward",
+            "type": "u64"
+          },
+          {
+            "name": "taskReopened",
+            "docs": [
+              "True when `current_workers` hit zero and the task returned to `Open`."
+            ],
+            "type": "bool"
           },
           {
             "name": "timestamp",
