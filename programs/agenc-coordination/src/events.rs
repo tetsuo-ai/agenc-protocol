@@ -168,6 +168,21 @@ pub struct TaskClaimed {
     pub timestamp: i64,
 }
 
+/// Emitted when a stale claim is expired via `expire_claim` (issue #82).
+/// Closes the indexer blind spot on claim-timeout fallback transitions.
+#[event]
+pub struct TaskClaimExpired {
+    pub task: Pubkey,
+    /// The expired claim's worker `AgentRegistration` PDA.
+    pub worker: Pubkey,
+    /// Caller who triggered expiry (worker during grace, anyone after).
+    pub expired_by: Pubkey,
+    pub cleanup_reward: u64,
+    /// True when `current_workers` hit zero and the task returned to `Open`.
+    pub task_reopened: bool,
+    pub timestamp: i64,
+}
+
 /// Emitted when a task is completed
 #[event]
 pub struct TaskCompleted {
