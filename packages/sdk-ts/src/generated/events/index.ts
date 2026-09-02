@@ -91,6 +91,7 @@ export * from "./storeRegistered";
 export * from "./storeUpdated";
 export * from "./taskCancelled";
 export * from "./taskChangesRequested";
+export * from "./taskClaimExpired";
 export * from "./taskClaimed";
 export * from "./taskClosed";
 export * from "./taskCompleted";
