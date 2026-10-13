@@ -13,13 +13,13 @@ This pre-deploy checkpoint is complete.
 
 ## Isolated Worktree
 
-- Worktree: `/Users/pchmirenko/agenc-protocol-validation-v2-validation`
+- Worktree: `$HOME/agenc-protocol-validation-v2-validation`
 - Branch: `codex/validation-deploy-prep`
 
 ## Dedicated Validation Program
 
 - Program ID: `GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3`
-- Program keypair: `/Users/pchmirenko/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json`
+- Program keypair: `$HOME/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json`
 
 ## Verified In This Worktree
 
@@ -33,22 +33,22 @@ This pre-deploy checkpoint is complete.
 ## Commands Already Run
 
 ```bash
-PATH="/Users/pchmirenko/.local/share/solana/install/active_release/bin:$PATH" \
+PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH" \
   anchor build -- --features validation-timings
 
-PATH="/Users/pchmirenko/.local/share/solana/install/active_release/bin:$PATH" \
+PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH" \
   npm run artifacts:refresh
 
 npm run devnet:validation:preflight -- \
-  --program-keypair /Users/pchmirenko/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json
+  --program-keypair $HOME/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json
 ```
 
 ## Deploy Command Used
 
 ```bash
-PATH="/Users/pchmirenko/.local/share/solana/install/active_release/bin:$PATH" \
+PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH" \
   anchor deploy -p agenc_coordination --provider.cluster devnet \
-  --program-keypair /Users/pchmirenko/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json
+  --program-keypair $HOME/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json
 ```
 
 This command path is no longer pending. Keep it here as the recorded pre-deploy checkpoint.
