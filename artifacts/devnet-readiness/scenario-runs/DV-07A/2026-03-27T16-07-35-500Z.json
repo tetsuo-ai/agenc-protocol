@@ -2,7 +2,7 @@
   "scenarioId": "DV-07A",
   "createdAt": "2026-03-27T16:07:35.500Z",
   "rpcUrl": "https://api.devnet.solana.com",
-  "idlPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/anchor/idl/agenc_coordination.json",
+  "idlPath": "$HOME/agenc-protocol-validation-v2-validation/artifacts/anchor/idl/agenc_coordination.json",
   "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
   "wallets": {
     "creator": "AYwAQmXxTLB3ukpRPHV2LC6qA4DCo2hsuSTneNn9xnQN",

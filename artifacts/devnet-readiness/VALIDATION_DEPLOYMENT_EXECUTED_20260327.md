@@ -1,6 +1,6 @@
 Validation deployment executed on devnet on 2026-03-27.
 
-Worktree: `/Users/pchmirenko/agenc-protocol-validation-v2-validation`
+Worktree: `$HOME/agenc-protocol-validation-v2-validation`
 Branch: `codex/validation-deploy-prep`
 
 Program ID: `GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3`
@@ -23,12 +23,12 @@ Operational notes:
 - Deployment was completed safely by resuming from that existing buffer with:
 
 ```bash
-PATH="/Users/pchmirenko/.local/share/solana/install/active_release/bin:$PATH" \
+PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH" \
   solana program deploy \
-  /Users/pchmirenko/agenc-protocol-validation-v2-validation/programs/agenc-coordination/target/deploy/agenc_coordination.so \
+  $HOME/agenc-protocol-validation-v2-validation/programs/agenc-coordination/target/deploy/agenc_coordination.so \
   --buffer 9xdiqqs9nisdy1JXJF2fcBKRVKcVNoCw24vXCVowGjYo \
-  --program-id /Users/pchmirenko/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json \
-  --upgrade-authority /Users/pchmirenko/.config/solana/id.json \
+  --program-id $HOME/.config/solana/agenc-validation/agenc_coordination-validation-keypair.json \
+  --upgrade-authority $HOME/.config/solana/id.json \
   --url devnet \
   --use-rpc \
   --max-sign-attempts 10

@@ -1,5 +1,5 @@
 {
-  "configPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/validation-init.config.json",
+  "configPath": "$HOME/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/validation-init.config.json",
   "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
   "protocolConfig": "GEXnAns2Wq27xjG84a7BnuxJBY3R5Qu9CdFy2HQ7vsiv",
   "bidMarketplace": "9eNWSqqiKU9UQ8fz1EtcN3ErxRpZGfUPjL3njjLMF7i8",
