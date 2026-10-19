@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, deregisterRemaining,
+  freshWorld, deregisterRemaining, setSurfaceRevision, setProtocolPaused, sendMany,
   BN, Keypair, PublicKey, SystemProgram, FailedTransactionMetadata,
 } from "./harness.mjs";
 
@@ -23,7 +23,7 @@ import {
 
 // Set an AgentRegistration's `reputation` in place (no real reputation flow
 // needed for tests). Feed posting requires reputation >= 5500 and upvoting
-// >= 5200, but new agents start at the neutral 5000 — so we bump it directly,
+// >= 5200, but new agents start at 3000 — so we bump it directly,
 // the same pattern injectAgentStake uses for `stake`.
 async function setAgentReputation(svm, agentPda, reputation) {
   const acct = svm.getAccount(agentPda);
@@ -51,9 +51,8 @@ function warp(svm, secs) {
 // freshWorld is reused; min_agent_stake is 0 so no stake is required.
 async function registerAgent(
   w,
-  { capabilities = 1, endpoint = "http://extra.test", stakeAmount = 0 } = {},
+  { capabilities = 1, endpoint = "http://extra.test", stakeAmount = 0, kp = Keypair.generate() } = {},
 ) {
-  const kp = Keypair.generate();
   w.svm.airdrop(kp.publicKey, BigInt(100e9));
   const prog = makeProgram(kp);
   const agentId = id32();
@@ -477,78 +476,204 @@ async function seedPost(w) {
   return { post, nonce };
 }
 
-test("upvote_post: a second agent upvotes (count -> 1, FeedVote recorded)", async () => {
+// Corruption/boundary fixtures below are confined to LiteSVM. The companion
+// feed-authority-votes.rpc.test.ts earns eligibility and waits age on real RPC.
+async function mutateAccount(w, name, key, change) {
+  const account = w.svm.getAccount(key);
+  const value = decode(w.svm, name, key);
+  change(value);
+  const data = Buffer.alloc(account.data.length);
+  (await coder.accounts.encode(name, value)).copy(data);
+  w.svm.setAccount(key, { ...account, data });
+}
+
+async function eligibleVoter(w, kp) {
+  const voter = await registerAgent(w, { kp });
+  await setAgentReputation(w.svm, voter.agentPda, 5200);
+  warp(w.svm, 900);
+  return voter;
+}
+
+async function walletVote(w, post, voter, overrides = {}) {
+  const [authorityVote] = pda([enc("authority_upvote"), post.toBuffer(), voter.kp.publicKey.toBuffer()]);
+  return voter.prog.methods.upvotePostByAuthority().accounts({
+    post, authorityVote, voter: voter.agentPda, author: w.providerAgent,
+    protocolConfig: w.protocolPda, authority: voter.kp.publicKey,
+    systemProgram: SystemProgram.programId, ...overrides,
+  }).instruction();
+}
+
+function receiptAddress(post, voter) {
+  return pda([enc("authority_upvote"), post.toBuffer(), voter.kp.publicKey.toBuffer()])[0];
+}
+
+test("#275: legacy agent-vote wire fails closed without creating a receipt", async () => {
   const w = await freshWorld({});
   const { post } = await seedPost(w);
-
-  // A distinct voter agent that meets the upvote eligibility gates.
-  const voter = await registerAgent(w);
-  await setAgentReputation(w.svm, voter.agentPda, 5200); // MIN_FEED_UPVOTE_REPUTATION
-  warp(w.svm, 900); // MIN_FEED_UPVOTE_ACCOUNT_AGE_SECS
-
+  const voter = await eligibleVoter(w);
   const [vote] = pda([enc("upvote"), post.toBuffer(), voter.agentPda.toBuffer()]);
-  expectOk(
-    send(
-      w.svm,
-      await voter.prog.methods
-        .upvotePost()
-        .accounts({ post, vote, voter: voter.agentPda, protocolConfig: w.protocolPda, authority: voter.kp.publicKey, systemProgram: SystemProgram.programId })
-        .instruction(),
-      [voter.kp],
-    ),
-    "upvote post",
-  );
-
-  assert.equal(decode(w.svm, "FeedPost", post).upvote_count, 1, "upvote_count incremented to 1");
-  const fv = decode(w.svm, "FeedVote", vote);
-  assert.equal(fv.post.toBase58(), post.toBase58(), "vote.post wired");
-  assert.equal(fv.voter.toBase58(), voter.agentPda.toBase58(), "vote.voter == upvoter agent");
+  const before = Buffer.from(w.svm.getAccount(post).data);
+  const ix = await voter.prog.methods.upvotePost().accounts({ post, vote,
+    voter: voter.agentPda, protocolConfig: w.protocolPda, authority: voter.kp.publicKey,
+    systemProgram: SystemProgram.programId }).instruction();
+  expectFail(send(w.svm, ix, [voter.kp]), "FeedAgentVotingRetired", "retired legacy vote");
+  assert.equal(w.svm.getAccount(vote), null);
+  assert.deepEqual(Buffer.from(w.svm.getAccount(post).data), before);
 });
 
-test("upvote_post: the author cannot upvote their own post (FeedSelfUpvote)", async () => {
+test("#275: distinct wallets count once, preserve historical prefix and legacy votes", async () => {
   const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
   const { post } = await seedPost(w);
-  // The provider agent authored the post; it also meets the (lower) upvote
-  // reputation/age gates, so the self-upvote guard is the failing check.
-  const [vote] = pda([enc("upvote"), post.toBuffer(), w.providerAgent.toBuffer()]);
-  expectFail(
-    send(
-      w.svm,
-      await w.providerProg.methods
-        .upvotePost()
-        .accounts({ post, vote, voter: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-        .instruction(),
-      [w.provider],
-    ),
-    "FeedSelfUpvote",
-    "self upvote",
-  );
-  assert.equal(decode(w.svm, "FeedPost", post).upvote_count, 0, "count unchanged after rejected self-upvote");
+  const voter = await eligibleVoter(w);
+  const other = await eligibleVoter(w);
+  // A historical post and receipt are fixtures; the prospective votes are real
+  // compiled-program instructions. No caller-selected historical deduplication.
+  await mutateAccount(w, "FeedPost", post, (value) => { value.upvote_count = 9; });
+  const [legacy, bump] = pda([enc("upvote"), post.toBuffer(), voter.agentPda.toBuffer()]);
+  const historical = await coder.accounts.encode("FeedVote", { post, voter: voter.agentPda,
+    timestamp: new BN(100), bump, _reserved: [0, 0, 0, 0] });
+  w.svm.setAccount(legacy, { lamports: 10_000_000, data: historical,
+    owner: PID, executable: false, rentEpoch: 0 });
+  const before = Buffer.from(w.svm.getAccount(post).data);
+  assert.equal(before.length, 190, "historical maximum post allocation unchanged");
+  const encoded = await coder.accounts.encode("FeedPost", decode(w.svm, "FeedPost", post));
+  const walletCountOffset = encoded.length - 8;
+  for (const who of [voter, other]) expectOk(send(w.svm, await walletVote(w, post, who), [who.kp]), "wallet vote");
+  const after = decode(w.svm, "FeedPost", post);
+  assert.equal(after.wallet_upvote_count, 2);
+  assert.equal(after.upvote_count, 9, "legacy aggregate remains separate");
+  const afterBytes = Buffer.from(w.svm.getAccount(post).data);
+  before.writeUInt32LE(2, walletCountOffset);
+  assert.deepEqual(afterBytes, before, "only the reserved-tail wallet counter changed");
+  assert.deepEqual(Buffer.from(w.svm.getAccount(legacy).data), historical);
+  const receipt = decode(w.svm, "FeedAuthorityVote", receiptAddress(post, voter));
+  assert.equal(receipt.authority.toBase58(), voter.kp.publicKey.toBase58());
+  assert.equal(receipt.voter.toBase58(), voter.agentPda.toBase58());
+  assert.equal(w.svm.getAccount(receiptAddress(post, voter)).data.length, 117);
 });
 
-test("upvote_post: a double upvote on the same (post, voter) PDA is rejected", async () => {
+test("#275: different agents under one wallet share one immutable receipt", async () => {
+  const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
+  const { post } = await seedPost(w);
+  const first = await eligibleVoter(w);
+  const second = await eligibleVoter(w, first.kp);
+  const ixs = [await walletVote(w, post, first), await walletVote(w, post, second)];
+  for (const ordered of [ixs, [...ixs].reverse()]) {
+    expectFail(sendMany(w.svm, ordered, [first.kp]), "FeedAuthorityAlreadyVoted", "atomic duplicates");
+    assert.equal(w.svm.getAccount(receiptAddress(post, first)), null, "rent allocation rolled back");
+    assert.equal(decode(w.svm, "FeedPost", post).wallet_upvote_count, 0);
+  }
+  expectOk(send(w.svm, ixs[0], [first.kp]), "first agent votes");
+  const original = Buffer.from(w.svm.getAccount(receiptAddress(post, first)).data);
+  for (const ix of [ixs[1], ixs[0]]) {
+    w.svm.expireBlockhash();
+    expectFail(send(w.svm, ix, [first.kp]), "FeedAuthorityAlreadyVoted", "same wallet repeat");
+    assert.deepEqual(Buffer.from(w.svm.getAccount(receiptAddress(post, first)).data), original);
+    assert.equal(decode(w.svm, "FeedPost", post).wallet_upvote_count, 1);
+  }
+});
+
+test("#275: same-agent and cross-agent self-votes both reject by immutable wallet authority", async () => {
+  const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
+  const { post } = await seedPost(w);
+  const sibling = await eligibleVoter(w, w.provider);
+  const author = { kp: w.provider, agentPda: w.providerAgent, prog: w.providerProg };
+  for (const voter of [author, sibling]) {
+    expectFail(send(w.svm, await walletVote(w, post, voter), [voter.kp]), "FeedSelfUpvote", "author wallet vote");
+    assert.equal(w.svm.getAccount(receiptAddress(post, voter)), null);
+  }
+  assert.equal(decode(w.svm, "FeedPost", post).wallet_upvote_count, 0);
+});
+
+test("#275: author retirement preserves the identity check and allows unrelated voters", async () => {
+  const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
+  const { post } = await seedPost(w);
+  const sibling = await eligibleVoter(w, w.provider);
+  const other = await eligibleVoter(w);
+  expectOk(send(w.svm, await w.providerProg.methods.deregisterAgent()
+    .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
+    .remainingAccounts(deregisterRemaining(w.providerAgent)).instruction(), [w.provider]), "retire author");
+  assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).authority.toBase58(), w.provider.publicKey.toBase58());
+  expectFail(send(w.svm, await walletVote(w, post, sibling), [sibling.kp]), "FeedSelfUpvote", "retired author's sibling");
+  expectOk(send(w.svm, await walletVote(w, post, other), [other.kp]), "vote on retired author's post");
+  assert.equal(decode(w.svm, "FeedPost", post).wallet_upvote_count, 1);
+});
+
+test("#275: author, voter authority and wallet receipt PDA cannot be substituted", async () => {
+  const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
+  const { post } = await seedPost(w);
+  const voter = await eligibleVoter(w);
+  expectFail(send(w.svm, await walletVote(w, post, voter, { author: voter.agentPda }), [voter.kp]),
+    "InvalidInput", "unrelated author identity");
+  const [otherReceipt] = pda([enc("authority_upvote"), post.toBuffer(), w.buyer.publicKey.toBuffer()]);
+  expectFail(send(w.svm, await walletVote(w, post, voter, { authority: w.buyer.publicKey, authorityVote: otherReceipt }), [w.buyer]),
+    "UnauthorizedAgent", "wrong voter authority");
+  expectFail(send(w.svm, await walletVote(w, post, voter, { authorityVote: otherReceipt }), [voter.kp]),
+    "ConstraintSeeds", "another wallet's receipt PDA");
+  assert.equal(w.svm.getAccount(receiptAddress(post, voter)), null);
+  assert.equal(w.svm.getAccount(otherReceipt), null);
+  assert.equal(decode(w.svm, "FeedPost", post).wallet_upvote_count, 0);
+});
+
+test("#275: revision gate, reputation floor, age boundary and pause remain effective", async () => {
   const w = await freshWorld({});
   const { post } = await seedPost(w);
   const voter = await registerAgent(w);
   await setAgentReputation(w.svm, voter.agentPda, 5200);
-  warp(w.svm, 900);
-
-  const [vote] = pda([enc("upvote"), post.toBuffer(), voter.agentPda.toBuffer()]);
-  const upvoteIx = async () =>
-    voter.prog.methods
-      .upvotePost()
-      .accounts({ post, vote, voter: voter.agentPda, protocolConfig: w.protocolPda, authority: voter.kp.publicKey, systemProgram: SystemProgram.programId })
-      .instruction();
-
-  expectOk(send(w.svm, await upvoteIx(), [voter.kp]), "first upvote");
-  assert.equal(decode(w.svm, "FeedPost", post).upvote_count, 1, "first upvote counted");
-
-  // The FeedVote PDA already exists -> a second upvote fails at init (a tx-level
-  // create_account error, so assert failure without a specific log match).
+  warp(w.svm, 899);
+  const ix = await walletVote(w, post, voter);
+  const reject = (error) => {
+    w.svm.expireBlockhash();
+    expectFail(send(w.svm, ix, [voter.kp]), error, error);
+    assert.equal(w.svm.getAccount(receiptAddress(post, voter)), null);
+  };
+  await setSurfaceRevision(w.svm, 5);
+  reject("FeedAuthorityVotingUnavailable");
+  await setSurfaceRevision(w.svm, 6);
+  reject("CooldownNotElapsed");
+  warp(w.svm, 1);
+  await setAgentReputation(w.svm, voter.agentPda, 5199);
+  reject("InsufficientReputation");
+  await setAgentReputation(w.svm, voter.agentPda, 5200);
+  await setProtocolPaused(w.svm, true);
+  reject("ProtocolPaused");
+  await setProtocolPaused(w.svm, false);
   w.svm.expireBlockhash();
-  assert.ok(
-    (await send(w.svm, await upvoteIx(), [voter.kp])) instanceof FailedTransactionMetadata,
-    "duplicate upvote rejected by init",
-  );
-  assert.equal(decode(w.svm, "FeedPost", post).upvote_count, 1, "count stays at 1 after rejected double upvote");
+  expectOk(send(w.svm, ix, [voter.kp]), "exact eligibility boundary");
 });
+
+test("#275: suspended voters cannot vote even with sufficient age and reputation", async () => {
+  const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
+  const { post } = await seedPost(w);
+  const voter = await eligibleVoter(w);
+  expectOk(send(w.svm, await makeProgram(w.admin).methods.suspendAgent().accounts({
+    agent: voter.agentPda, protocolConfig: w.protocolPda, authority: w.admin.publicKey,
+  }).instruction(), [w.admin]), "suspend voter");
+  expectFail(send(w.svm, await walletVote(w, post, voter), [voter.kp]), "AgentNotActive", "suspended voter");
+  assert.equal(w.svm.getAccount(receiptAddress(post, voter)), null);
+});
+
+test("#275: reserved-tail corruption and counter overflow roll back receipt initialization", async () => {
+  const w = await freshWorld({});
+  await setSurfaceRevision(w.svm, 6);
+  const { post } = await seedPost(w);
+  const voter = await eligibleVoter(w);
+  const ix = await walletVote(w, post, voter);
+  await mutateAccount(w, "FeedPost", post, (value) => { value._reserved[3] = 1; });
+  expectFail(send(w.svm, ix, [voter.kp]), "CorruptedData", "reserved tail");
+  await mutateAccount(w, "FeedPost", post, (value) => {
+    value._reserved[3] = 0; value.wallet_upvote_count = 0xffffffff;
+  });
+  const original = Buffer.from(w.svm.getAccount(post).data);
+  w.svm.expireBlockhash();
+  expectFail(send(w.svm, ix, [voter.kp]), "ArithmeticOverflow", "counter overflow");
+  assert.equal(w.svm.getAccount(receiptAddress(post, voter)), null);
+  assert.deepEqual(Buffer.from(w.svm.getAccount(post).data), original);
+});
+
