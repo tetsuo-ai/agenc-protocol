@@ -413,6 +413,8 @@ describe.skipIf(!RPC_ENABLED)(
       ]);
       for (const losing of [best, worst]) {
         const state = await h.read(losing.bid, sdk.getTaskBidDecoder());
+        const bidLamports = (await h.info(losing.bid))!.lamports;
+        expect(bidLamports).toBeGreaterThan(state.bondLamports);
         const before = await h.balance(losing.signer.address);
         const cancelled = await h.send(
           "loser exits and recovers bond",
@@ -426,11 +428,13 @@ describe.skipIf(!RPC_ENABLED)(
           ],
         );
         expect(await h.balance(losing.signer.address)).toBe(
-          before + state.bondLamports - cancelled.meta!.fee,
+          before + bidLamports - cancelled.meta!.fee,
         );
+        expect(await h.info(losing.bid)).toBeNull();
         expect(
-          (await h.read(losing.bid, sdk.getTaskBidDecoder())).bondLamports,
-        ).toBe(0n);
+          (await h.read(losing.market, sdk.getBidderMarketStateDecoder()))
+            .activeBidCount,
+        ).toBe(0);
       }
       const [claim] = await sdk.findClaimPda({ task, bidder: middle.agent });
       const [stats] = await sdk.findExpireClaimAgentStatsPda({
@@ -439,6 +443,8 @@ describe.skipIf(!RPC_ENABLED)(
       const claimRent = (await h.info(claim))!.lamports;
       const statsRent = (await h.info(stats))?.lamports ?? 0n;
       const accepted = await h.read(middle.bid, sdk.getTaskBidDecoder());
+      const acceptedBidLamports = (await h.info(middle.bid))!.lamports;
+      expect(acceptedBidLamports).toBeGreaterThan(accepted.bondLamports);
       const workerBefore = await h.balance(middle.signer.address);
       const treasuryBefore = await h.balance(h.config.treasury);
       const fee =
@@ -469,7 +475,7 @@ describe.skipIf(!RPC_ENABLED)(
         workerBefore +
           accepted.requestedRewardLamports -
           fee +
-          accepted.bondLamports +
+          acceptedBidLamports +
           claimRent -
           newStatsRent -
           completed.meta!.fee,
@@ -482,9 +488,12 @@ describe.skipIf(!RPC_ENABLED)(
         (await h.read(middle.agent, sdk.getAgentRegistrationDecoder()))
           .activeTasks,
       ).toBe(0);
+      expect(await h.info(middle.bid)).toBeNull();
+      expect(await h.info(claim)).toBeNull();
       expect(
-        (await h.read(middle.bid, sdk.getTaskBidDecoder())).bondLamports,
-      ).toBe(0n);
+        (await h.read(middle.market, sdk.getBidderMarketStateDecoder()))
+          .activeBidCount,
+      ).toBe(0);
       h.evidence.assertions = {
         invalidReorderingsRejected: true,
         graceCannotBeResetOrErased: true,
