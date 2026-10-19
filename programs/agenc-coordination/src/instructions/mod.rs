@@ -245,12 +245,12 @@ pub use complete_task::*;
 #[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 #[allow(ambiguous_glob_reexports)]
 pub use complete_task_private::*;
-#[allow(ambiguous_glob_reexports)]
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use configure_task_creation_quota::*;
 #[allow(ambiguous_glob_reexports)]
 pub use configure_task_moderation::*;
+#[allow(ambiguous_glob_reexports)]
 pub use configure_task_validation::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]

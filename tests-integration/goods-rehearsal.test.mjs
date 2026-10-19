@@ -23,7 +23,7 @@ import {
 import { decodeGoodPurchased } from "../scripts/goods-purchase-watcher.mjs";
 
 const MIN_GOOD_PRICE = 1_000;
-const REV_CURRENT = 6;
+const REV_CURRENT = 7;
 const LIVE_MASK = 0b0000_0100; // a nonzero launch-control mask to preserve
 const KEEP_MASK = 0xff;
 const KEEP_REV = 0xffff;
