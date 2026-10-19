@@ -48,7 +48,7 @@ function parseIsoDay(value, label) {
   return milliseconds / 86_400_000;
 }
 
-async function discoverPackageLocks(root) {
+export async function discoverPackageLocks(root) {
   const found = [];
   async function visit(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {

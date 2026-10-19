@@ -22,8 +22,10 @@ node scripts/audit-all-npm-locks.mjs --output npm-audit-evidence.json
 ```
 
 CI retains raw full-graph and runtime reports. Unknown, incomplete or inconsistent
-reports fail; a transport error is not a zero-finding result. Audit inventory is
-bound to the existing repository-wide lock discovery/license policy.
+reports fail; a transport error is not a zero-finding result. The audit and license
+gate share actual repository-wide lock discovery. An unlisted lock stops the
+audit before npm executes. Per-finding severities must match the summary counts,
+so a critical finding cannot be hidden by a misleading aggregate.
 
 | npm graph | Before: affected packages | After: full graph | After: runtime |
 | --- | --- | --- | --- |
@@ -123,6 +125,10 @@ dependency/documentation PR: no Rust program or IDL change is made here.
 - The new audit rejects the actual pre-fix Next graph as a negative control;
   tests reject expiry, changed archives, runtime exposure, unrelated advisories,
   malformed reports and dependency-chain inconsistencies.
+- Two final policy regressions fail against the preceding audit implementation:
+  a critical finding hidden by inconsistent summary counts, and an additional
+  unlisted lock. The corrected implementation rejects both; the real six-lock
+  audit then passes with the same explicit development-only review.
 
 ## Remaining release and operational acceptance
 
