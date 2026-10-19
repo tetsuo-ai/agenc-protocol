@@ -136,6 +136,9 @@ test("the gitleaks exception permits only the exact public regression vector", a
   assert.doesNotMatch(source, /paths\s*=|commits\s*=|stopwords\s*=/);
   const regexes = source.match(/regexes\s*=\s*\[([\s\S]*?)\]/)?.[1] ?? "";
   assert.equal((regexes.match(/whsec_/g) ?? []).length, 1);
+  assert.match(source, /Exact public Squads Multisig\.create_key address/);
+  assert.ok(source.includes('^createKey": "5UJUUFZnbGpS65nTrwenvzGNTffkUDrsjGAGg894uZqr"$'));
+  assert.equal((source.match(/\[\[allowlists\]\]/g) ?? []).length, 2);
 });
 
 test("Dependabot covers every independent npm lock", async () => {
