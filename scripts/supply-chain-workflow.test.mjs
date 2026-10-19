@@ -44,6 +44,7 @@ test("CodeQL, history secret scanning, and npm policy run fail-closed", async ()
   assert.ok(Object.hasOwn(workflow.on, "pull_request"));
   assert.deepEqual(workflow.on.push.branches, ["main"]);
   assert.ok(Object.hasOwn(workflow.on, "schedule"));
+  assert.deepEqual(workflow.on.schedule, [{ cron: "23 8 * * *" }], "expired npm exceptions must be detected daily");
 
   const codeql = workflow.jobs.codeql;
   assert.equal(codeql.permissions["security-events"], "write");
