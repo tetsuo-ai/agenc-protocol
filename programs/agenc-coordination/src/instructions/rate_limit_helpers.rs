@@ -430,6 +430,240 @@ mod tests {
     }
 
     #[test]
+    fn task_quota_merges_legacy_usage_and_only_resets_for_a_later_window() {
+        let authority = Pubkey::new_unique();
+        let mut legacy = AuthorityRateLimit {
+            authority,
+            task_count_24h: 42,
+            rate_limit_window_start: WINDOW_24H,
+            ..AuthorityRateLimit::default()
+        };
+        let mut quota = AuthorityTaskQuota {
+            authority,
+            max_tasks_per_24h: 300,
+            task_count_24h: 40,
+            rate_limit_window_start: WINDOW_24H,
+            enabled: true,
+            ..AuthorityTaskQuota::default()
+        };
+        synchronize_task_quota(&mut quota, &legacy).unwrap();
+        assert_eq!(quota.task_count_24h, 42);
+        // A saturated u8 counter must not replenish the wider budget.
+        quota.task_count_24h = 299;
+        legacy.task_count_24h = 255;
+        synchronize_task_quota(&mut quota, &legacy).unwrap();
+        assert_eq!(quota.task_count_24h, 299);
+        // A dispute may already have advanced the shared calendar window.
+        legacy.rate_limit_window_start = 2 * WINDOW_24H;
+        legacy.task_count_24h = 3;
+        synchronize_task_quota(&mut quota, &legacy).unwrap();
+        assert_eq!(quota.task_count_24h, 3);
+        assert_eq!(quota.rate_limit_window_start, 2 * WINDOW_24H);
+        legacy.rate_limit_window_start = WINDOW_24H;
+        assert_anchor_error_code(
+            synchronize_task_quota(&mut quota, &legacy),
+            CoordinationError::CorruptedData,
+        );
+        assert_eq!(quota.task_count_24h, 3);
+        legacy.rate_limit_window_start = 2 * WINDOW_24H;
+        quota._reserved[5] = 1;
+        assert_anchor_error_code(
+            synchronize_task_quota(&mut quota, &legacy),
+            CoordinationError::CorruptedData,
+        );
+        quota._reserved[5] = 0;
+        quota.authority = Pubkey::new_unique();
+        assert_anchor_error_code(
+            synchronize_task_quota(&mut quota, &legacy),
+            CoordinationError::InvalidTaskQuotaAccount,
+        );
+    }
+
+    #[test]
+    fn serialized_task_quota_admits_256_then_rejects_every_agent_without_touching_disputes() {
+        let authority = Pubkey::new_unique();
+        let (address, bump) = Pubkey::find_program_address(
+            &[b"authority_task_quota", authority.as_ref()],
+            &crate::ID,
+        );
+        let quota = AuthorityTaskQuota {
+            authority,
+            max_tasks_per_24h: 256,
+            task_count_24h: 255,
+            enabled: true,
+            bump,
+            ..AuthorityTaskQuota::default()
+        };
+        let mut data = vec![];
+        quota.try_serialize(&mut data).unwrap();
+        assert_eq!(data.len(), AuthorityTaskQuota::SIZE);
+        let mut lamports = 1_000_000;
+        let info = AccountInfo::new(
+            &address,
+            false,
+            true,
+            &mut lamports,
+            &mut data,
+            &crate::ID,
+            false,
+            0,
+        );
+        let config = ProtocolConfig {
+            surface_revision: ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS,
+            task_creation_cooldown: 1,
+            max_tasks_per_24h: 255,
+            ..ProtocolConfig::default()
+        };
+        let mut legacy = AuthorityRateLimit {
+            authority,
+            task_count_24h: 255,
+            last_task_created: 1_000,
+            dispute_count_24h: 7,
+            last_dispute_initiated: 999,
+            ..AuthorityRateLimit::default()
+        };
+        let before = info.try_borrow_data().unwrap().to_vec();
+        assert_anchor_error_code(
+            check_task_creation_with_optional_quota(
+                &mut legacy,
+                authority,
+                7,
+                [1; 32],
+                &config,
+                &test_clock(1_000),
+                std::slice::from_ref(&info),
+            ),
+            CoordinationError::CooldownNotElapsed,
+        );
+        assert_eq!(&info.try_borrow_data().unwrap()[..], before.as_slice());
+        check_task_creation_with_optional_quota(
+            &mut legacy,
+            authority,
+            7,
+            [1; 32],
+            &config,
+            &test_clock(1_001),
+            std::slice::from_ref(&info),
+        )
+        .unwrap();
+        let saved =
+            AuthorityTaskQuota::try_deserialize(&mut &info.try_borrow_data().unwrap()[..]).unwrap();
+        assert_eq!(saved.task_count_24h, 256);
+        assert_eq!(legacy.task_count_24h, 255);
+        assert_eq!(legacy.last_task_created, 1_001);
+        let at_capacity = info.try_borrow_data().unwrap().to_vec();
+        for agent_id in [[1; 32], [2; 32]] {
+            assert_anchor_error_code(
+                check_task_creation_with_optional_quota(
+                    &mut legacy,
+                    authority,
+                    7,
+                    agent_id,
+                    &config,
+                    &test_clock(1_002),
+                    std::slice::from_ref(&info),
+                ),
+                CoordinationError::RateLimitExceeded,
+            );
+        }
+        assert_anchor_error_code(
+            check_task_creation_with_optional_quota(
+                &mut legacy,
+                authority,
+                7,
+                [2; 32],
+                &config,
+                &test_clock(1_002),
+                &[],
+            ),
+            CoordinationError::RateLimitExceeded,
+        );
+        assert_eq!(&info.try_borrow_data().unwrap()[..], at_capacity.as_slice());
+        assert_eq!(legacy.dispute_count_24h, 7);
+        assert_eq!(legacy.last_dispute_initiated, 999);
+    }
+
+    #[test]
+    fn disabled_quota_retains_usage_and_obeys_the_legacy_limit() {
+        let authority = Pubkey::new_unique();
+        let (address, bump) = Pubkey::find_program_address(
+            &[b"authority_task_quota", authority.as_ref()],
+            &crate::ID,
+        );
+        let quota = AuthorityTaskQuota {
+            authority,
+            max_tasks_per_24h: 256,
+            task_count_24h: 2,
+            bump,
+            ..AuthorityTaskQuota::default()
+        };
+        let mut data = vec![];
+        quota.try_serialize(&mut data).unwrap();
+        let mut lamports = 1_000_000;
+        let info = AccountInfo::new(
+            &address,
+            false,
+            true,
+            &mut lamports,
+            &mut data,
+            &crate::ID,
+            false,
+            0,
+        );
+        let mut config = ProtocolConfig {
+            surface_revision: ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS,
+            task_creation_cooldown: 1,
+            max_tasks_per_24h: 3,
+            ..ProtocolConfig::default()
+        };
+        let mut legacy = AuthorityRateLimit {
+            authority,
+            task_count_24h: 2,
+            last_task_created: 1_000,
+            ..AuthorityRateLimit::default()
+        };
+        check_task_creation_with_optional_quota(
+            &mut legacy,
+            authority,
+            7,
+            [1; 32],
+            &config,
+            &test_clock(1_001),
+            std::slice::from_ref(&info),
+        )
+        .unwrap();
+        let saved =
+            AuthorityTaskQuota::try_deserialize(&mut &info.try_borrow_data().unwrap()[..]).unwrap();
+        assert_eq!(saved.task_count_24h, 3);
+        assert!(!saved.enabled);
+        assert_anchor_error_code(
+            check_task_creation_with_optional_quota(
+                &mut legacy,
+                authority,
+                7,
+                [2; 32],
+                &config,
+                &test_clock(1_002),
+                std::slice::from_ref(&info),
+            ),
+            CoordinationError::RateLimitExceeded,
+        );
+        config.surface_revision = ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS - 1;
+        assert_anchor_error_code(
+            check_task_creation_with_optional_quota(
+                &mut legacy,
+                authority,
+                7,
+                [2; 32],
+                &config,
+                &test_clock(1_002),
+                std::slice::from_ref(&info),
+            ),
+            CoordinationError::TaskQuotaUnavailable,
+        );
+    }
+
+    #[test]
     fn authority_task_cooldown_is_shared_across_agents() {
         let authority = Pubkey::new_unique();
         let mut authority_rate_limit = AuthorityRateLimit::default();
