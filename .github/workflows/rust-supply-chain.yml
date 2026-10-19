@@ -18,7 +18,7 @@ on:
       - "cli-v*"
       - "cli-alias-v*"
   schedule:
-    - cron: "41 9 * * 3"
+    - cron: "41 9 * * *"
 
 permissions:
   contents: read

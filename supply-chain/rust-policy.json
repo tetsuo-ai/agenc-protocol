@@ -51,9 +51,9 @@
       "lockfile": "programs/agenc-coordination/Cargo.lock",
       "owners": ["@7etsuo", "@signerless"],
       "tracking": "CARGO-MAINT-001",
-      "reviewedOn": "2026-07-19",
-      "expiresOn": "2026-10-17",
-      "reason": "bincode 1.3.3 remains a transitive requirement of the pinned Anchor and Solana dependency graph.",
+      "reviewedOn": "2026-10-19",
+      "expiresOn": "2026-11-18",
+      "reason": "Thirty-day maintenance exception after rechecking the exact locked Anchor/Solana graph and bincode call sites; see supply-chain/reviews/2026-10-19-bincode.json. RustSec lists no patched version for this unmaintained advisory; replacing the serializer requires an upstream compatibility migration.",
       "remediation": "Remove this exception as soon as the Anchor and Solana dependency graph no longer resolves bincode 1.3.3; otherwise re-review the exact locked package before expiry."
     }
   ]

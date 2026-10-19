@@ -470,8 +470,8 @@ function validateWorkflow(workflowText, policy) {
     "workflow must support manual runs",
   );
   invariant(
-    /\bschedule:\s*$[\s\S]*?\bcron:\s*["'][^"']+["']/m.test(workflowText),
-    "workflow must run on a recurring schedule",
+    /\bschedule:\s*\n\s*- cron: ["']41 9 \* \* \*["']\s*$/m.test(workflowText),
+    "workflow must run on the daily recurring schedule (09:41 UTC)",
   );
   invariant(
     /runs-on:\s*ubuntu-24\.04\s*$/m.test(workflowText),
