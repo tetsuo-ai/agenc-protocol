@@ -2,7 +2,6 @@ name: Protocol RPC E2E
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -15,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AGAVE_VERSION: v3.0.13
-  AGAVE_INSTALL_INIT_SHA256: 1a4e96d884a4df7f204240ea8a0e2ce5a4ca71257bc5ce32ae140e1f6bc140d8
+  AGAVE_VERSION: v4.1.0
+  AGAVE_INSTALL_INIT_SHA256: 47364bcbe524d8e5cb33eb64ed448d3d4ea8a8cc4d1073e04e04ef9e4c5abacb
 
 jobs:
   settlement-rpc:
