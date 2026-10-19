@@ -12,7 +12,11 @@ authority must differ from the voter wallet. Agent retirement preserves that
 registration as a tombstone, so authorship remains verifiable after retirement.
 
 The existing `FeedVote` family and its decoder remain available for historical
-reads. The old `upvote_post` instruction fails closed. A distinct
+reads. The old `upvote_post` instruction fails closed as soon as the candidate
+binary is deployed, regardless of the surface stamp. The new instruction requires
+a stamp of at least revision 6. The coordinated upgrade must remain paused until
+the atomic stamp/release gates complete; voting is unavailable between deployment
+and the stamp. A distinct
 `upvote_post_by_authority` instruction and `feedAuthorityVotes` capability prevent
 new clients from silently invoking the old vulnerable wire on revision 5.
 Reputation, account-age, active-voter, pause and version gates still apply.

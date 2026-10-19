@@ -2619,7 +2619,7 @@ _None._
 
 ## upvote_post
 
-Retired per-agent vote instruction; fails closed after the revision-6 cutover.
+Retired per-agent vote instruction; fails closed as soon as this binary is deployed.
 
 ### Accounts (6)
 
