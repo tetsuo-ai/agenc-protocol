@@ -48,7 +48,7 @@ describe.skipIf(!RPC_ENABLED)(
                 authority: buyer.signer,
                 creatorAgent: buyer.agent,
                 requiredCapabilities: 1n,
-                description: new Uint8Array([...id32(), ...id32()]),
+                description: new Uint8Array([...id32(), ...new Uint8Array(32)]),
                 rewardAmount: reward,
                 maxWorkers: 1,
                 deadline: (await h.clock()) + 900n,
