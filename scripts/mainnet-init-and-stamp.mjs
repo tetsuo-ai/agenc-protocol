@@ -60,6 +60,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { assertPrivateTaskReleaseDisabled } from "./private-task-release-policy.mjs";
 import { parseBinaryEnvFlag } from "./env-flags.mjs";
+import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
 import {
   assertApprovedExecutableSnapshot,
   assertImmediatePreUpgradeSnapshot,
@@ -409,13 +410,19 @@ async function verifyLoaderBoundary(
 
 async function sendIx(ix, label, { preBroadcast, postConfirmation } = {}) {
   const boundary = await verifyLoaderBoundary(`${label} pre-broadcast`);
-  if (preBroadcast) await preBroadcast(boundary.contextSlot, boundary);
   const latest = await connection.getLatestBlockhash("confirmed");
   const tx = new Transaction({
     feePayer: authority.publicKey,
     blockhash: latest.blockhash,
     lastValidBlockHeight: latest.lastValidBlockHeight,
   }).add(ix);
+  const signerPublicKeys = signerKps.map((signer) => signer.publicKey);
+  const review = await reviewFreshAdminTransaction({ connection, transaction: tx, latest,
+    signerPublicKeys, minContextSlot: boundary.contextSlot });
+  console.log(`   unsigned admin review: ${JSON.stringify(review)}`);
+  const immediate = await verifyLoaderBoundary(`${label} immediate pre-sign`, review.contextSlot);
+  if (preBroadcast) await preBroadcast(immediate.contextSlot, immediate);
+  assertReviewedAdminTransaction(tx, review, signerPublicKeys);
   tx.sign(...signerKps);
   const sig = await connection.sendRawTransaction(tx.serialize(), {
     skipPreflight: false,

@@ -79,7 +79,7 @@ export function buildNonBroadcastableSimulationTransaction({
 
 export async function simulateNonBroadcastableInstructions(
   connection,
-  { feePayer, instructions, commitment = "confirmed" },
+  { feePayer, instructions, commitment = "confirmed", minContextSlot },
 ) {
   if (!connection || typeof connection.simulateTransaction !== "function") {
     throw new Error("simulation connection is missing simulateTransaction");
@@ -92,6 +92,7 @@ export async function simulateNonBroadcastableInstructions(
     commitment,
     replaceRecentBlockhash: true,
     sigVerify: false,
+    ...(minContextSlot === undefined ? {} : { minContextSlot }),
   });
 }
 

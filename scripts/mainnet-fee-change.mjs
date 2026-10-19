@@ -87,6 +87,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 import path from "path";
 import { createHash } from "crypto";
+import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
 import {
   assertImmediatePreUpgradeSnapshot,
   loadReviewedUpgradeAuthorityPolicy,
@@ -1163,7 +1164,6 @@ async function sendIx(
   // and signing occur before the raw bytes are submitted.
   const built = await builder.transaction();
   const latest = await connection.getLatestBlockhash("confirmed");
-  if (preSign) await preSign();
   const transaction = new Transaction({
     feePayer: signer.publicKey,
     blockhash: latest.blockhash,
@@ -1175,6 +1175,17 @@ async function sendIx(
         other.publicKey.equals(candidate.publicKey),
       ) === index,
   );
+  const signerPublicKeys = transactionSigners.map((signer) => signer.publicKey);
+  const review = await reviewFreshAdminTransaction({ connection, transaction, latest,
+    signerPublicKeys, minContextSlot: immediateLoader.contextSlot });
+  console.log(`unsigned admin review: ${JSON.stringify(review)}`);
+  const afterSimulation = await readProgramUpgradeAuthoritySnapshot(connection, upgradeAuthorityPolicy,
+    { commitment: "confirmed", minContextSlot: review.contextSlot });
+  assertFeeChangeLoaderSnapshotUnchanged({ initial: approvedLoaderSnapshot, immediate: afterSimulation,
+    policy: upgradeAuthorityPolicy, genesisHash: MAINNET_GENESIS, binaryBytes: soBytes, expectedSoSha256 });
+  // Preserve the existing independent finalized-proposal check as the last RPC gate.
+  if (preSign) await preSign();
+  assertReviewedAdminTransaction(transaction, review, signerPublicKeys);
   transaction.sign(...transactionSigners);
   const sig = await submitLocallySignedTransaction({
     connection,

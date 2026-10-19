@@ -18,6 +18,7 @@ import {
   decodeUpgradeableProgramDataAccount,
   UPGRADEABLE_LOADER_ID,
 } from "./program-upgrade-authority-policy.mjs";
+import { decodeProtocolControls } from "./protocol-config-monitor.mjs";
 
 const require = createRequire(
   new URL("../tests-integration/package.json", import.meta.url),
@@ -56,6 +57,9 @@ export function validateSettings(value) {
       "staleAfterMs",
       "vaultTopUpLamports",
       "vaultOutflowLamports",
+      ...(Object.hasOwn(value ?? {}, "protocolMonitoring")
+        ? ["protocolMonitoring"]
+        : []),
     ],
     "settings",
   );
@@ -96,6 +100,20 @@ export function validateSettings(value) {
       BigInt(value[name]) < 1n
     )
       throw new Error(`invalid ${name}`);
+  if (value.protocolMonitoring !== undefined) {
+    keys(
+      value.protocolMonitoring,
+      ["treasuryInflowLamports", "treasuryOutflowLamports"],
+      "protocolMonitoring",
+    );
+    for (const threshold of Object.values(value.protocolMonitoring))
+      if (
+        typeof threshold !== "string" ||
+        !decimal.test(threshold) ||
+        BigInt(threshold) < 1n
+      )
+        throw new Error("invalid treasury threshold");
+  }
   return structuredClone(value);
 }
 
@@ -108,6 +126,17 @@ export function fixedAccounts(settings) {
     { kind: "program", address: settings.programId },
     { kind: "program-data", address: programData.toBase58() },
     { kind: "vault", address: settings.vaultAddress },
+    ...(settings.protocolMonitoring
+      ? [
+          {
+            kind: "protocol",
+            address: PublicKey.findProgramAddressSync(
+              [Buffer.from("protocol")],
+              new PublicKey(settings.programId),
+            )[0].toBase58(),
+          },
+        ]
+      : []),
     ...(settings.squads
       ? [{ kind: "multisig", address: settings.squads.multisig }]
       : []),
@@ -156,7 +185,11 @@ export function accountView(kind, account, settings) {
     dataSha256: hash(data),
     dataBytes: data.length,
   };
-  if (kind === "program") {
+  if (kind === "protocol") {
+    if (account.owner.toBase58() !== settings.programId || account.executable)
+      throw new Error("invalid ProtocolConfig owner/executable flag");
+    view.admin = decodeProtocolControls(data);
+  } else if (kind === "program") {
     Object.assign(view, decodeUpgradeableProgramAccount(account, LOADER));
   } else if (kind === "program-data") {
     const decoded = decodeUpgradeableProgramDataAccount(account, LOADER);
@@ -471,6 +504,11 @@ export class ObservationTracker {
     }
     const entry = { kind, address, slot, view };
     const comparable = (value) => {
+      if (kind === "protocol") {
+        // Telemetry and unsolicited donations do not alter administrative controls.
+        const { dataSha256: _telemetry, lamports: _donations, ...adminView } = value;
+        return adminView;
+      }
       if (kind !== "program" && kind !== "program-data") return value;
       const { lamports: _donations, ...semantic } = value;
       return semantic;
@@ -486,19 +524,45 @@ export class ObservationTracker {
     const type = !previous ? `${kind}-discovered` : `${kind}-changed`;
     let deltaLamports = null;
     if (
-      kind === "vault" &&
+      (kind === "vault" || kind === "treasury") &&
       previous?.view.lamports !== undefined &&
       view.lamports !== undefined
     ) {
       deltaLamports = BigInt(view.lamports) - BigInt(previous.view.lamports);
       const s = this.baseline.settings;
+      const isTreasury =
+        kind === "treasury" ||
+        (s.protocolMonitoring &&
+          [...this.latest.values()].some(
+            (entry) =>
+              entry.kind === "protocol" &&
+              entry.view.admin?.treasury === address,
+          ));
+      const smaller = (a, b) => (BigInt(a) < BigInt(b) ? BigInt(a) : BigInt(b));
+      const inflow = isTreasury
+        ? kind === "vault"
+          ? smaller(
+              s.vaultTopUpLamports,
+              s.protocolMonitoring.treasuryInflowLamports,
+            )
+          : BigInt(s.protocolMonitoring.treasuryInflowLamports)
+        : BigInt(s.vaultTopUpLamports);
+      const outflow = isTreasury
+        ? kind === "vault"
+          ? smaller(
+              s.vaultOutflowLamports,
+              s.protocolMonitoring.treasuryOutflowLamports,
+            )
+          : BigInt(s.protocolMonitoring.treasuryOutflowLamports)
+        : BigInt(s.vaultOutflowLamports);
       const structuralChange =
         previous.view.owner !== view.owner ||
+        previous.view.executable !== view.executable ||
         previous.view.dataSha256 !== view.dataSha256;
       if (
         !structuralChange &&
-        deltaLamports < BigInt(s.vaultTopUpLamports) &&
-        -deltaLamports < BigInt(s.vaultOutflowLamports)
+        deltaLamports < inflow &&
+        -deltaLamports < outflow
       ) {
         // Keep the last reported balance: multiple small transfers accumulate.
         this.latest.set(address, { ...previous, slot });

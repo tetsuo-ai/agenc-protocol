@@ -36,6 +36,7 @@ import {
   readProgramUpgradeAuthoritySnapshot,
 } from "./program-upgrade-authority-policy.mjs";
 import { simulateNonBroadcastableInstructions } from "./mainnet-release-boundary.mjs";
+import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
@@ -383,13 +384,18 @@ async function enumerateAndValidateTasks() {
     );
 }
 
-async function signedTransaction(instruction) {
+async function signedTransaction(instruction, minContextSlot) {
   const latest = await connection.getLatestBlockhash("confirmed");
   const transaction = new Transaction({
     feePayer: authority.publicKey,
     blockhash: latest.blockhash,
     lastValidBlockHeight: latest.lastValidBlockHeight,
   }).add(instruction);
+  const signerPublicKeys = signerKps.map((signer) => signer.publicKey);
+  const review = await reviewFreshAdminTransaction({ connection, transaction, latest, signerPublicKeys, minContextSlot });
+  console.log(`  unsigned admin review: ${JSON.stringify(review)}`);
+  await verifyMigrationBoundary("immediate pre-sign", review.contextSlot);
+  assertReviewedAdminTransaction(transaction, review, signerPublicKeys);
   transaction.sign(...signerKps);
   return { transaction, latest };
 }
@@ -411,7 +417,7 @@ async function simulateInstruction(instruction, label) {
 
 async function sendInstruction(instruction, label) {
   const boundary = await verifyMigrationBoundary(`${label} pre-broadcast`);
-  const { transaction, latest } = await signedTransaction(instruction);
+  const { transaction, latest } = await signedTransaction(instruction, boundary.contextSlot);
   const signature = await connection.sendRawTransaction(transaction.serialize(), {
     skipPreflight: false,
   });

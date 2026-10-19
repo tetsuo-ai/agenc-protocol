@@ -46,6 +46,20 @@ export async function captureBaseline(connection, input) {
     accounts[1].view.upgradeAuthority !== settings.expectedUpgradeAuthority
   )
     throw new Error("program/upgrade authority differs from reviewed settings");
+  const treasury = accounts.find((entry) => entry.kind === "protocol")?.view
+    .admin?.treasury;
+  if (treasury && !accounts.some((entry) => entry.address === treasury)) {
+    const response = await connection.getAccountInfoAndContext(
+      new PublicKey(treasury),
+      { commitment: "confirmed", minContextSlot: context.slot },
+    );
+    accounts.push({
+      kind: "treasury",
+      address: treasury,
+      slot: response.context.slot,
+      view: accountView("treasury", response.value, settings),
+    });
+  }
   for (const query of discoveryFilters(settings)) {
     const found = await connection.getProgramAccounts(query.program, {
       commitment: "confirmed",
@@ -107,6 +121,16 @@ export function validateBaseline(value) {
     throw new Error(
       "baseline program linkage/authority contradicts reviewed settings",
     );
+  if (value.settings.protocolMonitoring) {
+    const protocol = value.accounts.find((entry) => entry.kind === "protocol");
+    if (
+      !protocol?.view.admin?.treasury ||
+      !value.accounts.some(
+        (entry) => entry.address === protocol.view.admin.treasury,
+      )
+    )
+      throw new Error("baseline must include the configured treasury");
+  }
   return value;
 }
 
@@ -151,6 +175,18 @@ export async function watch({
   const observe = (kind, address, account, slot, source) => {
     try {
       tracker.observe(kind, address, account, slot, source);
+      if (kind === "protocol") {
+        const treasury = tracker.latest.get(address)?.view.admin?.treasury;
+        if (treasury && !tracker.latest.has(treasury)) {
+          tracker.latest.set(treasury, {
+            kind: "treasury",
+            address: treasury,
+            slot: 0,
+            view: { unobserved: true },
+          });
+          subscribeAccount("treasury", treasury);
+        }
+      }
     } catch (error) {
       fatal = error;
     }
