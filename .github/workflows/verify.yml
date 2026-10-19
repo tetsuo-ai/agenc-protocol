@@ -108,7 +108,7 @@ jobs:
           solana-verify build \
             --library-name "${LIBRARY_NAME}" \
             -- --no-default-features --features mainnet-canary
-          mv "target/deploy/${LIBRARY_NAME}.so" \
+          cp "target/deploy/${LIBRARY_NAME}.so" \
              "/tmp/${LIBRARY_NAME}.canary.so"
 
       - name: Hash the mainnet-canary build
@@ -130,7 +130,7 @@ jobs:
         working-directory: programs/agenc-coordination
         run: |
           solana-verify build --library-name "${LIBRARY_NAME}"
-          mv "target/deploy/${LIBRARY_NAME}.so" \
+          cp "target/deploy/${LIBRARY_NAME}.so" \
              "/tmp/${LIBRARY_NAME}.full.so"
 
       - name: Hash the production build
