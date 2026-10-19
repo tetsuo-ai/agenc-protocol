@@ -27,7 +27,7 @@ name: Verifiable Build
 #
 # Targets solana-verify v0.5.x (Solana Foundation fork). The build image's
 # Solana CLI version is read from programs/agenc-coordination/Cargo.toml
-# [workspace.metadata.cli].solana = "3.0.13" (kept in sync with Anchor.toml).
+# [workspace.metadata.cli].solana = "4.1.0" (kept in sync with Anchor.toml).
 
 on:
   # Required by release.yml for protocol tags.
@@ -41,7 +41,8 @@ permissions:
 # Pin the verifier so the build image and hashing logic are themselves
 # reproducible. Bump deliberately and re-record hashes when upgrading.
 env:
-  SOLANA_VERIFY_VERSION: "0.5.0"
+  SOLANA_VERIFY_VERSION: "0.5.2"
+  SOLANA_VERIFY_LINUX_SHA256: b9d5ccce9634dc14269cab3e7a58649bc141b3306e7735a94478c936341f211f
   PROGRAM_ID: "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"
   LIBRARY_NAME: "agenc_coordination"
   MOUNT_PATH: "programs/agenc-coordination"
@@ -78,10 +79,19 @@ jobs:
             ~/.cargo/git
           key: solana-verify-${{ env.SOLANA_VERIFY_VERSION }}-${{ runner.os }}
 
-      # solana-verify drives a deterministic Docker build; the runner already
-      # has Docker. --locked pins the verifier's own dependency tree.
-      - name: Install solana-verify
-        run: cargo install solana-verify --version "${SOLANA_VERIFY_VERSION}" --locked
+      # Use the checksum-pinned upstream executable independently of the
+      # protocol's Rust 1.85 host/MSRV checks. Its image map includes Agave 4.1.
+      - name: Install checksum-pinned solana-verify
+        run: |
+          verifier_dir="${RUNNER_TEMP}/solana-verify-bin"
+          mkdir -p "${verifier_dir}"
+          curl --fail --location --silent --show-error --retry 3 \
+            "https://github.com/solana-foundation/solana-verifiable-build/releases/download/v${SOLANA_VERIFY_VERSION}/solana-verify-${SOLANA_VERIFY_VERSION}-linux" \
+            --output "${verifier_dir}/solana-verify"
+          echo "${SOLANA_VERIFY_LINUX_SHA256}  ${verifier_dir}/solana-verify" | sha256sum --check --strict
+          chmod +x "${verifier_dir}/solana-verify"
+          test "$("${verifier_dir}/solana-verify" --version)" = "solana-verify ${SOLANA_VERIFY_VERSION}"
+          echo "${verifier_dir}" >> "$GITHUB_PATH"
 
       - name: Tool versions (recorded in the log for auditability)
         run: |

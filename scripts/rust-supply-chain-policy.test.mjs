@@ -13,7 +13,10 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { validateRustSupplyChainPolicy } from "./check-rust-supply-chain-policy.mjs";
+import {
+  validateRustSupplyChainPolicy,
+  validateAnchorVersion,
+} from "./check-rust-supply-chain-policy.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const POLICY = JSON.parse(
@@ -81,7 +84,7 @@ test("the UTC expiry boundary accepts the preceding instant and rejects every la
 
 // Exercise the actual CI entry point, file reads, wall clock, and process exit
 // status. This does not replace the live --run-tools audit in the same workflow.
-test("CI CLI rejects an expired on-disk exception before executing external tools", (t) => {
+function cliFixture(t) {
   const root = mkdtempSync(resolve(tmpdir(), "agenc-rust-policy-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const script = "scripts/check-rust-supply-chain-policy.mjs";
@@ -108,6 +111,11 @@ test("CI CLI rejects an expired on-disk exception before executing external tool
         CARGO_DENY_BIN: resolve(root, "must-not-run-deny"),
       },
     });
+  return { root, run };
+}
+
+test("CI CLI rejects an expired on-disk exception before executing external tools", (t) => {
+  const { root, run } = cliFixture(t);
   const valid = run();
   assert.equal(valid.error, undefined);
   assert.equal(valid.status, 0, valid.stderr);
@@ -143,6 +151,80 @@ test("CI CLI rejects an expired on-disk exception before executing external tool
     assert.doesNotMatch(rejected.stderr, /cannot execute/);
     assert.doesNotMatch(rejected.stdout, /passed|are valid/);
   }
+});
+
+test("Anchor migration floor covers prereleases, release boundaries, and build metadata", () => {
+  for (const name of ["anchor-lang", "anchor-spl"]) {
+    for (const version of [
+      "0.32.1",
+      "0.32.2",
+      "1.0.2",
+      "1.0.2+reviewed",
+      "1.0.3",
+      "1.1.0",
+      "2.0.0",
+    ]) {
+      assert.doesNotThrow(() =>
+        validateAnchorVersion(name, version, "fixture"),
+      );
+    }
+    for (const version of [
+      "0.32.1-rc.1",
+      "0.33.0",
+      "1.0.0-alpha",
+      "1.0.0-beta.1",
+      "1.0.0-rc.1",
+      "1.0.0-rc.2",
+      "1.0.0",
+      "1.0.1",
+      "1.0.1+build.7",
+      "1.0.2-rc.1",
+    ]) {
+      assert.throws(
+        () => validateAnchorVersion(name, version, "fixture"),
+        /forbidden/,
+      );
+    }
+  }
+});
+
+test("real CI command rejects vulnerable Anchor locks and accepts the patched boundary", (t) => {
+  const { root, run } = cliFixture(t);
+  const lockfile = "programs/agenc-coordination/Cargo.lock";
+  const original = LOCK_TEXTS[lockfile];
+  for (const name of ["anchor-lang", "anchor-spl"]) {
+    for (const version of ["1.0.0-rc.1", "1.0.0", "1.0.1", "1.0.2"]) {
+      const mutated = original.replace(
+        new RegExp(`(\\nname = "${name}"\\nversion = ")[^"]+`),
+        `$1${version}`,
+      );
+      assert.notEqual(
+        mutated,
+        original,
+        "fixture must change a real locked package",
+      );
+      writeFileSync(resolve(root, lockfile), mutated);
+      const result = run();
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, version === "1.0.2" ? 0 : 1, result.stderr);
+      if (version !== "1.0.2")
+        assert.ok(
+          result.stderr.includes(`forbidden ${name}@${version}`),
+          result.stderr,
+        );
+    }
+  }
+});
+
+test("a vulnerable transitive Anchor in another covered lock cannot bypass the floor", () => {
+  const input = fixture();
+  const lockfile = "programs/agenc-coordination/fuzz/Cargo.lock";
+  input.lockTexts[lockfile] +=
+    '\n[[package]]\nname = "anchor-lang"\nversion = "1.0.1"\n';
+  assert.throws(
+    () => validateRustSupplyChainPolicy(input),
+    /fuzz\/Cargo.lock: forbidden anchor-lang@1.0.1/,
+  );
 });
 
 test("the exception cannot broaden its bincode version selector", () => {

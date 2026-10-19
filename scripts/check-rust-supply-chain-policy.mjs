@@ -107,6 +107,23 @@ function normalizePath(path) {
   return path.split(sep).join("/");
 }
 
+// Repository migration policy, deliberately stricter than the individual
+// advisory ranges. Both Anchor packages must stay on stable 0.32.x or cross
+// directly to >=1.0.2; prereleases of the vulnerable 1.0 transition are denied.
+export function validateAnchorVersion(name, version, label) {
+  if (name !== "anchor-lang" && name !== "anchor-spl") return;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(version);
+  invariant(match !== null, `${label}: ${name} has an invalid resolved version`);
+  const major = BigInt(match[1]);
+  const minor = BigInt(match[2]);
+  const patch = BigInt(match[3]);
+  const prerelease = match[4];
+  const stable032 = major === 0n && minor === 32n && !prerelease;
+  const atLeast102 = major > 1n || (major === 1n && (minor > 0n || patch > 2n || (patch === 2n && !prerelease)));
+  invariant(stable032 || atLeast102,
+    `${label}: forbidden ${name}@${version}; require stable 0.32.x or >=1.0.2 (RUSTSEC-2026-0144 / RUSTSEC-2026-0146)`);
+}
+
 function exactKeys(value, expected, label) {
   invariant(
     value !== null && typeof value === "object" && !Array.isArray(value),
@@ -737,6 +754,7 @@ export function validateRustSupplyChainPolicy({
     const packages = parseCargoLock(lockText, entry.lockfile);
     packagesByLock.set(entry.lockfile, packages);
     for (const item of packages) {
+      validateAnchorVersion(item.name, item.version, entry.lockfile);
       if (item.source !== undefined) {
         invariant(
           item.source === ALLOWED_REGISTRY,

@@ -8,7 +8,7 @@ devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLA
 ## Toolchain Pins
 
 - Anchor `0.32.1`
-- Solana `3.0.13`
+- Solana `4.1.0`
 - Rust `1.85.0` for reproducible host CI/release builds; the program crate's
   independently tested MSRV is `1.82.0`
 - Node `24.18.0` with npm `11.18.0` for reproducible CI/release builds; Node
@@ -308,7 +308,7 @@ register its intentional opt-in canary skips from a clean checkout without requi
 pre-existing ignored canary IDL.
 
 The upgrade preflight separately checks loader-v3 ProgramData capacity and rent
-semantics: pinned Solana CLI 3.0.13, genesis-checked RPC rent, mainnet's minimum
+semantics: pinned Solana CLI 4.1.0, genesis-checked RPC rent, mainnet's minimum
 extension rule, no implicit auto-extension, and unchanged capacity across deploy.
 Immediately before invoking the loader it also re-runs the cutover inventory and
 requires explicit zero aggregates for open `TaskBid` accounts (Active or

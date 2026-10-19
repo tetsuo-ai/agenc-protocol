@@ -202,7 +202,7 @@ preflight-to-inclusion race is irreducible; exact postflight detects but cannot
 undo an unexpected concurrent extension, so any size mismatch aborts.
 Extension stamps the ProgramData slot, so the extension and
 `Upgrade` cannot execute in the same slot; wait for a later slot, then rerun the
-entire preflight. The separate upgrade rail pins Solana CLI 3.0.13, forces
+entire preflight. The separate upgrade rail pins Solana CLI 4.1.0, forces
 `--no-auto-extend`, and rejects pre/post capacity drift. Re-query size, rent,
 authority, balance, feature state, and slot at the ceremony. The 2026-07-22
 extend already ran (see Current Mainnet Deployment above).

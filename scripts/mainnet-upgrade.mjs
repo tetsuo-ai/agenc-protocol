@@ -179,7 +179,7 @@ const PROGRAM_ID_STR = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK";
 const PROGRAM_ID = new PublicKey(PROGRAM_ID_STR);
 const SYSTEM_PROGRAM_ID = new PublicKey("11111111111111111111111111111111");
 const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
-const REQUIRED_SOLANA_CLI_VERSION = "3.0.13";
+const REQUIRED_SOLANA_CLI_VERSION = "4.1.0";
 const REQUIRED_ANCHOR_CLI_VERSION = "0.32.1";
 // Solana loader account-data overheads (bytes added on top of the .so payload).
 const PROGRAMDATA_META_BYTES = PROGRAMDATA_METADATA_BYTES;
@@ -282,7 +282,7 @@ export function loaderRentDataLengths(binaryBytes, capacityBytes) {
   return {
     programData: capacityBytes + PROGRAMDATA_META_BYTES,
     bufferAllocation: binaryBytes + BUFFER_META_BYTES,
-    // Agave 3.0.13 process_program_deploy passes the ProgramData-sized rent
+    // Agave 4.1.0 process_program_deploy passes the ProgramData-sized rent
     // minimum into create_buffer, overfunding its 37-byte metadata allocation.
     cliBufferFunding: binaryBytes + PROGRAMDATA_META_BYTES,
   };
@@ -3323,7 +3323,7 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
       `zlib=${pf.anchorIdlStorage.compressedLength.toLocaleString()} B, sha256=${pf.publishedIdlSha}`,
   );
 
-  // Agave 3.0.13 computes the fresh upgrade Buffer's funding from
+  // Agave 4.1.0 computes the fresh upgrade Buffer's funding from
   // size_of_programdata(program_len), even though the Buffer allocation itself
   // has an eight-byte-smaller metadata prefix. Use the actual CLI debit for peak
   // funding, and the live ProgramData allocation for its permanent rent floor.
@@ -4238,7 +4238,7 @@ async function readReviewedDeployBufferState(
     expectedAuthority: pf.uaPub,
     loaderProgramId: pf.upgradeAuthorityPolicy.loaderProgramId,
     reviewedBinary: pf.soBytes,
-    // Agave 3.0.13 funds a fresh Buffer using the ProgramData-sized rent
+    // Agave 4.1.0 funds a fresh Buffer using the ProgramData-sized rent
     // basis. Requiring the same balance for a resumed Buffer prevents an
     // underfunded resume from failing after the frozen window opens.
     requiredFundingLamports: pf.bufferRent,
