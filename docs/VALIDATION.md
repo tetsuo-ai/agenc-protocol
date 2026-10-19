@@ -41,6 +41,19 @@ timing configuration, signed transaction signatures and metadata, and completion
 assertions. CI uploads only these JSON files, never test keypairs. Ordinary SDK
 unit runs skip the RPC suite; the dedicated workflow enables and runs every case.
 
+The same workflow runs `tests-e2e/moderation-disabled.rpc.test.ts` sequentially
+with settlement tests because it changes shared moderation config through signed
+authority instructions. Registered and humanless hires must roll back while
+moderation is disabled, preserving the buyer's funds apart from the transaction
+fee. The test also verifies cancellation refunds and listing-capacity recovery,
+the unconditional multisig BLOCK floor, re-enabled publication/claim, and exact
+worker/treasury payouts even if moderation is disabled again after the claim.
+It waits for the real per-authority creation cooldown. Evidence is saved as
+`.localnet/evidence/issue-274-*.json`. The production one-day deadman boundary
+and heartbeat re-arming use separate compiled-SBF Clock-warp cases in
+`tests-integration/moderation-disabled.test.mjs`, including both `enabled` states
+and both hire instructions.
+
 For Marketplace V2 release readiness, local CI is necessary but not sufficient. The protocol-owned
 devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md).
 

@@ -354,7 +354,7 @@ export async function seatTestAuthorityResolver(w) {
   return entry;
 }
 
-/// Inject a ModerationConfig at ["moderation_config"]. enabled=false keeps Model-A.
+/// Inject a ModerationConfig at ["moderation_config"]. Disabled is fail-closed.
 export async function injectModerationConfig(svm, admin, modAuth, enabled) {
   const [pdaKey, bump] = pda([enc("moderation_config")]);
   const cfg = {
@@ -404,7 +404,7 @@ export async function injectBidMarketplace(svm, admin, { minBond = 100_000 } = {
 }
 
 /// Build a fully wired world ready to hire: protocol + moderation config + agents + listing.
-export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1, moderationEnabled = false, operator = null, operatorFeeBps = 0 } = {}) {
+export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1, moderationEnabled, operator = null, operatorFeeBps = 0 } = {}) {
   const svm = new LiteSVM();
   svm.addProgramFromFile(PID, SO);
 
@@ -426,7 +426,7 @@ export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilit
   if (operator) svm.airdrop(operator, BigInt(1e9));
 
   const protocolPda = await injectProtocolConfig(svm, admin);
-  const modCfg = await injectModerationConfig(svm, admin, modAuth, moderationEnabled);
+  const modCfg = await injectModerationConfig(svm, admin, modAuth, moderationEnabled ?? true);
 
   // Register provider + buyer agents (real instruction).
   const providerProg = makeProgram(provider);
@@ -490,7 +490,18 @@ export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilit
     "create listing",
   );
 
-  return { svm, admin, provider, buyer, modAuth, buyerProg, providerProg, protocolPda, modCfg, providerAgent, buyerAgent, listing, listingId, price, specHash, operator, operatorFeeBps };
+  // Generic money-path fixtures use the supported enabled + CLEAN path. Tests
+  // that explicitly select a moderation mode manage their own attestations.
+  let defaultListingModeration = null;
+  if (moderationEnabled === undefined) {
+    [defaultListingModeration] = listingModV2Pda(listing, specHash, modAuth.publicKey);
+    expectOk(send(svm, await makeProgram(modAuth).methods
+      .recordListingModeration(arr(specHash), 0, 0, new BN(0), arr(id32()), arr(id32()), new BN(0))
+      .accounts({ listingModeration: defaultListingModeration, listing, moderationConfig: modCfg,
+        moderationAttestor: null, moderator: modAuth.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [modAuth]), "attest default listing");
+  }
+  return { svm, admin, provider, buyer, modAuth, buyerProg, providerProg, protocolPda, modCfg, providerAgent, buyerAgent, listing, listingId, price, specHash, operator, operatorFeeBps, defaultListingModeration };
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +529,7 @@ export function moderationBlockPda(contentHash) {
 /// P1.2: `moderator` names the attestor whose record the hire consumes (defaults to
 /// the world's global moderation authority); the required `moderationBlock` floor
 /// account is derived from the listing's pinned spec hash.
-export async function hireIx(w, { taskId, expectedPrice, expectedVersion, taskJobSpecHash = null, asProvider = false, listingModeration = null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null } = {}) {
+export async function hireIx(w, { taskId, expectedPrice, expectedVersion, taskJobSpecHash = null, asProvider = false, listingModeration = w.defaultListingModeration ?? null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;

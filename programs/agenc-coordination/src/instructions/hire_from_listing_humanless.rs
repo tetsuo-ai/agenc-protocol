@@ -223,12 +223,15 @@ pub fn handler(
     // The BLOCK floor above already ran and is NEVER relaxed; a heartbeat
     // instantly re-arms the strict path.
     let mut unlocking_attestor: Option<Pubkey> = None;
-    if ctx.accounts.moderation_config.enabled
-        && !moderation_gate_relaxed(
-            ctx.accounts.moderation_config.as_ref(),
-            clock.unix_timestamp,
-        )
-    {
+    if !moderation_gate_relaxed(
+        ctx.accounts.moderation_config.as_ref(),
+        clock.unix_timestamp,
+    ) {
+        // Match publication: a strict disabled gate rejects before funding.
+        require!(
+            ctx.accounts.moderation_config.enabled,
+            CoordinationError::TaskModerationRequired
+        );
         let record_info = ctx
             .accounts
             .listing_moderation

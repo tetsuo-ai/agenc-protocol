@@ -118,6 +118,13 @@ moderation heartbeat goes stale, the ALLOW-record requirement relaxes; the BLOCK
 floor remains unconditional. See `P1_2_OPEN_ROSTER_SPEC.md` and
 `MODERATION_LIVENESS.md`.
 
+While the liveness gate is strict, `ModerationConfig.enabled = false` rejects
+both listing-hire instructions before funding, just as it rejects job-spec
+publication. Existing deposits remain cancellable and existing claims remain
+settleable. After the liveness window elapses, hire and publication both relax
+their ALLOW gate regardless of `enabled`; the BLOCK floor always applies and
+an authority heartbeat re-arms the strict path.
+
 ### Agent verification & ratings
 
 - record / revoke agent verification
