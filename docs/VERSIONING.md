@@ -18,6 +18,37 @@ matrix below and `getDeployedSurface` do.
 
 ## 1. Support matrix
 
+### Revision-6 candidate: wallet-authority feed votes (not published or deployed)
+
+This branch contains a **102-instruction revision-6 candidate**, including the
+distinct `upvote_post_by_authority` wire and `FeedAuthorityVote` account family.
+The documented mainnet revision-5 deployment and published package set below
+remain historical deployment evidence; they do not describe this candidate IDL.
+The generated instruction/error references describe the candidate on this branch.
+
+The coordinated release targets are protocol **0.5.0**, SDK **0.13.0**,
+React/tools/MCP **0.6.0**, moderation/worker **0.3.0**, and CLI plus its alias
+**0.4.0**. The changeset records these pending minor bumps; package manifests
+retain their current versions until release preparation applies that changeset.
+These are proposed releases, not available-install recommendations. External
+store-core, scaffolder, hosted builders and marketplace binary releases still
+require their own tested pins and breaking-change announcements under §2.
+The CLI's reviewed production matrices remain revisions 4 and 5: a candidate
+must not become eligible for `promote` merely because its SDK understands 6.
+
+Breaking change: `facade.upvotePost` now requires the post's `author` registration
+and the live `surface` capability set, and requires `feedAuthorityVotes` (revision
+6). Legacy `upvote_post` writes fail closed after the upgrade; historical
+`FeedVote` accounts and events remain readable. Ranking must use
+`FeedPost.walletUpvoteCount`; `upvoteCount` becomes the frozen legacy count.
+The post allocation/prefix remains unchanged by using four reserved bytes.
+This does not migrate or deduplicate historical votes, or identify common
+ownership of different wallets. See [the design and acceptance evidence](design/authority-feed-votes.md).
+
+Deployment is gated on the coordinated first-party release, a paused reviewed
+upgrade and IDL publication, then the atomic revision-6 stamp before unpausing.
+Until that ceremony, the candidate must not be advertised as the live surface.
+
 ### 1.1 Current compatible set (as of 2026-07-22)
 
 The live program wire is the **full 101-instruction revision-5 surface**
@@ -42,14 +73,14 @@ added the **goods market** (**96 → 99 instructions**: `create_goods_listing`,
 `purchase_good`, `update_goods_listing` — rivalrous direct-buy with per-unit
 `SaleReceipt` provenance and the protocol fee on every sale), fully additive;
 the goods surface is revision-gated, so pre-0.11 SDKs simply do not expose it.
-The exact live wire artifact is revision 5 (**101 instructions / 43 accounts /
-102 events / 405 errors**). The committed workspace IDL SHA-256 is
+The recorded revision-5 live wire artifact has **101 instructions / 43 accounts /
+102 events / 405 errors**. Its historical workspace IDL SHA-256 is
 `f8eb548c6c521a4a327bc2adf1cd8920fdf0f15597ae831fb7a1824bc31efd2e`
 (instruction docs only vs the prior `8cfd094d…` hash; ABI unchanged). Current
 generated references at
 [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) and
-[`reference/ERRORS.md`](./reference/ERRORS.md) now describe the live
-101-instruction revision-5 surface. `npm run check:idl-reference` keeps those
+[`reference/ERRORS.md`](./reference/ERRORS.md) describe this branch's candidate,
+not proof of a new live deployment. `npm run check:idl-reference` keeps those
 references aligned with the committed IDL.
 
 **The revision-4 published set below now fails closed against the live

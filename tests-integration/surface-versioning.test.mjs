@@ -27,7 +27,7 @@ import {
 const OLD_CONFIG_SIZE = 349;
 const NEW_CONFIG_SIZE = 351;
 const SURFACE_REVISION_FULL = 1;
-const SURFACE_REVISION_CURRENT = 5;
+const SURFACE_REVISION_CURRENT = 6;
 
 // Build the 2-of-2 multisig signer metas the migrate/admin gate requires.
 async function arm2of2(w) {

@@ -38,3 +38,15 @@ cover corruption/overflow/old-binary negative controls, clearly labeled.
 Before deployment, complete the coordinated revision-6 package/capability and
 release-note transition under `VERSIONING.md`, including external first-party
 binary/template pins. No publication, source PR or test authorizes a live upgrade.
+
+Implementation validation is executable in `tests-integration/agent-social.test.mjs`
+and `packages/sdk-ts/tests-e2e/feed-authority-votes.rpc.test.ts`. The SBF suite
+explicitly fixtures reputation, clock, historical counts and malformed state;
+it covers the nine vote cases above. The RPC suite uses the production binary,
+91 signed paid completions to earn the four agents' eligibility (0.91 local SOL
+in protocol fees), and the actual one-hour author age. It records confirmed
+transaction metadata and source/IDL/binary hashes in
+`.localnet/evidence/issue-275-authority-feed-votes.json`. Its dedicated
+`Feed Authority RPC E2E` workflow retains that evidence and runs separately from
+the one-hour claim-expiry suite. A successful local test is not a deployment
+record or a completed external audit.

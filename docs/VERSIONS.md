@@ -1,15 +1,17 @@
 # VERSIONS — surface-versioning compatibility matrix (P6.5)
 
 One program ID (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`) can serve two
-release surfaces:
+release profiles:
 
 - the restricted **25-instruction canary** surface (`--features mainnet-canary`) —
   a conservative BUILD that still exists in the source; and
 - the full production surface (revision 5 is **101 instructions** with default
   features — live on mainnet since 2026-07-22).
 
+This branch's **unreleased revision-6 candidate** has 102 production instructions
+and the `feedAuthorityVotes` capability. It retains the 25-instruction canary.
 An explicit development-only `private-zk` feature adds three quarantined proof
-instructions, producing a 104-instruction build. It is not a release surface and
+instructions, producing a 105-instruction candidate build. It is not a release surface and
 the deployment preflight rejects a production build or IDL that contains it.
 
 > **As of 2026-07-22 the full 101-instruction revision-5 surface is live on
@@ -38,10 +40,12 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest: **96 ix** — submission-rent return, contest rails (`distribute_ghost_share`, `reclaim_terminal_claim`, entry deposit, selection window) | full-surface capabilities `true`; **`goods: false`** |
 | `4` (`SURFACE_REVISION_BATCH4`) | Batch-4 goods: **99 ix** — `create_goods_listing` / `purchase_good` / `update_goods_listing` (handlers require `surface_revision >= 4`) | full-surface capabilities `true`; **`goods: true`** |
 | `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | **Live on mainnet since 2026-07-22.** 2026-07 audit-hardening contract: **101 production ix**; retires the three unaudited private-ZK entrypoints, adds orphan-child recovery, the O(1) bid-accept redesign (`promote_bid` / `demote_ineligible_best` / `settle_dispute_claim`), and an atomic release-boundary stamp, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
+| `6` (`SURFACE_REVISION_AUTHORITY_FEED`) | **Unreleased candidate**, 102 production ix; wallet-authority feed receipts, legacy agent-vote writes retired, prospective wallet count separate from history | full-surface capabilities and `goods: true`; **`feedAuthorityVotes: true`** |
 
 > **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
 > pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
-> `goods` requires revision ≥ 4.
+> `goods` requires revision ≥ 4 and `feedAuthorityVotes` requires revision 6.
+> Unknown revisions fail closed, including revisions greater than the SDK's current value.
 
 `getDeployedSurface` **tolerates the pre-migration on-chain layout**: before the
 2026-06-11 migration the live mainnet `ProtocolConfig` was the OLD 349-byte layout with
@@ -66,18 +70,18 @@ otherwise fail with a raw "instruction not found" error.
 The live account is brought forward by **`migrate_protocol`** (realloc 349→351,
 zero-init `surface_revision = 0`, multisig-gated, idempotent, version-ungated — call it
 with `target_version == current_version` = `1` for the realloc-only path). Historical
-revisions `0`–`4` remain selectable through **`update_launch_controls`** for
-conservative rollback. Revision `5` can be established only by
+revisions `0`–`5` remain selectable while paused through **`update_launch_controls`**
+in this candidate. Its current revision `6` can be established only by
 **`stamp_release_surface`**, which atomically verifies the reviewed ProtocolConfig,
 singletons, ProgramData metadata, on-chain IDL, and upgrade-custody account.
 
 A **fresh production deploy** initializes with `protocol_paused = true` and
 `surface_revision = 0`; initialization alone is not proof that the reviewed
 release singletons, IDL, and custody boundary are present. Production reaches
-`SURFACE_REVISION_CURRENT` (`5` in this source) only through
+`SURFACE_REVISION_CURRENT` (`6` in this source) only through
 `stamp_release_surface`. After that stamp, `update_launch_controls` may unpause
 only when the resulting stored revision is CURRENT; rolling back to revision
-`0`–`4` pauses conservatively and requires a new atomic stamp before another
+`0`–`5` pauses conservatively and requires a new atomic stamp before another
 unpause. Goods handlers are enabled at every revision `>= 4`. The restricted
 **canary** has no atomic stamp instruction, remains at revision `0`, and may be
 unpaused on that conservative surface.
@@ -92,8 +96,9 @@ unpaused on that conservative surface.
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
 |---|---|---|---|---|---|---|
 | full (revision 5) | **101 ix** | **mainnet** (live since 2026-07-22) | `5` (AUDIT_HARDENING) | `@tetsuo-ai/marketplace-sdk` **0.12.x** (revision-5 client) | `true` | `true` |
+| full (revision 6 candidate) | **102 ix** | disposable local validation only; no deployment claim | `6` (AUTHORITY_FEED) | planned SDK **0.13.0**, unpublished | `true` | `true` |
 | full (revision 4, superseded) | **99 ix** | mainnet (live 2026-07-09 → 2026-07-22) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| explicit `private-zk` development build | 104 ix | local development only | not releasable | unsupported | n/a | n/a |
+| explicit `private-zk` candidate build | 105 ix | local development only | not releasable | unsupported | n/a | n/a |
 | historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 

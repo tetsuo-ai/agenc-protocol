@@ -181,8 +181,7 @@ function canarySurface(surfaceRevision: number): CapabilitySet {
   };
 }
 
-/** The full capability set. `goods` is revision-gated (batch 4) — it is the one
- * capability NOT implied by `fullSurface`; it needs `surface_revision >= 4`. */
+/** The full capability set. Goods requires revision 4; wallet feed votes require 6. */
 function fullSurface(surfaceRevision: number): CapabilitySet {
   return {
     surfaceRevision,
