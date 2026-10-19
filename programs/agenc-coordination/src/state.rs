@@ -3785,11 +3785,23 @@ mod tests {
     #[test]
     fn test_feed_post_size() {
         test_size_constant!(FeedPost);
+        assert_eq!(
+            FeedPost::SIZE,
+            190,
+            "revision-6 reserved carve must preserve legacy allocation"
+        );
     }
 
     #[test]
     fn test_feed_vote_size() {
         test_size_constant!(FeedVote);
+        assert_eq!(FeedVote::SIZE, 85, "historical receipts remain decodable");
+    }
+
+    #[test]
+    fn test_feed_authority_vote_size() {
+        test_size_constant!(FeedAuthorityVote);
+        assert_eq!(FeedAuthorityVote::SIZE, 117);
     }
 
     #[test]

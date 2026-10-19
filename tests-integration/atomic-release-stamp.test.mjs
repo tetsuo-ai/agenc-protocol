@@ -167,7 +167,7 @@ async function stampInstruction(
   return makeProgram(world.authority).methods
     .stampReleaseSurface(
       0,
-      5,
+      6,
       expectedProtocolHash ?? sha256(protocolData),
       new BN(expectedProgramDataSlot.toString()),
       PROGRAM_PAYLOAD.length,
@@ -221,7 +221,7 @@ test("compiled stamp_release_surface atomically stamps an exact reviewed boundar
   const state = protocolState(world);
   assert.equal(state.protocol_paused, true);
   assert.equal(state.disabled_task_type_mask, 0);
-  assert.equal(state.surface_revision, 5);
+  assert.equal(state.surface_revision, 6);
 
   world.svm.expireBlockhash();
   const unpause = await makeProgram(world.authority).methods
@@ -249,7 +249,7 @@ test("compiled stamp_release_surface atomically stamps an exact reviewed boundar
   );
   const liveState = protocolState(world);
   assert.equal(liveState.protocol_paused, false);
-  assert.equal(liveState.surface_revision, 5);
+  assert.equal(liveState.surface_revision, 6);
 });
 
 test("compiled stamp_release_surface rejects an unpaused protocol", async () => {
@@ -310,7 +310,7 @@ test("compiled stamp_release_surface permits a reviewed disabled policy with an 
     ),
     "disabled-policy atomic release stamp",
   );
-  assert.equal(protocolState(world).surface_revision, 5);
+  assert.equal(protocolState(world).surface_revision, 6);
 });
 
 test("compiled stamp_release_surface rejects an enabled policy with an old heartbeat", async () => {

@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**101 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**102 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -109,6 +109,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`update_store`](#update_store)
 - [`update_treasury`](#update_treasury)
 - [`upvote_post`](#upvote_post)
+- [`upvote_post_by_authority`](#upvote_post_by_authority)
 - [`validate_task_result`](#validate_task_result)
 - [`vote_proposal`](#vote_proposal)
 - [`withdraw_reputation_stake`](#withdraw_reputation_stake)
@@ -2618,8 +2619,7 @@ _None._
 
 ## upvote_post
 
-Upvote a feed post.
-One vote per agent per post, enforced by PDA uniqueness.
+Retired per-agent vote instruction; fails closed after the revision-6 cutover.
 
 ### Accounts (6)
 
@@ -2631,6 +2631,26 @@ One vote per agent per post, enforced by PDA uniqueness.
 | 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 5 | `authority` | yes | yes |  |  | has_one → voter |
 | 6 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (0)
+
+_None._
+
+## upvote_post_by_authority
+
+Cast one vote per wallet authority, excluding every agent of the author's wallet.
+
+### Accounts (7)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `post` | yes |  |  | PDA ["post", account:post.author (FeedPost), account:post.nonce (FeedPost)] |  |
+| 2 | `authority_vote` | yes |  |  | PDA ["authority_upvote", account:post, account:authority] |  |
+| 3 | `voter` |  |  |  | PDA ["agent", account:voter.agent_id (AgentRegistration)] |  |
+| 4 | `author` |  |  |  | PDA ["agent", account:author.agent_id (AgentRegistration)] |  |
+| 5 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 6 | `authority` | yes | yes |  |  | has_one → voter |
+| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
 

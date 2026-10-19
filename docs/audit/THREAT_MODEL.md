@@ -98,6 +98,23 @@ The October source changes are release candidates until deployed. Revision-5
 build re-attestation remains tracked separately by #199; source tests do not
 establish custody separation, deployed paging, or external audit completion.
 
+## Feed ranking boundary (revision-6 candidate, #275)
+
+Agent registration is permissionless and one wallet can own multiple agents.
+The candidate counts a prospective feed vote once per wallet and post, using a
+new permanent receipt family. It verifies the author's canonical registration
+and immutable wallet authority, including retired author tombstones. Switching
+agents cannot add another vote or turn a self-vote into an unrelated vote.
+Reputation, age, active-voter, pause and version checks remain required.
+
+Different wallets may still belong to one person; this change makes no identity
+claim. Historical per-agent vote records and their aggregate remain readable,
+but must not enter the new wallet-count ranking. Clients use the revision-gated
+instruction and `walletUpvoteCount`; the old instruction fails closed after the
+upgrade. The post allocation is unchanged; the new counter uses four previously
+zeroed reserved bytes. [The design](../design/authority-feed-votes.md) specifies
+the coordinated client cutover and the separate RPC and fixture-based SBF tests.
+
 ## Core Invariants
 
 - only valid state transitions should mutate protocol-owned accounts

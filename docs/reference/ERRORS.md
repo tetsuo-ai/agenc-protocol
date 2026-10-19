@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**408 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**411 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -419,3 +419,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6405 | 0x1905 | `ClaimSettlementPending` | Claim is reserved for pending dispute peer settlement; use settle_dispute_claim |
 | 6406 | 0x1906 | `InvalidModerationConfig` | Moderation configuration contains unsupported reserved flags |
 | 6407 | 0x1907 | `ListingCapacityBelowOpenJobs` | Finite listing capacity cannot be lower than its outstanding jobs |
+| 6408 | 0x1908 | `FeedAgentVotingRetired` | Per-agent feed votes are retired; use wallet-authority voting on revision 6 |
+| 6409 | 0x1909 | `FeedAuthorityAlreadyVoted` | This wallet authority has already voted on this post |
+| 6410 | 0x190a | `FeedAuthorityVotingUnavailable` | Wallet-authority feed voting requires the revision-6 surface |

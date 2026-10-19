@@ -1,6 +1,6 @@
 # Program Surface
 
-This file describes the live on-chain surface owned by
+This file records the deployed surface and the unreleased candidate owned by
 `programs/agenc-coordination/`.
 
 Mainnet status (verified 2026-07-22): the program
@@ -15,22 +15,25 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 `initialize_zk_config`, and `update_zk_image_id` exist only in the explicit
 `private-zk` development build.
 
-Build breakdown (verified from `src/lib.rs`, Cargo features, and generated IDL):
-default production (`spl-token-rewards`) is **101 instructions**, explicit
-`private-zk` is **104**, and `mainnet-canary` is **25**. `validation-timings`
-only shortens constants. `mainnet-canary` cannot combine with rewards or ZK. `lib.rs` therefore contains 129 raw `pub fn`
-declarations across its mutually exclusive modules but 104 unique names; the
-canary repeats 25 full-module names. Revision 5 retired the three private-ZK
-entrypoints from production and added `reclaim_orphan_task_child` and the O(1)
-bid-accept cranks. The canonical live IDL contains **101 instructions / 43
-accounts / 102 events / 405 errors**; `docs/reference/INSTRUCTIONS.md` is its
-generated instruction reference.
+Candidate build breakdown: default production (`spl-token-rewards`) is **102
+instructions**, explicit `private-zk` is **105**, and `mainnet-canary` remains
+**25**. The committed candidate IDL has **44 accounts / 104 events / 411 errors**;
+the generated reference describes this candidate. `validation-timings` only
+shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
+
+The revision-6 candidate adds `upvote_post_by_authority`, a receipt keyed by
+wallet authority and post, and the SDK capability `feedAuthorityVotes`. It
+retires legacy `upvote_post` writes while retaining historical reads. Only the
+new `wallet_upvote_count` participates in prospective wallet ranking; the
+legacy count is preserved separately. The [candidate design](design/authority-feed-votes.md)
+and [release contract](VERSIONING.md) describe compatibility and deployment gates.
+This branch is not evidence of a mainnet upgrade.
 
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (405 variants in the generated IDL)
+- `src/errors.rs` - program error codes (411 variants in the candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
