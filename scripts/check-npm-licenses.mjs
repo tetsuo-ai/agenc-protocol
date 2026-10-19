@@ -163,6 +163,8 @@ export function evaluateNpmLicensePolicy({
               "path",
               "package",
               "version",
+              "integrity",
+              "resolved",
               "observedLicense",
               "approvedLicense",
               "evidence",
@@ -172,6 +174,8 @@ export function evaluateNpmLicensePolicy({
               "path",
               "package",
               "version",
+              "integrity",
+              "resolved",
               "observedLicense",
               "approvedLicense",
               "licenseFile",
@@ -185,6 +189,10 @@ export function evaluateNpmLicensePolicy({
         safeRepositoryPath(entry.path, "license exception path") !== entry.path ||
         typeof entry.package !== "string" ||
         typeof entry.version !== "string" ||
+        typeof entry.integrity !== "string" ||
+        !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity) ||
+        typeof entry.resolved !== "string" ||
+        !entry.resolved.startsWith("https://registry.npmjs.org/") ||
         !(entry.observedLicense === null || typeof entry.observedLicense === "string") ||
         typeof entry.approvedLicense !== "string" ||
         entry.approvedLicense.length === 0 ||
@@ -236,6 +244,12 @@ export function evaluateNpmLicensePolicy({
           `${lockfile}:${path} (${name}@${record.version}) has unapproved license ` +
             `${JSON.stringify(record.license ?? null)}`,
         );
+      }
+      if (
+        exception.integrity !== record.integrity ||
+        exception.resolved !== record.resolved
+      ) {
+        fail(`license exception archive identity mismatch for ${name}@${record.version}`);
       }
       if (
         exception.licenseFile !== undefined &&

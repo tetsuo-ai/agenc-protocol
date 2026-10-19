@@ -47,7 +47,8 @@ Relevant primary advisories include [Next](https://github.com/advisories/GHSA-p2
 [Vitest](https://github.com/advisories/GHSA-82fw-gwwq-j7x9), and
 [PostCSS](https://github.com/advisories/GHSA-fxqj-rqcc-2cmp).
 
-Two scoped dependency overrides require explicit compatibility evidence:
+Two global overrides in the root development dependency graph force majors
+outside the callers' declared ranges and require explicit compatibility evidence:
 
 - `read-yaml-file@2.1.0` retains the CommonJS async/default/sync API used by
   Changesets, moves to js-yaml 4, and removes the legacy argparse/sprintf-js
@@ -78,6 +79,10 @@ SRI-verified; bundled licensing tables were reviewed. Their existing fixture-onl
 scope and November 18 expiry remain, with
 [new archive evidence](../../supply-chain/reviews/2026-10-19-sharp-security-update.json).
 They are not added to published AgenC package payloads.
+Every license exception now binds both `resolved` and SHA-512 `integrity` to
+that reviewed archive. Changing either without a new review fails the evaluator
+and the actual CLI. This closes the archive-binding gap found in the independent
+pre-merge review; expiry and ownership requirements remain in force.
 
 Pinned cargo-audit **0.22.2** and cargo-deny **0.20.2** passed on all three
 independent Cargo locks against the recorded live RustSec database. The existing
@@ -136,6 +141,11 @@ The observed mainnet program is still revision 5. Candidate tests do not upgrade
 it. The paused upgrade, IDL verification, coordinated client release and atomic
 surface stamp remain governed by [VERSIONING](../VERSIONING.md). Claims already
 deleted under the historical AGNC-01 behavior need separately designed recovery.
+Run the read-only dispute scan before scheduling that release; any pending set
+with missing peer claims is a separate recovery/release blocker. The restricted
+canary keeps its frozen 25-instruction wire shape, but shared handlers inherit
+the quota checks and expiry event behavior. A frozen IDL is not a guarantee of
+unchanged semantics; the canary semantic regressions remain required.
 
 Member-key co-location remains a custody risk until independent custody evidence
 exists. The monitor implementations cannot prove physical key separation or

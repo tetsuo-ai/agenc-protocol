@@ -55,6 +55,17 @@ test("unknown licenses fail closed", async () => {
   );
 });
 
+for (const field of ["integrity", "resolved"]) {
+  test(`license exception rejects an unreviewed archive ${field}`, async () => {
+    const input = await repositoryInput();
+    const entry = input.policy.exceptionGroups[0].entries[0];
+    const record = input.lockfiles.get(entry.lockfile).packages[entry.path];
+    record[field] = field === "integrity" ? `sha512-${Buffer.alloc(64, 1).toString("base64")}`
+      : "https://registry.npmjs.org/unreviewed/-/unreviewed-1.0.0.tgz";
+    assert.throws(() => evaluateNpmLicensePolicy(input), /archive identity mismatch/);
+  });
+}
+
 test("expired, stale, and changed evidence exceptions fail closed", async () => {
   const expired = await repositoryInput();
   expired.asOf = expired.policy.exceptionGroups[0].expiresOn;
@@ -154,6 +165,19 @@ test("actual npm policy CLI rejects an expired on-disk exception", async (t) => 
   const valid = run();
   assert.equal(valid.status, 0, valid.stderr);
   assert.match(valid.stdout, /19 exact, owned exceptions/);
+  const entry = policy.exceptionGroups[0].entries[0];
+  const reviewedLock = input.lockfiles.get(entry.lockfile);
+  for (const field of ["integrity", "resolved"]) {
+    const changed = structuredClone(reviewedLock);
+    changed.packages[entry.path][field] = field === "integrity"
+      ? `sha512-${Buffer.alloc(64, 1).toString("base64")}`
+      : "https://registry.npmjs.org/unreviewed/-/unreviewed-1.0.0.tgz";
+    await writeFile(join(root, entry.lockfile), JSON.stringify(changed));
+    const result = run();
+    assert.equal(result.status, 1, `CLI must reject changed ${field}`);
+    assert.match(result.stderr, /archive identity mismatch/);
+  }
+  await writeFile(join(root, entry.lockfile), JSON.stringify(reviewedLock));
   for (let i = 0; i < policy.exceptionGroups.length; i++) {
     const expired = structuredClone(policy);
     expired.exceptionGroups[i].expiresOn = today;

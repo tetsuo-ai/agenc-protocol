@@ -534,7 +534,7 @@ describe("runPromoteChecks", () => {
     }
   });
 
-  it.each([6, 7])("does not promote published clients onto unreviewed candidate surface %i", (revision) => {
+  it.each([6, 7, 8])("does not promote published clients onto unreviewed candidate surface %i", (revision) => {
     const input = readyInput();
     input.chainEvidence!.surfaceRevision = revision;
     setInstalledTrain(input, REVISION_5_CLIENTS);
