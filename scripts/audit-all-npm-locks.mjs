@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { discoverPackageLocks } from "./check-npm-licenses.mjs";
 
 export const LOCK_ROOTS = [
   ".",
@@ -92,6 +93,14 @@ export function evaluateAudit({
     fail("inconsistent npm audit counts");
   if (runtime && counts.total !== 0)
     fail(`${root}: runtime advisories are never excepted`);
+  const observedCounts = Object.fromEntries(severities.map((s) => [s, 0]));
+  for (const finding of Object.values(report.vulnerabilities)) {
+    if (!finding || !severities.includes(finding.severity))
+      fail("invalid npm finding severity");
+    observedCounts[finding.severity] += 1;
+  }
+  if (severities.some((s) => observedCounts[s] !== counts[s]))
+    fail("inconsistent npm audit severity counts");
   if (counts.critical !== 0)
     fail(`${root}: critical advisories are never excepted`);
   const used = new Set();
@@ -169,7 +178,7 @@ function audit(root, runtime) {
   return report;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   if (argv.length && (argv.length !== 2 || argv[0] !== "--output"))
     fail("usage: audit-all-npm-locks.mjs [--output report.json]");
   const policy = JSON.parse(
@@ -181,11 +190,14 @@ export function main(argv = process.argv.slice(2)) {
   const licensePolicy = JSON.parse(
     readFileSync(resolve(ROOT, "supply-chain/npm-license-policy.json"), "utf8"),
   );
-  // The existing license gate discovers all repository locks. Expanding its
-  // approved inventory must also expand this audit, never silently omit a tree.
+  // Use the same actual filesystem discovery as the license gate, including
+  // newly added locks that neither policy has approved yet.
+  const discoveredLocks = await discoverPackageLocks(ROOT);
   if (
+    JSON.stringify(discoveredLocks) !==
+      JSON.stringify([...licensePolicy.lockfiles].sort()) ||
     JSON.stringify(licensePolicy.lockfiles.map(dirname).sort()) !==
-    JSON.stringify([...LOCK_ROOTS].sort())
+      JSON.stringify([...LOCK_ROOTS].sort())
   )
     fail(
       "npm audit inventory differs from the repository's complete lock inventory",
@@ -248,10 +260,8 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
-  }
+  });
 }

@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   evaluateAudit,
   LOCK_ROOTS,
@@ -13,7 +24,7 @@ const policy = JSON.parse(
   ),
 );
 const review = policy.reviews[0];
-const now = Date.parse("2026-10-19T14:00:00Z");
+const now = Date.parse(review.reviewedAt) + 1_000;
 function inputs() {
   return {
     root: ".",
@@ -74,6 +85,73 @@ test("all runtime findings are rejected even with a matching development review"
   );
 });
 
+test("critical findings cannot be concealed by inconsistent summary severities", () => {
+  const x = inputs();
+  x.report.vulnerabilities.braces.severity = "critical";
+  assert.throws(
+    () => evaluateAudit(x),
+    /inconsistent npm audit severity counts/,
+  );
+  x.report.metadata.vulnerabilities.high = 1;
+  x.report.metadata.vulnerabilities.critical = 1;
+  assert.throws(
+    () => evaluateAudit(x),
+    /critical advisories are never excepted/,
+  );
+});
+
+test("the actual CLI rejects an unlisted lock before invoking npm", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agenc-audit-lock-inventory-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const file of [
+    "scripts/audit-all-npm-locks.mjs",
+    "scripts/check-npm-licenses.mjs",
+    "supply-chain/npm-advisory-reviews.json",
+    "supply-chain/npm-license-policy.json",
+  ]) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    copyFileSync(new URL(`../${file}`, import.meta.url), join(root, file));
+  }
+  for (const lockRoot of [...LOCK_ROOTS, "new-fixture"]) {
+    mkdirSync(join(root, lockRoot), { recursive: true });
+    writeFileSync(
+      join(root, lockRoot, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {},
+      }),
+    );
+  }
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const invoked = join(root, "npm-was-invoked");
+  writeFileSync(
+    join(bin, "npm"),
+    `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(invoked)}, 'unexpected invocation'); process.exit(99);\n`,
+    { mode: 0o700 },
+  );
+  const result = spawnSync(
+    process.execPath,
+    [join(root, "scripts/audit-all-npm-locks.mjs")],
+    {
+      cwd: root,
+      env: { ...process.env, PATH: bin },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(
+    result.stderr,
+    /inventory differs from the repository's complete lock inventory/,
+  );
+  assert.equal(
+    existsSync(invoked),
+    false,
+    "inventory must fail before any registry/tool invocation",
+  );
+});
+
 test("a review cannot follow a version, archive, dependency-scope or root change", () => {
   for (const change of [
     (x) => {
@@ -122,7 +200,11 @@ test("expiry is inclusive and a review cannot be extended beyond 30 days or futu
     /future-dated/,
   );
   const tooLong = structuredClone(policy);
-  tooLong.reviews[0].expiresAt = "2026-11-19T13:55:00Z";
+  tooLong.reviews[0].expiresAt = new Date(
+    Date.parse(review.reviewedAt) + 31 * 86_400_000,
+  )
+    .toISOString()
+    .replace(".000Z", "Z");
   assert.throws(() => validateReviews(tooLong, now), /30-day/);
 });
 
