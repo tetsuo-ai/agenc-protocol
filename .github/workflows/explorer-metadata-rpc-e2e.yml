@@ -1,0 +1,69 @@
+name: Explorer Metadata RPC E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: explorer-metadata-rpc-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AGAVE_VERSION: v4.1.0
+  AGAVE_INSTALL_INIT_SHA256: 47364bcbe524d8e5cb33eb64ed448d3d4ea8a8cc4d1073e04e04ef9e4c5abacb
+  SOLANA_VERIFY_VERSION: "0.5.2"
+  SOLANA_VERIFY_LINUX_SHA256: b9d5ccce9634dc14269cab3e7a58649bc141b3306e7735a94478c936341f211f
+
+jobs:
+  explorer-metadata-rpc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install checksum-pinned Agave and verifier
+        run: |
+          curl -sSfL --retry 3 "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          curl -sSfL --retry 3 "https://github.com/solana-foundation/solana-verifiable-build/releases/download/v${SOLANA_VERIFY_VERSION}/solana-verify-${SOLANA_VERIFY_VERSION}-linux" -o "${RUNNER_TEMP}/solana-verify"
+          echo "${SOLANA_VERIFY_LINUX_SHA256}  ${RUNNER_TEMP}/solana-verify" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/solana-verify"
+          echo "SOLANA_VERIFY_BIN=${RUNNER_TEMP}/solana-verify" >> "$GITHUB_ENV"
+      - name: Install locked dependencies
+        run: |
+          npm install --global npm@11.18.0
+          npm ci
+          npm ci --prefix tests-integration
+      - name: Validate preparation guards and exact executable fixtures
+        run: |
+          node --test scripts/explorer-metadata.test.mjs
+          node scripts/explorer-metadata.mjs check
+          node scripts/fetch-explorer-drill-programs.mjs
+      - name: Execute both ceremonies with real local Squads approvals
+        env:
+          AGENC_EXPLORER_RPC_E2E: "1"
+        run: node --test scripts/explorer-metadata.rpc.test.mjs
+      - name: Preserve public source and confirmed-transaction evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: explorer-metadata-rpc-evidence
+          path: |
+            .localnet/evidence/issue-199-explorer-metadata.json
+            .localnet/explorer-programs/source-evidence.json
+            .localnet/explorer-drill-*/validator.log
+          include-hidden-files: true
+          if-no-files-found: warn
