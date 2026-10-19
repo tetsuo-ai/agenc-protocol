@@ -279,10 +279,10 @@ test(
         () => evidence.receipts.some((r) => r.event.id === pendingEvent.id),
         "queued alert was lost across restart",
       );
-      const suffix = Buffer.alloc(8 + 4);
+      const suffix = Buffer.alloc(4 + 8 + 4);
       suffix.writeUInt32LE(0);
-      suffix.writeUInt32LE(4, 4);
-      suffix.set([1, 3, 3, 7], 8);
+      suffix.writeBigUInt64LE(4n, 4);
+      suffix.set([1, 3, 3, 7], 12);
       await send("write real buffer payload", [
         loaderIx(
           1,
