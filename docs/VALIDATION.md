@@ -2,6 +2,45 @@
 
 This file maps the local validation and CI flow for `agenc-protocol`.
 
+## AGNC-01 transactions through a local validator
+
+`Protocol RPC E2E` builds the production-feature SBF and runs the TypeScript SDK
+against `solana-test-validator`. It covers expiry, approved Complete/Split/Refund,
+and rejected rulings with three deferred peers. Agents deposit registration stake
+through `register_agent`; tasks, moderation records, claims, disputes, peer sweeps,
+and retirement all use signed transactions through RPC. Expected failures are
+broadcast with preflight disabled, then checked in confirmed transaction metadata.
+Assertions cover atomic rollback of exit + premature reclaim, pending-finalizer
+and withdrawal rejection, peer counters, claim-rent conservation, and the actual
+stake returned to the creator and peers (including the intentional rejection slash).
+
+```bash
+cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+npm run build --workspace=@tetsuo-ai/marketplace-sdk
+node scripts/localnet-up.mjs --dev-ready --short-disputes
+cd packages/sdk-ts
+AGENC_RPC_E2E=1 npx vitest run tests-e2e/settlement-pending.rpc.test.ts
+cd ../..
+node scripts/localnet-down.mjs
+```
+
+Use a fresh disposable ledger; stop and purge an existing managed local test
+ledger before changing its bootstrap parameters. `--short-disputes` requires
+`--dev-ready` and sets the genesis ProtocolConfig resolver window to 300 seconds
+and hard expiry to 600 seconds. The test waits for the validator's real Clock to
+pass the resolver deadline plus the unchanged 120-second grace period. It does
+not warp time, inject live dispute state, or change the program's production
+features. The ProtocolConfig genesis fixture is **not** evidence of production
+initialization or the release-stamp ceremony, nor is a local run devnet/mainnet
+evidence. Production-duration boundaries, historical Competitive layouts,
+submission variants, pause, and long-delayed exits also have separate LiteSVM
+regressions in `tests-integration/settlement-pending-wedge.test.mjs`.
+
+Every run writes `.localnet/evidence/agnc01-*.json` with source/build/IDL identity,
+timing configuration, signed transaction signatures and metadata, and completion
+assertions. CI uploads only these JSON files, never test keypairs. Ordinary SDK
+unit runs skip the RPC suite; the dedicated workflow enables and runs every case.
+
 For Marketplace V2 release readiness, local CI is necessary but not sufficient. The protocol-owned
 devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md).
 
