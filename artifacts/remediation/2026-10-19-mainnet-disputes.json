@@ -1,0 +1,41 @@
+{
+  "observedAt": "2026-10-19T17:08:09.697Z",
+  "sourceCommit": "5cf3a0b8666f0a6848a7196a04d2e2b91ec12dab",
+  "mode": "read-only",
+  "network": "mainnet-beta",
+  "programId": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+  "accountCount": 5,
+  "agentCount": 254,
+  "statusCounts": {
+    "active": 2,
+    "resolved": 0,
+    "expired": 0,
+    "cancelled": 3,
+    "settlementPending": 0
+  },
+  "expiredLegacyInitiatorLiabilityCount": 2,
+  "blockers": [
+    {
+      "kind": "legacy-agent-initiator-counter-nonzero",
+      "dispute": "FPppuvejNG8T2iQFnQaezfxjW6WGMN4KkRHeEHgFiu1A",
+      "detail": "active_dispute_votes=1"
+    },
+    {
+      "kind": "legacy-agent-defendant-counter-nonzero",
+      "dispute": "FPppuvejNG8T2iQFnQaezfxjW6WGMN4KkRHeEHgFiu1A",
+      "detail": "disputes_as_defendant=1"
+    },
+    {
+      "kind": "active-dispute-cutover",
+      "dispute": "4Ei4hU9C7CjdEH5Zb8CdiPEGzyjQSSaKTvjJrmRMvPXL",
+      "detail": "now=1792429687 voting_deadline=1785150445 expires_at=1785668845"
+    },
+    {
+      "kind": "active-dispute-cutover",
+      "dispute": "HycAkBQBynmyvxrkHcEK95snxYy7q2EUJ3ZvUD4qYp9v",
+      "detail": "now=1792429687 voting_deadline=1785066003 expires_at=1785584403"
+    }
+  ],
+  "now": "1792429687",
+  "releaseReady": false
+}
