@@ -43,8 +43,8 @@ test("every npm install script is exactly approved or explicitly denied", async 
   const result = evaluateNpmInstallScriptPolicy(await repositoryProjects());
   assert.deepEqual(result, {
     lockfiles: 6,
-    packages: 14,
-    approvals: 11,
+    packages: 13,
+    approvals: 10,
     denials: 3,
   });
 });

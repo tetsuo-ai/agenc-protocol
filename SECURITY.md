@@ -317,6 +317,7 @@ with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
 - Bug bounty scope & rewards: `docs/BUG_BOUNTY.md`
 - Upgrade-authority and capacity runbook: `docs/UPGRADE_AUTHORITY.md`
 - Threat model: `docs/audit/THREAT_MODEL.md`
+- Current dated remediation/advisory review: [2026-10-19](docs/audit/REMEDIATION_REVIEW_2026-10-19.md), including remaining operational gates and the bounded development dependency advisory
 - Audit prep / invariants / coverage: `docs/BATCH_1_3_AUDIT_PREP.md`
 - Program surface & PDAs: `docs/PROGRAM_SURFACE.md`
 - Mainnet source of truth: `docs/MAINNET_MAINLINE.md`
