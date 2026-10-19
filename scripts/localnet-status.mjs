@@ -115,6 +115,9 @@ export function parseLocalnetStatusEnvironment(body, label = "env file") {
       "attestorUrl",
       "fixturesPath",
       "keypairs",
+      ...(Object.hasOwn(value ?? {}, "deactivatedFeatures")
+        ? ["deactivatedFeatures"]
+        : []),
     ],
     label,
   );
@@ -132,6 +135,11 @@ export function parseLocalnetStatusEnvironment(body, label = "env file") {
     !Number.isSafeInteger(value.programSize) ||
     value.programSize < 1 ||
     value.programSize > MAX_PROGRAM_BYTES ||
+    (value.deactivatedFeatures !== undefined &&
+      (!Array.isArray(value.deactivatedFeatures) ||
+        !["[]", '["B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g"]'].includes(
+          JSON.stringify(value.deactivatedFeatures),
+        ))) ||
     !(
       value.attestorUrl === null ||
       (typeof value.attestorUrl === "string" &&
@@ -229,6 +237,16 @@ export function assertLocalnetStatusProcessIdentity(pidInfo, observed) {
   if (matches !== true) {
     fail(`validator pid ${pidInfo.pid} exited during status verification`);
   }
+}
+
+export function assertLocalnetStatusFeatureMode(env, argv) {
+  const actual = argv.flatMap((arg, index) =>
+    arg === "--deactivate-feature" ? [argv[index + 1]] : [],
+  );
+  if (JSON.stringify(actual) !== JSON.stringify(env.deactivatedFeatures ?? []))
+    fail(
+      "environment deactivated features do not match the owned validator argv",
+    );
 }
 
 export function decodeCanonicalBase64AccountData(value, label) {
@@ -548,6 +566,7 @@ export async function runLocalnetStatus(argv = process.argv.slice(2)) {
       processReference,
     });
     assertLocalnetStatusProcessIdentity(pidInfo, observed);
+    assertLocalnetStatusFeatureMode(env, observed.argv);
     report(
       true,
       "validator process",
@@ -741,6 +760,7 @@ export async function runLocalnetStatus(argv = process.argv.slice(2)) {
         processReference,
       });
       assertLocalnetStatusProcessIdentity(pidInfo, finalObserved);
+      assertLocalnetStatusFeatureMode(env, finalObserved.argv);
       report(
         true,
         "validator stability",
