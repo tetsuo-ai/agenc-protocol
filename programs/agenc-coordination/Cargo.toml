@@ -84,9 +84,9 @@ codegen-units = 1
 # to pick the deterministic Docker build image's Solana CLI version. Without it, the tool
 # falls back to the Cargo.lock solana-program entry (currently 2.3.0, a transitive dep), NOT
 # the toolchain this program is actually deployed with. Pin it to the Anchor.toml
-# solana_version (3.0.13) so the verifiable build uses the same toolchain as the live deploy.
+# solana_version (4.1.0) so the verifiable build uses the same toolchain as the live deploy.
 # Keep this in sync with Anchor.toml [toolchain] solana_version.
 [workspace]
 
 [workspace.metadata.cli]
-solana = "3.0.13"
+solana = "4.1.0"

@@ -41,11 +41,11 @@ export DEVNET_URL=https://api.devnet.solana.com
 ## 0. Prerequisites
 
 1. **Toolchain** — must match `Anchor.toml` pins (`anchor_version = "0.32.1"`,
-   `solana_version = "3.0.13"`). Verified locally:
+   `solana_version = "4.1.0"`). Verified locally:
 
    ```bash
    anchor --version    # anchor-cli 0.32.1
-   solana --version    # solana-cli 3.0.13 (Agave)
+   solana --version    # solana-cli 4.1.0 (Agave)
    ```
 
 2. **Upgrade-authority keypair** — the JSON keypair for
@@ -127,7 +127,7 @@ solana program show "$PROGRAM_ID" --url devnet        # read-only; note "Data Le
 solana program extend "$PROGRAM_ID" 2407848 --url devnet -k "$UPGRADE_AUTHORITY_KEYPAIR"   # [HUMAN, writes on-chain] ~16.76 SOL rent
 ```
 
-Note: `solana program deploy` on solana-cli 3.0.13 auto-extends by default (there is a
+Note: `solana program deploy` on solana-cli 4.1.0 auto-extends by default (there is a
 `--no-auto-extend` flag), so this step is technically redundant — but running it
 explicitly makes the rent cost land in its own auditable transaction and removes one
 failure mode from the big upload.

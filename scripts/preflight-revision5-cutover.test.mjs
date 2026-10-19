@@ -311,13 +311,17 @@ test("program upgrade preflight fails closed on insufficient loader capacity", (
 test("pins reviewed CLI semantics and obtains rent from the genesis-checked RPC", async () => {
   assert.equal(
     assertPinnedSolanaCliVersion(
-      "solana-cli 3.0.13 (src:90098d26; feat:3604001754, client:Agave)",
+      "solana-cli 4.1.0 (src:d3f1f55c; feat:c763ae0a, client:Agave)",
     ),
-    "3.0.13",
+    "4.1.0",
+  );
+  assert.throws(
+    () => assertPinnedSolanaCliVersion("solana-cli 3.0.13 (src:90098d26; feat:3604001754, client:Agave)"),
+    /3\.0\.13 != reviewed 4\.1\.0/,
   );
   assert.throws(
     () => assertPinnedSolanaCliVersion("solana-cli 3.1.13 (src:437252f)"),
-    /3\.1\.13 != reviewed 3\.0\.13/,
+    /3\.1\.13 != reviewed 4\.1\.0/,
   );
   assert.throws(
     () => assertPinnedSolanaCliVersion("not-solana 3.0.13"),

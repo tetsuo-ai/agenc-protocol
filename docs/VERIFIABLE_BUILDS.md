@@ -91,19 +91,46 @@ deployed bytecode.
 
 ## Toolchain pinning
 
+Anchor migrations must pass `node scripts/check-rust-supply-chain-policy.mjs`
+and its process-level regression suite. The resolved `anchor-lang` and
+`anchor-spl` packages in **every** Cargo lock must remain on stable 0.32.x or
+move directly to >=1.0.2. Versions 1.0.0 and 1.0.1, and prereleases below
+1.0.2, are forbidden by repository policy. This guards
+[RUSTSEC-2026-0144](https://rustsec.org/advisories/RUSTSEC-2026-0144.html)
+(`Program<System>` substitution) and
+[RUSTSEC-2026-0146](https://rustsec.org/advisories/RUSTSEC-2026-0146.html)
+(`InterfaceAccount` discriminator bypass in 1.0.0-rc.1). The currently pinned
+0.32.1 is unaffected by both. The version floor is a necessary migration gate;
+an Anchor major migration still needs ABI, SDK, SBF, and account-validation
+regressions. It is not approved merely by passing the floor.
+
+Advisory exception expiry is checked with the UTC wall clock before audit tools
+run. The daily Rust Supply Chain workflow also enforces the exact exception
+scope and reruns the pinned scanners on all independent Cargo locks.
+
 solana-verify selects its deterministic Docker build image's Solana CLI version
 from `[workspace.metadata.cli].solana` in the build-root `Cargo.toml`. This repo
 pins it explicitly:
 
-- **`programs/agenc-coordination/Cargo.toml`** → `[workspace.metadata.cli] solana = "3.0.13"`
+- **`programs/agenc-coordination/Cargo.toml`** → `[workspace.metadata.cli] solana = "4.1.0"`
 
 That value is kept in sync with `Anchor.toml` `[toolchain] solana_version`
-(3.0.13) and `anchor_version` (0.32.1). Without the explicit pin, solana-verify
+(4.1.0) and `anchor_version` (0.32.1). Without the explicit pin, solana-verify
 would fall back to the `solana-program` entry in `Cargo.lock` (a transitive
 `2.3.0`), which is **not** the toolchain the program is deployed with — so the
 pin is load-bearing for reproducibility. **If you bump the Solana toolchain,
 update all three (`Cargo.toml`, `Anchor.toml`, and `SOLANA_VERIFY_VERSION` /
 this doc) together.**
+
+The patched 4.1.0 build rail uses verifier 0.5.2; 0.5.0 has no 4.1.0 image
+mapping. CI verifies the upstream Linux executable SHA-256
+`b9d5ccce9634dc14269cab3e7a58649bc141b3306e7735a94478c936341f211f`
+before execution. Verifier 0.5.2 selects the official build image by digest
+`sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
+See the [tagged verifier release](https://github.com/solana-foundation/solana-verifiable-build/releases/tag/v0.5.2)
+and its [image map](https://github.com/solana-foundation/solana-verifiable-build/blob/v0.5.2/src/image_config.rs).
+These are candidate build pins; historical deployed hashes still require their
+original toolchain, and a new deployment needs a new independent attestation.
 
 The build root is `programs/agenc-coordination/` (this crate is a single-member
 Cargo workspace; there is no parent Cargo workspace). That path is the
@@ -118,7 +145,7 @@ Requires Docker and Rust. Targets **solana-verify v0.5.x**
 
 ```bash
 # 1. Install the pinned verifier (the version verify.yml uses).
-cargo install solana-verify --version 0.5.0 --locked
+cargo install solana-verify --version 0.5.2 --locked
 
 # 2. Build the production/default surface deterministically from the program
 #    crate directory. At current HEAD this is the live revision-5 surface.
@@ -250,7 +277,7 @@ starts `release.yml`, which calls `verify.yml`. Manual dispatch is the other
 entry. When it runs:
 
 1. Installs the pinned `solana-verify` (`SOLANA_VERIFY_VERSION`, currently
-   `0.5.0`).
+   `0.5.2`, whose digest map includes Agave 4.1.0).
 2. Reproducibly builds **both** current source surfaces (mainnet-canary and
    production) in the pinned Docker image.
 3. Emits `get-executable-hash` for each into `verifiable-build-hashes.txt`,
