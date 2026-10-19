@@ -67,7 +67,7 @@
   "peerDependencies": {
     "@solana/kit": "^6.9.0",
     "@solana/program-client-core": "^6.4.0",
-    "litesvm": "1.1.0"
+    "litesvm": "1.6.0"
   },
   "peerDependenciesMeta": {
     "litesvm": {
@@ -75,16 +75,16 @@
     }
   },
   "devDependencies": {
-    "@codama/nodes-from-anchor": "1.5.0",
-    "@codama/renderers-js": "2.2.0",
+    "@codama/nodes-from-anchor": "1.5.6",
+    "@codama/renderers-js": "2.7.0",
     "@solana/kit": "6.9.0",
     "@solana/program-client-core": "^6.4.0",
-    "codama": "1.7.0",
-    "litesvm": "1.1.0",
-    "prettier": "3.8.3",
+    "codama": "1.11.0",
+    "litesvm": "1.6.0",
+    "prettier": "3.9.10",
     "tsup": "8.5.1",
-    "typedoc": "^0.28.13",
-    "typedoc-plugin-markdown": "^4.9.0",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.14.0",
     "typescript": "5.9.3",
     "vitest": "4.1.8"
   },
@@ -115,6 +115,6 @@
     "node": ">=22.23.1"
   },
   "dependencies": {
-    "@solana-program/address-lookup-table": "0.11.0"
+    "@solana-program/address-lookup-table": "0.16.0"
   }
 }
