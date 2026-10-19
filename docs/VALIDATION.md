@@ -54,6 +54,21 @@ and heartbeat re-arming use separate compiled-SBF Clock-warp cases in
 `tests-integration/moderation-disabled.test.mjs`, including both `enabled` states
 and both hire instructions.
 
+`tests-e2e/claim-expiry.rpc.test.ts` covers issue #82 using automatic Exclusive
+and CreatorReview Collaborative tasks, funded and claimed through signed SDK
+transactions. It waits for the actual task deadline plus the unchanged production
+one-hour completion buffer, then proves worker-only expiry during grace and
+permissionless expiry after grace. Its two cases run concurrently on separate
+accounts, and need about 63 minutes; the dedicated workflow allows 100 minutes
+for all RPC suites. No task/claim injection or Clock warp is used in this suite.
+Each emitted `TaskClaimExpired` is decoded by the SDK and compared with task
+reopening, counters, rent refunds, escrow debit, and the caller's cleanup reward.
+The real polling subscriber must deduplicate overlapping address watches and
+exclude the otherwise valid event logged by an atomically reverted transaction.
+JSON evidence is saved under `.localnet/evidence/issue-82-*.json`. The compiled-SBF
+SPL regression separately proves token expiry emits a zero cleanup reward while
+preserving escrow rent; that integration case advances its simulated Clock.
+
 For Marketplace V2 release readiness, local CI is necessary but not sufficient. The protocol-owned
 devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md).
 

@@ -18548,19 +18548,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "taskClaimed",
-      "discriminator": [
-        208,
-        90,
-        243,
-        116,
-        80,
-        15,
-        228,
-        202
-      ]
-    },
-    {
       "name": "taskClaimExpired",
       "discriminator": [
         93,
@@ -18571,6 +18558,19 @@ export type AgencCoordination = {
         253,
         68,
         40
+      ]
+    },
+    {
+      "name": "taskClaimed",
+      "discriminator": [
+        208,
+        90,
+        243,
+        116,
+        80,
+        15,
+        228,
+        202
       ]
     },
     {
@@ -28570,42 +28570,6 @@ export type AgencCoordination = {
       }
     },
     {
-      "name": "taskClaimed",
-      "docs": [
-        "Emitted when an agent claims a task"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "taskId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "worker",
-            "type": "pubkey"
-          },
-          {
-            "name": "currentWorkers",
-            "type": "u8"
-          },
-          {
-            "name": "maxWorkers",
-            "type": "u8"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "taskClaimExpired",
       "docs": [
         "Emitted when a stale claim is expired via `expire_claim` (issue #82).",
@@ -28642,6 +28606,42 @@ export type AgencCoordination = {
               "True when `current_workers` hit zero and the task returned to `Open`."
             ],
             "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskClaimed",
+      "docs": [
+        "Emitted when an agent claims a task"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "taskId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "currentWorkers",
+            "type": "u8"
+          },
+          {
+            "name": "maxWorkers",
+            "type": "u8"
           },
           {
             "name": "timestamp",

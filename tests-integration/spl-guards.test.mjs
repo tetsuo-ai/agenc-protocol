@@ -24,7 +24,7 @@ import {
   createMintToInstruction, getAssociatedTokenAddressSync,
 } from "./spl-token-legacy.mjs";
 import {
-  enc, arr, pda, id32,
+  enc, arr, pda, id32, coder,
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed, tokenAmount,
   freshWorld, taskModV2Pda, moderationBlockPda,
   BN, Keypair,
@@ -142,7 +142,7 @@ test("F-4: expire_claim works on a token task and moves NO lamports out of the e
   // no bond was posted, so the derived empty PDA no-ops.
   const [workerBond] = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()]);
 
-  expectOk(send(w.svm, await makeProgram(cleaner).methods
+  const expired = expectOk(send(w.svm, await makeProgram(cleaner).methods
     .expireClaim()
     .accounts({
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
@@ -159,4 +159,14 @@ test("F-4: expire_claim works on a token task and moves NO lamports out of the e
   assert.equal(Number(decode(w.svm, "TaskEscrow", r.escrow).distributed), 0, "no lamport pollution of distributed");
   assert.ok(isClosed(w.svm, r.claim), "claim closed");
   assert.equal(decode(w.svm, "Task", r.task).current_workers, 0, "worker count freed");
+  const events = expired.logs()
+    .filter((line) => line.startsWith("Program data: "))
+    .map((line) => coder.events.decode(line.slice("Program data: ".length)))
+    .filter((event) => event?.name === "TaskClaimExpired");
+  assert.equal(events.length, 1, "one expiry event for a committed token claim expiry");
+  assert.equal(events[0].data.task.toBase58(), r.task.toBase58());
+  assert.equal(events[0].data.worker.toBase58(), w.providerAgent.toBase58());
+  assert.equal(events[0].data.expired_by.toBase58(), cleaner.publicKey.toBase58());
+  assert.equal(events[0].data.cleanup_reward.toString(), "0", "token expiry reports no SOL reward");
+  assert.equal(events[0].data.task_reopened, true);
 });
