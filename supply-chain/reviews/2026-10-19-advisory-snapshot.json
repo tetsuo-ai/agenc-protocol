@@ -1,0 +1,231 @@
+{
+  "observedAt": "2026-10-19T14:06:04.514Z",
+  "npmVersion": "11.18.0",
+  "fullRawReportSha256": "f73921ab6b61ce66e482855fa626394f2736ec3c68f3245960e2a183983b381f",
+  "accepted": true,
+  "note": "Accepted means all runtime scans are empty and only the exact expiring development review remains; it does not mean no advisory exists. CI retains raw reports.",
+  "locks": [
+    {
+      "root": ".",
+      "lockSha256": "5eb62cee5d9dd1387d091fbf60d5d3631ad71f472b5f2b2333019ab6ee73dd1e",
+      "scans": [
+        {
+          "runtime": false,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 18,
+            "critical": 0,
+            "total": 18
+          },
+          "advisories": [
+            {
+              "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+              "package": "braces",
+              "severity": "high",
+              "range": "<=3.0.3"
+            }
+          ],
+          "reviewedAdvisories": [
+            "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+          ]
+        },
+        {
+          "runtime": true,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        }
+      ]
+    },
+    {
+      "root": "tests-integration",
+      "lockSha256": "08f739ba4b60d1c0ac6288ba2ed4f8fbae3e9ce5bc36cb4090e37de82e76546d",
+      "scans": [
+        {
+          "runtime": false,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        },
+        {
+          "runtime": true,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        }
+      ]
+    },
+    {
+      "root": "packages/marketplace-react/examples/marketplace-starter",
+      "lockSha256": "98868fc4f4ea8e523cdd13811ab8ee44c30a3cf79f9b4a6e3b24d57435b24d00",
+      "scans": [
+        {
+          "runtime": false,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        },
+        {
+          "runtime": true,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        }
+      ]
+    },
+    {
+      "root": "packages/marketplace-react/test/playwright",
+      "lockSha256": "f8c5280723e3d47803b11510dd1f77e878254c934bbdee05a0f9ee927898bad5",
+      "scans": [
+        {
+          "runtime": false,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        },
+        {
+          "runtime": true,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        }
+      ]
+    },
+    {
+      "root": "packages/marketplace-react/test-apps/checkout",
+      "lockSha256": "5c31bf8df453732a90befb207ecb78395b1eef8a0065966f8d1080dd8856ce81",
+      "scans": [
+        {
+          "runtime": false,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        },
+        {
+          "runtime": true,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        }
+      ]
+    },
+    {
+      "root": "packages/marketplace-react/test-apps/next-ssr",
+      "lockSha256": "c3ada79ad825ea27fea57305b53b7952868602b2e54d02215b4843e2010dac2d",
+      "scans": [
+        {
+          "runtime": false,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        },
+        {
+          "runtime": true,
+          "counts": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "advisories": [],
+          "reviewedAdvisories": []
+        }
+      ]
+    }
+  ],
+  "rust": {
+    "cargoAudit": "0.22.2",
+    "cargoDeny": "0.20.2",
+    "advisoryDatabaseCommit": "999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b",
+    "advisoryCount": 1338,
+    "locks": [
+      {
+        "path": "programs/agenc-coordination/Cargo.lock",
+        "sha256": "f361339f627966f55986da78159bf23bdafe304680b4bb42e32ad9b907f569d0"
+      },
+      {
+        "path": "programs/agenc-coordination/fuzz/Cargo.lock",
+        "sha256": "af7aaaae94d3e9d18d9c56bc375ec7550373e9dbea833ea19926e3eb319e773b"
+      },
+      {
+        "path": "zkvm/Cargo.lock",
+        "sha256": "a6f69afb80f62e2caf764dd293c818baef3fe74152d43ba7f193a9b7f1058ddd"
+      }
+    ],
+    "result": "All three locks passed pinned advisory/license/source checks with the existing bounded bincode unmaintained advisory review."
+  }
+}

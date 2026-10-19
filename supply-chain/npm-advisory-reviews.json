@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "reviews": [
+    {
+      "advisory": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "version": "3.0.3",
+      "root": ".",
+      "node": "node_modules/braces",
+      "integrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
+      "severity": "high",
+      "reviewedAt": "2026-10-19T13:55:00Z",
+      "expiresAt": "2026-11-18T13:55:00Z",
+      "owner": "protocol maintainers",
+      "reason": "Upstream has no patched release. This exact development-only tree consumes repository-controlled build globs. All six runtime audits must remain empty; this does not authorize an exposed service or untrusted runtime glob input. Track replacement or an upstream patch before expiry."
+    }
+  ]
+}

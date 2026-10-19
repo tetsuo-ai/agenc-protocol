@@ -44,7 +44,11 @@ test("CodeQL, history secret scanning, and npm policy run fail-closed", async ()
   assert.ok(Object.hasOwn(workflow.on, "pull_request"));
   assert.deepEqual(workflow.on.push.branches, ["main"]);
   assert.ok(Object.hasOwn(workflow.on, "schedule"));
-  assert.deepEqual(workflow.on.schedule, [{ cron: "23 8 * * *" }], "expired npm exceptions must be detected daily");
+  assert.deepEqual(
+    workflow.on.schedule,
+    [{ cron: "23 8 * * *" }],
+    "expired npm exceptions must be detected daily",
+  );
 
   const codeql = workflow.jobs.codeql;
   assert.equal(codeql.permissions["security-events"], "write");
@@ -172,4 +176,28 @@ test("runtime advisory checks run on ordinary CI and quiet-period schedules", as
   assert.ok(Object.hasOwn(rust.on, "pull_request"));
   assert.ok(Object.hasOwn(rust.on, "schedule"));
   assert.ok(rust.on.schedule.some(({ cron }) => typeof cron === "string"));
+});
+
+test("all-lock audit and expiring development review run on the scheduled supply-chain job", async () => {
+  const workflow = parse(await readFile(WORKFLOW, "utf8"));
+  const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? []);
+  assert.ok(
+    steps.some(({ run }) =>
+      run?.includes("node --test scripts/audit-all-npm-locks.test.mjs"),
+    ),
+  );
+  assert.ok(
+    steps.some(({ run }) =>
+      run?.includes(
+        "node scripts/audit-all-npm-locks.mjs --output npm-audit-evidence.json",
+      ),
+    ),
+  );
+  assert.ok(
+    steps.some(
+      (step) =>
+        step.if === "always()" && step.with?.path === "npm-audit-evidence.json",
+    ),
+  );
+  assert.ok(Object.hasOwn(workflow.on, "schedule"));
 });

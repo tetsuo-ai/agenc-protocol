@@ -137,6 +137,20 @@ jobs:
       - name: Audit independent deployment dependencies
         run: npm run audit:tests-integration
 
+      - name: Audit every locked graph and enforce bounded development reviews
+        run: |
+          node --test scripts/audit-all-npm-locks.test.mjs
+          node scripts/audit-all-npm-locks.mjs --output npm-audit-evidence.json
+
+      - name: Preserve full and runtime advisory evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-audit-evidence-${{ github.sha }}
+          path: npm-audit-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Test supply-chain controls
         run: >-
           node --test
