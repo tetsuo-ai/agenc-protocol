@@ -525,10 +525,20 @@ describe("runPromoteChecks", () => {
 
   it("fails every installed pin closed for an unknown surface revision", () => {
     const input = readyInput();
-    input.chainEvidence!.surfaceRevision = 6;
+    input.chainEvidence!.surfaceRevision = 0xffff;
     setInstalledTrain(input, REVISION_5_CLIENTS);
     const report = runPromoteChecks(input);
     expect(statusOf(report, "chain:surface")).toBe("fail");
+    for (const pkg of Object.keys(REVISION_5_CLIENTS)) {
+      expect(statusOf(report, `pin:${pkg}`), pkg).toBe("fail");
+    }
+  });
+
+  it.each([6, 7])("does not promote published clients onto unreviewed candidate surface %i", (revision) => {
+    const input = readyInput();
+    input.chainEvidence!.surfaceRevision = revision;
+    setInstalledTrain(input, REVISION_5_CLIENTS);
+    const report = runPromoteChecks(input);
     for (const pkg of Object.keys(REVISION_5_CLIENTS)) {
       expect(statusOf(report, `pin:${pkg}`), pkg).toBe("fail");
     }
