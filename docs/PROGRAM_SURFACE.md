@@ -17,7 +17,7 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 
 Candidate build breakdown: default production (`spl-token-rewards`) is **103
 instructions**, explicit `private-zk` is **106**, and `mainnet-canary` remains
-**25**. The committed candidate IDL has **45 accounts / 106 events / 414 errors**;
+**25**. The committed candidate IDL has **45 accounts / 106 events / 415 errors**;
 the generated reference describes this candidate. `validation-timings` only
 shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
 
@@ -35,11 +35,17 @@ legacy account layouts and default cap remain unchanged; extra capacity needs
 M-of-N approval and the `taskCreationQuotas` capability. See the
 [quota design and adversarial review](design/authority-task-quotas.md).
 
+Revision 8 requires evidence of at least 100,000 SOL protocol-fee lamports for
+new listing/skill ratings. It consumes one previously zero reserved byte each
+in Task and PurchaseRecord, preserving allocation and wire shape. The
+`feeQualifiedRatings` capability describes the new semantics; historical
+aggregates are not retrospectively filtered. See [rating policy](design/fee-qualified-ratings.md).
+
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (414 variants in the candidate IDL)
+- `src/errors.rs` - program error codes (415 variants in the candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 

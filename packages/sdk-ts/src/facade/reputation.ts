@@ -310,6 +310,8 @@ export async function updateSkill(
 /**
  * Rate a skill. ratingAccount, the renamed rateSkillPurchaseRecord PDA, and
  * protocolConfig are all auto-derived. `reviewHash` defaults to null.
+ * Revision 8 requires a qualifying SOL fee recorded when purchased; current
+ * price/mint and expensive legacy receipts cannot establish eligibility.
  */
 export async function rateSkill(
   input: Omit<RateSkillAsyncInput, "reviewHash"> & {

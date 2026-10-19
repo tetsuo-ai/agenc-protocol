@@ -21,6 +21,7 @@ import {
   SURFACE_REVISION_AUDIT_HARDENING,
   SURFACE_REVISION_AUTHORITY_FEED,
   SURFACE_REVISION_TASK_QUOTAS,
+  SURFACE_REVISION_FEE_QUALIFIED_RATINGS,
   SURFACE_REVISION_CURRENT,
   SURFACE_REVISION_OFFSET,
   OLD_PROTOCOL_CONFIG_SIZE,
@@ -147,15 +148,15 @@ describe("capabilitiesForRevision (typed mapping)", () => {
 
   it("maps the audit-hardening/current revision as a monotonic full surface", () => {
     expect(SURFACE_REVISION_AUDIT_HARDENING).toBe(5);
-    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_TASK_QUOTAS);
+    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_FEE_QUALIFIED_RATINGS);
     const caps = capabilitiesForRevision(SURFACE_REVISION_CURRENT);
     expect(caps.fullSurface).toBe(true);
     expect(caps.goods).toBe(true);
-    expect(caps.surfaceRevision).toBe(7);
+    expect(caps.surfaceRevision).toBe(8);
   });
 
   it("requires the distinct revision-6 wallet-vote capability", () => {
-    for (const revision of [0, 1, 2, 3, 4, 5, 8, 65535]) {
+    for (const revision of [0, 1, 2, 3, 4, 5, 9, 65535]) {
       const caps = capabilitiesForRevision(revision);
       expect(caps.feedAuthorityVotes).toBe(false);
       expect(() => assertCapability(caps, "feedAuthorityVotes")).toThrow(
@@ -167,7 +168,7 @@ describe("capabilitiesForRevision (typed mapping)", () => {
   });
 
   it("requires revision 7 for optional task creation quotas", () => {
-    for (const revision of [0, 5, 6, 8, 65535]) {
+    for (const revision of [0, 5, 6, 9, 65535]) {
       expect(capabilitiesForRevision(revision).taskCreationQuotas).toBe(false);
     }
     expect(capabilitiesForRevision(7).taskCreationQuotas).toBe(true);

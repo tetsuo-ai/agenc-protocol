@@ -1044,6 +1044,15 @@ pub fn execute_completion_rewards<'a, 'info>(
         }
     }
 
+    // Persist only after transfers succeed. Known buyer/worker treasury aliases
+    // are not an independent cost. SPL amounts cannot be compared to lamports.
+    // The immutable marker, not a later price/configuration, gates rate_hire.
+    let independent_sol_fee = task.reward_mint.is_none()
+        && treasury_info.key() != task.creator
+        && treasury_info.key() != worker.authority
+        && treasury_info.key() != escrow.key();
+    task.record_rating_fee(protocol_fee, independent_sol_fee);
+
     Ok(())
 }
 

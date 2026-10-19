@@ -4,6 +4,7 @@ use crate::instructions::constants::{
     DEFAULT_DISPUTE_INITIATION_COOLDOWN, DEFAULT_MAX_DISPUTES_PER_24H, DEFAULT_MAX_TASKS_PER_24H,
     DEFAULT_TASK_CREATION_COOLDOWN, MAX_REPUTATION, MIN_GOVERNANCE_DISTINCT_VOTERS,
     MIN_GOVERNANCE_VOTER_REPUTATION, MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS,
+    MIN_RATING_PROTOCOL_FEE_LAMPORTS,
 };
 use anchor_lang::prelude::*;
 
@@ -552,9 +553,12 @@ impl ProtocolConfig {
     /// Additive, multisig-approved u32 creation quotas for individual wallets.
     pub const SURFACE_REVISION_TASK_QUOTAS: u16 = 7;
 
+    /// Prospective listing/skill ratings require a recorded SOL fee floor.
+    pub const SURFACE_REVISION_FEE_QUALIFIED_RATINGS: u16 = 8;
+
     /// Highest surface revision implemented by this binary. Deployment tooling
     /// stamps this value only after the matching artifact has been verified live.
-    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_TASK_QUOTAS;
+    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_FEE_QUALIFIED_RATINGS;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -1239,7 +1243,9 @@ pub struct Task {
     ///     having observed the intermediate state.
     ///   * `_reserved[11]` = `peer_settlement_pending` (0 = no deferred peers,
     ///     1 = peer claims are reserved for settle_dispute_claim).
-    /// Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
+    ///   * `_reserved[12]` = `rating_fee_qualified` (canonical boolean), recorded
+    ///     only by successful SOL completion with the minimum protocol fee.
+    /// Bytes `[13..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
@@ -1407,13 +1413,29 @@ impl Task {
             && self.task_type == TaskType::Competitive
     }
 
+    /// Record qualification only after an actual independent SOL treasury fee.
+    /// A prior qualifying completion remains durable; refunds/dispute payouts
+    /// never call this method. Legacy zero-filled tasks are unqualified.
+    pub fn record_rating_fee(&mut self, protocol_fee: u64, independent_sol_fee: bool) {
+        if independent_sol_fee && protocol_fee >= MIN_RATING_PROTOCOL_FEE_LAMPORTS {
+            self._reserved[12] = 1;
+        }
+    }
+
+    pub fn rating_fee_qualified(&self) -> bool {
+        self._reserved[12] == 1 && self.validate_reserved_fields()
+    }
+
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
     /// Batch 3, deferred-dispute guards, and claim-generation tracking carve
-    /// `_reserved[0..12]`. Both pending bytes are canonical booleans, the
+    /// `_reserved[0..13]`. Pending and fee bytes are canonical booleans, the
     /// generation is an unconstrained `u64`, and the tail must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved[2] <= 1 && self._reserved[11] <= 1 && self._reserved[12..] == [0u8; 4]
+        self._reserved[2] <= 1
+            && self._reserved[11] <= 1
+            && self._reserved[12] <= 1
+            && self._reserved[13..] == [0u8; 3]
     }
 }
 
@@ -2863,7 +2885,8 @@ pub struct PurchaseRecord {
     pub bump: u8,
     /// Purchase metadata carved from the existing reserved tail:
     /// `_reserved[0]` snapshots the purchased `SkillRegistration::version`;
-    /// bytes `[1..4]` remain reserved and must stay zero.
+    /// `_reserved[1]` records a qualifying SOL protocol fee (canonical boolean);
+    /// bytes `[2..4]` remain reserved and must stay zero.
     pub _reserved: [u8; 4],
 }
 
@@ -2877,6 +2900,17 @@ impl PurchaseRecord {
     pub fn snapshot_content_version(&mut self, version: u8) {
         self._reserved = [0u8; 4];
         self._reserved[0] = version;
+    }
+
+    /// Called after payment and the content-version snapshot. No inference from
+    /// the mutable skill price/mint or from legacy `price_paid` is permitted.
+    pub fn record_rating_fee(&mut self, protocol_fee: u64, independent_sol_fee: bool) {
+        self._reserved[1] =
+            u8::from(independent_sol_fee && protocol_fee >= MIN_RATING_PROTOCOL_FEE_LAMPORTS);
+    }
+
+    pub fn rating_fee_qualified(&self) -> bool {
+        self._reserved[1] == 1 && self._reserved[2..] == [0u8; 2]
     }
 }
 
@@ -4082,6 +4116,66 @@ mod tests {
         let mut tail = Task::default();
         tail._reserved[15] = 1;
         assert!(!tail.validate_reserved_fields());
+    }
+
+    #[test]
+    fn rating_fee_evidence_round_trips_without_layout_or_content_version_changes() {
+        for (fee, independent_sol, qualifies) in [
+            (0, true, false),
+            (99_999, true, false),
+            (100_000, true, true),
+            (100_001, true, true),
+            (u64::MAX, false, false),
+            (u64::MAX, true, true),
+        ] {
+            let mut task = Task::default();
+            task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+            task.set_live_submissions(3);
+            task.set_worker_slash_pending(true);
+            task.set_peer_settlement_pending(true);
+            task.increment_claim_generation().unwrap();
+            let prior = task._reserved;
+            assert!(!task.rating_fee_qualified());
+            task.record_rating_fee(fee, independent_sol);
+            let mut encoded = Vec::new();
+            task.try_serialize(&mut encoded).unwrap();
+            let restored = Task::try_deserialize(&mut encoded.as_slice()).unwrap();
+            assert_eq!(restored.rating_fee_qualified(), qualifies);
+            assert_eq!(&restored._reserved[..12], &prior[..12]);
+            assert_eq!(&restored._reserved[13..], &[0; 3]);
+            assert_eq!(Task::SIZE, 466);
+            task.record_rating_fee(0, false);
+            assert_eq!(task.rating_fee_qualified(), qualifies);
+            task._reserved[12] = 2;
+            assert!(!task.rating_fee_qualified());
+            assert!(!task.validate_reserved_fields());
+
+            let mut purchase = PurchaseRecord {
+                skill: Pubkey::new_unique(),
+                buyer: Pubkey::new_unique(),
+                price_paid: u64::MAX,
+                timestamp: 42,
+                bump: 255,
+                _reserved: [0; 4],
+            };
+            // Even an expensive legacy purchase is not proof of a fee.
+            assert!(!purchase.rating_fee_qualified());
+            purchase.snapshot_content_version(7);
+            purchase.record_rating_fee(fee, independent_sol);
+            let mut bytes = Vec::new();
+            purchase.try_serialize(&mut bytes).unwrap();
+            assert_eq!(bytes.len(), PurchaseRecord::SIZE);
+            assert_eq!(PurchaseRecord::SIZE, 93);
+            let restored = PurchaseRecord::try_deserialize(&mut bytes.as_slice()).unwrap();
+            assert_eq!(restored.content_version(), 7);
+            assert_eq!(restored.rating_fee_qualified(), qualifies);
+            for unknown in [2, 255] {
+                purchase._reserved[1] = unknown;
+                assert!(!purchase.rating_fee_qualified());
+            }
+            purchase._reserved = [7, 1, 1, 0];
+            assert!(!purchase.rating_fee_qualified());
+        }
     }
 
     #[test]

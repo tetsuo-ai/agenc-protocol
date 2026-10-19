@@ -311,6 +311,12 @@ pub fn handler(
     purchase_record.timestamp = clock.unix_timestamp;
     purchase_record.bump = ctx.bumps.purchase_record;
     purchase_record.snapshot_content_version(skill.version);
+    purchase_record.record_rating_fee(
+        protocol_fee,
+        skill.price_mint.is_none()
+            && ctx.accounts.treasury.key() != ctx.accounts.authority.key()
+            && ctx.accounts.treasury.key() != ctx.accounts.author_wallet.key(),
+    );
 
     emit!(SkillPurchased {
         skill: skill.key(),

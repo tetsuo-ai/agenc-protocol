@@ -842,6 +842,8 @@ export const AGENC_COORDINATION_ERROR__TASK_QUOTA_UNAVAILABLE = 0x190b; // 6411
 export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA = 0x190c; // 6412
 /** InvalidTaskQuotaAccount: Task quota account is not the canonical writable wallet quota */
 export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA_ACCOUNT = 0x190d; // 6413
+/** RatingFeeNotQualified: Rating requires a recorded SOL protocol fee of at least 100000 lamports */
+export const AGENC_COORDINATION_ERROR__RATING_FEE_NOT_QUALIFIED = 0x190e; // 6414
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -1127,6 +1129,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__RATE_LIMIT_BELOW_MINIMUM
   | typeof AGENC_COORDINATION_ERROR__RATE_LIMIT_EXCEEDED
   | typeof AGENC_COORDINATION_ERROR__RATE_LIMIT_TOO_HIGH
+  | typeof AGENC_COORDINATION_ERROR__RATING_FEE_NOT_QUALIFIED
   | typeof AGENC_COORDINATION_ERROR__RATING_NOT_BUYER
   | typeof AGENC_COORDINATION_ERROR__RATIONALE_URI_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY
@@ -1547,6 +1550,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__RATE_LIMIT_BELOW_MINIMUM]: `Rate limit value below protocol minimum`,
     [AGENC_COORDINATION_ERROR__RATE_LIMIT_EXCEEDED]: `Rate limit exceeded: maximum actions per 24h window reached`,
     [AGENC_COORDINATION_ERROR__RATE_LIMIT_TOO_HIGH]: `Rate limit value exceeds maximum allowed (1000)`,
+    [AGENC_COORDINATION_ERROR__RATING_FEE_NOT_QUALIFIED]: `Rating requires a recorded SOL protocol fee of at least 100000 lamports`,
     [AGENC_COORDINATION_ERROR__RATING_NOT_BUYER]: `Only the buyer (task creator) may rate this hire`,
     [AGENC_COORDINATION_ERROR__RATIONALE_URI_TOO_LONG]: `Dispute ruling rationale URI exceeds the maximum allowed length`,
     [AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY]: `Agent must wait 24 hours after voting before deregistering`,

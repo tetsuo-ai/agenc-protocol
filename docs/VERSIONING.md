@@ -18,9 +18,9 @@ matrix below and `getDeployedSurface` do.
 
 ## 1. Support matrix
 
-### Revision-6/7 candidates: feed votes and task quotas (not published or deployed)
+### Revision-6/7/8 candidates: feed votes, task quotas and fee-qualified ratings (not published or deployed)
 
-This branch contains a **103-instruction revision-7 candidate**, including the
+This branch contains a **103-instruction revision-8 candidate**, including the
 distinct revision-6 `upvote_post_by_authority` wire and `FeedAuthorityVote` account family,
 plus the revision-7 opt-in `configure_task_creation_quota` capacity policy.
 The documented mainnet revision-5 deployment and published package set below
@@ -35,7 +35,7 @@ These are proposed releases, not available-install recommendations. External
 store-core, scaffolder, hosted builders and marketplace binary releases still
 require their own tested pins and breaking-change announcements under §2.
 The CLI's reviewed production matrices remain revisions 4 and 5: a candidate
-must not become eligible for `promote` merely because its SDK understands 6 or 7.
+must not become eligible for `promote` merely because its SDK understands 6, 7 or 8.
 
 Breaking change: `facade.upvotePost` now requires the post's `author` registration
 and the live `surface` capability set, and requires `feedAuthorityVotes` (revision
@@ -52,11 +52,18 @@ multisig grants individual wallets a finite 256–1,000 maximum; all consumed
 usage and the shared cooldown carry across legacy and extended writes.
 ProtocolConfig and AuthorityRateLimit layouts remain 351 and 67 bytes. See
 [the quota design](design/authority-task-quotas.md) for the policy tradeoff and
-real RPC volume/settlement acceptance test. Both candidate changes form the
+real RPC volume/settlement acceptance test. These candidate changes form the
 same pending client train above; no intermediate publication is claimed.
 
+Revision 8 changes rating eligibility: each new listing/skill rating needs a
+recorded payment of at least 100,000 SOL protocol-fee lamports. Existing receipt
+layouts are retained; zero-filled historical evidence is ineligible. Clients
+can inspect `feeQualifiedRatings` and the SDK fee-evidence helpers. Existing
+aggregates retain their historical entries and must not be presented as wholly
+fee-qualified. See [the rating policy](design/fee-qualified-ratings.md).
+
 Deployment is gated on the coordinated first-party release, a paused reviewed
-upgrade and IDL publication, then the atomic revision-7 stamp before unpausing.
+upgrade and IDL publication, then the atomic revision-8 stamp before unpausing.
 Until that ceremony, the candidate must not be advertised as the live surface.
 
 ### 1.1 Current compatible set (as of 2026-07-22)

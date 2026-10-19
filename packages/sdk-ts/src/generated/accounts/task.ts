@@ -164,7 +164,9 @@ export type Task = {
    * having observed the intermediate state.
    * * `_reserved[11]` = `peer_settlement_pending` (0 = no deferred peers,
    * 1 = peer claims are reserved for settle_dispute_claim).
-   * Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[12]` = `rating_fee_qualified` (canonical boolean), recorded
+   * only by successful SOL completion with the minimum protocol fee.
+   * Bytes `[13..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
@@ -276,7 +278,9 @@ export type TaskArgs = {
    * having observed the intermediate state.
    * * `_reserved[11]` = `peer_settlement_pending` (0 = no deferred peers,
    * 1 = peer claims are reserved for settle_dispute_claim).
-   * Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[12]` = `rating_fee_qualified` (canonical boolean), recorded
+   * only by successful SOL completion with the minimum protocol fee.
+   * Bytes `[13..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**

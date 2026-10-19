@@ -20,10 +20,7 @@ const require = createRequire(
 const { PublicKey } = require("@solana/web3.js");
 
 function discriminator(name) {
-  return createHash("sha256")
-    .update(`account:${name}`)
-    .digest()
-    .subarray(0, 8);
+  return createHash("sha256").update(`account:${name}`).digest().subarray(0, 8);
 }
 
 function skillFixture(marker = 11, { withMint = false } = {}) {
@@ -43,7 +40,9 @@ function skillFixture(marker = 11, { withMint = false } = {}) {
   let offset = 144;
   if (withMint) {
     data[offset] = 1;
-    new PublicKey(Buffer.alloc(32, marker + 4)).toBuffer().copy(data, offset + 1);
+    new PublicKey(Buffer.alloc(32, marker + 4))
+      .toBuffer()
+      .copy(data, offset + 1);
     offset += 33;
   } else {
     data[offset] = 0;
@@ -155,6 +154,15 @@ test("exact-decodes both compact Option layouts and immutable bindings", () => {
     assert.ok(decodedPurchase.skill.equals(skill.address));
     assert.ok(decodedPurchase.buyer.equals(purchase.buyer));
     assert.equal(decodedPurchase.contentVersion, 1);
+    assert.equal(decodedPurchase.ratingFeeQualified, false);
+    purchase.data[90] = 1;
+    assert.equal(decodePurchaseRecord(purchase.data).ratingFeeQualified, true);
+    purchase.data[90] = 2;
+    assert.throws(
+      () => decodePurchaseRecord(purchase.data),
+      /invalid rating fee flag/,
+    );
+    purchase.data[90] = 0;
 
     const rating = ratingFixture(skill.address, purchase.buyer, {
       withReview: withMint,

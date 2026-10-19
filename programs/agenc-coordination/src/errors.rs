@@ -1217,4 +1217,6 @@ pub enum CoordinationError {
     InvalidTaskQuota,
     #[msg("Task quota account is not the canonical writable wallet quota")]
     InvalidTaskQuotaAccount,
+    #[msg("Rating requires a recorded SOL protocol fee of at least 100000 lamports")]
+    RatingFeeNotQualified,
 }

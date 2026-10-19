@@ -10,6 +10,7 @@ export * from "./verification.js";
 export * from "./bids.js";
 export * from "./governance.js";
 export * from "./reputation.js";
+export * from "./rating-fees.js";
 export * from "./goods.js";
 export * from "./surface.js";
 export type { TaskCreationQuotaInput } from "./task-quota.js";
