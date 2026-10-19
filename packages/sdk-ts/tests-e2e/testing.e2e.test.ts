@@ -375,8 +375,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
 
     // Pre-fix these surfaced as opaque on-chain program errors; they must be
     // clear local errors that name the option that caused them and state what
-    // moderationEnabled: false actually skips (only the hire-time listing
-    // gate).
+    // moderationEnabled: false freezes (hires/publication in strict mode).
     await expect(
       market.moderator.attestTask(someAddress, hash),
     ).rejects.toThrow(/moderationEnabled: false/);

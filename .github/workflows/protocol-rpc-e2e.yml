@@ -60,7 +60,8 @@ jobs:
         working-directory: packages/sdk-ts
         env:
           AGENC_RPC_E2E: "1"
-        run: npx vitest run tests-e2e/settlement-pending.rpc.test.ts
+        # These suites change shared authority config, so run files sequentially.
+        run: npx vitest run tests-e2e/settlement-pending.rpc.test.ts tests-e2e/moderation-disabled.rpc.test.ts --no-file-parallelism
       - name: Stop owned validator
         if: always()
         run: node scripts/localnet-down.mjs

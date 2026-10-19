@@ -435,9 +435,10 @@ pub fn handler(
     )?;
 
     // Hire-time moderation gate (§6), fail-closed: moderation_config is a required
-    // account, so an unconfigured marketplace can't hire. When enabled, the hire
-    // must present a publishable listing-level attestation for the pinned spec_hash.
-    // When disabled, keep Model-A (the existing set_task_job_spec path gates go-live).
+    // account, so an unconfigured marketplace can't hire. While the liveness
+    // gate is strict, moderation must be enabled and the pinned spec_hash must
+    // have a publishable attestation. This mirrors the publish gate: disabled
+    // moderation must not take payment for a task that cannot be activated.
     //
     // P1.2 §4.4: the record may be authored by the global moderation authority OR a
     // registered, non-revoked, non-exiting ModerationAttestor. The caller names the
@@ -450,12 +451,14 @@ pub fn handler(
     // The BLOCK floor above already ran and is NEVER relaxed; a heartbeat
     // instantly re-arms the strict path.
     let mut unlocking_attestor: Option<Pubkey> = None;
-    if ctx.accounts.moderation_config.enabled
-        && !moderation_gate_relaxed(
-            ctx.accounts.moderation_config.as_ref(),
-            clock.unix_timestamp,
-        )
-    {
+    if !moderation_gate_relaxed(
+        ctx.accounts.moderation_config.as_ref(),
+        clock.unix_timestamp,
+    ) {
+        require!(
+            ctx.accounts.moderation_config.enabled,
+            CoordinationError::TaskModerationRequired
+        );
         let record_info = ctx
             .accounts
             .listing_moderation

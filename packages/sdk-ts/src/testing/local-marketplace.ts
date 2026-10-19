@@ -45,16 +45,10 @@ export interface StartLocalMarketplaceOptions {
    * `true` (mainnet posture): hires and claims then REQUIRE the CLEAN
    * attestations the returned {@link LocalModerator} records.
    *
-   * **`false` skips ONLY the hire-time listing gate**
-   * (`hire_from_listing` / `hire_from_listing_humanless`) — it does NOT relax
-   * the rest of the flow. On-chain, recording attestations
-   * (`record_listing_moderation` / `record_task_moderation`, i.e.
-   * {@link LocalModerator.attestListing} / {@link LocalModerator.attestTask})
-   * and `setTaskJobSpec` all REQUIRE `enabled = true`, and
-   * `claimTaskWithJobSpec` (the only claim path; plain `claim_task` is
-   * fail-closed) requires the job spec `setTaskJobSpec` pins — so with
-   * moderation disabled no task can ever be claimed or go live. Leave this
-   * `true` for any flow that claims tasks.
+   * `false` freezes new hires and publication while the liveness gate is
+   * strict; attestations are also rejected. The separate liveness deadman
+   * can relax the ALLOW gate after authority silence, while the content
+   * BLOCK floor always applies. Leave this `true` for normal hire flows.
    */
   moderationEnabled?: boolean;
   /** Minimum arbiter stake seeded into ProtocolConfig. Defaults to `0n`. */
@@ -146,9 +140,8 @@ function assertModerationEnabled(moderationEnabled: boolean): void {
         "moderationEnabled: false, so the on-chain program rejects ALL " +
         "moderation attestations (record_listing_moderation / " +
         "record_task_moderation require ModerationConfig.enabled). " +
-        "moderationEnabled: false skips only the hire-time listing gate; " +
-        "setTaskJobSpec and claimTaskWithJobSpec still require an attested " +
-        "task, so no task can be claimed in this configuration. Start the " +
+        "moderationEnabled: false freezes the hire-time listing gate and " +
+        "publication while the liveness gate is strict. Start the " +
         "sandbox with moderationEnabled: true (the default) for any flow " +
         "that attests, pins a job spec, or claims tasks.",
     );

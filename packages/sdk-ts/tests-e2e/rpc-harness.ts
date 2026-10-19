@@ -211,6 +211,7 @@ export async function localRpcHarness(label: string) {
     expect(landed.meta!.err).toMatchObject({
       InstructionError: [expect.any(BigInt), { Custom: BigInt(code) }],
     });
+    return landed;
   }
   async function fundedSigner() {
     const signer = await generateKeyPairSigner();

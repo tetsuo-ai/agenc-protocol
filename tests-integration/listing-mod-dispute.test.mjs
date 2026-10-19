@@ -230,7 +230,7 @@ test("configure_task_moderation: protocol authority sets moderation authority + 
 });
 
 test("configure_task_moderation: a non-protocol-authority is rejected", async () => {
-  const w = await freshWorld({});
+  const w = await freshWorld({ moderationEnabled: false });
   const stranger = Keypair.generate();
   w.svm.airdrop(stranger.publicKey, BigInt(10e9));
   expectFail(
