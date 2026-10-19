@@ -824,6 +824,8 @@ export const AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING = 0x1902; 
 export const AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER = 0x1903; // 6403
 /** DisputeTerminalStatusCorrupt: The dispute's recorded terminal status is invalid */
 export const AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT = 0x1904; // 6404
+/** ClaimSettlementPending: Claim is reserved for pending dispute peer settlement; use settle_dispute_claim */
+export const AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING = 0x1905; // 6405
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -886,6 +888,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK
+  | typeof AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING
   | typeof AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING
   | typeof AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP
   | typeof AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON
@@ -1297,6 +1300,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED]: `Claim has not expired yet`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION]: `reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK]: `reclaim_terminal_claim requires a terminal (Completed/Cancelled) task`,
+    [AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING]: `Claim is reserved for pending dispute peer settlement; use settle_dispute_claim`,
     [AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING]: `This claim's dispute was resolved but its slash has not been applied yet`,
     [AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP]: `Combined protocol + operator + referrer fees leave the worker below the floor`,
     [AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON]: `Competitive task already completed by another worker`,

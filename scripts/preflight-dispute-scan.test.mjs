@@ -16,7 +16,9 @@ import {
 } from "./preflight-dispute-scan.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
+const require = createRequire(
+  path.join(ROOT, "tests-integration", "package.json"),
+);
 const { PublicKey } = require("@solana/web3.js");
 
 function discriminator(name) {
@@ -41,8 +43,13 @@ function disputeFixture({
   expiresAt = 2_000n,
   bump,
   legacy = false,
+  preChunk = false,
+  rationaleUri = "",
+  peerWorkersTotal = 0,
+  peerWorkersSettled = 0,
+  pendingTerminalStatus = 0,
 }) {
-  const data = Buffer.alloc(legacy ? 263 : 587);
+  const data = Buffer.alloc(legacy ? 263 : preChunk ? 587 : 590);
   discriminator("Dispute").copy(data, 0);
   disputeId.copy(data, 8);
   task.toBuffer().copy(data, 40);
@@ -60,10 +67,26 @@ function disputeFixture({
   data[220] = Number(initiatorSlashApplied);
   data[230] = bump;
   defendant.toBuffer().copy(data, 231);
+  if (!legacy) {
+    const uri = Buffer.from(rationaleUri);
+    data.writeUInt32LE(uri.length, 295);
+    uri.copy(data, 299);
+    if (!preChunk) {
+      data[331 + uri.length] = peerWorkersTotal;
+      data[332 + uri.length] = peerWorkersSettled;
+      data[333 + uri.length] = pendingTerminalStatus;
+    }
+  }
   return data;
 }
 
-function taskFixture({ taskId, creator, currentWorkers = 1, pending = false, bump }) {
+function taskFixture({
+  taskId,
+  creator,
+  currentWorkers = 1,
+  pending = false,
+  bump,
+}) {
   const data = Buffer.alloc(466);
   discriminator("Task").copy(data, 0);
   taskId.copy(data, 8);
@@ -124,6 +147,11 @@ function scenario({
   slashApplied = false,
   currentWorkers = 1,
   legacy = false,
+  preChunk = false,
+  rationaleUri,
+  peerWorkersTotal,
+  peerWorkersSettled,
+  pendingTerminalStatus,
   votesFor,
   votesAgainst,
   totalVoters = 0,
@@ -170,6 +198,11 @@ function scenario({
     resolvedAt,
     bump: disputeBump,
     legacy,
+    preChunk,
+    rationaleUri,
+    peerWorkersTotal,
+    peerWorkersSettled,
+    pendingTerminalStatus,
   });
   const taskData = taskFixture({
     taskId,
@@ -215,7 +248,10 @@ function connectionFor(value) {
     getGenesisHash: async () => MAINNET_GENESIS,
     getProgramAccounts: async (_programId, options) => {
       const discriminatorBytes = options?.filters?.[0]?.memcmp?.bytes;
-      if (discriminatorBytes === discriminator("AgentRegistration").toString("base64")) {
+      if (
+        discriminatorBytes ===
+        discriminator("AgentRegistration").toString("base64")
+      ) {
         return [{ pubkey: value.agentPubkey, account: value.agentAccount }];
       }
       assert.equal(
@@ -336,9 +372,10 @@ test("blocks legacy Dispute layouts that still need an active or finalizer exit"
       nowUnixTimestamp: 100n,
     });
     assert.ok(
-      result.blockers.some((item) =>
-        item.kind === "legacy-active-dispute-layout" ||
-        item.kind === "legacy-resolved-dispute-needs-finalizer"
+      result.blockers.some(
+        (item) =>
+          item.kind === "legacy-active-dispute-layout" ||
+          item.kind === "legacy-resolved-dispute-needs-finalizer",
       ),
     );
   }
@@ -528,9 +565,7 @@ test("accepts only zero or the current counter-provenance sentinel in retired vo
     nowUnixTimestamp: 100n,
   });
   assert.ok(
-    legacyResult.blockers.some(
-      (item) => item.kind === "legacy-arbiter-voters",
-    ),
+    legacyResult.blockers.some((item) => item.kind === "legacy-arbiter-voters"),
   );
 });
 
@@ -595,4 +630,93 @@ test("requires zero Active disputes regardless of their current deadline positio
     assert.ok(active);
     assert.match(active.detail, /voting_deadline=1000/);
   }
+});
+
+for (const pendingTerminalStatus of [1, 2]) {
+  test(`AGNC-01: pending peers block cutover for terminal status ${pendingTerminalStatus}, even with no liability counters or defendant claim`, async () => {
+    const value = scenario({
+      status: 4,
+      missingClaim: true,
+      currentWorkers: 2,
+      pending: false,
+      peerWorkersTotal: 3,
+      peerWorkersSettled: 1,
+      pendingTerminalStatus,
+      votesFor: pendingTerminalStatus === 1 ? 1n : 0n,
+      rationaleUri: "x".repeat(256),
+    });
+    const decoded = decodeDispute(value.account.data);
+    assert.equal(decoded.peerWorkersTotal, 3);
+    assert.equal(decoded.peerWorkersSettled, 1);
+    assert.equal(decoded.pendingTerminalStatus, pendingTerminalStatus);
+    const result = await scanDisputes(connectionFor(value), {
+      nowUnixTimestamp: 100n,
+    });
+    assert.equal(result.statusCounts.settlementPending, 1);
+    assert.ok(
+      result.blockers.some((b) => b.kind === "pending-peer-settlement-cutover"),
+    );
+    assert.ok(
+      !result.blockers.some((b) => b.kind === "invalid-dispute-layout"),
+    );
+  });
+}
+
+test("AGNC-01: completed peer settlement can pass the cutover scan", async () => {
+  const value = scenario({
+    status: 2,
+    missingClaim: true,
+    currentWorkers: 0,
+    peerWorkersTotal: 3,
+    peerWorkersSettled: 3,
+    pendingTerminalStatus: 2,
+  });
+  const result = await scanDisputes(connectionFor(value), {
+    nowUnixTimestamp: 100n,
+  });
+  assert.deepEqual(result.blockers, []);
+  assert.equal(result.statusCounts.expired, 1);
+});
+
+test("AGNC-01: ambiguous/corrupt peer layouts fail closed", () => {
+  for (const fields of [
+    { preChunk: true },
+    { legacy: true },
+    { peerWorkersTotal: 0 },
+    { peerWorkersSettled: 1 },
+    { peerWorkersSettled: 2 },
+    { pendingTerminalStatus: 0 },
+    { pendingTerminalStatus: 3 },
+    { rationaleUri: "x".repeat(257) },
+    { status: 2 },
+  ]) {
+    const value = scenario({
+      status: 4,
+      peerWorkersTotal: 1,
+      peerWorkersSettled: 0,
+      pendingTerminalStatus: 2,
+      ...fields,
+    });
+    assert.throws(() => decodeDispute(value.account.data), /Dispute/);
+  }
+  const historical = scenario({ preChunk: true });
+  assert.equal(decodeDispute(historical.account.data).legacyLayout, true);
+});
+
+test("AGNC-01: Task peer reservation is a separate canonical bool", () => {
+  const value = taskFixture({
+    taskId: Buffer.alloc(32, 1),
+    creator: new PublicKey(Buffer.alloc(32, 2)),
+    pending: false,
+    bump: 3,
+  });
+  assert.equal(decodeTaskBinding(value).peerSettlementPending, false);
+  value[363] = 1; // actual Borsh reserved base (352) + peer flag (11)
+  assert.equal(decodeTaskBinding(value).peerSettlementPending, true);
+  assert.equal(decodeTaskBinding(value).workerSlashPending, false);
+  value[363] = 2;
+  assert.throws(
+    () => decodeTaskBinding(value),
+    /peer_settlement_pending: invalid bool/,
+  );
 });

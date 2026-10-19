@@ -20781,6 +20781,11 @@ export type AgencCoordination = {
       "code": 6404,
       "name": "disputeTerminalStatusCorrupt",
       "msg": "The dispute's recorded terminal status is invalid"
+    },
+    {
+      "code": 6405,
+      "name": "claimSettlementPending",
+      "msg": "Claim is reserved for pending dispute peer settlement; use settle_dispute_claim"
     }
   ],
   "types": [
@@ -28047,7 +28052,9 @@ export type AgencCoordination = {
               "creates a canonical `TaskClaim` increments it atomically, allowing",
               "watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without",
               "having observed the intermediate state.",
-              "Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields)."
+              "* `_reserved[11]` = `peer_settlement_pending` (0 = no deferred peers,",
+              "1 = peer claims are reserved for settle_dispute_claim).",
+              "Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [

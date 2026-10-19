@@ -114,6 +114,7 @@ pub fn handler(ctx: Context<SettleDisputeClaim>) -> Result<()> {
             status if status == DisputeStatus::Expired as u8 => DisputeStatus::Expired,
             _ => return Err(CoordinationError::DisputeTerminalStatusCorrupt.into()),
         };
+        task.set_peer_settlement_pending(false);
     }
 
     let clock = Clock::get()?;

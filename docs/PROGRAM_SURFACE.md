@@ -213,6 +213,15 @@ they were signed instruction data.
 - apply initiator slash
 - settle dispute claim (permissionless chunked collaborative-peer crank after a recorded ruling)
 
+Source hardening for AGNC-01 (not evidence of a mainnet deployment): when a ruling
+or expiry defers peers, `Task._reserved[11]` reserves their claims for
+`settle_dispute_claim`. Generic `reclaim_terminal_claim` rejects them with
+`ClaimSettlementPending` until the last peer settles and clears the reservation.
+The existing worker-slash reservation is independent. This uses existing padding;
+Task remains 466 bytes and instruction accounts/arguments are unchanged. See
+[`VALIDATION.md`](./VALIDATION.md#agnc-01-terminal-claim-reservation) for cutover
+requirements, including disputes created before the reservation existed.
+
 ### Protocol administration
 
 - initialize protocol

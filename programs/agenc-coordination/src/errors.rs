@@ -1198,4 +1198,7 @@ pub enum CoordinationError {
     DisputeDefendantNotPeer,
     #[msg("The dispute's recorded terminal status is invalid")]
     DisputeTerminalStatusCorrupt,
+    // Append-only: preserve every existing Anchor error discriminant.
+    #[msg("Claim is reserved for pending dispute peer settlement; use settle_dispute_claim")]
+    ClaimSettlementPending,
 }

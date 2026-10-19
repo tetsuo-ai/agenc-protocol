@@ -1150,6 +1150,7 @@ pub fn handler<'info>(
     }
     dispute.peer_workers_total = deferred_peers;
     dispute.peer_workers_settled = 0;
+    task.set_peer_settlement_pending(deferred_peers > 0);
     dispute.resolved_at = clock.unix_timestamp;
     // P6.3: record the resolver's binary RULING into the (now-deprecated) vote-tally
     // fields so the permissionless slash finalizers — `apply_dispute_slash` (worker) and
