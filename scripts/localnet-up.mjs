@@ -103,6 +103,8 @@ const IDL_PATH = path.join(
 );
 const SDK_DIST = path.join(ROOT, "packages/sdk-ts/dist/index.js");
 const BPF_LOADER_UPGRADEABLE = "BPFLoaderUpgradeab1e11111111111111111111111";
+export const LEGACY_LOADER_DEPLOY_FEATURE =
+  "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g";
 
 const KEY_NAMES = ["authority", "moderator", "seeder"];
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -130,6 +132,8 @@ function usage() {
     "  --unsafe-unpaused-fixture  Legacy alias for --dev-ready used by browser tests.",
     "  --short-disputes          With --dev-ready only: 5-minute resolver window",
     "                            and 10-minute hard expiry in disposable genesis.",
+    "  --legacy-loader-drill    With --dev-ready only: deactivate SIMD-0500 so",
+    "                            the pinned v0 SBF can be locally upgraded in tests.",
     "",
     "See docs/LOCALNET.md for the full local-stack runbook.",
   ].join("\n");
@@ -142,6 +146,7 @@ export function parseArgs(argv) {
     envFile: DEFAULT_ENV_FILE,
     devReady: false,
     shortDisputes: false,
+    legacyLoaderDrill: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -160,6 +165,8 @@ export function parseArgs(argv) {
       args.devReady = true;
     } else if (arg === "--short-disputes") {
       args.shortDisputes = true;
+    } else if (arg === "--legacy-loader-drill") {
+      args.legacyLoaderDrill = true;
     } else if (arg === "--env-file") {
       if (!argv[i + 1]) throw new Error("--env-file requires a path");
       args.envFile = path.resolve(argv[i + 1]);
@@ -179,6 +186,10 @@ export function parseArgs(argv) {
   if (args.shortDisputes && !args.devReady) {
     throw new Error("--short-disputes requires --dev-ready disposable genesis");
   }
+  if (args.legacyLoaderDrill && !args.devReady)
+    throw new Error(
+      "--legacy-loader-drill requires --dev-ready disposable genesis",
+    );
   return args;
 }
 
@@ -792,6 +803,14 @@ async function mainLocked(args, lifecycleLock) {
   let booted = false;
 
   if (ourValidatorAlive) {
+    const actual = await observeLinuxProcess(pidInfo.pid);
+    if (
+      actual?.argv.includes(LEGACY_LOADER_DEPLOY_FEATURE) !==
+      args.legacyLoaderDrill
+    )
+      fail(
+        "local loader-drill feature mode differs; stop the owned validator before changing modes",
+      );
     // A live managed identity supersedes either recovery marker. In
     // particular, a launcher can die after COMMIT acknowledgement but before
     // removing validator.starting; a later converge must finish that cleanup.
@@ -913,6 +932,12 @@ async function mainLocked(args, lifecycleLock) {
       LOCALNET_PROGRAM_DESCRIPTOR_PATH,
       signers.authority.address,
     ];
+    if (args.legacyLoaderDrill) {
+      console.log(
+        "   TEST ONLY: SIMD-0500 disabled for the pinned legacy-SBF upgrade drill",
+      );
+      validatorArgs.push("--deactivate-feature", LEGACY_LOADER_DEPLOY_FEATURE);
+    }
     if (unsafeProtocolFixture !== null) {
       validatorArgs.push(
         "--account",
@@ -1231,7 +1256,11 @@ async function mainLocked(args, lifecycleLock) {
     check("protocolPaused", d.protocolPaused, expectedMode.protocolPaused);
     check("surfaceRevision", d.surfaceRevision, expectedMode.surfaceRevision);
     if (args.devReady) {
-      check("votingPeriod", d.votingPeriod, args.shortDisputes ? 300n : 86_400n);
+      check(
+        "votingPeriod",
+        d.votingPeriod,
+        args.shortDisputes ? 300n : 86_400n,
+      );
       check(
         "maxDisputeDuration",
         d.maxDisputeDuration,
@@ -1375,6 +1404,9 @@ async function mainLocked(args, lifecycleLock) {
     programSha256: soSha256,
     programSize: soBytes,
     attestorUrl,
+    deactivatedFeatures: args.legacyLoaderDrill
+      ? [LEGACY_LOADER_DEPLOY_FEATURE]
+      : [],
     fixturesPath: FIXTURES_PATH,
     keypairs: {
       authority: keyPaths.authority,

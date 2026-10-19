@@ -49,12 +49,23 @@ test(
     assert.equal(env.cluster, "localnet");
     assert.equal(endpoint.protocol, "http:");
     assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname));
+    const legacyDeployFeature = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g";
+    assert.deepEqual(
+      env.deactivatedFeatures,
+      [legacyDeployFeature],
+      "restart owned localnet with --dev-ready --legacy-loader-drill for the pinned v0 deployment rehearsal",
+    );
     execFileSync(
       process.execPath,
       [join(root, "scripts/localnet-status.mjs")],
       { cwd: root, stdio: "pipe" },
     );
     const connection = new Connection(env.rpcUrl, "confirmed");
+    assert.equal(
+      await connection.getAccountInfo(new PublicKey(legacyDeployFeature)),
+      null,
+      "SIMD-0500 must be explicitly inactive in this legacy-SBF deployment rehearsal",
+    );
     const payer = Keypair.fromSecretKey(
       Uint8Array.from(JSON.parse(readFileSync(env.keypairs.authority))),
     );
@@ -88,6 +99,7 @@ test(
           ),
         ),
       ),
+      deactivatedFeatures: env.deactivatedFeatures,
       transactions: [],
       receipts: [],
     };

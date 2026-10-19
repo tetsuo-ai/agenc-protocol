@@ -86,6 +86,19 @@ export function validateBaseline(value) {
     if (!Number.isSafeInteger(entry.slot) || entry.slot < 0)
       throw new Error("invalid baseline slot");
   }
+  const fixed = fixedAccounts(value.settings);
+  const program = value.accounts.find((entry) => entry.kind === "program");
+  const programData = value.accounts.find(
+    (entry) => entry.kind === "program-data",
+  );
+  if (
+    program.view.programDataAddress !== fixed[1].address ||
+    programData.view.upgradeAuthority !==
+      value.settings.expectedUpgradeAuthority
+  )
+    throw new Error(
+      "baseline program linkage/authority contradicts reviewed settings",
+    );
   return value;
 }
 
@@ -174,6 +187,19 @@ export async function watch({
   let nextPoll = 0,
     nextDiscovery = 0;
   let pollError = null;
+  const deliveryController = new AbortController();
+  const deliverySignal = AbortSignal.any([signal, deliveryController.signal]);
+  const delivery = (async () => {
+    // A slow pager must not block polling, subscriptions or health updates.
+    while (!deliverySignal.aborted) {
+      await outbox.deliver({ signal: deliverySignal });
+      await delay(200, undefined, { signal: deliverySignal }).catch((error) => {
+        if (error.name !== "AbortError") throw error;
+      });
+    }
+  })().catch((error) => {
+    fatal = error;
+  });
   try {
     while (!signal.aborted) {
       if (fatal) throw fatal;
@@ -233,7 +259,6 @@ export async function watch({
         }
       }
       if (fatal) throw fatal;
-      await outbox.deliver();
       const checkedAt = Date.now();
       const degraded =
         pollError ??
@@ -276,8 +301,10 @@ export async function watch({
       });
     }
   } finally {
+    deliveryController.abort();
     await Promise.allSettled(removers.map((remove) => remove()));
-    await outbox.deliver();
+    // The outbox remains on disk on shutdown; never wait for a remote pager.
+    await delivery;
     atomicJson(join(stateDirectory, "health.json"), {
       state: "stopped",
       checkedAt: new Date().toISOString(),
