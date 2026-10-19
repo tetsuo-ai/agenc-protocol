@@ -107,11 +107,7 @@ test(
         .instruction();
     const launchIx = (paused) =>
       program.methods
-        .updateLaunchControls(
-          paused,
-          original.disabled_task_type_mask,
-          original.surface_revision,
-        )
+        .updateLaunchControls(paused, 0xff, 0xffff)
         .accountsStrict({
           protocolConfig: protocol,
           authority: payer.publicKey,
