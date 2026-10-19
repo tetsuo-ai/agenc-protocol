@@ -506,7 +506,11 @@ export class ObservationTracker {
     const comparable = (value) => {
       if (kind === "protocol") {
         // Telemetry and unsolicited donations do not alter administrative controls.
-        const { dataSha256: _telemetry, lamports: _donations, ...adminView } = value;
+        const {
+          dataSha256: _telemetry,
+          lamports: _donations,
+          ...adminView
+        } = value;
         return adminView;
       }
       if (kind !== "program" && kind !== "program-data") return value;

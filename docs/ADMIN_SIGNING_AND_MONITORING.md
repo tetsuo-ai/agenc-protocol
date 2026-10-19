@@ -64,8 +64,10 @@ threshold, pause, surface revision and minimum supported version, plus other
 administrative economics/version fields. Only the four routine telemetry
 counters (`total_agents`, `total_tasks`, `completed_tasks`,
 `total_value_distributed`) are excluded from paging comparisons. Raw before/after
-account hashes remain in an administrative alert. Malformed/missing config also
-alerts. A legitimate registration must not produce a config-write page.
+account hashes remain in an administrative alert. Lamport-only donations are
+also excluded: they do not change administrative controls. Malformed/missing
+config still alerts. A legitimate registration or unsolicited donation must not
+produce a config-write page; treasury movements retain their separate thresholds.
 
 A treasury change immediately alerts and adds the new address to monitoring;
 the old address remains observed for that process lifetime. Configure cumulative

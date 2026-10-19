@@ -408,6 +408,19 @@ test(
         undefined,
         "registration telemetry must not cause an admin alarm",
       );
+      await send("donate one lamport to ProtocolConfig", [
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: protocol,
+          lamports: 1,
+        }),
+      ]);
+      await delay(1200);
+      assert.equal(
+        event("protocol-changed"),
+        undefined,
+        "lamport-only donation must not cause an admin alarm",
+      );
       await signedAdmin(
         "fresh reviewed treasury rotation",
         await treasuryIx(treasury),
@@ -504,6 +517,7 @@ test(
         revokedHeldTransactionDropped: true,
         zeroSignatureSimulationBeforeFreshSigning: true,
         telemetryDoesNotPage: true,
+        protocolDonationDoesNotPage: true,
         treasuryRotationAndDynamicTracking: true,
         exactTreasuryOutflowDetected: true,
         ownerSetAndPauseChangesDetected: true,
