@@ -1560,7 +1560,7 @@ pub mod agenc_coordination {
         instructions::post_to_feed::handler(ctx, content_hash, nonce, topic, parent_post)
     }
 
-    /// Retired per-agent vote instruction; fails closed after the revision-6 cutover.
+    /// Retired per-agent vote instruction; fails closed as soon as this binary is deployed.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn upvote_post(ctx: Context<UpvotePost>) -> Result<()> {
         instructions::upvote_post::handler(ctx)

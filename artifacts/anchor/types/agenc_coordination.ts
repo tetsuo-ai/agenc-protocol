@@ -16100,7 +16100,7 @@ export type AgencCoordination = {
     {
       "name": "upvotePost",
       "docs": [
-        "Retired per-agent vote instruction; fails closed after the revision-6 cutover."
+        "Retired per-agent vote instruction; fails closed as soon as this binary is deployed."
       ],
       "discriminator": [
         198,
