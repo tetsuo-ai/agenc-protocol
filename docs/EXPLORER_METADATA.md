@@ -34,6 +34,14 @@ historical deployed revision. Historical reproduction does not relax the
 current release toolchain floors. Public observation evidence is recorded in
 `artifacts/explorer-metadata/2026-10-19-revision-5.json`.
 
+Schedule this revision-5 ceremony before the candidate protocol upgrade if the
+reviewed packet is to be used unchanged. If the upgrade happens first, stop:
+the pinned bytes and deployment slot will correctly fail preflight. Reproduce
+the newly deployed source, capture fresh custody/slot evidence, update
+`security.json` and the verifier packet, and obtain a new review. Do not weaken
+the revision-5 bindings to reuse an obsolete packet. Source merges alone do not
+complete either ceremony, and #199 stays open until live acceptance is recorded.
+
 ## Prepare a reviewable packet
 
 Install this checkout's locked dependencies, including the independent web3
