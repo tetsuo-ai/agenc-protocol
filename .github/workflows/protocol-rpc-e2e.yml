@@ -62,7 +62,7 @@ jobs:
         env:
           AGENC_RPC_E2E: "1"
         # These suites change shared authority config, so run files sequentially.
-        run: npx vitest run tests-e2e/settlement-pending.rpc.test.ts tests-e2e/moderation-disabled.rpc.test.ts tests-e2e/claim-expiry.rpc.test.ts --no-file-parallelism
+        run: npx vitest run tests-e2e/settlement-pending.rpc.test.ts tests-e2e/moderation-disabled.rpc.test.ts tests-e2e/claim-expiry.rpc.test.ts tests-e2e/hardening-278.rpc.test.ts --no-file-parallelism
       - name: Stop owned validator
         if: always()
         run: node scripts/localnet-down.mjs

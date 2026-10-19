@@ -16,7 +16,8 @@ use crate::state::{
 pub struct RecordTaskModeration<'info> {
     #[account(
         seeds = [b"moderation_config"],
-        bump = moderation_config.bump
+        bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig
     )]
     pub moderation_config: Account<'info, ModerationConfig>,
 

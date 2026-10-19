@@ -1201,4 +1201,8 @@ pub enum CoordinationError {
     // Append-only: preserve every existing Anchor error discriminant.
     #[msg("Claim is reserved for pending dispute peer settlement; use settle_dispute_claim")]
     ClaimSettlementPending,
+    #[msg("Moderation configuration contains unsupported reserved flags")]
+    InvalidModerationConfig,
+    #[msg("Finite listing capacity cannot be lower than its outstanding jobs")]
+    ListingCapacityBelowOpenJobs,
 }

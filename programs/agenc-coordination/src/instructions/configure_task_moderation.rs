@@ -47,6 +47,10 @@ pub fn handler(
         moderation_authority != Pubkey::default(),
         CoordinationError::InvalidTaskModerationAuthority
     );
+    require!(
+        ctx.accounts.moderation_config.validate_reserved_fields(),
+        CoordinationError::InvalidModerationConfig
+    );
 
     let clock = Clock::get()?;
     let config = &mut ctx.accounts.moderation_config;

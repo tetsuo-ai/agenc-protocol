@@ -20799,6 +20799,16 @@ export type AgencCoordination = {
       "code": 6405,
       "name": "claimSettlementPending",
       "msg": "Claim is reserved for pending dispute peer settlement; use settle_dispute_claim"
+    },
+    {
+      "code": 6406,
+      "name": "invalidModerationConfig",
+      "msg": "Moderation configuration contains unsupported reserved flags"
+    },
+    {
+      "code": 6407,
+      "name": "listingCapacityBelowOpenJobs",
+      "msg": "Finite listing capacity cannot be lower than its outstanding jobs"
     }
   ],
   "types": [

@@ -300,7 +300,8 @@ pub struct HireFromListing<'info> {
     /// Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured
     /// gate (account absent) makes the hire fail = marketplace halt (spec §6). When
     /// `enabled`, a valid `listing_moderation` is required (checked in the handler).
-    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
+    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig)]
     pub moderation_config: Box<Account<'info, ModerationConfig>>,
 
     /// Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.

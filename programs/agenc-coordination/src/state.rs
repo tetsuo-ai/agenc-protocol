@@ -1059,6 +1059,12 @@ pub struct ModerationConfig {
 impl ModerationConfig {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 
+    /// Unknown tail flags must never silently change moderation semantics.
+    /// The first four bytes are the existing, supported liveness-window carve.
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved[4..].iter().all(|byte| *byte == 0)
+    }
+
     /// P1.3 liveness window in seconds, carved from `_reserved[0..4]`.
     /// 0 = "use `DEFAULT_MODERATION_LIVENESS_WINDOW_SECS`" (legacy configs with
     /// zeroed reserved bytes read the default with no migration).
