@@ -9,6 +9,8 @@
 // - any non-zero defendant-dispute counter before deregistration changes from a
 //   timestamp bypass to an exact terminal/finalizer gate;
 // - active disputes whose canonical Task/defendant claim is missing or invalid;
+// - every SettlementPending dispute: peers created before the AGNC-01 guard
+//   have no Task reservation bit and must be settled before cutover;
 // - every still-actionable historical initiator loss or provenance-tagged
 //   terminal outcome that remains unapplied; expired/no-fault historical
 //   outcomes own no counter and retain their deployed non-finalizable state;
@@ -27,14 +29,15 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
+const require = createRequire(
+  path.join(ROOT, "tests-integration", "package.json"),
+);
 const { Connection, PublicKey } = require("@solana/web3.js");
 
 export const PROGRAM_ID = new PublicKey(
   "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
 );
-export const MAINNET_GENESIS =
-  "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+export const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 
 const DISPUTE_DISCRIMINATOR = createHash("sha256")
   .update("account:Dispute")
@@ -54,13 +57,16 @@ const AGENT_DISCRIMINATOR = createHash("sha256")
   .subarray(0, 8);
 
 const DISPUTE_PREFIX_SIZE = 263;
-const DISPUTE_CURRENT_SIZE = 587;
+const DISPUTE_PRE_CHUNK_SIZE = 587;
+const DISPUTE_CURRENT_SIZE = 590;
 const TASK_SIZES = new Set([382, 432, 466]);
 const CLAIM_SIZE = 203;
 const AGENT_SIZE = 566;
 const STATUS_ACTIVE = 0;
 const STATUS_RESOLVED = 1;
-const STATUS_MAX = 3;
+const STATUS_EXPIRED = 2;
+const STATUS_SETTLEMENT_PENDING = 4;
+const STATUS_MAX = STATUS_SETTLEMENT_PENDING;
 const RESOLUTION_COMPLETE = 1;
 const INITIATOR_OUTCOME_COUNTER_MARKER = 0xff;
 const LEGACY_INITIATOR_SLASH_WINDOW_SECS = 604_800n;
@@ -97,7 +103,9 @@ function readBorshStringEnd(data, offset, field, maxLength) {
   requireBytes(data, offset, 4, `${field} length`);
   const length = data.readUInt32LE(offset);
   if (length > maxLength) {
-    throw new Error(`${field}: encoded length ${length} exceeds maximum ${maxLength}`);
+    throw new Error(
+      `${field}: encoded length ${length} exceeds maximum ${maxLength}`,
+    );
   }
   requireBytes(data, offset + 4, length, field);
   return offset + 4 + length;
@@ -107,10 +115,11 @@ export function decodeDispute(dataLike) {
   const data = Buffer.from(dataLike);
   if (
     data.length !== DISPUTE_PREFIX_SIZE &&
+    data.length !== DISPUTE_PRE_CHUNK_SIZE &&
     data.length !== DISPUTE_CURRENT_SIZE
   ) {
     throw new Error(
-      `Dispute: unexpected account size ${data.length}; expected ${DISPUTE_PREFIX_SIZE} (legacy) or ${DISPUTE_CURRENT_SIZE} (current)`,
+      `Dispute: unexpected account size ${data.length}; expected ${DISPUTE_PREFIX_SIZE} (legacy), ${DISPUTE_PRE_CHUNK_SIZE} (pre-chunk) or ${DISPUTE_CURRENT_SIZE} (current)`,
     );
   }
   assertDiscriminator(data, DISPUTE_DISCRIMINATOR, "Dispute");
@@ -119,7 +128,9 @@ export function decodeDispute(dataLike) {
   const slashAppliedByte = data[219];
   const initiatorSlashAppliedByte = data[220];
   if (resolutionType > 2) {
-    throw new Error(`Dispute.resolution_type: invalid enum variant ${resolutionType}`);
+    throw new Error(
+      `Dispute.resolution_type: invalid enum variant ${resolutionType}`,
+    );
   }
   if (status > STATUS_MAX) {
     throw new Error(`Dispute.status: invalid enum variant ${status}`);
@@ -134,8 +145,48 @@ export function decodeDispute(dataLike) {
   }
   const votesFor = data.readBigUInt64LE(186);
   const votesAgainst = data.readBigUInt64LE(194);
+  let peerWorkersTotal = 0;
+  let peerWorkersSettled = 0;
+  let pendingTerminalStatus = 0;
+  if (data.length !== DISPUTE_PREFIX_SIZE) {
+    const resolverOffset = readBorshStringEnd(
+      data,
+      295,
+      "Dispute.rationale_uri",
+      256,
+    );
+    requireBytes(data, resolverOffset, 32, "Dispute.resolved_by");
+    if (data.length === DISPUTE_CURRENT_SIZE) {
+      const peerOffset = resolverOffset + 32;
+      requireBytes(data, peerOffset, 3, "Dispute peer settlement counters");
+      peerWorkersTotal = data[peerOffset];
+      peerWorkersSettled = data[peerOffset + 1];
+      pendingTerminalStatus = data[peerOffset + 2];
+    }
+  }
+  if (peerWorkersSettled > peerWorkersTotal) {
+    throw new Error("Dispute: settled peer count exceeds total");
+  }
   if (
-    status === STATUS_RESOLVED &&
+    status === STATUS_SETTLEMENT_PENDING &&
+    (data.length !== DISPUTE_CURRENT_SIZE ||
+      peerWorkersSettled === peerWorkersTotal ||
+      ![STATUS_RESOLVED, STATUS_EXPIRED].includes(pendingTerminalStatus))
+  ) {
+    throw new Error("Dispute: invalid pending peer settlement state");
+  }
+  if (
+    status !== STATUS_SETTLEMENT_PENDING &&
+    peerWorkersSettled !== peerWorkersTotal
+  ) {
+    throw new Error(
+      "Dispute: unfinished peer settlement outside SettlementPending",
+    );
+  }
+  if (
+    (status === STATUS_RESOLVED ||
+      (status === STATUS_SETTLEMENT_PENDING &&
+        pendingTerminalStatus === STATUS_RESOLVED)) &&
     !(
       (votesFor === 1n && votesAgainst === 0n) ||
       (votesFor === 0n && votesAgainst === 1n)
@@ -147,7 +198,10 @@ export function decodeDispute(dataLike) {
   }
   return {
     accountSize: data.length,
-    legacyLayout: data.length === DISPUTE_PREFIX_SIZE,
+    legacyLayout: data.length !== DISPUTE_CURRENT_SIZE,
+    peerWorkersTotal,
+    peerWorkersSettled,
+    pendingTerminalStatus,
     disputeId: Buffer.from(data.subarray(8, 40)),
     task: new PublicKey(data.subarray(40, 72)),
     initiator: new PublicKey(data.subarray(72, 104)),
@@ -197,11 +251,7 @@ export function decodeTaskBinding(dataLike) {
 
   // Prefix through protocol_fee_bps ends at 313. depends_on is a Borsh Option,
   // so dependency_type moves by 32 bytes between None and Some encodings.
-  const dependsOnOption = readOptionPubkey(
-    data,
-    313,
-    "Task.depends_on",
-  );
+  const dependsOnOption = readOptionPubkey(data, 313, "Task.depends_on");
   requireBytes(
     data,
     dependsOnOption.end,
@@ -210,7 +260,9 @@ export function decodeTaskBinding(dataLike) {
   );
   const dependencyType = data[dependsOnOption.end];
   if (dependencyType > 3) {
-    throw new Error(`Task.dependency_type: invalid enum variant ${dependencyType}`);
+    throw new Error(
+      `Task.dependency_type: invalid enum variant ${dependencyType}`,
+    );
   }
   const rewardMintOption = readOptionPubkey(
     data,
@@ -237,6 +289,7 @@ export function decodeTaskBinding(dataLike) {
       rewardMint: rewardMintOption.value,
       bump,
       workerSlashPending: false,
+      peerSettlementPending: false,
       protocolFeeBps,
       operator: PublicKey.default,
       operatorFeeBps: 0,
@@ -253,6 +306,11 @@ export function decodeTaskBinding(dataLike) {
   const reserved = data.subarray(offset + 34, offset + 50);
   if (reserved[2] > 1) {
     throw new Error(`Task.worker_slash_pending: invalid bool ${reserved[2]}`);
+  }
+  if (reserved[11] > 1) {
+    throw new Error(
+      `Task.peer_settlement_pending: invalid bool ${reserved[11]}`,
+    );
   }
   const operator = new PublicKey(data.subarray(offset, offset + 32));
   const operatorFeeBps = data.readUInt16LE(offset + 32);
@@ -285,6 +343,7 @@ export function decodeTaskBinding(dataLike) {
     rewardMint: rewardMintOption.value,
     bump,
     workerSlashPending: reserved[2] === 1,
+    peerSettlementPending: reserved[11] === 1,
     protocolFeeBps,
     operator,
     operatorFeeBps,
@@ -473,7 +532,9 @@ async function inspectTaskAndClaim(
   if (!taskAccount || taskAccount.lamports === 0) {
     blockers.push(blocker("missing-task", pubkey, dispute.task.toBase58()));
   } else if (!taskAccount.owner.equals(PROGRAM_ID)) {
-    blockers.push(blocker("invalid-task-owner", pubkey, dispute.task.toBase58()));
+    blockers.push(
+      blocker("invalid-task-owner", pubkey, dispute.task.toBase58()),
+    );
   } else {
     try {
       task = decodeTaskBinding(taskAccount.data);
@@ -507,9 +568,7 @@ async function inspectTaskAndClaim(
     }
   } else if (!claimAccount.owner.equals(PROGRAM_ID)) {
     claimState = "invalid";
-    blockers.push(
-      blocker("invalid-claim-owner", pubkey, claimPda.toBase58()),
-    );
+    blockers.push(blocker("invalid-claim-owner", pubkey, claimPda.toBase58()));
   } else {
     try {
       const claim = decodeClaimBinding(claimAccount.data);
@@ -547,7 +606,11 @@ async function validateInitiator(connection, pubkey, dispute, blockers) {
   );
   if (!account || account.lamports === 0) {
     blockers.push(
-      blocker("missing-dispute-initiator", pubkey, dispute.initiator.toBase58()),
+      blocker(
+        "missing-dispute-initiator",
+        pubkey,
+        dispute.initiator.toBase58(),
+      ),
     );
     return;
   }
@@ -593,10 +656,7 @@ async function validateInitiator(connection, pubkey, dispute, blockers) {
   }
 }
 
-export async function scanDisputes(
-  connection,
-  { nowUnixTimestamp } = {},
-) {
+export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
   const genesis = await connection.getGenesisHash();
   if (genesis !== MAINNET_GENESIS) {
     throw new Error(
@@ -630,7 +690,13 @@ export async function scanDisputes(
     ],
   });
 
-  const statusCounts = { active: 0, resolved: 0, expired: 0, cancelled: 0 };
+  const statusCounts = {
+    active: 0,
+    resolved: 0,
+    expired: 0,
+    cancelled: 0,
+    settlementPending: 0,
+  };
   let expiredLegacyInitiatorLiabilityCount = 0;
   for (const { pubkey, account } of accounts) {
     if (!account.owner.equals(PROGRAM_ID)) {
@@ -659,10 +725,28 @@ export async function scanDisputes(
       continue;
     }
 
-    const statusName = ["active", "resolved", "expired", "cancelled"][
-      dispute.status
-    ];
+    const statusName = [
+      "active",
+      "resolved",
+      "expired",
+      "cancelled",
+      "settlementPending",
+    ][dispute.status];
     statusCounts[statusName]++;
+    // The reservation byte is value-only and cannot retroactively mark peer
+    // claims deferred by the old binary. Require a quiescent settlement set;
+    // never infer safety from a zero bit or silently count a missing claim.
+    if (dispute.status === STATUS_SETTLEMENT_PENDING) {
+      blockers.push(
+        blocker(
+          "pending-peer-settlement-cutover",
+          pubkey,
+          `settled=${dispute.peerWorkersSettled}/${dispute.peerWorkersTotal}; run settle_dispute_claim before deployment; missing peers require recovery review`,
+        ),
+      );
+      await validateInitiator(connection, pubkey, dispute, blockers);
+      continue;
+    }
     if (
       dispute.totalVoters !== 0 &&
       dispute.totalVoters !== INITIATOR_OUTCOME_COUNTER_MARKER
@@ -706,8 +790,7 @@ export async function scanDisputes(
     const legacyLossWindowOpen =
       initiatorLost &&
       dispute.resolvedAt > 0n &&
-      now <=
-        dispute.resolvedAt + LEGACY_INITIATOR_SLASH_WINDOW_SECS;
+      now <= dispute.resolvedAt + LEGACY_INITIATOR_SLASH_WINDOW_SECS;
     if (
       terminal &&
       !counterTracked &&
@@ -751,8 +834,8 @@ export async function scanDisputes(
       );
     }
 
-    // The hardened binary deserializes the full 587-byte Dispute layout. An
-    // Active 263-byte legacy account would lose both resolution and expiry exits
+    // The hardened binary deserializes the full 590-byte Dispute layout. An
+    // Active legacy account would lose both resolution and expiry exits
     // after deployment, regardless of the appended fields' zero defaults.
     if (active && dispute.legacyLayout) {
       blockers.push(
@@ -861,6 +944,7 @@ async function main() {
   console.log(
     `Agents: ${result.agentCount}; disputes: ${result.accountCount} (active=${result.statusCounts.active}, resolved=${result.statusCounts.resolved}, ` +
       `expired=${result.statusCounts.expired}, cancelled=${result.statusCounts.cancelled}, ` +
+      `settlement_pending=${result.statusCounts.settlementPending}, ` +
       `expired_legacy_initiator_liabilities=${result.expiredLegacyInitiatorLiabilityCount})`,
   );
   for (const item of result.blockers) {
@@ -874,7 +958,7 @@ async function main() {
     );
   }
   console.log(
-    "PREFLIGHT OK: every agent liability counter is zero, zero disputes are Active, and no tagged or still-actionable legacy initiator outcome is unapplied.",
+    "PREFLIGHT OK: every agent liability counter is zero, zero disputes are Active or SettlementPending, and no tagged or still-actionable legacy initiator outcome is unapplied.",
   );
 }
 

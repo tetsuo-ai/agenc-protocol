@@ -43,10 +43,16 @@ use anchor_lang::prelude::*;
 /// before the durable pending bit existed, no stronger omission-proof marker was
 /// available on Task. Conservatively reserve that shape for
 /// `apply_dispute_slash` so generic reclaim cannot erase its canonical evidence.
-fn validate_terminal_claim_not_slash_reserved(task: &Task) -> Result<()> {
+/// Peer claims are separately reserved until `settle_dispute_claim` has advanced
+/// every peer counter; closing one here would permanently strand the initiator.
+fn validate_terminal_claim_not_dispute_reserved(task: &Task) -> Result<()> {
     require!(
         !task.worker_slash_pending() && task.current_workers > 0,
         CoordinationError::ClaimSlashPending
+    );
+    require!(
+        !task.peer_settlement_pending(),
+        CoordinationError::ClaimSettlementPending
     );
     Ok(())
 }
@@ -156,10 +162,10 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         CoordinationError::ClaimAlreadyCompleted
     );
 
-    // Load-bearing, omission-proof slash guard. The pending bit lives on the
-    // required Task account, so omitting the optional Dispute remaining account
-    // can no longer reclaim the exact claim reserved for apply_dispute_slash.
-    validate_terminal_claim_not_slash_reserved(task)?;
+    // Both reservations live on the required Task account: a caller cannot
+    // omit Dispute evidence to bypass either the worker-slash finalizer or
+    // peer settlement. Check before closing accounts or changing counters.
+    validate_terminal_claim_not_dispute_reserved(task)?;
 
     // Unfakeable submission-state proof, with three accepted cleanup forms:
     //  1. the seeds-derived submission address is system-owned + zero-data (no
@@ -294,13 +300,26 @@ mod tests {
             current_workers: 1,
             ..Task::default()
         };
-        assert!(validate_terminal_claim_not_slash_reserved(&task).is_ok());
+        assert!(validate_terminal_claim_not_dispute_reserved(&task).is_ok());
 
         task.set_worker_slash_pending(true);
-        assert!(validate_terminal_claim_not_slash_reserved(&task).is_err());
+        assert!(validate_terminal_claim_not_dispute_reserved(&task).is_err());
 
         task.set_worker_slash_pending(false);
         task.current_workers = 0;
-        assert!(validate_terminal_claim_not_slash_reserved(&task).is_err());
+        assert!(validate_terminal_claim_not_dispute_reserved(&task).is_err());
+    }
+
+    #[test]
+    fn terminal_claim_reclaim_reserves_deferred_peer_claims() {
+        let mut task = Task {
+            current_workers: 3,
+            ..Task::default()
+        };
+        task.set_peer_settlement_pending(true);
+        let error = validate_terminal_claim_not_dispute_reserved(&task).unwrap_err();
+        assert_eq!(error, error!(CoordinationError::ClaimSettlementPending));
+        task.set_peer_settlement_pending(false);
+        assert!(validate_terminal_claim_not_dispute_reserved(&task).is_ok());
     }
 }

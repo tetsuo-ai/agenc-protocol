@@ -122,6 +122,46 @@ are test-only Anchor account-header fixtures.
 committed copies drift from `artifacts/anchor/idl/agenc_coordination.json`. After
 an intentional IDL change, run `npm run docs:idl-reference` and commit the result.
 
+## AGNC-01 terminal-claim reservation
+
+The candidate fix uses `Task._reserved[11]` to prevent generic terminal cleanup
+from deleting claims needed by a `SettlementPending` dispute. Both
+`resolve_dispute` and `expire_dispute` set the reservation when they defer peers;
+only settlement of the last peer clears it. No account realloc or instruction
+wire change is required; the new error is appended without renumbering old ones.
+
+Local regressions run against a freshly compiled program:
+
+```bash
+cargo-build-sbf --manifest-path programs/agenc-coordination/Cargo.toml --sbf-out-dir programs/agenc-coordination/target/deploy
+anchor idl build -p agenc_coordination -o target/idl/agenc_coordination.json -t target/types/agenc_coordination.ts
+node --test tests-integration/settlement-pending-wedge.test.mjs scripts/preflight-dispute-scan.test.mjs
+```
+
+The suite covers atomic expiry-plus-reclaim rollback, sequential reclaim races,
+all resolver outcomes, one to four workers, historical non-contest Competitive
+tasks, Submitted/Rejected peer records, validation-counter conservation,
+double-settlement rejection, independent worker slashing, and initiator stake
+recovery while paused after a five-year clock advance. Existing ordinary terminal
+cleanup remains covered by `completing-accept-orphan.test.mjs` and the full
+integration suite.
+
+**Cutover prerequisite:** pause new entry and require zero `Active` and zero
+`SettlementPending` disputes before upgrading. The old binary can create pending
+peers with `_reserved[11] == 0`; an upgrade alone cannot mark those accounts.
+`scripts/preflight-dispute-scan.mjs`, also called by the mainnet upgrade rail,
+recognizes the 590-byte chunked Dispute layout and blocks every pending peer set,
+regardless of the task flag or initiator counter. It retains conservative checks
+for the historical 263- and 587-byte layouts. Drain intact peers through
+`settle_dispute_claim`, then finalize outstanding outcomes and rerun the scan.
+
+If a peer claim has already been deleted, this preventive patch does **not**
+recover the dispute. Keep the cutover blocked and review a separate recovery
+procedure against verified historical claim/account evidence. Never compensate
+by blindly incrementing peer counters or clearing an initiator's liability.
+Follow the existing mainnet runbook and explicit authorization gates; these
+local checks are not a deployment or a claim of completed external review.
+
 ## Devnet Marketplace Readiness
 
 Use the devnet matrix when the change touches accepted-bid settlement, dispute settlement,

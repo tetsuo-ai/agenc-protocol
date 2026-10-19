@@ -432,6 +432,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     }
     dispute.peer_workers_total = deferred_peers;
     dispute.peer_workers_settled = 0;
+    task.set_peer_settlement_pending(deferred_peers > 0);
     dispute.resolved_at = clock.unix_timestamp;
     escrow.is_closed = true;
 

@@ -1204,7 +1204,9 @@ pub struct Task {
     ///     creates a canonical `TaskClaim` increments it atomically, allowing
     ///     watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
     ///     having observed the intermediate state.
-    /// Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
+    ///   * `_reserved[11]` = `peer_settlement_pending` (0 = no deferred peers,
+    ///     1 = peer claims are reserved for settle_dispute_claim).
+    /// Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
@@ -1321,6 +1323,21 @@ impl Task {
         self._reserved[2] = u8::from(pending);
     }
 
+    /// True while a dispute still needs peer claims to reach its terminal
+    /// status. Generic terminal cleanup must not close those claims without
+    /// advancing the dispute's peer counters and releasing its initiator.
+    pub fn peer_settlement_pending(&self) -> bool {
+        self._reserved[11] != 0
+    }
+
+    /// Reserve peer claims at ruling/expiry and release them only when the last
+    /// peer settles. This consumes padding without changing the Task layout.
+    /// Pre-upgrade pending disputes must be drained before cutover; their zero
+    /// byte alone cannot prove that they have no deferred peers.
+    pub fn set_peer_settlement_pending(&mut self, pending: bool) {
+        self._reserved[11] = u8::from(pending);
+    }
+
     /// Monotonic claim-attempt generation carved into `_reserved[3..11]` as a
     /// little-endian `u64`. Zero is backward-compatible with every task created
     /// before this carve-out; the first claim under the upgraded program writes 1.
@@ -1359,11 +1376,13 @@ impl Task {
 
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
-    /// Batch 3, the deferred-slash guard, and claim-generation tracking carve
-    /// `_reserved[0..11]`. The slash byte is a canonical boolean, the generation
-    /// is an unconstrained `u64`, and the remaining tail must stay zeroed.
+    /// Batch 3, deferred-dispute guards, and claim-generation tracking carve
+    /// `_reserved[0..12]`. Both pending bytes are canonical booleans, the
+    /// generation is an unconstrained `u64`, and the tail must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved[2] <= 1 && self._reserved[11..] == [0u8; 5]
+        self._reserved[2] <= 1
+            && self._reserved[11] <= 1
+            && self._reserved[12..] == [0u8; 4]
     }
 }
 
@@ -4048,6 +4067,31 @@ mod tests {
         assert!(!task.worker_slash_pending());
         assert_eq!(task._reserved[2], 0);
         assert!(task.validate_reserved_fields());
+    }
+
+    #[test]
+    fn test_peer_settlement_pending_preserves_other_reserved_fields() {
+        let mut task = Task::default();
+        task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        task.set_live_submissions(3);
+        task.set_worker_slash_pending(true);
+        task.increment_claim_generation().unwrap();
+        let before = task._reserved;
+        assert!(!task.peer_settlement_pending());
+
+        task.set_peer_settlement_pending(true);
+        assert!(task.peer_settlement_pending());
+        assert_eq!(task._reserved[11], 1);
+        assert_eq!(&task._reserved[..11], &before[..11]);
+        assert_eq!(&task._reserved[12..], &before[12..]);
+        assert!(task.validate_reserved_fields());
+
+        task.set_peer_settlement_pending(false);
+        assert!(!task.peer_settlement_pending());
+        assert_eq!(task._reserved, before);
+        task._reserved[11] = 2;
+        assert!(task.peer_settlement_pending());
+        assert!(!task.validate_reserved_fields());
     }
 
     #[test]
