@@ -7,3 +7,10 @@ regexTarget = "match"
 regexes = [
   '''^SECRET\s*=\s*"whsec_3q9QGiHxBcDdXxJZBkPMV7Fy"$'''
 ]
+
+[[allowlists]]
+description = "Exact public Squads Multisig.create_key address from the committed read-only mainnet custody snapshot; not signing material"
+regexTarget = "match"
+regexes = [
+  '''^createKey": "5UJUUFZnbGpS65nTrwenvzGNTffkUDrsjGAGg894uZqr"$'''
+]
