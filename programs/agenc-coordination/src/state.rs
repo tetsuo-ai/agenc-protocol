@@ -1380,9 +1380,7 @@ impl Task {
     /// `_reserved[0..12]`. Both pending bytes are canonical booleans, the
     /// generation is an unconstrained `u64`, and the tail must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved[2] <= 1
-            && self._reserved[11] <= 1
-            && self._reserved[12..] == [0u8; 4]
+        self._reserved[2] <= 1 && self._reserved[11] <= 1 && self._reserved[12..] == [0u8; 4]
     }
 }
 
