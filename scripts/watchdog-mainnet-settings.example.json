@@ -12,5 +12,9 @@
   "discoveryIntervalMs": 30000,
   "staleAfterMs": 20000,
   "vaultTopUpLamports": "1000000",
-  "vaultOutflowLamports": "1000000"
+  "vaultOutflowLamports": "1000000",
+  "protocolMonitoring": {
+    "treasuryInflowLamports": "1000000000",
+    "treasuryOutflowLamports": "1000000"
+  }
 }
