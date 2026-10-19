@@ -1,0 +1,85 @@
+{
+  "observedOn": "2026-10-19",
+  "liveAcceptanceComplete": false,
+  "loader": {
+    "observedAt": "2026-10-19T13:02:11.310Z",
+    "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+    "authority": "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+    "contextSlot": 458842697,
+    "custody": {
+      "bump": 255,
+      "configAuthority": "11111111111111111111111111111111",
+      "createKey": "5UJUUFZnbGpS65nTrwenvzGNTffkUDrsjGAGg894uZqr",
+      "executorCount": 3,
+      "memberCount": 3,
+      "members": [
+        {
+          "address": "3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx",
+          "permissionsMask": 7
+        },
+        {
+          "address": "6CpyZBmBDymdp56dg1KsNnK1vYqWwz2vemdp9m7a6ufw",
+          "permissionsMask": 7
+        },
+        {
+          "address": "HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh",
+          "permissionsMask": 7
+        }
+      ],
+      "proposerCount": 3,
+      "rentCollector": null,
+      "staleTransactionIndex": "1",
+      "threshold": 2,
+      "timeLockSeconds": 0,
+      "transactionIndex": "10",
+      "voterCount": 3
+    },
+    "custodyAccountDataSha256": "8f2c0679381953e6cfcebcdd6416c917a06c78effec5fc81f32f90b064a5e52c",
+    "loaderProgramId": "BPFLoaderUpgradeab1e11111111111111111111111",
+    "metadataBytes": 45,
+    "policySha256": "12c16fa9cd8015158af76e734a254bc367bf94d0d6a0993b8c9dbef11c65637e",
+    "programAccountDataSha256": "c55b153a2c5327bcbfebc4a1bed5b7916063aa6448b34ea7f6a40ecd19fe5bea",
+    "programData": "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+    "programDataAccountDataSha256": "0a606c95132f73da80e0cedde671d94870a8b14db6054df3cd1db9dd9b244bc6",
+    "programDataSlot": "434489452",
+    "programId": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+    "stateDigest": "1a4094dc682a7cd32b063384fa5e5c7c9699c9db3b4ac633e7a7f3b0ab021f67",
+    "payloadBytes": 2303608,
+    "rawPayloadSha256": "049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2",
+    "normalizedExecutableSha256": "a389e6f5e0dda3cb1b893e2c82ba04272059f33d17df7c00ab8fca73915ef203"
+  },
+  "pmp": {
+    "observedAt": "2026-10-19T13:06:19.234Z",
+    "contextSlot": 458843843,
+    "programId": "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S",
+    "programData": "F8hZ6cQFCNZ3UdNkhUfjgxxRnUD8HiYPobpk2qRVD7aB",
+    "authority": "7M7wSLFM65js7NamVhXnBBb8ooop1MHuracJbQNHuXWT",
+    "metadataBytes": 45,
+    "slot": "431987340",
+    "executableSha256": "3d0c0f7504c01b1f6996d30a5c3dc2cccb8b65dedba80d6fceb60a7cada093e0",
+    "canonicalSecurity": "HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw",
+    "securityAccountExists": false
+  },
+  "osec": {
+    "is_verified": false,
+    "message": "On chain program not verified",
+    "on_chain_hash": "a389e6f5e0dda3cb1b893e2c82ba04272059f33d17df7c00ab8fca73915ef203",
+    "executable_hash": "c6ddc7fdc19f59bb1fcd2f0c87582e09fc1959ee3e615f299c909e07854b4199",
+    "repo_url": "https://github.com/tetsuo-ai/agenc-protocol/tree/097ded12b03d27e8c89d50ad6ed8813493700129",
+    "commit": "097ded12b03d27e8c89d50ad6ed8813493700129",
+    "last_verified_at": "2026-07-10T02:09:22.507147",
+    "is_frozen": false,
+    "is_closed": false
+  },
+  "reproduction": {
+    "commit": "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d",
+    "defaultFeatures": true,
+    "verifier": "0.5.2",
+    "agave": "3.0.13",
+    "imageDigest": "sha256:2ee1f4c3f0db0e1c1107ffb978b1d16b792194148852f31891adf3ee85970259",
+    "rawSha256": "049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2",
+    "normalizedHash": "a389e6f5e0dda3cb1b893e2c82ba04272059f33d17df7c00ab8fca73915ef203",
+    "matchesLiveByteForByte": true,
+    "scope": "Internal historical reproduction, not an external audit or live attestation."
+  }
+}
