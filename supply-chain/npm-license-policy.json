@@ -44,7 +44,9 @@
           "version": "0.0.2",
           "observedLicense": null,
           "approvedLicense": "MIT",
-          "evidence": "https://github.com/tj/node-only/blob/623bfe27bde8aaca73cf3783f3f4da3ea928f592/LICENSE"
+          "evidence": "https://github.com/tj/node-only/blob/623bfe27bde8aaca73cf3783f3f4da3ea928f592/LICENSE",
+          "integrity": "sha512-Fvw+Jemq5fjjyWz6CpKx6w9s7xxqo3+JCyM0WXWeCSOboZ8ABkyvP8ID4CZuChA/wxSx+XSJmdOm8rGVyJ1hdQ==",
+          "resolved": "https://registry.npmjs.org/only/-/only-0.0.2.tgz"
         },
         {
           "lockfile": "package-lock.json",
@@ -54,7 +56,9 @@
           "observedLicense": "SEE LICENSE IN LICENSE",
           "approvedLicense": "MIT",
           "licenseFile": "node_modules/spawndamnit/LICENSE",
-          "licenseSha256": "aac99045d4e36ab3b1e2914337620963b56cbac53de280c94f29261a22ab5b0f"
+          "licenseSha256": "aac99045d4e36ab3b1e2914337620963b56cbac53de280c94f29261a22ab5b0f",
+          "integrity": "sha512-MmnduQUuHCoFckZoWnXsTg7JaiLBJrKFj9UI2MbRPGaJeVpsLcVBu6P/IGZovziM/YBsellCmsprgNA+w0CzVg==",
+          "resolved": "https://registry.npmjs.org/spawndamnit/-/spawndamnit-3.0.1.tgz"
         },
         {
           "lockfile": "tests-integration/package-lock.json",
@@ -64,7 +68,9 @@
           "observedLicense": null,
           "approvedLicense": "MIT",
           "licenseFile": "tests-integration/node_modules/eyes/LICENSE",
-          "licenseSha256": "e424cbb68485fe465f6e58959da4bf157e5a0e716c02cd8d9a2041a12520fb93"
+          "licenseSha256": "e424cbb68485fe465f6e58959da4bf157e5a0e716c02cd8d9a2041a12520fb93",
+          "integrity": "sha512-GipyPsXO1anza0AOZdy69Im7hGFCNB7Y/NGjDlZGJ3GJJLtwNSb2vrzYrTYJRrRloVx7pl+bhUaTB8yiccPvFQ==",
+          "resolved": "https://registry.npmjs.org/eyes/-/eyes-0.1.8.tgz"
         },
         {
           "lockfile": "tests-integration/package-lock.json",
@@ -74,7 +80,9 @@
           "observedLicense": null,
           "approvedLicense": "Unlicense",
           "licenseFile": "tests-integration/node_modules/text-encoding-utf-8/LICENSE.md",
-          "licenseSha256": "caecf721eb8d6c1d74e57a798ef53d9cbeb58fc637af1877741a5572455206ec"
+          "licenseSha256": "caecf721eb8d6c1d74e57a798ef53d9cbeb58fc637af1877741a5572455206ec",
+          "integrity": "sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg==",
+          "resolved": "https://registry.npmjs.org/text-encoding-utf-8/-/text-encoding-utf-8-1.0.2.tgz"
         }
       ]
     },
@@ -96,7 +104,9 @@
           "version": "9.3.8",
           "observedLicense": "LGPL-3.0-only",
           "approvedLicense": "LGPL-3.0-only",
-          "evidence": "https://www.npmjs.com/package/rpc-websockets/v/9.3.8"
+          "evidence": "https://www.npmjs.com/package/rpc-websockets/v/9.3.8",
+          "integrity": "sha512-7r+fm4tSJmLf9GvZfL1DJ1SJwpagpp6AazqM0FUaeV7CA+7+NYINSk1syWa4tU/6OF2CyBicLtzENGmXRJH6wQ==",
+          "resolved": "https://registry.npmjs.org/rpc-websockets/-/rpc-websockets-9.3.8.tgz"
         }
       ]
     },
@@ -118,7 +128,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-arm64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-arm64/v/1.3.4",
+          "integrity": "sha512-5R89nBYiRdUlSWJxPhO+GVtaXzXSxKnRu/xqMn3KTA3L9EB9Oy/P+Nn2f2vlhPuUdy/Zusb2DarbyTpGCfEDuw==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -127,7 +139,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-x64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-x64/v/1.3.4",
+          "integrity": "sha512-iR2OKH80yi0U+dUplyh3/xdpFvps6YkCwsXenIJxqxR1v9o+xtKTGbS9H7cps+2Vxjc8B1j96p75NmTGjIhtpQ==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -136,7 +150,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm/v/1.3.4",
+          "integrity": "sha512-LmRtTsOHuvM2+wlO2Db37dx5MiZhB0FvSunciw48YjdOkZz9KAiRbm8ujeMOA1INqmei5NapFxYEK1D1ZSidmw==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -145,7 +161,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm64/v/1.3.4",
+          "integrity": "sha512-Y3dgX/6lE2QhQb+Gxy0WZxfg9MEm/JBjamZpS2IklP7xIQoKN4hzAm7KcMVGtaVDt3neE9OKBC7vAfonA/Lr1A==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -154,7 +172,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-ppc64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-ppc64/v/1.3.4",
+          "integrity": "sha512-Le6boB8Tai0Nis+gIxIpKx68UDVVIqdR8Tin5Yf1z2LJJQLDJvCDRqRu+jC2qCoD+eIomonmOwB4smBRxfVpYQ==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -163,7 +183,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-riscv64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-riscv64/v/1.3.4",
+          "integrity": "sha512-aHkkIEHPRdQEegJN20MLmGtxYD9R2wQr3Cwpddnu5+YKMt6Uzax7S9h5gpZTo8wyrGuZSlfQ63OevL5mTyOC7Q==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -172,7 +194,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-s390x/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-s390x/v/1.3.4",
+          "integrity": "sha512-ra/mB6MikESDUO7Yg+Mi95bFBb9GsObURuhnOv3OqknjGe9sZrG8tCe9q0xSIGrtLgvgw0gKnFWcK4blSgQOuQ==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -181,7 +205,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-x64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-x64/v/1.3.4",
+          "integrity": "sha512-GJ//SSXbnwSDes02umB3nDJLFcQzw8a18V8fyhqr6tV515tOEMdImjjxj1AoafMRz56F3PHgftnj1QEKSU1zkw==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -190,7 +216,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-arm64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-arm64/v/1.3.4",
+          "integrity": "sha512-hvulFwtjUcagsis6BBxHwGFwWoNZjgYmULGVrZcyfNbjA8hKILbRxGg15/7w5HDyXHXUos/j6baAWqnCyQ2DWA==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -199,7 +227,9 @@
           "version": "1.3.4",
           "observedLicense": "LGPL-3.0-or-later",
           "approvedLicense": "LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-x64/v/1.3.4"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-x64/v/1.3.4",
+          "integrity": "sha512-6zXKeE/p39I1AmA3cJG35eyBGNqNddLnUXjhwBnsGjFPWqf5VKkDBEqaEkPDoTEtkxwi2vv8Tcr2mDyP4So7Fg==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.4.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -208,7 +238,9 @@
           "version": "0.35.5",
           "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
           "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-wasm32/v/0.35.5"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-wasm32/v/0.35.5",
+          "integrity": "sha512-Ptsga1su4tQx+LLF1ECS9U6nz5kmrXKo6XVbtR48Ke3ZRxxgaWBu7IDtEe1quo8hiupwm6WFqxVlXaSf7IINGQ==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.5.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -217,7 +249,9 @@
           "version": "0.35.5",
           "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
           "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-arm64/v/0.35.5"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-arm64/v/0.35.5",
+          "integrity": "sha512-X4t7g+7ZA5DKblCBEXGjUqqemj4vczING/5viFwAL8h4N3qYeyjwdCvRLHi4EdOUI+2Z7UFlp1VM+p/AuEtm6Q==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.5.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -226,7 +260,9 @@
           "version": "0.35.5",
           "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
           "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-ia32/v/0.35.5"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-ia32/v/0.35.5",
+          "integrity": "sha512-5Zm82LoBc43nhwNybZlG7Y1KO//Zhsn306fQl29ZOuStHLGTo3BWL83q3cznX0poxSAMuYL1On/BHBxkBeKr6A==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.5.tgz"
         },
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
@@ -235,7 +271,9 @@
           "version": "0.35.5",
           "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
           "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
-          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-x64/v/0.35.5"
+          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-x64/v/0.35.5",
+          "integrity": "sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg==",
+          "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.5.tgz"
         }
       ]
     }
