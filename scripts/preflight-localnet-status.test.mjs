@@ -18,6 +18,7 @@ import {
   assertLocalnetMarketplaceReady,
   assertLocalnetStatusBinding,
   assertLocalnetStatusProcessIdentity,
+  assertLocalnetStatusFeatureMode,
   assertLocalnetStatusValidatorArgv,
   parseLocalnetStatusEnvironment,
   parseLocalnetStatusKeypair,
@@ -158,6 +159,34 @@ test("status never treats a disappeared recorded validator as healthy", () => {
     () =>
       assertLocalnetStatusProcessIdentity({ ...pidRecord(), pid: 42 }, null),
     /exited during status verification/u,
+  );
+});
+
+test("status binds explicit legacy-loader drill to the real process flags", () => {
+  const feature = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g";
+  const env = { ...environment(), deactivatedFeatures: [feature] };
+  assert.deepEqual(
+    parseLocalnetStatusEnvironment(JSON.stringify(env)).deactivatedFeatures,
+    [feature],
+  );
+  assert.doesNotThrow(() =>
+    assertLocalnetStatusFeatureMode(env, ["--deactivate-feature", feature]),
+  );
+  assert.throws(() => assertLocalnetStatusFeatureMode(env, []), /do not match/);
+  assert.throws(
+    () =>
+      assertLocalnetStatusFeatureMode(environment(), [
+        "--deactivate-feature",
+        feature,
+      ]),
+    /do not match/,
+  );
+  assert.throws(
+    () =>
+      parseLocalnetStatusEnvironment(
+        JSON.stringify({ ...env, deactivatedFeatures: ["unknown"] }),
+      ),
+    /malformed/,
   );
 });
 
