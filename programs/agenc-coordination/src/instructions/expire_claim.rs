@@ -410,7 +410,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         }
     }
 
-    let mut task_reopened = false;
     if is_manual_validation_task(task) {
         let validation_config = ctx
             .accounts
@@ -423,7 +422,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         // Reopen task if no workers left AND task is still in progress
         // (Don't reopen cancelled/completed/disputed tasks - prevents zombie task attack)
         task.status = TaskStatus::Open;
-        task_reopened = true;
     }
 
     #[cfg(not(feature = "mainnet-canary"))]
@@ -609,7 +607,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         worker: worker.key(),
         expired_by: ctx.accounts.authority.key(),
         cleanup_reward: reward,
-        task_reopened,
+        // Both automatic and manual validation can reopen a task. Report the
+        // resulting state, including sync_task_validation_status above.
+        task_reopened: task.status == TaskStatus::Open,
         timestamp: clock.unix_timestamp,
     });
 

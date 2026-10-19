@@ -899,7 +899,7 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
     const cleaner = Keypair.generate();
     w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
     // null bond accounts MUST be accepted on a no-show for a non-Exclusive task (no bond can exist).
-    expectOk(send(w.svm, await makeProgram(cleaner).methods
+    const expireIx = await makeProgram(cleaner).methods
       .expireClaim()
       .accounts({
         authority: cleaner.publicKey, task, escrow, claim,
@@ -908,7 +908,23 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
         workerCompletionBond: null, bondCreator: null,
         treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
       })
-      .instruction(), [cleaner]), `${name} no-show expires with null bond accounts (no freeze)`);
+      .instruction();
+    const escrowBefore = w.svm.getBalance(escrow);
+    const rollback = sendMany(w.svm, [expireIx, expireIx], [cleaner]);
+    expectFail(rollback, "AccountNotInitialized", "duplicate expiry atomically rolls back");
+    assert.equal(w.svm.getBalance(escrow), escrowBefore, "rollback preserves escrow");
+    assert.equal(decode(w.svm, "Task", task).current_workers, 1);
+    assert.ok(!isClosed(w.svm, claim), "rollback preserves claim");
+    const expired = expectOk(send(w.svm, expireIx, [cleaner]), `${name} no-show expires with null bond accounts (no freeze)`);
+    const expiryEvents = expired.logs()
+      .filter((line) => line.startsWith("Program data: "))
+      .map((line) => coder.events.decode(line.slice("Program data: ".length)))
+      .filter((event) => event?.name === "TaskClaimExpired");
+    assert.equal(expiryEvents.length, 1);
+    assert.equal(expiryEvents[0].data.task.toBase58(), task.toBase58());
+    assert.equal(expiryEvents[0].data.cleanup_reward.toString(), "1000");
+    assert.equal(expiryEvents[0].data.task_reopened, true, "manual validation reports the actual reopened state (#82)");
+    assert.ok(decode(w.svm, "Task", task).status.Open !== undefined);
     assert.ok(isClosed(w.svm, claim), `${name} no-show claim closed`);
   });
 }

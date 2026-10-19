@@ -246,6 +246,7 @@ export async function localRpcHarness(label: string) {
     maxDisputeDuration: config.maxDisputeDuration,
     grace: 120,
   };
+  evidence.maxClaimDuration = config.maxClaimDuration;
   expect(config.authority).toBe(admin.address);
   expect(config.multisigThreshold).toBe(2);
   save();

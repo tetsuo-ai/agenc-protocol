@@ -18542,19 +18542,6 @@
       ]
     },
     {
-      "name": "TaskClaimed",
-      "discriminator": [
-        208,
-        90,
-        243,
-        116,
-        80,
-        15,
-        228,
-        202
-      ]
-    },
-    {
       "name": "TaskClaimExpired",
       "discriminator": [
         93,
@@ -18565,6 +18552,19 @@
         253,
         68,
         40
+      ]
+    },
+    {
+      "name": "TaskClaimed",
+      "discriminator": [
+        208,
+        90,
+        243,
+        116,
+        80,
+        15,
+        228,
+        202
       ]
     },
     {
@@ -28564,42 +28564,6 @@
       }
     },
     {
-      "name": "TaskClaimed",
-      "docs": [
-        "Emitted when an agent claims a task"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "task_id",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "worker",
-            "type": "pubkey"
-          },
-          {
-            "name": "current_workers",
-            "type": "u8"
-          },
-          {
-            "name": "max_workers",
-            "type": "u8"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "TaskClaimExpired",
       "docs": [
         "Emitted when a stale claim is expired via `expire_claim` (issue #82).",
@@ -28636,6 +28600,42 @@
               "True when `current_workers` hit zero and the task returned to `Open`."
             ],
             "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskClaimed",
+      "docs": [
+        "Emitted when an agent claims a task"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "current_workers",
+            "type": "u8"
+          },
+          {
+            "name": "max_workers",
+            "type": "u8"
           },
           {
             "name": "timestamp",
