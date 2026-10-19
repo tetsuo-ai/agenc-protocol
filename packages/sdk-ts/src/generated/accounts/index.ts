@@ -10,6 +10,7 @@ export * from "./agentRegistration";
 export * from "./agentStats";
 export * from "./agentVerification";
 export * from "./authorityRateLimit";
+export * from "./authorityTaskQuota";
 export * from "./bidderMarketState";
 export * from "./bidMarketplaceConfig";
 export * from "./completionBond";

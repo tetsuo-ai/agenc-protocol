@@ -23,6 +23,7 @@ export * from "./clearModerationBlock";
 export * from "./closeStore";
 export * from "./closeTask";
 export * from "./completeTask";
+export * from "./configureTaskCreationQuota";
 export * from "./configureTaskModeration";
 export * from "./configureTaskValidation";
 export * from "./createBid";

@@ -1,3 +1,8 @@
+import {
+  appendTaskCreationQuota,
+  snapshotTaskQuotaSurface,
+  type TaskCreationQuotaInput,
+} from "./task-quota.js";
 // Facade: ergonomic, named entry points over the generated client for the task
 // lifecycle. Thin by design — the generated Async builders already resolve PDAs
 // (task, escrow, claim, submission, validation/protocol config, rate limits) and
@@ -171,39 +176,44 @@ function assertDisputeSafeWorkerLimit(
  * `referrer: null`, `referrerFeeBps: 0`).
  */
 export async function createTask(
-  input: OptionalReferrer<CreateTaskAsyncInput>,
+  input: OptionalReferrer<CreateTaskAsyncInput> & TaskCreationQuotaInput,
 ) {
+  const includeQuota = snapshotTaskQuotaSurface(input.taskQuotaSurface);
   const stableInput = canonicalizeFacadeInputSignerFields(input, [
     "authority",
     "creator",
   ] as const);
   assertDisputeSafeWorkerLimit("createTask", stableInput.maxWorkers);
-  return getCreateTaskInstructionAsync(
-    withReferrerDefaults<CreateTaskAsyncInput>(
-      {
-        ...stableInput,
-        taskId: snapshotFixedBytes(
-          stableInput.taskId,
-          32,
-          "createTask: taskId",
-        ),
-        description: snapshotFixedBytes(
-          stableInput.description,
-          64,
-          "createTask: description",
-        ),
-        constraintHash: snapshotOptionalFixedBytes(
-          stableInput.constraintHash,
-          32,
-          "createTask: constraintHash",
-        ),
-        rewardMintArg: snapshotOptionalAddress(
-          stableInput.rewardMintArg,
-          "createTask: rewardMintArg",
-        ),
-      },
-      "createTask",
+  return appendTaskCreationQuota(
+    getCreateTaskInstructionAsync(
+      withReferrerDefaults<CreateTaskAsyncInput>(
+        {
+          ...stableInput,
+          taskId: snapshotFixedBytes(
+            stableInput.taskId,
+            32,
+            "createTask: taskId",
+          ),
+          description: snapshotFixedBytes(
+            stableInput.description,
+            64,
+            "createTask: description",
+          ),
+          constraintHash: snapshotOptionalFixedBytes(
+            stableInput.constraintHash,
+            32,
+            "createTask: constraintHash",
+          ),
+          rewardMintArg: snapshotOptionalAddress(
+            stableInput.rewardMintArg,
+            "createTask: rewardMintArg",
+          ),
+        },
+        "createTask",
+      ),
     ),
+    stableInput.authority.address,
+    includeQuota,
   );
 }
 
@@ -217,26 +227,32 @@ export async function createTask(
  * path (`referrer: null`, `referrerFeeBps: 0`).
  */
 export async function createTaskHumanless(
-  input: OptionalReferrer<CreateTaskHumanlessAsyncInput>,
+  input: OptionalReferrer<CreateTaskHumanlessAsyncInput> &
+    TaskCreationQuotaInput,
 ) {
+  const includeQuota = snapshotTaskQuotaSurface(input.taskQuotaSurface);
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["creator"]);
-  return getCreateTaskHumanlessInstructionAsync(
-    withReferrerDefaults<CreateTaskHumanlessAsyncInput>(
-      {
-        ...stableInput,
-        taskId: snapshotFixedBytes(
-          stableInput.taskId,
-          32,
-          "createTaskHumanless: taskId",
-        ),
-        description: snapshotFixedBytes(
-          stableInput.description,
-          64,
-          "createTaskHumanless: description",
-        ),
-      },
-      "createTaskHumanless",
+  return appendTaskCreationQuota(
+    getCreateTaskHumanlessInstructionAsync(
+      withReferrerDefaults<CreateTaskHumanlessAsyncInput>(
+        {
+          ...stableInput,
+          taskId: snapshotFixedBytes(
+            stableInput.taskId,
+            32,
+            "createTaskHumanless: taskId",
+          ),
+          description: snapshotFixedBytes(
+            stableInput.description,
+            64,
+            "createTaskHumanless: description",
+          ),
+        },
+        "createTaskHumanless",
+      ),
     ),
+    stableInput.creator.address,
+    includeQuota,
   );
 }
 
@@ -245,35 +261,40 @@ export async function createTaskHumanless(
  * the rest of the task/escrow/config/rate-limit PDAs auto-derive.
  */
 export async function createDependentTask(
-  input: CreateDependentTaskAsyncInput,
+  input: CreateDependentTaskAsyncInput & TaskCreationQuotaInput,
 ) {
+  const includeQuota = snapshotTaskQuotaSurface(input.taskQuotaSurface);
   const stableInput = canonicalizeFacadeInputSignerFields(input, [
     "authority",
     "creator",
   ] as const);
   assertDisputeSafeWorkerLimit("createDependentTask", stableInput.maxWorkers);
-  return getCreateDependentTaskInstructionAsync({
-    ...stableInput,
-    taskId: snapshotFixedBytes(
-      stableInput.taskId,
-      32,
-      "createDependentTask: taskId",
-    ),
-    description: snapshotFixedBytes(
-      stableInput.description,
-      64,
-      "createDependentTask: description",
-    ),
-    constraintHash: snapshotOptionalFixedBytes(
-      stableInput.constraintHash,
-      32,
-      "createDependentTask: constraintHash",
-    ),
-    rewardMintArg: snapshotOptionalAddress(
-      stableInput.rewardMintArg,
-      "createDependentTask: rewardMintArg",
-    ),
-  });
+  return appendTaskCreationQuota(
+    getCreateDependentTaskInstructionAsync({
+      ...stableInput,
+      taskId: snapshotFixedBytes(
+        stableInput.taskId,
+        32,
+        "createDependentTask: taskId",
+      ),
+      description: snapshotFixedBytes(
+        stableInput.description,
+        64,
+        "createDependentTask: description",
+      ),
+      constraintHash: snapshotOptionalFixedBytes(
+        stableInput.constraintHash,
+        32,
+        "createDependentTask: constraintHash",
+      ),
+      rewardMintArg: snapshotOptionalAddress(
+        stableInput.rewardMintArg,
+        "createDependentTask: rewardMintArg",
+      ),
+    }),
+    stableInput.authority.address,
+    includeQuota,
+  );
 }
 
 /**

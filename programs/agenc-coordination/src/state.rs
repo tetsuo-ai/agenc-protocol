@@ -549,9 +549,12 @@ impl ProtocolConfig {
     /// Wallet-authority feed voting with a separate prospective wallet count.
     pub const SURFACE_REVISION_AUTHORITY_FEED: u16 = 6;
 
+    /// Additive, multisig-approved u32 creation quotas for individual wallets.
+    pub const SURFACE_REVISION_TASK_QUOTAS: u16 = 7;
+
     /// Highest surface revision implemented by this binary. Deployment tooling
     /// stamps this value only after the matching artifact has been verified live.
-    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_AUTHORITY_FEED;
+    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_TASK_QUOTAS;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -766,6 +769,27 @@ pub struct AuthorityRateLimit {
 impl AuthorityRateLimit {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
 }
+
+/// Optional multisig-approved task quota. Legacy/dispute state is never resized.
+/// PDA seeds: ["authority_task_quota", authority]. No close/reset instruction.
+#[account]
+#[derive(Default, InitSpace)]
+pub struct AuthorityTaskQuota {
+    pub authority: Pubkey,
+    pub max_tasks_per_24h: u32,
+    pub task_count_24h: u32,
+    pub rate_limit_window_start: i64,
+    pub enabled: bool,
+    pub bump: u8,
+    pub _reserved: [u8; 6],
+}
+
+impl AuthorityTaskQuota {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+const _: () = assert!(AuthorityRateLimit::SIZE == 67);
+const _: () = assert!(AuthorityTaskQuota::SIZE == 64);
 
 /// Task-level validation configuration.
 /// PDA seeds: ["task_validation", task]

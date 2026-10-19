@@ -836,6 +836,12 @@ export const AGENC_COORDINATION_ERROR__FEED_AGENT_VOTING_RETIRED = 0x1908; // 64
 export const AGENC_COORDINATION_ERROR__FEED_AUTHORITY_ALREADY_VOTED = 0x1909; // 6409
 /** FeedAuthorityVotingUnavailable: Wallet-authority feed voting requires the revision-6 surface */
 export const AGENC_COORDINATION_ERROR__FEED_AUTHORITY_VOTING_UNAVAILABLE = 0x190a; // 6410
+/** TaskQuotaUnavailable: Extended task quotas require the revision-7 surface */
+export const AGENC_COORDINATION_ERROR__TASK_QUOTA_UNAVAILABLE = 0x190b; // 6411
+/** InvalidTaskQuota: An extended task quota must be finite and between 256 and 1000 */
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA = 0x190c; // 6412
+/** InvalidTaskQuotaAccount: Task quota account is not the canonical writable wallet quota */
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA_ACCOUNT = 0x190d; // 6413
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -1047,6 +1053,8 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_AUTHORITY
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_RISK_SCORE
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_STATUS
+  | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA
+  | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_TYPE
   | typeof AGENC_COORDINATION_ERROR__INVALID_TOKEN_ACCOUNT_OWNER
   | typeof AGENC_COORDINATION_ERROR__INVALID_TOKEN_ESCROW
@@ -1206,6 +1214,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_PENDING_VALIDATION
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_REJECT_FROZEN
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_RENT_EXEMPT
+  | typeof AGENC_COORDINATION_ERROR__TASK_QUOTA_UNAVAILABLE
   | typeof AGENC_COORDINATION_ERROR__TASK_SUBMISSION_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_TYPE_DISABLED
   | typeof AGENC_COORDINATION_ERROR__TASK_VALIDATION_ALREADY_CONFIGURED
@@ -1464,6 +1473,8 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_AUTHORITY]: `Invalid task moderation authority`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_RISK_SCORE]: `Invalid task moderation risk score`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_STATUS]: `Invalid task moderation status`,
+    [AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA]: `An extended task quota must be finite and between 256 and 1000`,
+    [AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA_ACCOUNT]: `Task quota account is not the canonical writable wallet quota`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_TYPE]: `Invalid task type`,
     [AGENC_COORDINATION_ERROR__INVALID_TOKEN_ACCOUNT_OWNER]: `Token account owner does not match expected authority`,
     [AGENC_COORDINATION_ERROR__INVALID_TOKEN_ESCROW]: `Token escrow ATA does not match expected derivation`,
@@ -1623,6 +1634,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TASK_NOT_PENDING_VALIDATION]: `Task is not pending validation`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_REJECT_FROZEN]: `Task is not in the RejectFrozen state`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_RENT_EXEMPT]: `Task must be rent exempt before terminal cleanup can preserve it`,
+    [AGENC_COORDINATION_ERROR__TASK_QUOTA_UNAVAILABLE]: `Extended task quotas require the revision-7 surface`,
     [AGENC_COORDINATION_ERROR__TASK_SUBMISSION_REQUIRED]: `Task submission is required`,
     [AGENC_COORDINATION_ERROR__TASK_TYPE_DISABLED]: `Task type is disabled by multisig launch controls`,
     [AGENC_COORDINATION_ERROR__TASK_VALIDATION_ALREADY_CONFIGURED]: `Task already has validation configured`,

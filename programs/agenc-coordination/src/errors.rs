@@ -1211,4 +1211,10 @@ pub enum CoordinationError {
     FeedAuthorityAlreadyVoted,
     #[msg("Wallet-authority feed voting requires the revision-6 surface")]
     FeedAuthorityVotingUnavailable,
+    #[msg("Extended task quotas require the revision-7 surface")]
+    TaskQuotaUnavailable,
+    #[msg("An extended task quota must be finite and between 256 and 1000")]
+    InvalidTaskQuota,
+    #[msg("Task quota account is not the canonical writable wallet quota")]
+    InvalidTaskQuotaAccount,
 }

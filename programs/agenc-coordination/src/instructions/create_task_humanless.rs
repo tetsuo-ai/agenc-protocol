@@ -18,7 +18,7 @@ use crate::instructions::completion_helpers::{
     resolve_referrer_snapshot, validate_marketplace_payee_destinations,
 };
 use crate::instructions::launch_controls::require_task_type_index_enabled;
-use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
+use crate::instructions::rate_limit_helpers::check_task_creation_with_optional_quota;
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
     validate_description_is_content_hash, validate_task_params,
@@ -127,13 +127,14 @@ pub fn handler(
 
     // Wallet-scoped rate limit. No invoking agent ⇒ zero agent id (the limit is
     // keyed by the authority/wallet, not the agent — see rate_limit_helpers).
-    check_authority_task_creation_rate_limits(
+    check_task_creation_with_optional_quota(
         ctx.accounts.authority_rate_limit.as_mut(),
         ctx.accounts.creator.key(),
         ctx.bumps.authority_rate_limit,
         [0u8; 32],
         config,
         &clock,
+        ctx.remaining_accounts,
     )?;
 
     let escrow_key = ctx.accounts.escrow.key();

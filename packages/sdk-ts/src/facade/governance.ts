@@ -29,6 +29,8 @@ import {
   getUpdateTreasuryInstructionAsync,
   getUpdateProtocolFeeInstructionAsync,
   getUpdateRateLimitsInstructionAsync,
+  getConfigureTaskCreationQuotaInstructionAsync,
+  type ConfigureTaskCreationQuotaAsyncInput,
   getUpdateMinVersionInstructionAsync,
   getUpdateStateInstructionAsync,
   getUpdateLaunchControlsInstructionAsync,
@@ -246,6 +248,22 @@ export async function updateRateLimits(input: UpdateRateLimitsInput) {
   return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
+/** Grant, update or disable a bounded wallet quota without replenishing usage. */
+export type ConfigureTaskCreationQuotaInput =
+  WithRequiredMultisigSigners<ConfigureTaskCreationQuotaAsyncInput>;
+
+export async function configureTaskCreationQuota(
+  input: ConfigureTaskCreationQuotaInput,
+) {
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
+  );
+  const instruction =
+    await getConfigureTaskCreationQuotaInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
+}
+
 /** Build an update_min_version instruction. protocolConfig defaults to its PDA. */
 export type UpdateMinVersionInput =
   WithRequiredMultisigSigners<UpdateMinVersionAsyncInput>;
@@ -296,9 +314,7 @@ export async function findAgencProgramDataPda(): Promise<Address> {
   return (
     await getProgramDerivedAddress({
       programAddress: UPGRADEABLE_LOADER_PROGRAM_ADDRESS,
-      seeds: [
-        getAddressEncoder().encode(AGENC_COORDINATION_PROGRAM_ADDRESS),
-      ],
+      seeds: [getAddressEncoder().encode(AGENC_COORDINATION_PROGRAM_ADDRESS)],
     })
   )[0];
 }
@@ -348,9 +364,7 @@ export async function initializeProtocol(input: InitializeProtocolInput) {
       );
     }
     if (ownerAddresses.has(owner)) {
-      throw new Error(
-        `initializeProtocol: duplicate multisig owner ${owner}`,
-      );
+      throw new Error(`initializeProtocol: duplicate multisig owner ${owner}`);
     }
     ownerAddresses.add(owner);
   }

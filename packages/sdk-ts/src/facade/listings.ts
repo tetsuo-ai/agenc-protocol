@@ -1,3 +1,8 @@
+import {
+  appendTaskCreationQuota,
+  snapshotTaskQuotaSurface,
+  type TaskCreationQuotaInput,
+} from "./task-quota.js";
 // Facade: ergonomic, named entry points over the generated client. Thin by design —
 // the generated client already resolves PDAs and encodes data; the facade adds friendly
 // signatures, defaults, and (for multi-PDA flows) bundling. Never import from generated/
@@ -398,7 +403,8 @@ export type HireFromListingInput = Omit<
   HireFromListingAsyncInput,
   "referrer" | "referrerFeeBps" | "moderationBlock"
 > &
-  HireModerationInputs & {
+  HireModerationInputs &
+  TaskCreationQuotaInput & {
     /**
      * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
      * pre-referrer behavior: the facade defaults `referrer` to `null` (the
@@ -425,6 +431,7 @@ export type HireFromListingInput = Omit<
  * the REQUIRED `moderationBlock` BLOCK-floor PDA from it.
  */
 export async function hireFromListing(input: HireFromListingInput) {
+  const includeQuota = snapshotTaskQuotaSurface(input.taskQuotaSurface);
   const stableInput = canonicalizeFacadeInputSignerFields(input, [
     "authority",
     "creator",
@@ -476,12 +483,16 @@ export async function hireFromListing(input: HireFromListingInput) {
     moderationBlock: stableRest.moderationBlock,
     moderatorIsAttestor,
   });
-  return getHireFromListingInstructionAsync({
-    ...stableRest,
-    ...moderation,
-    referrer: stableReferrer,
-    referrerFeeBps: referrerFeeBps ?? 0,
-  });
+  return appendTaskCreationQuota(
+    getHireFromListingInstructionAsync({
+      ...stableRest,
+      ...moderation,
+      referrer: stableReferrer,
+      referrerFeeBps: referrerFeeBps ?? 0,
+    }),
+    stableInput.authority.address,
+    includeQuota,
+  );
 }
 
 /**
@@ -495,7 +506,8 @@ export type HireFromListingHumanlessInput = Omit<
   HireFromListingHumanlessAsyncInput,
   "referrer" | "referrerFeeBps" | "moderationBlock"
 > &
-  HireModerationInputs & {
+  HireModerationInputs &
+  TaskCreationQuotaInput & {
     /**
      * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
      * pre-referrer behavior: defaults to the no-leg/skip path (`referrer: null`,
@@ -519,6 +531,7 @@ export type HireFromListingHumanlessInput = Omit<
 export async function hireFromListingHumanless(
   input: HireFromListingHumanlessInput,
 ) {
+  const includeQuota = snapshotTaskQuotaSurface(input.taskQuotaSurface);
   const stableInput = canonicalizeFacadeInputSignerFields(input, [
     "creator",
   ] as const);
@@ -576,12 +589,16 @@ export async function hireFromListingHumanless(
     moderationBlock: stableRest.moderationBlock,
     moderatorIsAttestor,
   });
-  return getHireFromListingHumanlessInstructionAsync({
-    ...stableRest,
-    ...moderation,
-    referrer: stableReferrer,
-    referrerFeeBps: referrerFeeBps ?? 0,
-  });
+  return appendTaskCreationQuota(
+    getHireFromListingHumanlessInstructionAsync({
+      ...stableRest,
+      ...moderation,
+      referrer: stableReferrer,
+      referrerFeeBps: referrerFeeBps ?? 0,
+    }),
+    stableInput.creator.address,
+    includeQuota,
+  );
 }
 
 /**

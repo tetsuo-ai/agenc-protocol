@@ -30,7 +30,7 @@ use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::moderation_gate_helpers::{
     load_listing_moderation_record, moderation_gate_relaxed, require_content_not_blocked,
 };
-use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
+use crate::instructions::rate_limit_helpers::check_task_creation_with_optional_quota;
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
 };
@@ -515,13 +515,14 @@ pub fn handler(
     let creator_agent = ctx.accounts.creator_agent.as_ref();
 
     // Rate-limit by authority (wallet) to mirror create_task anti-spam.
-    check_authority_task_creation_rate_limits(
+    check_task_creation_with_optional_quota(
         ctx.accounts.authority_rate_limit.as_mut(),
         ctx.accounts.authority.key(),
         ctx.bumps.authority_rate_limit,
         creator_agent.agent_id,
         config,
         &clock,
+        ctx.remaining_accounts,
     )?;
 
     // Initialize task-owned state before the escrow-funding CPI.

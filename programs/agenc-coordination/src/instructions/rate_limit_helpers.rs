@@ -3,11 +3,11 @@
 //! Used by task creation and dispute initiation instructions.
 
 use crate::errors::CoordinationError;
-use crate::events::RateLimitHit;
+use crate::events::{RateLimitHit, TaskCreationQuotaHit};
 use crate::instructions::constants::{
     MAX_DISPUTE_STAKE_LAMPORTS, MIN_DISPUTE_STAKE_LAMPORTS, WINDOW_24H,
 };
-use crate::state::{AuthorityRateLimit, ProtocolConfig};
+use crate::state::{AuthorityRateLimit, AuthorityTaskQuota, ProtocolConfig};
 use anchor_lang::prelude::*;
 
 /// Action types for rate limiting (matches RateLimitHit event field)
@@ -137,7 +137,10 @@ fn emit_rate_limit_hit(
 }
 
 /// Reset the 24h rate limit window for wallet-scoped state if expired.
-fn maybe_reset_authority_window(authority_rate_limit: &mut AuthorityRateLimit, clock: &Clock) {
+pub(crate) fn maybe_reset_authority_window(
+    authority_rate_limit: &mut AuthorityRateLimit,
+    clock: &Clock,
+) {
     // Using saturating_sub intentionally - handles clock drift safely
     if clock
         .unix_timestamp
@@ -155,7 +158,7 @@ fn maybe_reset_authority_window(authority_rate_limit: &mut AuthorityRateLimit, c
 }
 
 /// Initialize wallet-scoped rate limit state on first use.
-fn initialize_authority_rate_limit(
+pub(crate) fn initialize_authority_rate_limit(
     authority_rate_limit: &mut AuthorityRateLimit,
     authority: Pubkey,
     bump: u8,
@@ -249,6 +252,139 @@ pub fn check_authority_task_creation_rate_limits(
         clock,
         RateLimitAction::TaskCreation,
     )
+}
+
+pub const MIN_EXTENDED_TASK_QUOTA: u32 = 256;
+pub const MAX_EXTENDED_TASK_QUOTA: u32 = 1000;
+
+/// Merge legacy writes without resetting the shared calendar-day budget. Once
+/// the wide count reaches 255, the legacy u8 counter is saturated and every
+/// legacy task entry is exhausted, even if the caller omits its quota account.
+pub(crate) fn synchronize_task_quota(
+    quota: &mut AuthorityTaskQuota,
+    legacy: &AuthorityRateLimit,
+) -> Result<()> {
+    require!(
+        quota.authority == legacy.authority,
+        CoordinationError::InvalidTaskQuotaAccount
+    );
+    require!(
+        quota._reserved == [0u8; 6],
+        CoordinationError::CorruptedData
+    );
+    require!(
+        quota.rate_limit_window_start <= legacy.rate_limit_window_start,
+        CoordinationError::CorruptedData
+    );
+    if quota.rate_limit_window_start < legacy.rate_limit_window_start {
+        quota.rate_limit_window_start = legacy.rate_limit_window_start;
+        quota.task_count_24h = u32::from(legacy.task_count_24h);
+    } else {
+        quota.task_count_24h = quota.task_count_24h.max(u32::from(legacy.task_count_24h));
+    }
+    Ok(())
+}
+
+/// Optional remaining-account extension shared by all five task entry paths.
+/// No suffix retains the stricter legacy cap; it cannot bypass an extended cap
+/// because that cap is always greater than every representable legacy limit.
+#[allow(clippy::too_many_arguments)]
+pub fn check_task_creation_with_optional_quota(
+    legacy: &mut AuthorityRateLimit,
+    authority: Pubkey,
+    authority_bump: u8,
+    invoking_agent_id: [u8; 32],
+    config: &ProtocolConfig,
+    clock: &Clock,
+    remaining: &[AccountInfo<'_>],
+) -> Result<()> {
+    if remaining.is_empty() {
+        return check_authority_task_creation_rate_limits(
+            legacy,
+            authority,
+            authority_bump,
+            invoking_agent_id,
+            config,
+            clock,
+        );
+    }
+    require!(
+        config.surface_revision >= ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS,
+        CoordinationError::TaskQuotaUnavailable
+    );
+    require!(
+        remaining.len() == 1,
+        CoordinationError::InvalidTaskQuotaAccount
+    );
+    let info = &remaining[0];
+    let (expected, bump) =
+        Pubkey::find_program_address(&[b"authority_task_quota", authority.as_ref()], &crate::ID);
+    require!(
+        info.key() == expected
+            && info.owner == &crate::ID
+            && info.is_writable
+            && info.data_len() == AuthorityTaskQuota::SIZE,
+        CoordinationError::InvalidTaskQuotaAccount
+    );
+    let mut quota = AuthorityTaskQuota::try_deserialize(&mut &info.try_borrow_data()?[..])?;
+    require!(
+        quota.authority == authority && quota.bump == bump,
+        CoordinationError::InvalidTaskQuotaAccount
+    );
+    require!(
+        (MIN_EXTENDED_TASK_QUOTA..=MAX_EXTENDED_TASK_QUOTA).contains(&quota.max_tasks_per_24h),
+        CoordinationError::InvalidTaskQuota
+    );
+    require!(
+        config.task_creation_cooldown >= 1 && config.max_tasks_per_24h >= 1,
+        CoordinationError::RateLimitBelowMinimum
+    );
+    initialize_authority_rate_limit(legacy, authority, authority_bump, clock);
+    maybe_reset_authority_window(legacy, clock);
+    synchronize_task_quota(&mut quota, legacy)?;
+    if !quota.enabled {
+        check_authority_task_creation_rate_limits(
+            legacy,
+            authority,
+            authority_bump,
+            invoking_agent_id,
+            config,
+            clock,
+        )?;
+        synchronize_task_quota(&mut quota, legacy)?;
+    } else {
+        let elapsed = clock
+            .unix_timestamp
+            .saturating_sub(legacy.last_task_created);
+        if legacy.last_task_created > 0 && elapsed < config.task_creation_cooldown {
+            emit!(TaskCreationQuotaHit {
+                authority,
+                current_count: quota.task_count_24h,
+                max_count: quota.max_tasks_per_24h,
+                cooldown_remaining: config.task_creation_cooldown.saturating_sub(elapsed),
+                timestamp: clock.unix_timestamp
+            });
+            return err!(CoordinationError::CooldownNotElapsed);
+        }
+        if quota.task_count_24h >= quota.max_tasks_per_24h {
+            emit!(TaskCreationQuotaHit {
+                authority,
+                current_count: quota.task_count_24h,
+                max_count: quota.max_tasks_per_24h,
+                cooldown_remaining: 0,
+                timestamp: clock.unix_timestamp
+            });
+            return err!(CoordinationError::RateLimitExceeded);
+        }
+        quota.task_count_24h = quota
+            .task_count_24h
+            .checked_add(1)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        legacy.task_count_24h = quota.task_count_24h.min(u32::from(u8::MAX)) as u8;
+        legacy.last_task_created = clock.unix_timestamp;
+    }
+    quota.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
+    Ok(())
 }
 
 #[cfg(test)]

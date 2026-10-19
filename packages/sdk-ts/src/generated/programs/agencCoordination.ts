@@ -38,6 +38,7 @@ import {
   getAgentStatsCodec,
   getAgentVerificationCodec,
   getAuthorityRateLimitCodec,
+  getAuthorityTaskQuotaCodec,
   getBidderMarketStateCodec,
   getBidMarketplaceConfigCodec,
   getCompletionBondCodec,
@@ -86,6 +87,8 @@ import {
   type AgentVerificationArgs,
   type AuthorityRateLimit,
   type AuthorityRateLimitArgs,
+  type AuthorityTaskQuota,
+  type AuthorityTaskQuotaArgs,
   type BidderMarketState,
   type BidderMarketStateArgs,
   type BidMarketplaceConfig,
@@ -185,6 +188,7 @@ import {
   getCloseStoreInstructionAsync,
   getCloseTaskInstructionAsync,
   getCompleteTaskInstructionAsync,
+  getConfigureTaskCreationQuotaInstructionAsync,
   getConfigureTaskModerationInstructionAsync,
   getConfigureTaskValidationInstructionAsync,
   getCreateBidInstructionAsync,
@@ -287,6 +291,7 @@ import {
   parseCloseStoreInstruction,
   parseCloseTaskInstruction,
   parseCompleteTaskInstruction,
+  parseConfigureTaskCreationQuotaInstruction,
   parseConfigureTaskModerationInstruction,
   parseConfigureTaskValidationInstruction,
   parseCreateBidInstruction,
@@ -389,6 +394,7 @@ import {
   type CloseStoreAsyncInput,
   type CloseTaskAsyncInput,
   type CompleteTaskAsyncInput,
+  type ConfigureTaskCreationQuotaAsyncInput,
   type ConfigureTaskModerationAsyncInput,
   type ConfigureTaskValidationAsyncInput,
   type CreateBidAsyncInput,
@@ -435,6 +441,7 @@ import {
   type ParsedCloseStoreInstruction,
   type ParsedCloseTaskInstruction,
   type ParsedCompleteTaskInstruction,
+  type ParsedConfigureTaskCreationQuotaInstruction,
   type ParsedConfigureTaskModerationInstruction,
   type ParsedConfigureTaskValidationInstruction,
   type ParsedCreateBidInstruction,
@@ -614,6 +621,7 @@ import {
   findProposalPda,
   findProtocolConfigPda,
   findPurchaseRecordPda,
+  findQuotaAuthorityRateLimitPda,
   findRateSkillPurchaseRecordPda,
   findRatingAccountPda,
   findRecordListingModerationModerationAttestorPda,
@@ -626,6 +634,7 @@ import {
   findTaskJobSpecPda,
   findTaskModerationPda,
   findTaskPda,
+  findTaskQuotaPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
   findTaskValidationVotePda,
@@ -642,6 +651,7 @@ export enum AgencCoordinationAccount {
   AgentStats,
   AgentVerification,
   AuthorityRateLimit,
+  AuthorityTaskQuota,
   BidMarketplaceConfig,
   BidderMarketState,
   CompletionBond,
@@ -731,6 +741,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.AuthorityRateLimit;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([85, 68, 148, 138, 112, 126, 34, 206]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.AuthorityTaskQuota;
   }
   if (
     containsBytes(
@@ -1196,6 +1217,7 @@ export enum AgencCoordinationInstruction {
   CloseStore,
   CloseTask,
   CompleteTask,
+  ConfigureTaskCreationQuota,
   ConfigureTaskModeration,
   ConfigureTaskValidation,
   CreateBid,
@@ -1473,6 +1495,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.CompleteTask;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([48, 147, 37, 126, 131, 85, 224, 93]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ConfigureTaskCreationQuota;
   }
   if (
     containsBytes(
@@ -2470,6 +2503,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.CompleteTask;
     } & ParsedCompleteTaskInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.ConfigureTaskCreationQuota;
+    } & ParsedConfigureTaskCreationQuotaInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.ConfigureTaskModeration;
     } & ParsedConfigureTaskModerationInstruction<TProgram>)
   | ({
@@ -2847,6 +2883,14 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.CompleteTask,
         ...parseCompleteTaskInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.ConfigureTaskCreationQuota: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType:
+          AgencCoordinationInstruction.ConfigureTaskCreationQuota,
+        ...parseConfigureTaskCreationQuotaInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.ConfigureTaskModeration: {
@@ -3472,6 +3516,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<AgentVerificationArgs, AgentVerification>;
   authorityRateLimit: ReturnType<typeof getAuthorityRateLimitCodec> &
     SelfFetchFunctions<AuthorityRateLimitArgs, AuthorityRateLimit>;
+  authorityTaskQuota: ReturnType<typeof getAuthorityTaskQuotaCodec> &
+    SelfFetchFunctions<AuthorityTaskQuotaArgs, AuthorityTaskQuota>;
   bidMarketplaceConfig: ReturnType<typeof getBidMarketplaceConfigCodec> &
     SelfFetchFunctions<BidMarketplaceConfigArgs, BidMarketplaceConfig>;
   bidderMarketState: ReturnType<typeof getBidderMarketStateCodec> &
@@ -3621,6 +3667,10 @@ export type AgencCoordinationPluginInstructions = {
   completeTask: (
     input: CompleteTaskAsyncInput,
   ) => ReturnType<typeof getCompleteTaskInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  configureTaskCreationQuota: (
+    input: ConfigureTaskCreationQuotaAsyncInput,
+  ) => ReturnType<typeof getConfigureTaskCreationQuotaInstructionAsync> &
     SelfPlanAndSendFunctions;
   configureTaskModeration: (
     input: ConfigureTaskModerationAsyncInput,
@@ -3983,6 +4033,8 @@ export type AgencCoordinationPluginPdas = {
   cancelTaskWorkerCompletionBond: typeof findCancelTaskWorkerCompletionBondPda;
   agentStats: typeof findAgentStatsPda;
   store: typeof findStorePda;
+  taskQuota: typeof findTaskQuotaPda;
+  quotaAuthorityRateLimit: typeof findQuotaAuthorityRateLimitPda;
   taskAttestorConfig: typeof findTaskAttestorConfigPda;
   bidMarketplace: typeof findBidMarketplacePda;
   task: typeof findTaskPda;
@@ -4047,6 +4099,10 @@ export function agencCoordinationProgram() {
           authorityRateLimit: addSelfFetchFunctions(
             client,
             getAuthorityRateLimitCodec(),
+          ),
+          authorityTaskQuota: addSelfFetchFunctions(
+            client,
+            getAuthorityTaskQuotaCodec(),
           ),
           bidMarketplaceConfig: addSelfFetchFunctions(
             client,
@@ -4246,6 +4302,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getCompleteTaskInstructionAsync(input),
+            ),
+          configureTaskCreationQuota: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getConfigureTaskCreationQuotaInstructionAsync(input),
             ),
           configureTaskModeration: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4701,6 +4762,8 @@ export function agencCoordinationProgram() {
           cancelTaskWorkerCompletionBond: findCancelTaskWorkerCompletionBondPda,
           agentStats: findAgentStatsPda,
           store: findStorePda,
+          taskQuota: findTaskQuotaPda,
+          quotaAuthorityRateLimit: findQuotaAuthorityRateLimitPda,
           taskAttestorConfig: findTaskAttestorConfigPda,
           bidMarketplace: findBidMarketplacePda,
           task: findTaskPda,

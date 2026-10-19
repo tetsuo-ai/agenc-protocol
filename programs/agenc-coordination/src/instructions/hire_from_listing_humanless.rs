@@ -29,7 +29,7 @@ use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::moderation_gate_helpers::{
     load_listing_moderation_record, moderation_gate_relaxed, require_content_not_blocked,
 };
-use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
+use crate::instructions::rate_limit_helpers::check_task_creation_with_optional_quota;
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
 };
@@ -280,13 +280,14 @@ pub fn handler(
     let protocol_fee_bps = config.protocol_fee_bps;
 
     // Wallet-scoped rate limit (agent_id = 0 ⇒ keyed by the wallet, no agent).
-    check_authority_task_creation_rate_limits(
+    check_task_creation_with_optional_quota(
         ctx.accounts.authority_rate_limit.as_mut(),
         ctx.accounts.creator.key(),
         ctx.bumps.authority_rate_limit,
         [0u8; 32],
         config,
         &clock,
+        ctx.remaining_accounts,
     )?;
 
     let escrow_key = ctx.accounts.escrow.key();
