@@ -81,7 +81,19 @@ test("ordinary telemetry is quiet; every requested admin field and invalid data 
   original.data.writeBigUInt64LE(4n, 115); // total_tasks: only telemetry
   tracker.observe("protocol", address, original, 2, "poll");
   assert.equal(events.length, 0);
-  let slot = 3;
+  tracker.observe(
+    "protocol",
+    address,
+    { ...original, lamports: original.lamports + 1 },
+    3,
+    "websocket",
+  );
+  assert.equal(
+    events.length,
+    0,
+    "unsolicited donations must not page as administrative changes",
+  );
+  let slot = 4;
   for (const offset of [40, 140, 141, 186, 187, 189, 349]) {
     const changed = fixture();
     changed.data[offset] ^= 1;
