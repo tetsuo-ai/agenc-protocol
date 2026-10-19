@@ -1,0 +1,24 @@
+{
+  "advisory": "RUSTSEC-2025-0141",
+  "source": "https://rustsec.org/advisories/RUSTSEC-2025-0141.html",
+  "reviewedOn": "2026-10-19",
+  "expiresOn": "2026-11-18",
+  "tracking": "https://github.com/tetsuo-ai/agenc-protocol/issues/277",
+  "owners": ["@7etsuo", "@signerless"],
+  "package": "bincode@1.3.3",
+  "checksum": "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad",
+  "lockfile": "programs/agenc-coordination/Cargo.lock",
+  "assessment": [
+    "The advisory is an unmaintained notice with no patched version. This exception accepts maintenance risk for 30 days; it does not assert absence of undiscovered vulnerabilities.",
+    "cargo tree --manifest-path programs/agenc-coordination/Cargo.toml --locked -i bincode resolves exactly 1.3.3 through anchor-lang 0.32.1, solana-instruction 2.3.3 and solana-sysvar 2.3.0. The fuzz and zkvm locks do not contain bincode.",
+    "The protocol crate has no direct bincode dependency or bincode API calls. Anchor's loader-state decoder uses bincode on UpgradeableLoaderState; its Account wrapper checks ownership. Solana's sysvar decoder checks the sysvar address. Instruction serialization also uses bincode. These observations narrow the reviewed exposure; they are not a complete transitive call-graph audit.",
+    "Replacing bincode with another serializer or upgrading Anchor requires explicit wire-format and SBF compatibility work. A lockfile-only replacement is not supported by this pinned dependency graph.",
+    "The existing validator continues to bind the exception to one exact package, checksum, lockfile, owner set and bounded date window. All other advisories remain errors. Daily CI and the process-level expiry regression prevent this renewal from becoming indefinite."
+  ],
+  "verificationCommands": [
+    "cargo tree --manifest-path programs/agenc-coordination/Cargo.toml --locked -i bincode",
+    "node --test scripts/rust-supply-chain-policy.test.mjs",
+    "node scripts/check-rust-supply-chain-policy.mjs --run-tools"
+  ],
+  "removalCondition": "Remove this exception when the supported Anchor/Solana graph eliminates bincode 1.3.3. Re-review before 2026-11-18 if that migration remains unavailable; never extend only to make CI green."
+}

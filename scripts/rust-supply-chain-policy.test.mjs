@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -29,7 +38,7 @@ function clone(value) {
 function fixture(overrides = {}) {
   return {
     root: ROOT,
-    now: new Date("2026-07-19T12:00:00Z"),
+    now: new Date(`${POLICY.advisoryExceptions[0].reviewedOn}T12:00:00Z`),
     policy: clone(POLICY),
     denyText: DENY_TEXT,
     workflowText: WORKFLOW_TEXT,
@@ -44,11 +53,96 @@ test("current policy covers all Cargo locks with an active narrow exception", ()
 });
 
 test("the bincode exception fails closed on its expiry date", () => {
-  const input = fixture({ now: new Date("2026-10-17T00:00:00Z") });
+  const expiry = POLICY.advisoryExceptions[0].expiresOn;
+  const input = fixture({ now: new Date(`${expiry}T00:00:00Z`) });
   assert.throws(
     () => validateRustSupplyChainPolicy(input),
-    /exception expired on 2026-10-17/,
+    new RegExp(`exception expired on ${expiry}`),
   );
+});
+
+test("the UTC expiry boundary accepts the preceding instant and rejects every later day", () => {
+  const expiry = new Date(
+    `${POLICY.advisoryExceptions[0].expiresOn}T00:00:00Z`,
+  );
+  assert.doesNotThrow(() =>
+    validateRustSupplyChainPolicy(fixture({ now: new Date(+expiry - 1) })),
+  );
+  for (const offset of [0, 1, 86_400_000, 365 * 86_400_000]) {
+    assert.throws(
+      () =>
+        validateRustSupplyChainPolicy(
+          fixture({ now: new Date(+expiry + offset) }),
+        ),
+      /exception expired on/,
+    );
+  }
+});
+
+// Exercise the actual CI entry point, file reads, wall clock, and process exit
+// status. This does not replace the live --run-tools audit in the same workflow.
+test("CI CLI rejects an expired on-disk exception before executing external tools", (t) => {
+  const root = mkdtempSync(resolve(tmpdir(), "agenc-rust-policy-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const script = "scripts/check-rust-supply-chain-policy.mjs";
+  for (const file of [
+    script,
+    ".github/CODEOWNERS",
+    POLICY.workflow,
+    "deny.toml",
+    "supply-chain/rust-policy.json",
+    ...POLICY.locks.flatMap(({ manifest, lockfile }) => [manifest, lockfile]),
+  ]) {
+    const destination = resolve(root, file);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(resolve(ROOT, file), destination);
+  }
+  const run = (args = []) =>
+    spawnSync(process.execPath, [resolve(root, script), ...args], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        CARGO_AUDIT_BIN: resolve(root, "must-not-run-audit"),
+        CARGO_DENY_BIN: resolve(root, "must-not-run-deny"),
+      },
+    });
+  const valid = run();
+  assert.equal(valid.error, undefined);
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.match(valid.stdout, /policy metadata.*valid/);
+
+  const expired = clone(POLICY);
+  const exception = expired.advisoryExceptions[0];
+  const original = POLICY.advisoryExceptions[0];
+  const today = new Date().toISOString().slice(0, 10);
+  exception.reviewedOn = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  exception.expiresOn = today;
+  writeFileSync(
+    resolve(root, "supply-chain/rust-policy.json"),
+    JSON.stringify(expired),
+  );
+  writeFileSync(
+    resolve(root, "deny.toml"),
+    DENY_TEXT.replace(
+      `reviewed ${original.reviewedOn}`,
+      `reviewed ${exception.reviewedOn}`,
+    ).replace(
+      `expires ${original.expiresOn}`,
+      `expires ${exception.expiresOn}`,
+    ),
+  );
+  for (const args of [[], ["--run-tools"]]) {
+    const rejected = run(args);
+    assert.equal(rejected.error, undefined);
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, new RegExp(`exception expired on ${today}`));
+    assert.doesNotMatch(rejected.stderr, /cannot execute/);
+    assert.doesNotMatch(rejected.stdout, /passed|are valid/);
+  }
 });
 
 test("the exception cannot broaden its bincode version selector", () => {
@@ -158,7 +252,10 @@ test("deny.toml rejects unreviewed tables including license clarifications", () 
     '\n[bans]\nmultiple-versions = "allow"\n',
   ]) {
     assert.throws(
-      () => validateRustSupplyChainPolicy(fixture({ denyText: DENY_TEXT + injected })),
+      () =>
+        validateRustSupplyChainPolicy(
+          fixture({ denyText: DENY_TEXT + injected }),
+        ),
       /deny\.toml section inventory/,
     );
   }
@@ -169,10 +266,27 @@ test("Rust advisory monitoring cannot lose its recurring schedule", () => {
     /\n  schedule:\n    - cron: "[^"]+"/,
     "",
   );
-  assert.notEqual(withoutSchedule, WORKFLOW_TEXT, "fixture must remove the schedule");
+  assert.notEqual(
+    withoutSchedule,
+    WORKFLOW_TEXT,
+    "fixture must remove the schedule",
+  );
   assert.throws(
-    () => validateRustSupplyChainPolicy(fixture({ workflowText: withoutSchedule })),
+    () =>
+      validateRustSupplyChainPolicy(fixture({ workflowText: withoutSchedule })),
     /recurring schedule/,
+  );
+});
+
+test("expiry monitoring cannot silently drop back to weekly scans", () => {
+  assert.throws(
+    () =>
+      validateRustSupplyChainPolicy(
+        fixture({
+          workflowText: WORKFLOW_TEXT.replace("41 9 * * *", "41 9 * * 3"),
+        }),
+      ),
+    /daily recurring schedule/,
   );
 });
 
