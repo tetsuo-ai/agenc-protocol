@@ -137,6 +137,15 @@ dependency/documentation PR: no Rust program or IDL change is made here.
 
 ## Remaining release and operational acceptance
 
+The post-review read-only mainnet dispute scan on 2026-10-19 found 254 agents
+and five disputes: two Active, three Cancelled, zero SettlementPending. Four
+release blockers remain: the two active disputes plus nonzero legacy initiator
+and defendant liability counters. The scanner also reports two expired legacy
+initiator liabilities. [Recorded evidence](../../artifacts/remediation/2026-10-19-mainnet-disputes.json)
+contains the public account identifiers and observed deadlines. This is a
+release blocker, not evidence of a missing-peer SettlementPending incident.
+No mainnet recovery, finalization or upgrade transaction was submitted.
+
 The observed mainnet program is still revision 5. Candidate tests do not upgrade
 it. The paused upgrade, IDL verification, coordinated client release and atomic
 surface stamp remain governed by [VERSIONING](../VERSIONING.md). Claims already
