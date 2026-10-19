@@ -58,6 +58,7 @@ export * from "./operatorFeePaid";
 export * from "./orphanTaskChildReclaimed";
 export * from "./postCreated";
 export * from "./postUpvoted";
+export * from "./postUpvotedByAuthority";
 export * from "./proposalCancelled";
 export * from "./proposalCreated";
 export * from "./proposalExecuted";

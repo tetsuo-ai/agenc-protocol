@@ -45,6 +45,7 @@ import {
   getDefaultTrustListCodec,
   getDisputeCodec,
   getDisputeResolverCodec,
+  getFeedAuthorityVoteCodec,
   getFeedPostCodec,
   getFeedVoteCodec,
   getGoodsListingCodec,
@@ -99,6 +100,8 @@ import {
   type DisputeArgs,
   type DisputeResolver,
   type DisputeResolverArgs,
+  type FeedAuthorityVote,
+  type FeedAuthorityVoteArgs,
   type FeedPost,
   type FeedPostArgs,
   type FeedVote,
@@ -262,6 +265,7 @@ import {
   getUpdateStateInstructionAsync,
   getUpdateStoreInstructionAsync,
   getUpdateTreasuryInstructionAsync,
+  getUpvotePostByAuthorityInstructionAsync,
   getUpvotePostInstructionAsync,
   getValidateTaskResultInstructionAsync,
   getVoteProposalInstructionAsync,
@@ -363,6 +367,7 @@ import {
   parseUpdateStateInstruction,
   parseUpdateStoreInstruction,
   parseUpdateTreasuryInstruction,
+  parseUpvotePostByAuthorityInstruction,
   parseUpvotePostInstruction,
   parseValidateTaskResultInstruction,
   parseVoteProposalInstruction,
@@ -510,6 +515,7 @@ import {
   type ParsedUpdateStateInstruction,
   type ParsedUpdateStoreInstruction,
   type ParsedUpdateTreasuryInstruction,
+  type ParsedUpvotePostByAuthorityInstruction,
   type ParsedUpvotePostInstruction,
   type ParsedValidateTaskResultInstruction,
   type ParsedVoteProposalInstruction,
@@ -566,6 +572,7 @@ import {
   type UpdateStoreAsyncInput,
   type UpdateTreasuryAsyncInput,
   type UpvotePostAsyncInput,
+  type UpvotePostByAuthorityAsyncInput,
   type ValidateTaskResultAsyncInput,
   type VoteProposalAsyncInput,
   type WithdrawReputationStakeAsyncInput,
@@ -576,6 +583,7 @@ import {
   findAgentStatsPda,
   findAgentVerificationPda,
   findAuthorityRateLimitPda,
+  findAuthorityVotePda,
   findBidBookPda,
   findBidderMarketStatePda,
   findBidMarketplacePda,
@@ -641,6 +649,7 @@ export enum AgencCoordinationAccount {
   DefaultTrustList,
   Dispute,
   DisputeResolver,
+  FeedAuthorityVote,
   FeedPost,
   FeedVote,
   GoodsListing,
@@ -799,6 +808,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.DisputeResolver;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([211, 111, 81, 40, 191, 211, 108, 204]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.FeedAuthorityVote;
   }
   if (
     containsBytes(
@@ -1257,6 +1277,7 @@ export enum AgencCoordinationInstruction {
   UpdateStore,
   UpdateTreasury,
   UpvotePost,
+  UpvotePostByAuthority,
   ValidateTaskResult,
   VoteProposal,
   WithdrawReputationStake,
@@ -2348,6 +2369,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
+        new Uint8Array([221, 72, 177, 111, 124, 65, 210, 255]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.UpvotePostByAuthority;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([141, 192, 86, 228, 233, 168, 41, 224]),
       ),
       0,
@@ -2680,6 +2712,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.UpvotePost;
     } & ParsedUpvotePostInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.UpvotePostByAuthority;
+    } & ParsedUpvotePostByAuthorityInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.ValidateTaskResult;
     } & ParsedValidateTaskResultInstruction<TProgram>)
@@ -3383,6 +3418,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseUpvotePostInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.UpvotePostByAuthority: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.UpvotePostByAuthority,
+        ...parseUpvotePostByAuthorityInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.ValidateTaskResult: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3444,6 +3486,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<DisputeArgs, Dispute>;
   disputeResolver: ReturnType<typeof getDisputeResolverCodec> &
     SelfFetchFunctions<DisputeResolverArgs, DisputeResolver>;
+  feedAuthorityVote: ReturnType<typeof getFeedAuthorityVoteCodec> &
+    SelfFetchFunctions<FeedAuthorityVoteArgs, FeedAuthorityVote>;
   feedPost: ReturnType<typeof getFeedPostCodec> &
     SelfFetchFunctions<FeedPostArgs, FeedPost>;
   feedVote: ReturnType<typeof getFeedVoteCodec> &
@@ -3900,6 +3944,10 @@ export type AgencCoordinationPluginInstructions = {
     input: UpvotePostAsyncInput,
   ) => ReturnType<typeof getUpvotePostInstructionAsync> &
     SelfPlanAndSendFunctions;
+  upvotePostByAuthority: (
+    input: UpvotePostByAuthorityAsyncInput,
+  ) => ReturnType<typeof getUpvotePostByAuthorityInstructionAsync> &
+    SelfPlanAndSendFunctions;
   validateTaskResult: (
     input: ValidateTaskResultAsyncInput,
   ) => ReturnType<typeof getValidateTaskResultInstructionAsync> &
@@ -3966,6 +4014,7 @@ export type AgencCoordinationPluginPdas = {
   moderationBlock: typeof findModerationBlockPda;
   state: typeof findStatePda;
   vote: typeof findVotePda;
+  authorityVote: typeof findAuthorityVotePda;
   taskValidationVote: typeof findTaskValidationVotePda;
   voteProposalVote: typeof findVoteProposalVotePda;
 };
@@ -4023,6 +4072,10 @@ export function agencCoordinationProgram() {
           disputeResolver: addSelfFetchFunctions(
             client,
             getDisputeResolverCodec(),
+          ),
+          feedAuthorityVote: addSelfFetchFunctions(
+            client,
+            getFeedAuthorityVoteCodec(),
           ),
           feedPost: addSelfFetchFunctions(client, getFeedPostCodec()),
           feedVote: addSelfFetchFunctions(client, getFeedVoteCodec()),
@@ -4605,6 +4658,11 @@ export function agencCoordinationProgram() {
               client,
               getUpvotePostInstructionAsync(input),
             ),
+          upvotePostByAuthority: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getUpvotePostByAuthorityInstructionAsync(input),
+            ),
           validateTaskResult: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4676,6 +4734,7 @@ export function agencCoordinationProgram() {
           moderationBlock: findModerationBlockPda,
           state: findStatePda,
           vote: findVotePda,
+          authorityVote: findAuthorityVotePda,
           taskValidationVote: findTaskValidationVotePda,
           voteProposalVote: findVoteProposalVotePda,
         },

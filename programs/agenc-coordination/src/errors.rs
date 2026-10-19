@@ -1205,4 +1205,10 @@ pub enum CoordinationError {
     InvalidModerationConfig,
     #[msg("Finite listing capacity cannot be lower than its outstanding jobs")]
     ListingCapacityBelowOpenJobs,
+    #[msg("Per-agent feed votes are retired; use wallet-authority voting on revision 6")]
+    FeedAgentVotingRetired,
+    #[msg("This wallet authority has already voted on this post")]
+    FeedAuthorityAlreadyVoted,
+    #[msg("Wallet-authority feed voting requires the revision-6 surface")]
+    FeedAuthorityVotingUnavailable,
 }

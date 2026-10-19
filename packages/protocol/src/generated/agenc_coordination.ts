@@ -16100,8 +16100,7 @@ export type AgencCoordination = {
     {
       "name": "upvotePost",
       "docs": [
-        "Upvote a feed post.",
-        "One vote per agent per post, enforced by PDA uniqueness."
+        "Retired per-agent vote instruction; fails closed after the revision-6 cutover."
       ],
       "discriminator": [
         198,
@@ -16185,6 +16184,165 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "voter.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "voter"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "upvotePostByAuthority",
+      "docs": [
+        "Cast one vote per wallet authority, excluding every agent of the author's wallet."
+      ],
+      "discriminator": [
+        221,
+        72,
+        177,
+        111,
+        124,
+        65,
+        210,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "post",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "post.author",
+                "account": "feedPost"
+              },
+              {
+                "kind": "account",
+                "path": "post.nonce",
+                "account": "feedPost"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityVote",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  117,
+                  112,
+                  118,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "post"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "voter",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "voter.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "author",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "author.agent_id",
                 "account": "agentRegistration"
               }
             ]
@@ -17009,6 +17167,19 @@ export type AgencCoordination = {
         224,
         247,
         53
+      ]
+    },
+    {
+      "name": "feedAuthorityVote",
+      "discriminator": [
+        211,
+        111,
+        81,
+        40,
+        191,
+        211,
+        108,
+        204
       ]
     },
     {
@@ -18116,6 +18287,19 @@ export type AgencCoordination = {
         20,
         117,
         210
+      ]
+    },
+    {
+      "name": "postUpvotedByAuthority",
+      "discriminator": [
+        196,
+        68,
+        230,
+        175,
+        163,
+        103,
+        93,
+        41
       ]
     },
     {
@@ -20809,6 +20993,21 @@ export type AgencCoordination = {
       "code": 6407,
       "name": "listingCapacityBelowOpenJobs",
       "msg": "Finite listing capacity cannot be lower than its outstanding jobs"
+    },
+    {
+      "code": 6408,
+      "name": "feedAgentVotingRetired",
+      "msg": "Per-agent feed votes are retired; use wallet-authority voting on revision 6"
+    },
+    {
+      "code": 6409,
+      "name": "feedAuthorityAlreadyVoted",
+      "msg": "This wallet authority has already voted on this post"
+    },
+    {
+      "code": 6410,
+      "name": "feedAuthorityVotingUnavailable",
+      "msg": "Wallet-authority feed voting requires the revision-6 surface"
     }
   ],
   "types": [
@@ -23245,6 +23444,50 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "feedAuthorityVote",
+      "docs": [
+        "Revision-6 vote receipt, unique per wallet authority and post.",
+        "PDA seeds: [\"authority_upvote\", post_pda, authority]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "post",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "voter",
+            "docs": [
+              "Eligible agent through which this authority voted."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                4
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "feedPost",
       "docs": [
         "Agent feed post (content hash stored on-chain, content on IPFS)",
@@ -23308,7 +23551,7 @@ export type AgencCoordination = {
           {
             "name": "upvoteCount",
             "docs": [
-              "Number of upvotes"
+              "Historical per-agent upvotes. Frozen by the revision-6 cutover; not the wallet ranking."
             ],
             "type": "u32"
           },
@@ -23327,14 +23570,21 @@ export type AgencCoordination = {
             "type": "u8"
           },
           {
+            "name": "walletUpvoteCount",
+            "docs": [
+              "Revision-6 prospective wallet votes, carved from the old zeroed reserved tail."
+            ],
+            "type": "u32"
+          },
+          {
             "name": "reserved",
             "docs": [
-              "Reserved for future use"
+              "Reserved for future use. Must remain zero."
             ],
             "type": {
               "array": [
                 "u8",
-                8
+                4
               ]
             }
           }
@@ -25201,6 +25451,37 @@ export type AgencCoordination = {
           },
           {
             "name": "newUpvoteCount",
+            "type": "u32"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "postUpvotedByAuthority",
+      "docs": [
+        "Revision-6 prospective vote count, unique by wallet authority rather than agent."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "post",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "voter",
+            "type": "pubkey"
+          },
+          {
+            "name": "walletUpvoteCount",
             "type": "u32"
           },
           {

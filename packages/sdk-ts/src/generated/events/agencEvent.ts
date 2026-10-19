@@ -219,6 +219,10 @@ import {
   type PostUpvotedEventData,
 } from "./postUpvoted";
 import {
+  getPostUpvotedByAuthorityEventDecoder,
+  type PostUpvotedByAuthorityEventData,
+} from "./postUpvotedByAuthority";
+import {
   getProposalCancelledEventDecoder,
   type ProposalCancelledEventData,
 } from "./proposalCancelled";
@@ -484,6 +488,7 @@ export type AgencEvent =
   | { eventName: "OrphanTaskChildReclaimed"; data: OrphanTaskChildReclaimedEventData }
   | { eventName: "PostCreated"; data: PostCreatedEventData }
   | { eventName: "PostUpvoted"; data: PostUpvotedEventData }
+  | { eventName: "PostUpvotedByAuthority"; data: PostUpvotedByAuthorityEventData }
   | { eventName: "ProposalCancelled"; data: ProposalCancelledEventData }
   | { eventName: "ProposalCreated"; data: ProposalCreatedEventData }
   | { eventName: "ProposalExecuted"; data: ProposalExecutedEventData }
@@ -924,6 +929,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "PostUpvoted",
       data: getPostUpvotedEventDecoder().decode(payload),
+    }),
+  },
+  "c444e6afa3675d29": {
+    eventName: "PostUpvotedByAuthority",
+    decode: (payload) => ({
+      eventName: "PostUpvotedByAuthority",
+      data: getPostUpvotedByAuthorityEventDecoder().decode(payload),
     }),
   },
   "fd3b682e814e090e": {

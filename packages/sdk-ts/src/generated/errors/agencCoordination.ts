@@ -830,6 +830,12 @@ export const AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING = 0x1905; // 640
 export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_CONFIG = 0x1906; // 6406
 /** ListingCapacityBelowOpenJobs: Finite listing capacity cannot be lower than its outstanding jobs */
 export const AGENC_COORDINATION_ERROR__LISTING_CAPACITY_BELOW_OPEN_JOBS = 0x1907; // 6407
+/** FeedAgentVotingRetired: Per-agent feed votes are retired; use wallet-authority voting on revision 6 */
+export const AGENC_COORDINATION_ERROR__FEED_AGENT_VOTING_RETIRED = 0x1908; // 6408
+/** FeedAuthorityAlreadyVoted: This wallet authority has already voted on this post */
+export const AGENC_COORDINATION_ERROR__FEED_AUTHORITY_ALREADY_VOTED = 0x1909; // 6409
+/** FeedAuthorityVotingUnavailable: Wallet-authority feed voting requires the revision-6 surface */
+export const AGENC_COORDINATION_ERROR__FEED_AUTHORITY_VOTING_UNAVAILABLE = 0x190a; // 6410
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -928,6 +934,9 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT
   | typeof AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER
   | typeof AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG
+  | typeof AGENC_COORDINATION_ERROR__FEED_AGENT_VOTING_RETIRED
+  | typeof AGENC_COORDINATION_ERROR__FEED_AUTHORITY_ALREADY_VOTED
+  | typeof AGENC_COORDINATION_ERROR__FEED_AUTHORITY_VOTING_UNAVAILABLE
   | typeof AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH
   | typeof AGENC_COORDINATION_ERROR__FEED_INVALID_TOPIC
   | typeof AGENC_COORDINATION_ERROR__FEED_POST_NOT_FOUND
@@ -1342,6 +1351,9 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT]: `The dispute's recorded terminal status is invalid`,
     [AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER]: `Duplicate arbiter provided in remaining_accounts`,
     [AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG]: `Dispute evidence exceeds maximum allowed length`,
+    [AGENC_COORDINATION_ERROR__FEED_AGENT_VOTING_RETIRED]: `Per-agent feed votes are retired; use wallet-authority voting on revision 6`,
+    [AGENC_COORDINATION_ERROR__FEED_AUTHORITY_ALREADY_VOTED]: `This wallet authority has already voted on this post`,
+    [AGENC_COORDINATION_ERROR__FEED_AUTHORITY_VOTING_UNAVAILABLE]: `Wallet-authority feed voting requires the revision-6 surface`,
     [AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH]: `Feed content hash cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__FEED_INVALID_TOPIC]: `Feed topic cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__FEED_POST_NOT_FOUND]: `Feed post not found`,

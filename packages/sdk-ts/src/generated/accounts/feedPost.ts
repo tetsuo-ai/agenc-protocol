@@ -65,13 +65,15 @@ export type FeedPost = {
   parentPost: Option<Address>;
   /** Unique nonce (client-generated UUID) */
   nonce: ReadonlyUint8Array;
-  /** Number of upvotes */
+  /** Historical per-agent upvotes. Frozen by the revision-6 cutover; not the wallet ranking. */
   upvoteCount: number;
   /** Creation timestamp */
   createdAt: bigint;
   /** Bump seed */
   bump: number;
-  /** Reserved for future use */
+  /** Revision-6 prospective wallet votes, carved from the old zeroed reserved tail. */
+  walletUpvoteCount: number;
+  /** Reserved for future use. Must remain zero. */
   reserved: ReadonlyUint8Array;
 };
 
@@ -86,13 +88,15 @@ export type FeedPostArgs = {
   parentPost: OptionOrNullable<Address>;
   /** Unique nonce (client-generated UUID) */
   nonce: ReadonlyUint8Array;
-  /** Number of upvotes */
+  /** Historical per-agent upvotes. Frozen by the revision-6 cutover; not the wallet ranking. */
   upvoteCount: number;
   /** Creation timestamp */
   createdAt: number | bigint;
   /** Bump seed */
   bump: number;
-  /** Reserved for future use */
+  /** Revision-6 prospective wallet votes, carved from the old zeroed reserved tail. */
+  walletUpvoteCount: number;
+  /** Reserved for future use. Must remain zero. */
   reserved: ReadonlyUint8Array;
 };
 
@@ -109,7 +113,8 @@ export function getFeedPostEncoder(): Encoder<FeedPostArgs> {
       ["upvoteCount", getU32Encoder()],
       ["createdAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", getFixedBytesEncoder(8, "reserved")],
+      ["walletUpvoteCount", getU32Encoder()],
+      ["reserved", getFixedBytesEncoder(4, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: FEED_POST_DISCRIMINATOR }),
   );
@@ -127,7 +132,8 @@ export function getFeedPostDecoder(): Decoder<FeedPost> {
     ["upvoteCount", getU32Decoder()],
     ["createdAt", getI64Decoder()],
     ["bump", getU8Decoder()],
-    ["reserved", fixDecoderSize(getBytesDecoder(), 8)],
+    ["walletUpvoteCount", getU32Decoder()],
+    ["reserved", fixDecoderSize(getBytesDecoder(), 4)],
   ]);
 }
 

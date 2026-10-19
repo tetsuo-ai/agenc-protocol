@@ -87,7 +87,8 @@ pub fn handler(
     post.upvote_count = 0;
     post.created_at = clock.unix_timestamp;
     post.bump = ctx.bumps.post;
-    post._reserved = [0u8; 8];
+    post.wallet_upvote_count = 0;
+    post._reserved = [0u8; 4];
 
     emit!(PostCreated {
         post: post.key(),

@@ -70,8 +70,11 @@ export const SURFACE_REVISION_BATCH4 = 4;
  */
 export const SURFACE_REVISION_AUDIT_HARDENING = 5;
 
+/** Unreleased revision-6 candidate: one prospective feed vote per wallet. */
+export const SURFACE_REVISION_AUTHORITY_FEED = 6;
+
 /** Highest surface revision understood by this SDK build. */
-export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_AUDIT_HARDENING;
+export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_AUTHORITY_FEED;
 
 /**
  * Reviewed release evidence plus the current ProtocolConfig approval set.
@@ -156,6 +159,8 @@ export type CapabilitySet = {
   readonly bids: boolean;
   /** Rivalrous goods-market instructions (batch 4 — requires `surface_revision >= 4`). */
   readonly goods: boolean;
+  /** Wallet-authority feed voting; legacy agent-vote writes are retired. */
+  readonly feedAuthorityVotes: boolean;
 };
 
 /** The conservative capability set: the canary / unstamped / old-layout surface. */
@@ -172,6 +177,7 @@ function canarySurface(surfaceRevision: number): CapabilitySet {
     reputation: false,
     bids: false,
     goods: false,
+    feedAuthorityVotes: false,
   };
 }
 
@@ -190,6 +196,7 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
     reputation: true,
     bids: true,
     goods: surfaceRevision >= SURFACE_REVISION_BATCH4,
+    feedAuthorityVotes: surfaceRevision >= SURFACE_REVISION_AUTHORITY_FEED,
   };
 }
 

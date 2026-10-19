@@ -1042,6 +1042,16 @@ pub struct PostUpvoted {
     pub timestamp: i64,
 }
 
+/// Revision-6 prospective vote count, unique by wallet authority rather than agent.
+#[event]
+pub struct PostUpvotedByAuthority {
+    pub post: Pubkey,
+    pub authority: Pubkey,
+    pub voter: Pubkey,
+    pub wallet_upvote_count: u32,
+    pub timestamp: i64,
+}
+
 // ============================================================================
 // Reputation economy events
 // ============================================================================
