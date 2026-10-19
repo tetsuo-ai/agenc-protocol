@@ -1,0 +1,16 @@
+{
+  "programId": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "expectedUpgradeAuthority": "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+  "vaultAddress": "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+  "bufferAuthorities": ["Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf"],
+  "squads": {
+    "programId": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+    "multisig": "7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY"
+  },
+  "pollIntervalMs": 5000,
+  "discoveryIntervalMs": 30000,
+  "staleAfterMs": 20000,
+  "vaultTopUpLamports": "1000000",
+  "vaultOutflowLamports": "1000000"
+}

@@ -1,0 +1,28 @@
+[Unit]
+Description=AgenC read-only upgrade watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agenc-watchdog
+Group=agenc-watchdog
+WorkingDirectory=/opt/agenc-protocol
+EnvironmentFile=/etc/agenc/watchdog.env
+ExecStart=/usr/bin/node /opt/agenc-protocol/scripts/upgrade-watchdog.mjs watch --baseline /etc/agenc/watchdog-baseline.json --state-dir /var/lib/agenc-watchdog
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StateDirectory=agenc-watchdog
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/agenc-watchdog
+
+[Install]
+WantedBy=multi-user.target

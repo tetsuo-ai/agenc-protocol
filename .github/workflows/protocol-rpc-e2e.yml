@@ -51,12 +51,17 @@ jobs:
         run: |
           npm install --global npm@11.18.0
           npm ci
+          npm ci --prefix tests-integration
       - name: Build production-feature program and SDK
         run: |
           cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
           npm run build --workspace=@tetsuo-ai/marketplace-sdk
       - name: Start disposable validator with explicit short dispute windows
         run: node scripts/localnet-up.mjs --dev-ready --short-disputes
+      - name: Rehearse upgrade watchdog delivery on owned local RPC
+        env:
+          AGENC_RPC_E2E: "1"
+        run: node --test scripts/upgrade-watchdog.rpc.test.mjs
       - name: Execute SDK transactions through RPC and verify recorded outcomes
         working-directory: packages/sdk-ts
         env:
