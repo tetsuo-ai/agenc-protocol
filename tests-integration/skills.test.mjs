@@ -9,12 +9,139 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   PID, coder, enc, arr, pda, id32,
-  makeProgram, send, expectOk, expectFail, decode,
-  freshWorld, deregisterRemaining, setProtocolPaused,
+  makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed, tokenAmount,
+  freshWorld, deregisterRemaining, setProtocolPaused, setProtocolFeeBps,
   BN, Keypair, PublicKey, SystemProgram, FailedTransactionMetadata,
+  MINT_SIZE, TOKEN_PROGRAM_ID, createInitializeMintInstruction,
+  createAssociatedTokenAccountInstruction, createMintToInstruction, getAssociatedTokenAddressSync,
 } from "./harness.mjs";
 
 const MIN_SKILL_PRICE = 1_000;
+
+async function ratePurchasedSkill(w, skill, purchaseRecord) {
+  const [ratingAccount] = pda([enc("skill_rating"), skill.toBuffer(), w.buyerAgent.toBuffer()]);
+  const ix = await w.buyerProg.methods.rateSkill(5, null).accounts({
+    skill, ratingAccount, rater: w.buyerAgent, purchaseRecord,
+    authorAgent: w.providerAgent, protocolConfig: w.protocolPda,
+    authority: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+  }).instruction();
+  return { ratingAccount, result: send(w.svm, ix, [w.buyer]) };
+}
+
+for (const [price, expectedFee, eligible] of [
+  [1_001, 10, false], [9_999_900, 99_999, false], [10_000_000, 100_000, true],
+]) {
+  test(`#276: skill price=${price} snapshots actual SOL fee; later price edits cannot launder it`, async () => {
+    const w = await freshWorld();
+    const { skill, res } = await registerSkill(w, {
+      authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg, price,
+    });
+    expectOk(res);
+    const treasuryBefore = w.svm.getBalance(w.admin.publicKey);
+    const { purchaseRecord, res: paid } = await purchaseSkillSol(w, {
+      skill, buyerWallet: w.buyer, buyerAgent: w.buyerAgent, buyerProg: w.buyerProg,
+      authorAgent: w.providerAgent, authorWallet: w.provider.publicKey, expectedPrice: price,
+    });
+    expectOk(paid);
+    assert.equal(w.svm.getBalance(w.admin.publicKey) - treasuryBefore, BigInt(expectedFee));
+    const receipt = decode(w.svm, "PurchaseRecord", purchaseRecord);
+    assert.deepEqual(receipt._reserved, [1, Number(eligible), 0, 0]);
+    // Eligibility belongs to the payment, even after a price increase/decrease.
+    expectOk(send(w.svm, await w.providerProg.methods
+      .updateSkill(arr(Buffer.alloc(32, 9)), new BN(eligible ? 1_001 : 10_000_000), null, true)
+      .accounts({ skill, author: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
+      .instruction(), [w.provider]));
+    const before = w.svm.getAccount(skill);
+    const { ratingAccount, result } = await ratePurchasedSkill(w, skill, purchaseRecord);
+    if (eligible) {
+      expectOk(result);
+      assert.equal(decode(w.svm, "SkillRegistration", skill).rating_count, 1);
+    } else {
+      expectFail(result, "RatingFeeNotQualified");
+      assert.deepEqual(w.svm.getAccount(skill), before);
+      assert.ok(isClosed(w.svm, ratingAccount));
+    }
+  });
+}
+
+test("#276: a large actual SPL fee cannot qualify as SOL rating evidence", async () => {
+  const w = await freshWorld();
+  const mint = Keypair.generate();
+  const price = 10_000_000_000;
+  expectOk(sendMany(w.svm, [
+    SystemProgram.createAccount({ fromPubkey: w.admin.publicKey, newAccountPubkey: mint.publicKey,
+      lamports: Number(w.svm.minimumBalanceForRentExemption(BigInt(MINT_SIZE))),
+      space: MINT_SIZE, programId: TOKEN_PROGRAM_ID }),
+    createInitializeMintInstruction(mint.publicKey, 0, w.admin.publicKey, null),
+  ], [w.admin, mint]));
+  const atas = [w.buyer, w.provider, w.admin].map((wallet) => getAssociatedTokenAddressSync(mint.publicKey, wallet.publicKey));
+  expectOk(sendMany(w.svm, [
+    ...[w.buyer, w.provider, w.admin].map((wallet, i) => createAssociatedTokenAccountInstruction(w.admin.publicKey, atas[i], wallet.publicKey, mint.publicKey)),
+    createMintToInstruction(mint.publicKey, atas[0], w.admin.publicKey, price),
+  ], [w.admin]));
+  const { skill, res } = await registerSkill(w, {
+    authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg,
+    price, priceMint: mint.publicKey,
+  });
+  expectOk(res);
+  const [purchaseRecord] = pda([enc("skill_purchase"), skill.toBuffer(), w.buyerAgent.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods.purchaseSkill(new BN(price), 1, arr(Buffer.alloc(32, 9)))
+    .accounts({ skill, purchaseRecord, buyer: w.buyerAgent, authorAgent: w.providerAgent,
+      authorWallet: w.provider.publicKey, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
+      authority: w.buyer.publicKey, systemProgram: SystemProgram.programId, priceMint: mint.publicKey,
+      buyerTokenAccount: atas[0], authorTokenAccount: atas[1], treasuryTokenAccount: atas[2], tokenProgram: TOKEN_PROGRAM_ID })
+    .instruction(), [w.buyer]));
+  assert.equal(tokenAmount(w.svm, atas[2]), 100_000_000n);
+  assert.equal(decode(w.svm, "PurchaseRecord", purchaseRecord)._reserved[1], 0);
+  const { result, ratingAccount } = await ratePurchasedSkill(w, skill, purchaseRecord);
+  expectFail(result, "RatingFeeNotQualified");
+  assert.ok(isClosed(w.svm, ratingAccount));
+  assert.equal(decode(w.svm, "SkillRegistration", skill).rating_count, 0);
+});
+
+test("#276: expensive legacy/corrupt skill receipts cannot qualify from price_paid", async () => {
+  for (const [index, value] of [[1, 0], [1, 2], [2, 1]]) {
+    const w = await freshWorld();
+    const { skill } = await registerSkill(w, {
+      authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg, price: 10_000_000,
+    });
+    const { purchaseRecord, res } = await purchaseSkillSol(w, {
+      skill, buyerWallet: w.buyer, buyerAgent: w.buyerAgent, buyerProg: w.buyerProg,
+      authorAgent: w.providerAgent, authorWallet: w.provider.publicKey, expectedPrice: 10_000_000,
+    });
+    expectOk(res);
+    const account = w.svm.getAccount(purchaseRecord);
+    const data = Buffer.from(account.data);
+    data[89 + index] = value; // explicit historical/corrupt receipt fixture
+    w.svm.setAccount(purchaseRecord, { ...account, data });
+    const { result, ratingAccount } = await ratePurchasedSkill(w, skill, purchaseRecord);
+    expectFail(result, "RatingFeeNotQualified");
+    assert.ok(isClosed(w.svm, ratingAccount));
+    assert.equal(decode(w.svm, "SkillRegistration", skill).rating_count, 0);
+  }
+});
+
+for (const reason of ["zero fee", "buyer is treasury"]) {
+  test(`#276: skill purchase with ${reason} has no independent qualifying cost`, async () => {
+    const w = await freshWorld();
+    if (reason === "zero fee") await setProtocolFeeBps(w.svm, 0);
+    else {
+      const actor = await registerAgentForWallet(w, { kp: w.admin, prog: makeProgram(w.admin) });
+      w.buyer = actor.kp; w.buyerAgent = actor.agentPda; w.buyerProg = actor.prog;
+    }
+    const { skill } = await registerSkill(w, {
+      authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg, price: 100_000_000,
+    });
+    const { purchaseRecord, res } = await purchaseSkillSol(w, {
+      skill, buyerWallet: w.buyer, buyerAgent: w.buyerAgent, buyerProg: w.buyerProg,
+      authorAgent: w.providerAgent, authorWallet: w.provider.publicKey, expectedPrice: 100_000_000,
+    });
+    expectOk(res);
+    assert.equal(decode(w.svm, "PurchaseRecord", purchaseRecord)._reserved[1], 0);
+    expectFail((await ratePurchasedSkill(w, skill, purchaseRecord)).result, "RatingFeeNotQualified");
+    assert.equal(decode(w.svm, "SkillRegistration", skill).rating_count, 0);
+  });
+}
 
 function decodeSkillPurchased(logs) {
   for (const line of logs ?? []) {
@@ -628,7 +755,7 @@ test("paused cutover freezes legacy skill creation, purchase, and rating", async
 
 test("rate_skill: a paying buyer rates the skill (reputation-weighted)", async () => {
   const w = await freshWorld();
-  const price = 1_000_000;
+  const price = 10_000_000;
   const { skill } = await registerSkill(w, {
     authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg,
     price,
@@ -675,7 +802,7 @@ test("rate_skill: a paying buyer rates the skill (reputation-weighted)", async (
 
 test("rate_skill: rejects an out-of-range rating value (SkillInvalidRating)", async () => {
   const w = await freshWorld();
-  const price = 1_000_000;
+  const price = 10_000_000;
   const { skill } = await registerSkill(w, {
     authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg,
     price,
@@ -706,7 +833,7 @@ test("rate_skill: rejects an out-of-range rating value (SkillInvalidRating)", as
 
 test("rate_skill: a distinct rater agent (not the buyer) also works after purchasing", async () => {
   const w = await freshWorld();
-  const price = 1_000_000;
+  const price = 10_000_000;
   const { skill } = await registerSkill(w, {
     authorWallet: w.provider, authorAgent: w.providerAgent, authorProg: w.providerProg,
     price,
@@ -743,7 +870,7 @@ test("rate_skill: a distinct rater agent (not the buyer) also works after purcha
 
 test("rate_skill: paid buyer may rate after the author deactivates the skill", async () => {
   const w = await freshWorld();
-  const price = 1_000_000;
+  const price = 10_000_000;
   const contentHash = Buffer.alloc(32, 9);
   const { skill } = await registerSkill(w, {
     authorWallet: w.provider,

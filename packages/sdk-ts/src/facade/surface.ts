@@ -76,8 +76,11 @@ export const SURFACE_REVISION_AUTHORITY_FEED = 6;
 /** Unreleased revision-7 candidate: bounded multisig-approved task capacity. */
 export const SURFACE_REVISION_TASK_QUOTAS = 7;
 
+/** Unreleased revision-8 candidate: ratings backed by an actual SOL fee floor. */
+export const SURFACE_REVISION_FEE_QUALIFIED_RATINGS = 8;
+
 /** Highest surface revision understood by this SDK build. */
-export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_TASK_QUOTAS;
+export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_FEE_QUALIFIED_RATINGS;
 
 /**
  * Reviewed release evidence plus the current ProtocolConfig approval set.
@@ -165,6 +168,8 @@ export type CapabilitySet = {
   /** Wallet-authority feed voting; legacy agent-vote writes are retired. */
   readonly feedAuthorityVotes: boolean;
   readonly taskCreationQuotas: boolean;
+  /** Future ratings require a recorded qualifying SOL protocol fee. */
+  readonly feeQualifiedRatings: boolean;
 };
 
 /** The conservative capability set: the canary / unstamped / old-layout surface. */
@@ -183,6 +188,7 @@ function canarySurface(surfaceRevision: number): CapabilitySet {
     goods: false,
     feedAuthorityVotes: false,
     taskCreationQuotas: false,
+    feeQualifiedRatings: false,
   };
 }
 
@@ -202,6 +208,8 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
     goods: surfaceRevision >= SURFACE_REVISION_BATCH4,
     feedAuthorityVotes: surfaceRevision >= SURFACE_REVISION_AUTHORITY_FEED,
     taskCreationQuotas: surfaceRevision >= SURFACE_REVISION_TASK_QUOTAS,
+    feeQualifiedRatings:
+      surfaceRevision >= SURFACE_REVISION_FEE_QUALIFIED_RATINGS,
   };
 }
 

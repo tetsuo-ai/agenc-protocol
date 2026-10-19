@@ -21195,6 +21195,11 @@ export type AgencCoordination = {
       "code": 6413,
       "name": "invalidTaskQuotaAccount",
       "msg": "Task quota account is not the canonical writable wallet quota"
+    },
+    {
+      "code": 6414,
+      "name": "ratingFeeNotQualified",
+      "msg": "Rating requires a recorded SOL protocol fee of at least 100000 lamports"
     }
   ],
   "types": [
@@ -26461,7 +26466,8 @@ export type AgencCoordination = {
             "docs": [
               "Purchase metadata carved from the existing reserved tail:",
               "`_reserved[0]` snapshots the purchased `SkillRegistration::version`;",
-              "bytes `[1..4]` remain reserved and must stay zero."
+              "`_reserved[1]` records a qualifying SOL protocol fee (canonical boolean);",
+              "bytes `[2..4]` remain reserved and must stay zero."
             ],
             "type": {
               "array": [
@@ -28590,7 +28596,9 @@ export type AgencCoordination = {
               "having observed the intermediate state.",
               "* `_reserved[11]` = `peer_settlement_pending` (0 = no deferred peers,",
               "1 = peer claims are reserved for settle_dispute_claim).",
-              "Bytes `[12..16]` MUST stay zeroed (validate_reserved_fields)."
+              "* `_reserved[12]` = `rating_fee_qualified` (canonical boolean), recorded",
+              "only by successful SOL completion with the minimum protocol fee.",
+              "Bytes `[13..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [

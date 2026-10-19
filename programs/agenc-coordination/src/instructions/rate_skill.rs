@@ -93,6 +93,10 @@ pub fn handler(ctx: Context<RateSkill>, rating: u8, review_hash: Option<[u8; 32]
         ctx.accounts.purchase_record.price_paid > 0,
         CoordinationError::SkillPriceBelowMinimum
     );
+    require!(
+        ctx.accounts.purchase_record.rating_fee_qualified(),
+        CoordinationError::RatingFeeNotQualified
+    );
 
     let clock = Clock::get()?;
 

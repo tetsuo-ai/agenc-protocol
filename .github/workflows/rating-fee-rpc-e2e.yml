@@ -1,0 +1,75 @@
+name: Rating Fee RPC E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rating-fee-rpc-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AGAVE_VERSION: v4.1.0
+  AGAVE_INSTALL_INIT_SHA256: 47364bcbe524d8e5cb33eb64ed448d3d4ea8a8cc4d1073e04e04ef9e4c5abacb
+
+jobs:
+  rating-fee-rpc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.85.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            programs/agenc-coordination/target
+          key: rating-fee-rpc-e2e-sbf-${{ runner.os }}-${{ hashFiles('programs/agenc-coordination/Cargo.lock', 'programs/agenc-coordination/Cargo.toml') }}
+      - name: Install checksum-pinned Agave tools
+        run: |
+          curl -sSfL --retry 3 "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Install pinned npm and dependencies
+        run: |
+          npm install --global npm@11.18.0
+          npm ci
+          npm ci --prefix tests-integration
+      - name: Build production-feature program and SDK
+        run: |
+          cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+          npm run build --workspace=@tetsuo-ai/marketplace-sdk
+      - name: Start disposable validator with production timing constants
+        run: node scripts/localnet-up.mjs --dev-ready
+      - name: Execute SDK transactions through RPC and verify recorded outcomes
+        working-directory: packages/sdk-ts
+        env:
+          AGENC_RPC_E2E: "1"
+        run: npx vitest run tests-e2e/fee-qualified-ratings.rpc.test.ts
+      - name: Stop owned validator
+        if: always()
+        run: node scripts/localnet-down.mjs
+      - name: Preserve transaction and program-hash evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rating-fee-rpc-evidence
+          path: .localnet/evidence/*.json
+          include-hidden-files: true
+          if-no-files-found: warn

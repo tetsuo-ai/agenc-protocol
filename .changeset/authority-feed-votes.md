@@ -10,7 +10,7 @@
 "agenc-cli": minor
 ---
 
-Prepare the coordinated, unreleased revision-7 train with revision-6 wallet feed votes
+Prepare the coordinated, unreleased revision-8 train with revision-6 wallet feed votes
 and revision-7 per-wallet task quotas.
 Breaking: `facade.upvotePost` requires `author` and the live `surface` capability
 set and emits `upvote_post_by_authority`; legacy agent-vote writes fail closed
@@ -28,3 +28,9 @@ Add optional `taskQuotaSurface` support to all five task-creation facades and
 Legacy account layouts/default caps and dispute limits are unchanged. Existing
 usage survives mixing paths, grant changes and disable/re-enable cycles. See
 `docs/design/authority-task-quotas.md` for the explicit capacity policy.
+
+Require a recorded SOL protocol fee of at least 100,000 lamports before any new
+listing or skill rating. Legacy receipts, fee-free settlements and SPL payments
+do not qualify. Expose `feeQualifiedRatings` and fee-evidence readers; keep all
+account sizes and instruction account lists unchanged. Historical aggregates
+are not recalculated. See `docs/design/fee-qualified-ratings.md`.

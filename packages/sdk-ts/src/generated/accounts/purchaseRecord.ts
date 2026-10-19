@@ -64,7 +64,8 @@ export type PurchaseRecord = {
   /**
    * Purchase metadata carved from the existing reserved tail:
    * `_reserved[0]` snapshots the purchased `SkillRegistration::version`;
-   * bytes `[1..4]` remain reserved and must stay zero.
+   * `_reserved[1]` records a qualifying SOL protocol fee (canonical boolean);
+   * bytes `[2..4]` remain reserved and must stay zero.
    */
   reserved: ReadonlyUint8Array;
 };
@@ -83,7 +84,8 @@ export type PurchaseRecordArgs = {
   /**
    * Purchase metadata carved from the existing reserved tail:
    * `_reserved[0]` snapshots the purchased `SkillRegistration::version`;
-   * bytes `[1..4]` remain reserved and must stay zero.
+   * `_reserved[1]` records a qualifying SOL protocol fee (canonical boolean);
+   * bytes `[2..4]` remain reserved and must stay zero.
    */
   reserved: ReadonlyUint8Array;
 };

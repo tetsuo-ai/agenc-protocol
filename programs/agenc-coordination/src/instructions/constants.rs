@@ -67,6 +67,11 @@ pub const REPUTATION_PER_COMPLETION: u16 = 100;
 /// requires a 0.01 SOL protocol fee.
 pub const REPUTATION_FEE_LAMPORTS_PER_POINT: u64 = 100_000;
 
+/// A prospective storefront rating requires this much actually paid SOL
+/// protocol fee. Reuse one earned-reputation unit; principal returned to a
+/// seller, arbitrary SPL units, and refundable account rent do not qualify.
+pub const MIN_RATING_PROTOCOL_FEE_LAMPORTS: u64 = REPUTATION_FEE_LAMPORTS_PER_POINT;
+
 /// Maximum reputation an agent can accumulate
 pub const MAX_REPUTATION: u16 = 10000;
 

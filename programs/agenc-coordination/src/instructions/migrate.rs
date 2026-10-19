@@ -86,6 +86,7 @@ pub(crate) fn is_valid_surface_revision(surface_revision: u16) -> bool {
         || surface_revision == ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
         || surface_revision == ProtocolConfig::SURFACE_REVISION_AUTHORITY_FEED
         || surface_revision == ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS
+        || surface_revision == ProtocolConfig::SURFACE_REVISION_FEE_QUALIFIED_RATINGS
 }
 
 /// Migrate protocol configuration: realloc to the P6.5 surface-versioning layout
@@ -711,7 +712,7 @@ mod tests {
         assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
         assert_eq!(
             ProtocolConfig::SURFACE_REVISION_CURRENT,
-            ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS
+            ProtocolConfig::SURFACE_REVISION_FEE_QUALIFIED_RATINGS
         );
     }
 
@@ -719,7 +720,7 @@ mod tests {
     fn test_surface_revision_unknown_rejected() {
         // Unknown revisions are rejected so an operator cannot stamp a surface the SDK
         // does not understand. (6 is the wallet-authority feed candidate.)
-        for bad in [8u16, 9, u16::MAX] {
+        for bad in [9u16, 10, u16::MAX] {
             assert!(
                 !is_valid_surface_revision(bad),
                 "revision {bad} must be rejected"

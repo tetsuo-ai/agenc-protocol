@@ -28,12 +28,77 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
 import {
-  enc, arr, pda, id32,
+  enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld,
+  freshWorld, setProtocolFeeBps,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, SystemProgram, FailedTransactionMetadata,
 } from "./harness.mjs";
+
+for (const [price, expectedFee, eligible] of [
+  [1_001, 10, false],
+  [9_999_900, 99_999, false],
+  [10_000_000, 100_000, true],
+]) {
+  test(`#276: cross-wallet completed hire price=${price} requires actual fee floor`, async () => {
+    const w = await freshWorld({ moderationEnabled: true, price });
+    const h = await hireToCompleted(w);
+    const treasuryBefore = w.svm.getBalance(w.admin.publicKey);
+    await h.complete();
+    assert.equal(w.svm.getBalance(w.admin.publicKey) - treasuryBefore, BigInt(expectedFee));
+    const task = decode(w.svm, "Task", h.task);
+    assert.equal(task._reserved[12], Number(eligible));
+    const before = w.svm.getAccount(h.listing);
+    const beforeBuyer = w.svm.getBalance(w.buyer.publicKey);
+    const { ix, hireRating } = await rateHireIx(w, {
+      ...h, signer: w.buyer, score: 5,
+    });
+    const result = send(w.svm, ix, [w.buyer]);
+    if (eligible) {
+      expectOk(result, "fee-qualified rating");
+      const listing = decode(w.svm, "ServiceListing", h.listing);
+      assert.equal(listing.rating_count, 1);
+      assert.equal(listing.total_rating.toString(), "5");
+    } else {
+      expectFail(result, "RatingFeeNotQualified", "cheap self-dealing cycle");
+      assert.deepEqual(w.svm.getAccount(h.listing), before);
+      assert.ok(isClosed(w.svm, hireRating));
+      assert.equal(w.svm.getBalance(w.buyer.publicKey), beforeBuyer - 5_000n);
+    }
+  });
+}
+
+test("#276: expensive legacy and malformed completed tasks cannot create ratings", async () => {
+  for (const reserved of [[12, 0], [12, 2], [13, 1]]) {
+    const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
+    const h = await hireToCompleted(w);
+    await h.complete();
+    // Explicit historical/corruption fixture; all lifecycle transitions above
+    // execute the compiled program. No mutable price can substitute for proof.
+    const account = w.svm.getAccount(h.task);
+    const task = decode(w.svm, "Task", h.task);
+    task._reserved[reserved[0]] = reserved[1];
+    const data = Buffer.alloc(account.data.length);
+    (await coder.accounts.encode("Task", task)).copy(data);
+    w.svm.setAccount(h.task, { ...account, data });
+    const { ix, hireRating } = await rateHireIx(w, { ...h, signer: w.buyer, score: 5 });
+    expectFail(send(w.svm, ix, [w.buyer]), "RatingFeeNotQualified");
+    assert.ok(isClosed(w.svm, hireRating));
+    assert.equal(decode(w.svm, "ServiceListing", h.listing).rating_count, 0);
+  }
+});
+
+test("#276: a completed high-price hire under a zero-fee policy is not ratable", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 100_000_000 });
+  await setProtocolFeeBps(w.svm, 0);
+  const h = await hireToCompleted(w);
+  const before = w.svm.getBalance(w.admin.publicKey);
+  await h.complete();
+  assert.equal(w.svm.getBalance(w.admin.publicKey), before);
+  assert.equal(decode(w.svm, "Task", h.task)._reserved[12], 0);
+  const { ix } = await rateHireIx(w, { ...h, signer: w.buyer, score: 5 });
+  expectFail(send(w.svm, ix, [w.buyer]), "RatingFeeNotQualified");
+});
 
 // ---------------------------------------------------------------------------
 // Local helper: drive a listing hire all the way to a terminal Completed task.
@@ -124,7 +189,7 @@ async function rateHireIx(w, { task, listing, hireRecord, signer, score, reviewH
 // Positive: the buyer rates a completed hire; listing aggregate + record update.
 // ---------------------------------------------------------------------------
 test("rate_hire: buyer rates a completed hire -> listing aggregate + HireRating record", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
+  const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
   const h = await hireToCompleted(w);
   await h.complete();
 
@@ -166,7 +231,7 @@ test("rate_hire: buyer rates a completed hire -> listing aggregate + HireRating 
 // Negative: a non-buyer signer cannot rate (RatingNotBuyer guard).
 // ---------------------------------------------------------------------------
 test("rate_hire: a non-buyer signer is rejected (RatingNotBuyer)", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
+  const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
   const h = await hireToCompleted(w);
   await h.complete();
 
@@ -186,7 +251,7 @@ test("rate_hire: a non-buyer signer is rejected (RatingNotBuyer)", async () => {
 // Negative: double-rating the same task fails (init-once ["hire_rating", task]).
 // ---------------------------------------------------------------------------
 test("rate_hire: a second rating on the same task is rejected (one rating per hire)", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
+  const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
   const h = await hireToCompleted(w);
   await h.complete();
 
@@ -216,7 +281,7 @@ test("rate_hire: a second rating on the same task is rejected (one rating per hi
 // Negative: a non-terminal (still InProgress) task cannot be rated.
 // ---------------------------------------------------------------------------
 test("rate_hire: a non-completed task is rejected (TaskNotCompletedForRating)", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
+  const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
   // hireToCompleted stops just before complete(): the task is claimed (InProgress).
   const h = await hireToCompleted(w);
 
@@ -233,7 +298,7 @@ test("rate_hire: a non-completed task is rejected (TaskNotCompletedForRating)", 
 // Negative: score out of [1,5] is rejected (InvalidRatingScore) on both edges.
 // ---------------------------------------------------------------------------
 test("rate_hire: score 0 and score 6 are rejected (InvalidRatingScore)", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
+  const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
   const h = await hireToCompleted(w);
   await h.complete();
 

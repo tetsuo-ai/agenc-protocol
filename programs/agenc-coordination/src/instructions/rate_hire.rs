@@ -149,6 +149,13 @@ pub fn handler(
     // (2) Terminal Completed only.
     validate_task_completed(task.status)?;
 
+    // A completed self-dealing cycle must have paid the actual SOL fee floor.
+    // Legacy records and fee-free dispute payouts carry no such proof.
+    require!(
+        task.rating_fee_qualified(),
+        CoordinationError::RatingFeeNotQualified
+    );
+
     let clock = Clock::get()?;
     let task_key = task.key();
 

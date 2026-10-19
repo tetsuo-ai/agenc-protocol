@@ -16,14 +16,15 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
+const require = createRequire(
+  path.join(ROOT, "tests-integration", "package.json"),
+);
 const { Connection, PublicKey } = require("@solana/web3.js");
 
 export const PROGRAM_ID = new PublicKey(
   "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
 );
-export const MAINNET_GENESIS =
-  "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+export const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 export const SKILL_REGISTRATION_SIZE = 284;
 export const PURCHASE_RECORD_SIZE = 93;
 export const SKILL_RATING_SIZE = 121;
@@ -36,10 +37,7 @@ const DISCRIMINATORS = Object.freeze({
 const ZERO_PUBKEY = PublicKey.default;
 
 function discriminator(name) {
-  return createHash("sha256")
-    .update(`account:${name}`)
-    .digest()
-    .subarray(0, 8);
+  return createHash("sha256").update(`account:${name}`).digest().subarray(0, 8);
 }
 
 function assertExactAccount(data, expectedSize, expectedDiscriminator, name) {
@@ -91,16 +89,9 @@ export function decodeSkillRegistration(dataLike) {
   const skillId = Buffer.from(data.subarray(40, 72));
   assertNonzeroBytes(skillId, "SkillRegistration.skill_id");
   assertNonzeroBytes(data.subarray(72, 104), "SkillRegistration.name");
-  assertNonzeroBytes(
-    data.subarray(104, 136),
-    "SkillRegistration.content_hash",
-  );
+  assertNonzeroBytes(data.subarray(104, 136), "SkillRegistration.content_hash");
   const price = data.readBigUInt64LE(136);
-  const priceMint = readOptionPubkey(
-    data,
-    144,
-    "SkillRegistration.price_mint",
-  );
+  const priceMint = readOptionPubkey(data, 144, "SkillRegistration.price_mint");
   let offset = priceMint.offset + 64;
   const totalRating = data.readBigUInt64LE(offset);
   offset += 8;
@@ -114,7 +105,9 @@ export function decodeSkillRegistration(dataLike) {
   offset += 1;
   if (version === 0) throw new Error("SkillRegistration.version: zero");
   if (isActiveByte > 1) {
-    throw new Error(`SkillRegistration.is_active: invalid bool ${isActiveByte}`);
+    throw new Error(
+      `SkillRegistration.is_active: invalid bool ${isActiveByte}`,
+    );
   }
   const createdAt = data.readBigInt64LE(offset);
   offset += 8;
@@ -132,7 +125,10 @@ export function decodeSkillRegistration(dataLike) {
     "SkillRegistration._reserved",
   );
   offset += 8;
-  assertZeroBytes(data.subarray(offset), "SkillRegistration allocation padding");
+  assertZeroBytes(
+    data.subarray(offset),
+    "SkillRegistration allocation padding",
+  );
   return {
     author,
     skillId,
@@ -169,8 +165,19 @@ export function decodePurchaseRecord(dataLike) {
   }
   const bump = data[88];
   const contentVersion = data[89];
-  assertZeroBytes(data.subarray(90, 93), "PurchaseRecord._reserved[1..4]");
-  return { skill, buyer, pricePaid, timestamp, bump, contentVersion };
+  const ratingFeeQualified = data[90];
+  if (ratingFeeQualified > 1)
+    throw new Error("PurchaseRecord: invalid rating fee flag");
+  assertZeroBytes(data.subarray(91, 93), "PurchaseRecord._reserved[2..4]");
+  return {
+    skill,
+    buyer,
+    pricePaid,
+    timestamp,
+    bump,
+    contentVersion,
+    ratingFeeQualified: ratingFeeQualified === 1,
+  };
 }
 
 export function decodeSkillRating(dataLike) {
@@ -221,7 +228,8 @@ export function decodeSkillRating(dataLike) {
 function readOptionHash(data, offset) {
   const tag = data[offset];
   if (tag === 0) return { value: null, offset: offset + 1 };
-  if (tag !== 1) throw new Error(`SkillRating.review_hash: invalid Option tag ${tag}`);
+  if (tag !== 1)
+    throw new Error(`SkillRating.review_hash: invalid Option tag ${tag}`);
   return {
     value: Buffer.from(data.subarray(offset + 1, offset + 33)),
     offset: offset + 33,
@@ -348,10 +356,7 @@ export async function scanSkillRatingCutover(connection) {
 }
 
 export function redactRpcText(value) {
-  return String(value).replace(
-    /(?:https?|wss?):\/\/\S+/giu,
-    "<redacted-rpc>",
-  );
+  return String(value).replace(/(?:https?|wss?):\/\/\S+/giu, "<redacted-rpc>");
 }
 
 async function main() {
