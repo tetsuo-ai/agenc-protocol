@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { LOADER } from "./watchdog-core.mjs";
+import { loaderRentDataLengths } from "./mainnet-upgrade.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(
@@ -192,16 +193,25 @@ test(
     evidence.baseline = baseline;
     save();
     let rejectPager = false;
+    let rejectedId = null;
+    const rejectedPayloadSha256 = sha(
+      Buffer.concat([Buffer.from([1, 3, 3, 8]), Buffer.alloc(60)]),
+    );
     const server = createServer(async (req, res) => {
       let body = "";
       for await (const chunk of req) body += chunk;
       const event = JSON.parse(body);
       assert.equal(req.headers["idempotency-key"], event.id);
-      if (!rejectPager) {
+      const rejectThisAlert =
+        event.type === "buffer-changed" &&
+        event.address === buffer.publicKey.toBase58() &&
+        event.current.payloadSha256 === rejectedPayloadSha256;
+      if (rejectThisAlert) rejectedId = event.id;
+      if (!rejectPager && !rejectThisAlert) {
         evidence.receipts.push({ receivedAt: new Date().toISOString(), event });
         save();
       }
-      res.writeHead(rejectPager ? 503 : 204);
+      res.writeHead(rejectPager ? 503 : rejectThisAlert ? 400 : 204);
       res.end();
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -326,6 +336,49 @@ test(
         () => event("vault-changed", (e) => e.deltaLamports === "200000"),
         "vault top-up was missed",
       );
+      suffix[15] = 8;
+      await send("write buffer payload whose alert the receiver rejects", [
+        loaderIx(
+          1,
+          [
+            { pubkey: buffer.publicKey, isSigner: false, isWritable: true },
+            { pubkey: payer.publicKey, isSigner: true, isWritable: false },
+          ],
+          suffix,
+        ),
+      ]);
+      await until(
+        () => rejectedId !== null,
+        "receiver did not reject the selected alert",
+      );
+      evidence.rejectedAlertId = rejectedId;
+      // The following real authority/upgrade alerts must pass the rejected item.
+      const beforeDonation = evidence.receipts.filter(
+        (r) => r.event.type === "program-data-changed",
+      ).length;
+      const donation = await send(
+        "donate one lamport to ProgramData without changing program semantics",
+        [
+          SystemProgram.transfer({
+            fromPubkey: payer.publicKey,
+            toPubkey: programData,
+            lamports: 1,
+          }),
+        ],
+      );
+      await until(() => {
+        const health = JSON.parse(
+          readFileSync(join(stateDirectory, "health.json")),
+        );
+        return health.highestSlot >= donation.slot;
+      }, "monitor did not reconcile the donation slot");
+      await delay(1000);
+      assert.equal(
+        evidence.receipts.filter((r) => r.event.type === "program-data-changed")
+          .length,
+        beforeDonation,
+        "lamport-only donation must not page as an upgrade",
+      );
       await send("rotate local upgrade authority", [
         setAuthority(payer, rotated),
       ]);
@@ -388,6 +441,61 @@ test(
       );
       const deployment = JSON.parse(result.stdout);
       evidence.deployment = deployment;
+      let before, oldest;
+      for (;;) {
+        const page = await connection.getSignaturesForAddress(
+          deployBuffer.publicKey,
+          { limit: 1000, ...(before ? { before } : {}) },
+          "confirmed",
+        );
+        if (!page.length) break;
+        oldest = page.at(-1);
+        if (page.length < 1000) break;
+        before = oldest.signature;
+      }
+      assert.ok(
+        oldest,
+        "CLI buffer creation must have confirmed transaction evidence",
+      );
+      const created = await connection.getParsedTransaction(oldest.signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      assert.equal(created.meta.err, null);
+      const creation = created.transaction.message.instructions.find(
+        (ix) =>
+          ix.program === "system" &&
+          ix.parsed?.type === "createAccount" &&
+          ix.parsed.info.newAccount === deployBuffer.publicKey.toBase58(),
+      );
+      assert.ok(
+        creation,
+        "first CLI buffer transaction must allocate the buffer",
+      );
+      const lengths = loaderRentDataLengths(
+        readFileSync(
+          join(
+            root,
+            "programs/agenc-coordination/target/deploy/agenc_coordination.so",
+          ),
+        ).length,
+        baseline.accounts.find((a) => a.kind === "program-data").view
+          .allocatedPayloadBytes,
+      );
+      const expectedFunding =
+        await connection.getMinimumBalanceForRentExemption(
+          lengths.cliBufferFunding,
+        );
+      assert.equal(creation.parsed.info.space, lengths.bufferAllocation);
+      assert.equal(creation.parsed.info.lamports, expectedFunding);
+      evidence.cliBufferFunding = {
+        signature: oldest.signature,
+        slot: created.slot,
+        lengths,
+        observedAllocationBytes: creation.parsed.info.space,
+        observedLamports: creation.parsed.info.lamports,
+        expectedLamports: expectedFunding,
+      };
       const original = baseline.accounts.find(
         (a) => a.kind === "program-data",
       ).view;
@@ -441,6 +549,9 @@ test(
         authorityRotationAndRestoration: true,
         vaultTopUpAndOutflow: true,
         alertRetryAfterProcessRestart: true,
+        rejectedAlertDoesNotBlockLaterAuthorityAndUpgradeAlerts: true,
+        programDataDonationDoesNotPage: true,
+        observedCliBufferFundingMatchesUpgradeModel: true,
         httpFallback: true,
         squadsScope:
           "parser/namespace unit tests only; no local Squads deployment or operator ceremony claimed",
