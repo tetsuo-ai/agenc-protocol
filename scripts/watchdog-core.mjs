@@ -277,11 +277,12 @@ export class AlertOutbox {
       .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
       .sort();
   }
-  async deliver() {
+  async deliver({ signal } = {}) {
     if (this.delivering) return;
     this.delivering = true;
     try {
       for (const name of this.pending().slice(0, 20)) {
+        if (signal?.aborted) break;
         const path = join(this.directory, name);
         const body = readFileSync(path, "utf8");
         const response = await fetch(this.webhook, {
@@ -293,7 +294,9 @@ export class AlertOutbox {
             ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
           },
           body,
-          signal: AbortSignal.timeout(5000),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+            : AbortSignal.timeout(5000),
         });
         await response.body?.cancel();
         if (!response.ok) throw new Error(`HTTP ${response.status}`);

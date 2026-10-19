@@ -113,6 +113,7 @@ daemon never pauses, signs, advances nonces, rotates authorities or deploys.
 
 ```sh
 node --test scripts/upgrade-watchdog.test.mjs
+node scripts/localnet-up.mjs --dev-ready --legacy-loader-drill
 AGENC_RPC_E2E=1 node --test scripts/upgrade-watchdog.rpc.test.mjs
 ```
 
@@ -125,3 +126,15 @@ HTTP-only phase proves reconciliation. JSON evidence includes program/source
 hashes, transaction signatures/metadata and received alerts. The test does not
 deploy Squads: its namespace/decoder cases are covered by unit fixtures, and a
 full Squads proposal and independent pager drill remains an operational gate.
+
+The pinned program currently emits sBPFv0. Agave 4.1.0 local validators activate
+SIMD-0500 by default, which rejects new v0 deployments while existing programs
+continue to execute. This drill explicitly deactivates only that feature in
+fresh disposable genesis and records its address in the evidence. It does not
+change compiled program bytes, shorten timers, or alter any live cluster. The
+ordinary protocol RPC suites run first with default validator features; CI then
+restarts a separate genesis for the loader drill. This is not proof of v3
+deployment compatibility. Rebuilding on a supported v3 toolchain is a separate
+release prerequisite before SIMD-0500 activates on a target cluster; check that
+cluster's actual feature account during release review. See the official
+[sBPFv3 transition](https://solana.com/upgrades/sbpfv3-programs).

@@ -58,16 +58,20 @@ jobs:
           npm run build --workspace=@tetsuo-ai/marketplace-sdk
       - name: Start disposable validator with explicit short dispute windows
         run: node scripts/localnet-up.mjs --dev-ready --short-disputes
-      - name: Rehearse upgrade watchdog delivery on owned local RPC
-        env:
-          AGENC_RPC_E2E: "1"
-        run: node --test scripts/upgrade-watchdog.rpc.test.mjs
       - name: Execute SDK transactions through RPC and verify recorded outcomes
         working-directory: packages/sdk-ts
         env:
           AGENC_RPC_E2E: "1"
         # These suites change shared authority config, so run files sequentially.
         run: npx vitest run tests-e2e/settlement-pending.rpc.test.ts tests-e2e/moderation-disabled.rpc.test.ts tests-e2e/claim-expiry.rpc.test.ts tests-e2e/hardening-278.rpc.test.ts --no-file-parallelism
+      - name: Restart owned validator for explicit legacy-SBF upgrade drill
+        run: |
+          node scripts/localnet-down.mjs
+          node scripts/localnet-up.mjs --dev-ready --legacy-loader-drill
+      - name: Rehearse upgrade watchdog delivery on owned local RPC
+        env:
+          AGENC_RPC_E2E: "1"
+        run: node --test scripts/upgrade-watchdog.rpc.test.mjs
       - name: Stop owned validator
         if: always()
         run: node scripts/localnet-down.mjs
