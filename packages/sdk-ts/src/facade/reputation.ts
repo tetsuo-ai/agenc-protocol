@@ -13,7 +13,7 @@ import {
   getRateSkillInstructionAsync,
   getPurchaseSkillInstructionAsync,
   getPostToFeedInstructionAsync,
-  getUpvotePostInstructionAsync,
+  getUpvotePostByAuthorityInstructionAsync,
   findReputationStakePda,
   findDelegationPda,
   findProtocolConfigPda,
@@ -23,6 +23,7 @@ import {
   findPurchaseRecordPda,
   findPostPda,
   findVotePda,
+  findAuthorityVotePda,
   type StakeReputationAsyncInput,
   type WithdrawReputationStakeAsyncInput,
   type DelegateReputationAsyncInput,
@@ -31,7 +32,7 @@ import {
   type RateSkillAsyncInput,
   type PurchaseSkillAsyncInput,
   type PostToFeedAsyncInput,
-  type UpvotePostAsyncInput,
+  type UpvotePostByAuthorityAsyncInput,
 } from "../generated/index.js";
 import {
   AccountRole,
@@ -51,6 +52,7 @@ import {
   snapshotOptionOrNullable,
   snapshotOptionalAddress,
 } from "../values/options.js";
+import { assertCapability, type CapabilitySet } from "./surface.js";
 
 // Re-export the PDA helpers used by this domain so callers can derive accounts
 // without reaching into generated/.
@@ -63,6 +65,7 @@ export {
   findPurchaseRecordPda,
   findPostPda,
   findVotePda,
+  findAuthorityVotePda,
 };
 
 // ---------------------------------------------------------------------------
@@ -375,9 +378,9 @@ export async function postToFeed(
   });
 }
 
-/** Upvote a post; the vote PDA (from post + voter) and protocolConfig PDA are auto-derived. */
-export async function upvotePost(input: UpvotePostAsyncInput) {
-  return getUpvotePostInstructionAsync(
-    canonicalizeFacadeInputSignerFields(input, ["authority"]),
-  );
+/** Cast one prospective wallet vote. Pass the post's author agent and live capabilities. */
+export async function upvotePost(input: UpvotePostByAuthorityAsyncInput & { surface: CapabilitySet }) {
+  const { surface, ...instructionInput } = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  assertCapability(surface, "feedAuthorityVotes");
+  return getUpvotePostByAuthorityInstructionAsync(instructionInput);
 }

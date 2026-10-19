@@ -1,8 +1,10 @@
-//! Upvote a feed post (one vote per agent per post, enforced by PDA uniqueness)
+//! Wallet-authority feed voting and a fail-closed historical instruction.
 
 use crate::errors::CoordinationError;
-use crate::events::PostUpvoted;
-use crate::state::{AgentRegistration, AgentStatus, FeedPost, FeedVote, ProtocolConfig};
+use crate::events::PostUpvotedByAuthority;
+use crate::state::{
+    AgentRegistration, AgentStatus, FeedAuthorityVote, FeedPost, FeedVote, ProtocolConfig,
+};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
@@ -49,9 +51,67 @@ pub struct UpvotePost<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<UpvotePost>) -> Result<()> {
+pub fn handler(_ctx: Context<UpvotePost>) -> Result<()> {
+    // Keep the old account family/discriminator decodable, but never mint another
+    // per-agent vote. Anchor rolls back any provisional legacy init on this error.
+    err!(CoordinationError::FeedAgentVotingRetired)
+}
+
+#[derive(Accounts)]
+pub struct UpvotePostByAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [b"post", post.author.as_ref(), post.nonce.as_ref()],
+        bump = post.bump,
+        constraint = post._reserved == [0u8; 4] @ CoordinationError::CorruptedData
+    )]
+    pub post: Account<'info, FeedPost>,
+
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = FeedAuthorityVote::SIZE,
+        seeds = [b"authority_upvote", post.key().as_ref(), authority.key().as_ref()],
+        bump
+    )]
+    pub authority_vote: Account<'info, FeedAuthorityVote>,
+
+    #[account(
+        seeds = [b"agent", voter.agent_id.as_ref()],
+        bump = voter.bump,
+        has_one = authority @ CoordinationError::UnauthorizedAgent
+    )]
+    pub voter: Account<'info, AgentRegistration>,
+
+    #[account(
+        seeds = [b"agent", author.agent_id.as_ref()],
+        bump = author.bump,
+        constraint = author.key() == post.author @ CoordinationError::InvalidInput
+    )]
+    pub author: Account<'info, AgentRegistration>,
+
+    #[account(seeds = [b"protocol"], bump = protocol_config.bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn handler_by_authority(ctx: Context<UpvotePostByAuthority>) -> Result<()> {
     let config = &ctx.accounts.protocol_config;
     check_version_compatible(config)?;
+    require!(
+        config.surface_revision >= ProtocolConfig::SURFACE_REVISION_AUTHORITY_FEED,
+        CoordinationError::FeedAuthorityVotingUnavailable
+    );
+    require!(
+        ctx.accounts.authority_vote.post == Pubkey::default(),
+        CoordinationError::FeedAuthorityAlreadyVoted
+    );
+    require!(
+        ctx.accounts.author.authority != ctx.accounts.authority.key(),
+        CoordinationError::FeedSelfUpvote
+    );
 
     let voter = &ctx.accounts.voter;
     require!(
@@ -63,12 +123,6 @@ pub fn handler(ctx: Context<UpvotePost>) -> Result<()> {
         CoordinationError::InsufficientReputation
     );
 
-    let post = &ctx.accounts.post;
-    require!(
-        voter.key() != post.author,
-        CoordinationError::FeedSelfUpvote
-    );
-
     let clock = Clock::get()?;
     let account_age_secs = clock.unix_timestamp.saturating_sub(voter.registered_at);
     require!(
@@ -78,23 +132,25 @@ pub fn handler(ctx: Context<UpvotePost>) -> Result<()> {
 
     // Increment upvote count with checked arithmetic
     let post = &mut ctx.accounts.post;
-    post.upvote_count = post
-        .upvote_count
+    post.wallet_upvote_count = post
+        .wallet_upvote_count
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
     // Record vote
-    let vote = &mut ctx.accounts.vote;
+    let vote = &mut ctx.accounts.authority_vote;
     vote.post = post.key();
+    vote.authority = ctx.accounts.authority.key();
     vote.voter = ctx.accounts.voter.key();
     vote.timestamp = clock.unix_timestamp;
-    vote.bump = ctx.bumps.vote;
+    vote.bump = ctx.bumps.authority_vote;
     vote._reserved = [0u8; 4];
 
-    emit!(PostUpvoted {
+    emit!(PostUpvotedByAuthority {
         post: post.key(),
+        authority: ctx.accounts.authority.key(),
         voter: ctx.accounts.voter.key(),
-        new_upvote_count: post.upvote_count,
+        wallet_upvote_count: post.wallet_upvote_count,
         timestamp: clock.unix_timestamp,
     });
 

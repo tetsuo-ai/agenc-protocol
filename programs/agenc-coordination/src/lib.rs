@@ -1560,11 +1560,16 @@ pub mod agenc_coordination {
         instructions::post_to_feed::handler(ctx, content_hash, nonce, topic, parent_post)
     }
 
-    /// Upvote a feed post.
-    /// One vote per agent per post, enforced by PDA uniqueness.
+    /// Retired per-agent vote instruction; fails closed after the revision-6 cutover.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn upvote_post(ctx: Context<UpvotePost>) -> Result<()> {
         instructions::upvote_post::handler(ctx)
+    }
+
+    /// Cast one vote per wallet authority, excluding every agent of the author's wallet.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn upvote_post_by_authority(ctx: Context<UpvotePostByAuthority>) -> Result<()> {
+        instructions::upvote_post::handler_by_authority(ctx)
     }
 
     /// Stake SOL on agent reputation.

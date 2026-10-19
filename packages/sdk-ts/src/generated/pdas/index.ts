@@ -11,6 +11,7 @@ export * from "./agent";
 export * from "./agentStats";
 export * from "./agentVerification";
 export * from "./authorityRateLimit";
+export * from "./authorityVote";
 export * from "./bid";
 export * from "./bidBook";
 export * from "./bidderMarketState";

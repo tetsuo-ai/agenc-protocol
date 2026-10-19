@@ -546,9 +546,12 @@ impl ProtocolConfig {
     /// clients distinguish this wire contract from the deployed batch-4 binary.
     pub const SURFACE_REVISION_AUDIT_HARDENING: u16 = 5;
 
+    /// Wallet-authority feed voting with a separate prospective wallet count.
+    pub const SURFACE_REVISION_AUTHORITY_FEED: u16 = 6;
+
     /// Highest surface revision implemented by this binary. Deployment tooling
     /// stamps this value only after the matching artifact has been verified live.
-    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_AUDIT_HARDENING;
+    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_AUTHORITY_FEED;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -2993,14 +2996,16 @@ pub struct FeedPost {
     pub parent_post: Option<Pubkey>,
     /// Unique nonce (client-generated UUID)
     pub nonce: [u8; 32],
-    /// Number of upvotes
+    /// Historical per-agent upvotes. Frozen by the revision-6 cutover; not the wallet ranking.
     pub upvote_count: u32,
     /// Creation timestamp
     pub created_at: i64,
     /// Bump seed
     pub bump: u8,
-    /// Reserved for future use
-    pub _reserved: [u8; 8],
+    /// Revision-6 prospective wallet votes, carved from the old zeroed reserved tail.
+    pub wallet_upvote_count: u32,
+    /// Reserved for future use. Must remain zero.
+    pub _reserved: [u8; 4],
 }
 
 impl FeedPost {
@@ -3026,6 +3031,24 @@ pub struct FeedVote {
 
 impl FeedVote {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
+}
+
+/// Revision-6 vote receipt, unique per wallet authority and post.
+/// PDA seeds: ["authority_upvote", post_pda, authority]
+#[account]
+#[derive(InitSpace)]
+pub struct FeedAuthorityVote {
+    pub post: Pubkey,
+    pub authority: Pubkey,
+    /// Eligible agent through which this authority voted.
+    pub voter: Pubkey,
+    pub timestamp: i64,
+    pub bump: u8,
+    pub _reserved: [u8; 4],
+}
+
+impl FeedAuthorityVote {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
 // ============================================================================
@@ -3973,6 +3996,7 @@ mod tests {
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH4, 4);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_AUTHORITY_FEED, 6);
         const {
             assert!(
                 ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL
@@ -3986,6 +4010,10 @@ mod tests {
             assert!(
                 ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
                     > ProtocolConfig::SURFACE_REVISION_BATCH4
+            );
+            assert!(
+                ProtocolConfig::SURFACE_REVISION_AUTHORITY_FEED
+                    > ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
             );
         }
     }

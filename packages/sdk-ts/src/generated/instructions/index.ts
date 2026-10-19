@@ -104,6 +104,7 @@ export * from "./updateState";
 export * from "./updateStore";
 export * from "./updateTreasury";
 export * from "./upvotePost";
+export * from "./upvotePostByAuthority";
 export * from "./validateTaskResult";
 export * from "./voteProposal";
 export * from "./withdrawReputationStake";

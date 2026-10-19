@@ -19,6 +19,7 @@ import {
   SurfaceNotDeployedError,
   SURFACE_REVISION_FULL,
   SURFACE_REVISION_AUDIT_HARDENING,
+  SURFACE_REVISION_AUTHORITY_FEED,
   SURFACE_REVISION_CURRENT,
   SURFACE_REVISION_OFFSET,
   OLD_PROTOCOL_CONFIG_SIZE,
@@ -145,11 +146,22 @@ describe("capabilitiesForRevision (typed mapping)", () => {
 
   it("maps the audit-hardening/current revision as a monotonic full surface", () => {
     expect(SURFACE_REVISION_AUDIT_HARDENING).toBe(5);
-    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_AUDIT_HARDENING);
+    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_AUTHORITY_FEED);
     const caps = capabilitiesForRevision(SURFACE_REVISION_CURRENT);
     expect(caps.fullSurface).toBe(true);
     expect(caps.goods).toBe(true);
-    expect(caps.surfaceRevision).toBe(5);
+    expect(caps.surfaceRevision).toBe(6);
+  });
+
+  it("requires the distinct revision-6 wallet-vote capability", () => {
+    for (const revision of [0, 1, 2, 3, 4, 5, 7, 65535]) {
+      const caps = capabilitiesForRevision(revision);
+      expect(caps.feedAuthorityVotes).toBe(false);
+      expect(() => assertCapability(caps, "feedAuthorityVotes")).toThrow(
+        SurfaceNotDeployedError,
+      );
+    }
+    expect(capabilitiesForRevision(6).feedAuthorityVotes).toBe(true);
   });
 
   it("fails closed for a future revision this SDK does not understand", () => {

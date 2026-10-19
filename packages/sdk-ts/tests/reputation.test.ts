@@ -33,6 +33,9 @@ import {
   getUpvotePostInstruction,
   getUpvotePostInstructionDataDecoder,
   findProtocolConfigPda,
+  capabilitiesForRevision,
+  SURFACE_REVISION_AUTHORITY_FEED,
+  SurfaceNotDeployedError,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 import {
@@ -508,13 +511,37 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     ).toEqual(none());
   });
 
-  it("upvotePost derives the vote + protocolConfig PDAs", async () => {
+  it("upvotePost derives a wallet vote and includes the bound author", async () => {
     const authority = createNoopSigner(signerAddr);
-    const ix = await upvotePost({ post: A1, voter: A3, authority });
-    expect(ix.accounts.length).toBe(6);
+    const ix = await upvotePost({
+      post: A1,
+      voter: A3,
+      author: A2,
+      authority,
+      surface: capabilitiesForRevision(SURFACE_REVISION_AUTHORITY_FEED),
+    });
+    expect(ix.accounts.length).toBe(7);
     expect(ix.accounts[0]!.address).toBe(A1);
     expect(ix.accounts[2]!.address).toBe(A3);
-    expect(ix.accounts[5]!.address).toBe(SYSTEM_PROGRAM);
+    expect(ix.accounts[3]!.address).toBe(A2);
+    expect(ix.accounts[6]!.address).toBe(SYSTEM_PROGRAM);
+    const second = await upvotePost({
+      post: A1,
+      voter: A4,
+      author: A2,
+      authority,
+      surface: capabilitiesForRevision(SURFACE_REVISION_AUTHORITY_FEED),
+    });
+    expect(second.accounts[1]!.address).toBe(ix.accounts[1]!.address);
+    await expect(
+      upvotePost({
+        post: A1,
+        voter: A3,
+        author: A2,
+        authority,
+        surface: capabilitiesForRevision(5),
+      }),
+    ).rejects.toThrow(SurfaceNotDeployedError);
   });
 
   it("updateSkill defaults tags/isActive to null and derives protocolConfig", async () => {
