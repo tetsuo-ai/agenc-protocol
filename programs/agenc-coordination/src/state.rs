@@ -4033,6 +4033,7 @@ mod tests {
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH4, 4);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_AUTHORITY_FEED, 6);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_TASK_QUOTAS, 7);
         const {
             assert!(
                 ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL

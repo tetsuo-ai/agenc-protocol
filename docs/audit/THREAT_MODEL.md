@@ -98,6 +98,24 @@ The October source changes are release candidates until deployed. Revision-5
 build re-attestation remains tracked separately by #199; source tests do not
 establish custody separation, deployed paging, or external audit completion.
 
+## Optional task capacity (revision-7 candidate, #124)
+
+Task and dispute throttles already follow wallet authority, not individual
+agents. The optional quota adds M-of-N-approved capacity of 256–1,000 tasks per
+calendar-day window for a specific wallet. It keeps the minimum one-second
+cooldown and all dispute controls. The legacy configuration dial governs the
+default path; revoking extra capacity requires disabling that wallet's quota.
+Approving more throughput is an explicit operator policy decision.
+
+The wide counter mirrors a saturating count into the legacy account and merges
+legacy writes before each use. Omitting a quota, switching agents/entrypoints,
+or toggling a grant cannot replenish usage. The account is permanent. Existing
+work can still settle or refund after creation allowance is exhausted. Principal
+and some rent can be recovered, so escrow alone is not treated as an irreversible
+spam price. Separate wallets can still share an owner. See the
+[design and adversarial matrix](../design/authority-task-quotas.md) for boundaries
+and the distinction between actual RPC volume and fixture-based day transitions.
+
 ## Feed ranking boundary (revision-6 candidate, #275)
 
 Agent registration is permissionless and one wallet can own multiple agents.

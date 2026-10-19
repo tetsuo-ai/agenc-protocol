@@ -27,7 +27,7 @@ import {
 const OLD_CONFIG_SIZE = 349;
 const NEW_CONFIG_SIZE = 351;
 const SURFACE_REVISION_FULL = 1;
-const SURFACE_REVISION_CURRENT = 6;
+const SURFACE_REVISION_CURRENT = 7;
 
 // Build the 2-of-2 multisig signer metas the migrate/admin gate requires.
 async function arm2of2(w) {
@@ -146,7 +146,7 @@ test("update_launch_controls: permits historical revisions but cannot bypass the
   // Unknown surface revision is rejected (operator cannot stamp a surface the SDK
   // does not understand).
   w.svm.expireBlockhash();
-  expectFail(send(w.svm, await buildStamp(7), [w.admin, owner2]), "InvalidSurfaceRevision", "unknown revision rejected");
+  expectFail(send(w.svm, await buildStamp(8), [w.admin, owner2]), "InvalidSurfaceRevision", "unknown revision rejected");
   assert.equal(getSurfaceRevision(w.svm), 0, "rejected stamp left surface_revision untouched");
 
   // The current production revision is reserved for stamp_release_surface,

@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**102 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**103 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -28,6 +28,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`close_store`](#close_store)
 - [`close_task`](#close_task)
 - [`complete_task`](#complete_task)
+- [`configure_task_creation_quota`](#configure_task_creation_quota)
 - [`configure_task_moderation`](#configure_task_moderation)
 - [`configure_task_validation`](#configure_task_validation)
 - [`create_bid`](#create_bid)
@@ -521,6 +522,37 @@ For collaborative tasks, multiple completions may be needed.
 |---|---|---|
 | 1 | `proof_hash` | `[u8; 32]` |
 | 2 | `result_data` | `Option<[u8; 64]>` |
+
+## configure_task_creation_quota
+
+Update rate limiting configuration (multisig gated).
+Parameters can be tuned post-deployment without program upgrade.
+
+# Arguments
+* `task_creation_cooldown` - Seconds between task creations (0 = disabled)
+* `max_tasks_per_24h` - Maximum tasks per agent per 24h (0 = unlimited)
+* `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)
+* `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)
+* `min_stake_for_dispute` - Minimum stake required to initiate dispute
+Configure a finite per-wallet u32 task quota without resetting usage.
+
+### Accounts (5)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 2 | `task_quota` | yes |  |  | PDA ["authority_task_quota", arg:task_authority] |  |
+| 3 | `quota_authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", arg:task_authority] |  |
+| 4 | `authority` | yes | yes |  |  |  |
+| 5 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (3)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `task_authority` | `pubkey` |
+| 2 | `max_tasks_per_24h` | `u32` |
+| 3 | `enabled` | `bool` |
 
 ## configure_task_moderation
 
@@ -2466,16 +2498,6 @@ Update the protocol fee (multisig gated).
 | 1 | `protocol_fee_bps` | `u16` |
 
 ## update_rate_limits
-
-Update rate limiting configuration (multisig gated).
-Parameters can be tuned post-deployment without program upgrade.
-
-# Arguments
-* `task_creation_cooldown` - Seconds between task creations (0 = disabled)
-* `max_tasks_per_24h` - Maximum tasks per agent per 24h (0 = unlimited)
-* `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)
-* `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)
-* `min_stake_for_dispute` - Minimum stake required to initiate dispute
 
 ### Accounts (2)
 

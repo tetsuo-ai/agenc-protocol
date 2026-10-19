@@ -15,9 +15,9 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 `initialize_zk_config`, and `update_zk_image_id` exist only in the explicit
 `private-zk` development build.
 
-Candidate build breakdown: default production (`spl-token-rewards`) is **102
-instructions**, explicit `private-zk` is **105**, and `mainnet-canary` remains
-**25**. The committed candidate IDL has **44 accounts / 104 events / 411 errors**;
+Candidate build breakdown: default production (`spl-token-rewards`) is **103
+instructions**, explicit `private-zk` is **106**, and `mainnet-canary` remains
+**25**. The committed candidate IDL has **45 accounts / 106 events / 414 errors**;
 the generated reference describes this candidate. `validation-timings` only
 shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
 
@@ -29,11 +29,17 @@ legacy count is preserved separately. The [candidate design](design/authority-fe
 and [release contract](VERSIONING.md) describe compatibility and deployment gates.
 This branch is not evidence of a mainnet upgrade.
 
+The revision-7 candidate additionally exposes `configure_task_creation_quota`
+and optional per-wallet u32 task capacity on all five creation paths. The
+legacy account layouts and default cap remain unchanged; extra capacity needs
+M-of-N approval and the `taskCreationQuotas` capability. See the
+[quota design and adversarial review](design/authority-task-quotas.md).
+
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (411 variants in the candidate IDL)
+- `src/errors.rs` - program error codes (414 variants in the candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 

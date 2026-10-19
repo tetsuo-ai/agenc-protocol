@@ -116,6 +116,22 @@ test("#124: all five task entry paths share the u32 quota; omission keeps the le
   }
 });
 
+test("#124: the 256th funded creation needs an approved wide quota, carrying all 255 legacy writes", async () => {
+  const w = await world();
+  await setSurfaceRevision(w.svm, 6);
+  for (let count = 0; count < 255; count++) {
+    warpSeconds(w.svm, 1);
+    expectOk(send(w.svm, (await create(w, { extended: false })).ix, [w.buyer]), `legacy creation ${count + 1}`);
+  }
+  warpSeconds(w.svm, 1);
+  expectFail(send(w.svm, (await create(w, { extended: false })).ix, [w.buyer]), "RateLimitExceeded", "legacy ceiling");
+  await grant(w);
+  assert.equal(decode(w.svm, "AuthorityTaskQuota", quotaAddress(w.buyer.publicKey)).task_count_24h, 255);
+  await setSurfaceRevision(w.svm, 7);
+  expectOk(send(w.svm, (await create(w)).ix, [w.buyer]), "256th funded creation");
+  assert.equal(decode(w.svm, "AuthorityTaskQuota", quotaAddress(w.buyer.publicKey)).task_count_24h, 256);
+});
+
 test("#124: activating, alternating legacy writes, disabling and re-enabling never reset usage", async () => {
   const w = await world();
   expectOk(send(w.svm, (await create(w, { extended: false })).ix, [w.buyer]), "legacy first");

@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**411 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**414 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -422,3 +422,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6408 | 0x1908 | `FeedAgentVotingRetired` | Per-agent feed votes are retired; use wallet-authority voting on revision 6 |
 | 6409 | 0x1909 | `FeedAuthorityAlreadyVoted` | This wallet authority has already voted on this post |
 | 6410 | 0x190a | `FeedAuthorityVotingUnavailable` | Wallet-authority feed voting requires the revision-6 surface |
+| 6411 | 0x190b | `TaskQuotaUnavailable` | Extended task quotas require the revision-7 surface |
+| 6412 | 0x190c | `InvalidTaskQuota` | An extended task quota must be finite and between 256 and 1000 |
+| 6413 | 0x190d | `InvalidTaskQuotaAccount` | Task quota account is not the canonical writable wallet quota |
