@@ -15,7 +15,7 @@ use super::completion_helpers::{
     resolve_referrer_snapshot, validate_marketplace_payee_destinations,
 };
 use super::launch_controls::require_task_type_index_enabled;
-use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
+use super::rate_limit_helpers::check_task_creation_with_optional_quota;
 use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields,
     require_private_task_creation_disabled, validate_bid_task_mode, validate_deadline,
@@ -194,13 +194,14 @@ pub fn handler(
     let authority_rate_limit = ctx.accounts.authority_rate_limit.as_mut();
 
     // Check wallet-scoped rate limits to prevent multi-agent bypasses under one authority.
-    check_authority_task_creation_rate_limits(
+    check_task_creation_with_optional_quota(
         authority_rate_limit,
         ctx.accounts.authority.key(),
         ctx.bumps.authority_rate_limit,
         creator_agent.agent_id,
         config,
         &clock,
+        ctx.remaining_accounts,
     )?;
 
     // Initialize task-owned state before any external CPI so later logic does not

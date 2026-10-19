@@ -6,6 +6,24 @@
 use crate::state::HASH_SIZE;
 use anchor_lang::prelude::*;
 
+#[event]
+pub struct TaskCreationQuotaConfigured {
+    pub authority: Pubkey,
+    pub max_tasks_per_24h: u32,
+    pub enabled: bool,
+    pub updated_by: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct TaskCreationQuotaHit {
+    pub authority: Pubkey,
+    pub current_count: u32,
+    pub max_count: u32,
+    pub cooldown_remaining: i64,
+    pub timestamp: i64,
+}
+
 /// Dispute resolution outcome constants (fix #425)
 ///
 /// These distinguish how a dispute was resolved, enabling consumers

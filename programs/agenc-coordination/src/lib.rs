@@ -898,6 +898,21 @@ pub mod agenc_coordination {
     /// * `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)
     /// * `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)
     /// * `min_stake_for_dispute` - Minimum stake required to initiate dispute
+    /// Configure a finite per-wallet u32 task quota without resetting usage.
+    pub fn configure_task_creation_quota(
+        ctx: Context<ConfigureTaskCreationQuota>,
+        task_authority: Pubkey,
+        max_tasks_per_24h: u32,
+        enabled: bool,
+    ) -> Result<()> {
+        instructions::configure_task_creation_quota::handler(
+            ctx,
+            task_authority,
+            max_tasks_per_24h,
+            enabled,
+        )
+    }
+
     pub fn update_rate_limits(
         ctx: Context<UpdateRateLimits>,
         task_creation_cooldown: i64,

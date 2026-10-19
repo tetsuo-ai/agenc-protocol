@@ -3211,6 +3211,150 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "configureTaskCreationQuota",
+      "docs": [
+        "Update rate limiting configuration (multisig gated).",
+        "Parameters can be tuned post-deployment without program upgrade.",
+        "",
+        "# Arguments",
+        "* `task_creation_cooldown` - Seconds between task creations (0 = disabled)",
+        "* `max_tasks_per_24h` - Maximum tasks per agent per 24h (0 = unlimited)",
+        "* `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)",
+        "* `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)",
+        "* `min_stake_for_dispute` - Minimum stake required to initiate dispute",
+        "Configure a finite per-wallet u32 task quota without resetting usage."
+      ],
+      "discriminator": [
+        48,
+        147,
+        37,
+        126,
+        131,
+        85,
+        224,
+        93
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskQuota",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  113,
+                  117,
+                  111,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "taskAuthority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quotaAuthorityRateLimit",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "taskAuthority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "taskAuthority",
+          "type": "pubkey"
+        },
+        {
+          "name": "maxTasksPer24h",
+          "type": "u32"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "configureTaskModeration",
       "docs": [
         "Configure the moderation authority required before task job-spec publication."
@@ -15454,17 +15598,6 @@ export type AgencCoordination = {
     },
     {
       "name": "updateRateLimits",
-      "docs": [
-        "Update rate limiting configuration (multisig gated).",
-        "Parameters can be tuned post-deployment without program upgrade.",
-        "",
-        "# Arguments",
-        "* `task_creation_cooldown` - Seconds between task creations (0 = disabled)",
-        "* `max_tasks_per_24h` - Maximum tasks per agent per 24h (0 = unlimited)",
-        "* `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)",
-        "* `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)",
-        "* `min_stake_for_dispute` - Minimum stake required to initiate dispute"
-      ],
       "discriminator": [
         247,
         36,
@@ -17076,6 +17209,19 @@ export type AgencCoordination = {
         70,
         81,
         19
+      ]
+    },
+    {
+      "name": "authorityTaskQuota",
+      "discriminator": [
+        85,
+        68,
+        148,
+        138,
+        112,
+        126,
+        34,
+        206
       ]
     },
     {
@@ -18794,6 +18940,32 @@ export type AgencCoordination = {
         159,
         69,
         175
+      ]
+    },
+    {
+      "name": "taskCreationQuotaConfigured",
+      "discriminator": [
+        41,
+        36,
+        90,
+        6,
+        102,
+        145,
+        199,
+        87
+      ]
+    },
+    {
+      "name": "taskCreationQuotaHit",
+      "discriminator": [
+        0,
+        68,
+        55,
+        41,
+        73,
+        175,
+        95,
+        201
       ]
     },
     {
@@ -21008,6 +21180,21 @@ export type AgencCoordination = {
       "code": 6410,
       "name": "feedAuthorityVotingUnavailable",
       "msg": "Wallet-authority feed voting requires the revision-6 surface"
+    },
+    {
+      "code": 6411,
+      "name": "taskQuotaUnavailable",
+      "msg": "Extended task quotas require the revision-7 surface"
+    },
+    {
+      "code": 6412,
+      "name": "invalidTaskQuota",
+      "msg": "An extended task quota must be finite and between 256 and 1000"
+    },
+    {
+      "code": 6413,
+      "name": "invalidTaskQuotaAccount",
+      "msg": "Task quota account is not the canonical writable wallet quota"
     }
   ],
   "types": [
@@ -21825,6 +22012,51 @@ export type AgencCoordination = {
               "PDA bump seed"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "authorityTaskQuota",
+      "docs": [
+        "Optional multisig-approved task quota. Legacy/dispute state is never resized.",
+        "PDA seeds: [\"authority_task_quota\", authority]. No close/reset instruction."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "maxTasksPer24h",
+            "type": "u32"
+          },
+          {
+            "name": "taskCount24h",
+            "type": "u32"
+          },
+          {
+            "name": "rateLimitWindowStart",
+            "type": "i64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
           }
         ]
       }
@@ -29096,6 +29328,62 @@ export type AgencCoordination = {
             "type": {
               "option": "pubkey"
             }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskCreationQuotaConfigured",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "maxTasksPer24h",
+            "type": "u32"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "updatedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskCreationQuotaHit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "currentCount",
+            "type": "u32"
+          },
+          {
+            "name": "maxCount",
+            "type": "u32"
+          },
+          {
+            "name": "cooldownRemaining",
+            "type": "i64"
           },
           {
             "name": "timestamp",

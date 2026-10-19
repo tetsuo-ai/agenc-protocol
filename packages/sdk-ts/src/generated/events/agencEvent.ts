@@ -375,6 +375,14 @@ import {
   type TaskCreatedEventData,
 } from "./taskCreated";
 import {
+  getTaskCreationQuotaConfiguredEventDecoder,
+  type TaskCreationQuotaConfiguredEventData,
+} from "./taskCreationQuotaConfigured";
+import {
+  getTaskCreationQuotaHitEventDecoder,
+  type TaskCreationQuotaHitEventData,
+} from "./taskCreationQuotaHit";
+import {
   getTaskJobSpecSetEventDecoder,
   type TaskJobSpecSetEventData,
 } from "./taskJobSpecSet";
@@ -527,6 +535,8 @@ export type AgencEvent =
   | { eventName: "TaskClosed"; data: TaskClosedEventData }
   | { eventName: "TaskCompleted"; data: TaskCompletedEventData }
   | { eventName: "TaskCreated"; data: TaskCreatedEventData }
+  | { eventName: "TaskCreationQuotaConfigured"; data: TaskCreationQuotaConfiguredEventData }
+  | { eventName: "TaskCreationQuotaHit"; data: TaskCreationQuotaHitEventData }
   | { eventName: "TaskJobSpecSet"; data: TaskJobSpecSetEventData }
   | { eventName: "TaskMigrated"; data: TaskMigratedEventData }
   | { eventName: "TaskModerationConfigUpdated"; data: TaskModerationConfigUpdatedEventData }
@@ -1202,6 +1212,20 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "TaskCreated",
       data: getTaskCreatedEventDecoder().decode(payload),
+    }),
+  },
+  "29245a066691c757": {
+    eventName: "TaskCreationQuotaConfigured",
+    decode: (payload) => ({
+      eventName: "TaskCreationQuotaConfigured",
+      data: getTaskCreationQuotaConfiguredEventDecoder().decode(payload),
+    }),
+  },
+  "0044372949af5fc9": {
+    eventName: "TaskCreationQuotaHit",
+    decode: (payload) => ({
+      eventName: "TaskCreationQuotaHit",
+      data: getTaskCreationQuotaHitEventDecoder().decode(payload),
     }),
   },
   "9b029979b35ad0b7": {

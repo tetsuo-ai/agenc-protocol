@@ -3205,6 +3205,150 @@
       ]
     },
     {
+      "name": "configure_task_creation_quota",
+      "docs": [
+        "Update rate limiting configuration (multisig gated).",
+        "Parameters can be tuned post-deployment without program upgrade.",
+        "",
+        "# Arguments",
+        "* `task_creation_cooldown` - Seconds between task creations (0 = disabled)",
+        "* `max_tasks_per_24h` - Maximum tasks per agent per 24h (0 = unlimited)",
+        "* `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)",
+        "* `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)",
+        "* `min_stake_for_dispute` - Minimum stake required to initiate dispute",
+        "Configure a finite per-wallet u32 task quota without resetting usage."
+      ],
+      "discriminator": [
+        48,
+        147,
+        37,
+        126,
+        131,
+        85,
+        224,
+        93
+      ],
+      "accounts": [
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_quota",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  113,
+                  117,
+                  111,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "task_authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quota_authority_rate_limit",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "task_authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "task_authority",
+          "type": "pubkey"
+        },
+        {
+          "name": "max_tasks_per_24h",
+          "type": "u32"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "configure_task_moderation",
       "docs": [
         "Configure the moderation authority required before task job-spec publication."
@@ -15448,17 +15592,6 @@
     },
     {
       "name": "update_rate_limits",
-      "docs": [
-        "Update rate limiting configuration (multisig gated).",
-        "Parameters can be tuned post-deployment without program upgrade.",
-        "",
-        "# Arguments",
-        "* `task_creation_cooldown` - Seconds between task creations (0 = disabled)",
-        "* `max_tasks_per_24h` - Maximum tasks per agent per 24h (0 = unlimited)",
-        "* `dispute_initiation_cooldown` - Seconds between disputes (0 = disabled)",
-        "* `max_disputes_per_24h` - Maximum disputes per agent per 24h (0 = unlimited)",
-        "* `min_stake_for_dispute` - Minimum stake required to initiate dispute"
-      ],
       "discriminator": [
         247,
         36,
@@ -17070,6 +17203,19 @@
         70,
         81,
         19
+      ]
+    },
+    {
+      "name": "AuthorityTaskQuota",
+      "discriminator": [
+        85,
+        68,
+        148,
+        138,
+        112,
+        126,
+        34,
+        206
       ]
     },
     {
@@ -18788,6 +18934,32 @@
         159,
         69,
         175
+      ]
+    },
+    {
+      "name": "TaskCreationQuotaConfigured",
+      "discriminator": [
+        41,
+        36,
+        90,
+        6,
+        102,
+        145,
+        199,
+        87
+      ]
+    },
+    {
+      "name": "TaskCreationQuotaHit",
+      "discriminator": [
+        0,
+        68,
+        55,
+        41,
+        73,
+        175,
+        95,
+        201
       ]
     },
     {
@@ -21002,6 +21174,21 @@
       "code": 6410,
       "name": "FeedAuthorityVotingUnavailable",
       "msg": "Wallet-authority feed voting requires the revision-6 surface"
+    },
+    {
+      "code": 6411,
+      "name": "TaskQuotaUnavailable",
+      "msg": "Extended task quotas require the revision-7 surface"
+    },
+    {
+      "code": 6412,
+      "name": "InvalidTaskQuota",
+      "msg": "An extended task quota must be finite and between 256 and 1000"
+    },
+    {
+      "code": 6413,
+      "name": "InvalidTaskQuotaAccount",
+      "msg": "Task quota account is not the canonical writable wallet quota"
     }
   ],
   "types": [
@@ -21819,6 +22006,51 @@
               "PDA bump seed"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityTaskQuota",
+      "docs": [
+        "Optional multisig-approved task quota. Legacy/dispute state is never resized.",
+        "PDA seeds: [\"authority_task_quota\", authority]. No close/reset instruction."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_tasks_per_24h",
+            "type": "u32"
+          },
+          {
+            "name": "task_count_24h",
+            "type": "u32"
+          },
+          {
+            "name": "rate_limit_window_start",
+            "type": "i64"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
           }
         ]
       }
@@ -29090,6 +29322,62 @@
             "type": {
               "option": "pubkey"
             }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskCreationQuotaConfigured",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_tasks_per_24h",
+            "type": "u32"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "updated_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskCreationQuotaHit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "current_count",
+            "type": "u32"
+          },
+          {
+            "name": "max_count",
+            "type": "u32"
+          },
+          {
+            "name": "cooldown_remaining",
+            "type": "i64"
           },
           {
             "name": "timestamp",

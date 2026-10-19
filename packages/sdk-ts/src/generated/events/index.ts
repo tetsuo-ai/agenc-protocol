@@ -97,6 +97,8 @@ export * from "./taskClaimed";
 export * from "./taskClosed";
 export * from "./taskCompleted";
 export * from "./taskCreated";
+export * from "./taskCreationQuotaConfigured";
+export * from "./taskCreationQuotaHit";
 export * from "./taskJobSpecSet";
 export * from "./taskMigrated";
 export * from "./taskModerationConfigUpdated";
