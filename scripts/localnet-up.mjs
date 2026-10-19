@@ -128,6 +128,8 @@ function usage() {
     "",
     "TEST-ONLY",
     "  --unsafe-unpaused-fixture  Legacy alias for --dev-ready used by browser tests.",
+    "  --short-disputes          With --dev-ready only: 5-minute resolver window",
+    "                            and 10-minute hard expiry in disposable genesis.",
     "",
     "See docs/LOCALNET.md for the full local-stack runbook.",
   ].join("\n");
@@ -139,6 +141,7 @@ export function parseArgs(argv) {
     keepLedger: false,
     envFile: DEFAULT_ENV_FILE,
     devReady: false,
+    shortDisputes: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -155,6 +158,8 @@ export function parseArgs(argv) {
       args.keepLedger = true;
     } else if (arg === "--dev-ready" || arg === "--unsafe-unpaused-fixture") {
       args.devReady = true;
+    } else if (arg === "--short-disputes") {
+      args.shortDisputes = true;
     } else if (arg === "--env-file") {
       if (!argv[i + 1]) throw new Error("--env-file requires a path");
       args.envFile = path.resolve(argv[i + 1]);
@@ -170,6 +175,9 @@ export function parseArgs(argv) {
     throw new Error(
       "--dev-ready requires a fresh disposable genesis and cannot be combined with --keep-ledger",
     );
+  }
+  if (args.shortDisputes && !args.devReady) {
+    throw new Error("--short-disputes requires --dev-ready disposable genesis");
   }
   return args;
 }
@@ -617,6 +625,7 @@ async function writeUnsafeUnpausedProtocolFixture({
   sdk,
   programId,
   signers,
+  shortDisputes,
 }) {
   const [protocolPda, bump] = await sdk.findProtocolConfigPda();
   const defaultAddress = kit.address("11111111111111111111111111111111");
@@ -628,7 +637,7 @@ async function writeUnsafeUnpausedProtocolFixture({
     minArbiterStake: PROTOCOL_PARAMS.minStake,
     minAgentStake: PROTOCOL_PARAMS.minStake,
     maxClaimDuration: 604_800n,
-    maxDisputeDuration: 604_800n,
+    maxDisputeDuration: shortDisputes ? 600n : 604_800n,
     totalAgents: 0n,
     totalTasks: 0n,
     completedTasks: 0n,
@@ -643,7 +652,7 @@ async function writeUnsafeUnpausedProtocolFixture({
     minStakeForDispute: PROTOCOL_PARAMS.minStakeForDispute,
     slashPercentage: 25,
     stateUpdateCooldown: 60n,
-    votingPeriod: 86_400n,
+    votingPeriod: shortDisputes ? 300n : 86_400n,
     protocolVersion: 1,
     minSupportedVersion: 1,
     protocolPaused: false,
@@ -768,6 +777,7 @@ async function mainLocked(args, lifecycleLock) {
       sdk,
       programId,
       signers,
+      shortDisputes: args.shortDisputes,
     });
     console.warn(
       `   LOCAL DEV ONLY: genesis-injecting current, unpaused ProtocolConfig ${unsafeProtocolFixture.address}`,
@@ -1220,6 +1230,14 @@ async function mainLocked(args, lifecycleLock) {
     );
     check("protocolPaused", d.protocolPaused, expectedMode.protocolPaused);
     check("surfaceRevision", d.surfaceRevision, expectedMode.surfaceRevision);
+    if (args.devReady) {
+      check("votingPeriod", d.votingPeriod, args.shortDisputes ? 300n : 86_400n);
+      check(
+        "maxDisputeDuration",
+        d.maxDisputeDuration,
+        args.shortDisputes ? 600n : 604_800n,
+      );
+    }
     if (diffs.length > 0) {
       fail(
         `ProtocolConfig ${protocolPda} EXISTS WITH DIFFERENT VALUES — refusing to converge:\n` +

@@ -141,6 +141,13 @@ test("localnet operational mode is explicit and cannot be relabeled on converge"
   );
 });
 
+test("short dispute windows are restricted to fresh disposable dev genesis", () => {
+  assert.equal(parseLocalnetUpArgs([]).shortDisputes, false);
+  assert.equal(parseLocalnetUpArgs(["--dev-ready", "--short-disputes"]).shortDisputes, true);
+  assert.throws(() => parseLocalnetUpArgs(["--short-disputes"]), /requires --dev-ready/);
+  assert.throws(() => parseLocalnetUpArgs(["--short-disputes", "--dev-ready", "--keep-ledger"]), /fresh disposable genesis/);
+});
+
 test("localnet-up initializes and verifies the exact bid marketplace singleton", () => {
   const authority = { address: "authority" };
   const moderator = { address: "moderator" };
