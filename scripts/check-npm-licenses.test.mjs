@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { evaluateNpmLicensePolicy } from "./check-npm-licenses.mjs";
@@ -30,7 +33,7 @@ async function repositoryInput() {
     lockfiles,
     licenseDigests,
     codeowners,
-    asOf: "2026-07-19",
+    asOf: policy.exceptionGroups.map((group) => group.reviewedOn).sort().at(-1),
   };
 }
 
@@ -54,7 +57,7 @@ test("unknown licenses fail closed", async () => {
 
 test("expired, stale, and changed evidence exceptions fail closed", async () => {
   const expired = await repositoryInput();
-  expired.asOf = "2026-10-17";
+  expired.asOf = expired.policy.exceptionGroups[0].expiresOn;
   assert.throws(() => evaluateNpmLicensePolicy(expired), /invalid or expired/);
 
   const stale = await repositoryInput();
@@ -118,5 +121,45 @@ test("license evidence paths cannot traverse through URL or platform normalizati
       () => evaluateNpmLicensePolicy(input),
       /canonical repository-relative path/,
     );
+  }
+});
+
+test("actual npm policy CLI rejects an expired on-disk exception", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "agenc-npm-license-cli-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const input = await repositoryInput();
+  const files = [
+    "scripts/check-npm-licenses.mjs", ".github/CODEOWNERS",
+    ...input.policy.lockfiles,
+    ...input.policy.exceptionGroups.flatMap(({ entries }) => entries)
+      .map(({ licenseFile }) => licenseFile).filter(Boolean),
+  ];
+  for (const file of files) {
+    await mkdir(dirname(join(root, file)), { recursive: true });
+    await copyFile(new URL(file, ROOT), join(root, file));
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  const policy = structuredClone(input.policy);
+  for (const group of policy.exceptionGroups) {
+    group.reviewedOn = today;
+    group.expiresOn = tomorrow;
+  }
+  const policyPath = join(root, "supply-chain/npm-license-policy.json");
+  await mkdir(dirname(policyPath), { recursive: true });
+  await writeFile(policyPath, JSON.stringify(policy));
+  const run = () => spawnSync(process.execPath, [join(root, "scripts/check-npm-licenses.mjs")], {
+    cwd: root, encoding: "utf8", timeout: 30_000,
+  });
+  const valid = run();
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.match(valid.stdout, /19 exact, owned exceptions/);
+  for (let i = 0; i < policy.exceptionGroups.length; i++) {
+    const expired = structuredClone(policy);
+    expired.exceptionGroups[i].expiresOn = today;
+    await writeFile(policyPath, JSON.stringify(expired));
+    const result = run();
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, new RegExp(`invalid or expired license exception group ${expired.exceptionGroups[i].id}`));
   }
 });
