@@ -110,7 +110,8 @@ pub struct HireFromListingHumanless<'info> {
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
     /// Global moderation gate. REQUIRED so a hire is fail-closed (spec §6).
-    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
+    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig)]
     pub moderation_config: Box<Account<'info, ModerationConfig>>,
 
     /// Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.

@@ -25,7 +25,8 @@ use anchor_lang::prelude::*;
 pub struct AssignModerationAttestor<'info> {
     #[account(
         seeds = [b"moderation_config"],
-        bump = moderation_config.bump
+        bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig
     )]
     pub moderation_config: Box<Account<'info, ModerationConfig>>,
 

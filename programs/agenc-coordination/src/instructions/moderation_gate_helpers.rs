@@ -91,8 +91,8 @@ pub enum ModerationRecordSlot {
     /// `["…_moderation_v2", parent, hash, moderator]` — the post-P1.2 write path.
     V2,
     /// `["…_moderation", parent, hash]` — pre-P1.2 records, FROZEN at upgrade
-    /// (post-upgrade `record_*` writes only v2 seeds). Accepted during the grace
-    /// window; unforgeable because every legacy write required authorization.
+    /// (post-upgrade `record_*` writes only v2 seeds). There is no calendar cutoff;
+    /// consumption still revalidates the author against the current authority/roster.
     Legacy,
 }
 

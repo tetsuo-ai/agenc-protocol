@@ -173,7 +173,8 @@ wire until it ships the regenerated 90-ix client. Sequence at deploy time:
    branch, tests green). Minimize the skew window.
 4. Redeploy **attest.agenc.ag** on the new client: its writes move to the v2
    seeds; its EXISTING legacy listing records (e.g. attestor `13tuj…`) stay
-   consumable through the grace window when its roster PDA is presented (the SDK
+   consumable without a calendar cutoff while the current author/roster and
+   record-expiry checks pass, with the roster PDA presented when required (the SDK
    ships `findLegacyTaskModerationPda` / `findLegacyListingModerationPda` for
    exactly this). Confirm a live roster attestation flows end-to-end post-deploy.
 5. Announce the breaking wire change ahead of the Moment (the P4.6 deprecation

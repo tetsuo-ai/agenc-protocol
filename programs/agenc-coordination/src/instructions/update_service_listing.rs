@@ -109,6 +109,12 @@ pub fn handler(
         listing.default_deadline_secs = d;
     }
     if let Some(m) = max_open_jobs {
+        // Zero is the existing unlimited-capacity sentinel. A finite limit may
+        // equal outstanding jobs, but must not fall below already-funded work.
+        require!(
+            m == 0 || m >= listing.open_jobs,
+            CoordinationError::ListingCapacityBelowOpenJobs
+        );
         listing.max_open_jobs = m;
     }
     if let Some(fee) = operator_fee_bps {

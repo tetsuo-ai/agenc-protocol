@@ -69,6 +69,17 @@ JSON evidence is saved under `.localnet/evidence/issue-82-*.json`. The compiled-
 SPL regression separately proves token expiry emits a zero cleanup reward while
 preserving escrow rent; that integration case advances its simulated Clock.
 
+`tests-e2e/hardening-278.rpc.test.ts` exercises finite/unlimited listing capacity,
+atomic rejection of a capacity reduction below funded hires, suspended-worker
+entry versus settlement exits, and bid winner demotion/promotion reorderings.
+Bid acceptance waits the production five-minute re-promotion grace in real
+validator time; the tests compare actual refunds, bond returns, and payouts.
+`tests-integration/moderation-config-reserved.test.mjs` supplies deliberately
+corrupt config fixtures (unreachable through valid authority instructions) to
+verify both unknown tail bytes fail closed on hire, publish, recording, and
+config/heartbeat paths, before and after liveness relaxation. The active release
+preflight independently rejects these unsupported config bytes before upgrade.
+
 For Marketplace V2 release readiness, local CI is necessary but not sufficient. The protocol-owned
 devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md).
 

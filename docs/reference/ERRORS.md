@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**406 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**408 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -417,3 +417,5 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6403 | 0x1903 | `DisputeDefendantNotPeer` | The defendant claim settles through the ruling, not peer settlement |
 | 6404 | 0x1904 | `DisputeTerminalStatusCorrupt` | The dispute's recorded terminal status is invalid |
 | 6405 | 0x1905 | `ClaimSettlementPending` | Claim is reserved for pending dispute peer settlement; use settle_dispute_claim |
+| 6406 | 0x1906 | `InvalidModerationConfig` | Moderation configuration contains unsupported reserved flags |
+| 6407 | 0x1907 | `ListingCapacityBelowOpenJobs` | Finite listing capacity cannot be lower than its outstanding jobs |

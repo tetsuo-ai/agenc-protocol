@@ -29,7 +29,8 @@ use crate::state::{
 
 #[derive(Accounts)]
 pub struct RecordAgentVerification<'info> {
-    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
+    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig)]
     pub moderation_config: Account<'info, ModerationConfig>,
 
     /// The agent being verified, pinned to its canonical `["agent", agent_id]` PDA.

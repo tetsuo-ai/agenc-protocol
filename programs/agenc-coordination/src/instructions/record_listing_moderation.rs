@@ -22,7 +22,8 @@ use crate::state::{
 #[derive(Accounts)]
 #[instruction(job_spec_hash: [u8; HASH_SIZE])]
 pub struct RecordListingModeration<'info> {
-    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
+    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig)]
     pub moderation_config: Account<'info, ModerationConfig>,
 
     #[account(

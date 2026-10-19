@@ -59,6 +59,45 @@ readiness still requires deploying and verifying that exact metadata at both
 canonical hosts; hosted delivery is a release blocker, not an on-chain
 invariant.
 
+## Moderation, suspension, and pause boundaries (2026-10 review)
+
+- Suspension prevents new assignments. It intentionally does not revoke an
+  existing worker's ability to submit results or receive a valid settlement.
+  Blocking those exits could trap already-funded work. A suspended provider
+  cannot accept new claims; the `#278` RPC regression verifies both sides and
+  compares actual worker, treasury, and refund balances.
+- Moderation uses an open bonded attestor roster. A live eligible attestor may
+  write CLEAN for a hash and satisfy the ALLOW gate. A per-record BLOCKED verdict
+  is evidence, not a universal veto. Only the multisig `ModerationBlock` account
+  is the unconditional content prohibition; it also applies after the liveness
+  deadman relaxes ALLOW requirements. Integrators must read
+  [MODERATION_NEUTRALITY.md](../MODERATION_NEUTRALITY.md) before treating an
+  attestation as a platform-wide trust decision.
+- Frozen legacy moderation records have no calendar sunset. Consumption still
+  checks their expiry and the current authority or live roster authorization.
+  The proposed reserved-byte validation rejects unsupported ModerationConfig
+  flags on all instruction readers, including publication/hire after silence.
+  It does not change the existing four-byte liveness-window carve.
+- Pausing blocks governance vote entry and does not extend voting deadlines.
+  A pause crossing a deadline may leave a proposal unable to reach quorum or
+  approval; it does not automatically defeat a proposal that already met those
+  requirements. Operators must snapshot pending proposals and their deadlines
+  before an elective pause. During an incident, prioritize containment and
+  record any proposals requiring resubmission after recovery. Do not bypass the
+  emergency pause to preserve a vote. See the source's exit gates for actions
+  that remain available while paused.
+- Bid recovery is permissionless: demoting a provably ineligible tracked winner
+  opens a five-minute re-promotion grace. Only the current leader can be demoted;
+  repeated stale demotions cannot restart the timer, and promotions cannot
+  erase it. The `#278` RPC regression checks adversarial operation ordering,
+  acceptance of the recovered policy winner after real elapsed time, losing
+  bond refunds, and final worker/treasury payouts. This is a bounded regression
+  review, not a claim that every possible transaction ordering has been audited.
+
+The October source changes are release candidates until deployed. Revision-5
+build re-attestation remains tracked separately by #199; source tests do not
+establish custody separation, deployed paging, or external audit completion.
+
 ## Core Invariants
 
 - only valid state transitions should mutate protocol-owned accounts

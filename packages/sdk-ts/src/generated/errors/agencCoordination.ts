@@ -826,6 +826,10 @@ export const AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER = 0x1903; // 6
 export const AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT = 0x1904; // 6404
 /** ClaimSettlementPending: Claim is reserved for pending dispute peer settlement; use settle_dispute_claim */
 export const AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING = 0x1905; // 6405
+/** InvalidModerationConfig: Moderation configuration contains unsupported reserved flags */
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_CONFIG = 0x1906; // 6406
+/** ListingCapacityBelowOpenJobs: Finite listing capacity cannot be lower than its outstanding jobs */
+export const AGENC_COORDINATION_ERROR__LISTING_CAPACITY_BELOW_OPEN_JOBS = 0x1907; // 6407
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -993,6 +997,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_ATTESTOR
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT
+  | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_CONFIG
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD
@@ -1045,6 +1050,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_WEIGHTED_SCORE_WEIGHTS
   | typeof AGENC_COORDINATION_ERROR__LAMPORT_TRANSFER_ACCOUNT_ALIAS
   | typeof AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED
+  | typeof AGENC_COORDINATION_ERROR__LISTING_CAPACITY_BELOW_OPEN_JOBS
   | typeof AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED
   | typeof AGENC_COORDINATION_ERROR__LISTING_INVALID_ID
   | typeof AGENC_COORDINATION_ERROR__LISTING_INVALID_NAME
@@ -1405,6 +1411,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION]: `Minimum version cannot exceed current protocol version`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_ATTESTOR]: `Invalid moderation attestor: pubkey must be non-zero`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT]: `Moderation block account is not the canonical PDA for this content hash`,
+    [AGENC_COORDINATION_ERROR__INVALID_MODERATION_CONFIG]: `Moderation configuration contains unsupported reserved flags`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW]: `Moderation liveness window is outside the allowed [1 day, 400 day] range`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE]: `Block rationale hash and URI are required (non-zero, non-empty, bounded)`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD]: `Moderation record account is not the canonical PDA, not program-owned, or not a moderation record`,
@@ -1457,6 +1464,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_WEIGHTED_SCORE_WEIGHTS]: `Weighted score weights must sum to 10000 basis points`,
     [AGENC_COORDINATION_ERROR__LAMPORT_TRANSFER_ACCOUNT_ALIAS]: `A positive lamport transfer requires distinct source and destination accounts`,
     [AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED]: `Service listing must declare at least one required capability`,
+    [AGENC_COORDINATION_ERROR__LISTING_CAPACITY_BELOW_OPEN_JOBS]: `Finite listing capacity cannot be lower than its outstanding jobs`,
     [AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED]: `Service listing has reached its maximum concurrent open hires`,
     [AGENC_COORDINATION_ERROR__LISTING_INVALID_ID]: `Service listing ID cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__LISTING_INVALID_NAME]: `Service listing name cannot be all zeros`,

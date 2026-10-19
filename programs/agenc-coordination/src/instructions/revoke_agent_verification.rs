@@ -16,7 +16,8 @@ use crate::state::{AgentVerification, ModerationConfig};
 
 #[derive(Accounts)]
 pub struct RevokeAgentVerification<'info> {
-    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
+    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump,
+        constraint = moderation_config.validate_reserved_fields() @ CoordinationError::InvalidModerationConfig)]
     pub moderation_config: Account<'info, ModerationConfig>,
 
     /// The verification to revoke, pinned to its canonical PDA (seeded by the stored agent).

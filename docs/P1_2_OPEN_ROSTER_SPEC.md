@@ -163,13 +163,16 @@ the weaker thing.
     also becomes moderator-keyed — mind the load-order inversion: `moderator`
     is needed *before* the record loads). One revert-sensitive litesvm test
     **per re-implemented constraint**.
-- **Legacy branch (grace window):** a legacy-seed record is accepted **only**
+- **Legacy read compatibility (no calendar cutoff):** a legacy-seed record is accepted **only**
   where its stored `moderator == moderation_authority` (unforgeable — legacy
   writes required authorization) **OR** where the stored moderator is a
   currently-registered, non-revoked roster attestor with its roster PDA
   presented. The second clause eliminates the 13tuj/attest.agenc.ag
   dark-window at cutover and is overwrite-safe (post-upgrade `record_*` only
   writes v2 seeds, so legacy PDAs are frozen).
+  No on-chain sunset date exists. A record's own expiry and current author/roster
+  eligibility still apply. Introducing a future cutoff requires a separate,
+  announced compatibility change; this specification promises no timed window.
 
 ### 4.5 The takedown gate (BLOCK floor) — read §5.2; every gate consumes it
 All three consumption gates additionally load and honor the **required**
