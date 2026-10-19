@@ -1,0 +1,521 @@
+{
+  "reviewedOn": "2026-10-19",
+  "expiresOn": "2026-11-18",
+  "tracking": "SUPPLY-ASSURANCE-001",
+  "scope": "Technical review of exact dependency license metadata and existing test/tooling usage; no expansion of runtime distribution or exception versions.",
+  "method": [
+    "Downloaded all 19 exact npm archives from their lockfile resolved URLs and verified each full archive against its lockfile SRI hash. No lifecycle scripts executed.",
+    "Read bundled LICENSE, package metadata and sharp platform README licensing tables. sharp/libvips declares bundled third-party licenses; approval remains restricted to the Next SSR test fixture.",
+    "The only@0.0.2 archive contains no LICENSE. Retained the existing immutable upstream MIT license evidence, fetched and hashed on the review date.",
+    "Confirmed installed spawndamnit, eyes and text-encoding-utf-8 license hashes match the already approved policy."
+  ],
+  "upstreamOnlyLicense": {
+    "url": "https://raw.githubusercontent.com/tj/node-only/623bfe27bde8aaca73cf3783f3f4da3ea928f592/LICENSE",
+    "sha256": "0d324ba9b0ef09ac43b679fc1910c7756b8d8271e0a177d9900ca5a04f295704"
+  },
+  "packages": [
+    {
+      "package": "only",
+      "version": "0.0.2",
+      "lockfile": "package-lock.json",
+      "path": "node_modules/only",
+      "resolved": "https://registry.npmjs.org/only/-/only-0.0.2.tgz",
+      "integrity": "sha512-Fvw+Jemq5fjjyWz6CpKx6w9s7xxqo3+JCyM0WXWeCSOboZ8ABkyvP8ID4CZuChA/wxSx+XSJmdOm8rGVyJ1hdQ==",
+      "observedLicense": null,
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "674b65bd9ac49a197ecae18ba5f6888b7db50ff1f13b12359db1eb424eaf1620"
+        },
+        {
+          "member": "package/Readme.md",
+          "sha256": "d7f53d74f8c810c4516d316c309360b771e511189923b4def4169085e742bfa6"
+        }
+      ],
+      "scope": "root development tooling only"
+    },
+    {
+      "package": "spawndamnit",
+      "version": "3.0.1",
+      "lockfile": "package-lock.json",
+      "path": "node_modules/spawndamnit",
+      "resolved": "https://registry.npmjs.org/spawndamnit/-/spawndamnit-3.0.1.tgz",
+      "integrity": "sha512-MmnduQUuHCoFckZoWnXsTg7JaiLBJrKFj9UI2MbRPGaJeVpsLcVBu6P/IGZovziM/YBsellCmsprgNA+w0CzVg==",
+      "observedLicense": "SEE LICENSE IN LICENSE",
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "aac99045d4e36ab3b1e2914337620963b56cbac53de280c94f29261a22ab5b0f",
+          "bytes": 1084
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "690461abd34d2f071cead50b4628b1f7bcfe8a8ac3987589fc54c98fd5ef21f7"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "2d4af52fb69aeb4ff1506137a96f794f006426f81fe7a906715b1f7eb4473bc7"
+        }
+      ],
+      "scope": "root development tooling only"
+    },
+    {
+      "package": "eyes",
+      "version": "0.1.8",
+      "lockfile": "tests-integration/package-lock.json",
+      "path": "node_modules/eyes",
+      "resolved": "https://registry.npmjs.org/eyes/-/eyes-0.1.8.tgz",
+      "integrity": "sha512-GipyPsXO1anza0AOZdy69Im7hGFCNB7Y/NGjDlZGJ3GJJLtwNSb2vrzYrTYJRrRloVx7pl+bhUaTB8yiccPvFQ==",
+      "observedLicense": null,
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "e424cbb68485fe465f6e58959da4bf157e5a0e716c02cd8d9a2041a12520fb93",
+          "bytes": 1053
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "a080ec911a5ba411a2d6a7330a6c1eadef8f4a40dbeebcaa00f82701f1f3e8d2"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "45ec5b4d5e79155354e25725a458f66e9fa1a90a00535c31f2aa31a15a277a02"
+        }
+      ],
+      "scope": "deployment/integration tools only"
+    },
+    {
+      "package": "text-encoding-utf-8",
+      "version": "1.0.2",
+      "lockfile": "tests-integration/package-lock.json",
+      "path": "node_modules/text-encoding-utf-8",
+      "resolved": "https://registry.npmjs.org/text-encoding-utf-8/-/text-encoding-utf-8-1.0.2.tgz",
+      "integrity": "sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg==",
+      "observedLicense": null,
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE.md",
+          "sha256": "caecf721eb8d6c1d74e57a798ef53d9cbeb58fc637af1877741a5572455206ec",
+          "bytes": 1358
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "a86529273188c5e010a5398eb6fb807624d50e1ea7efa4f79132b4f26d95b7f5"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "c5af520e768eb08e1ed8a236889b87dee48a92aad42a91442951c90a9574887f"
+        }
+      ],
+      "scope": "deployment/integration tools only"
+    },
+    {
+      "package": "rpc-websockets",
+      "version": "9.3.8",
+      "lockfile": "tests-integration/package-lock.json",
+      "path": "node_modules/rpc-websockets",
+      "resolved": "https://registry.npmjs.org/rpc-websockets/-/rpc-websockets-9.3.8.tgz",
+      "integrity": "sha512-7r+fm4tSJmLf9GvZfL1DJ1SJwpagpp6AazqM0FUaeV7CA+7+NYINSk1syWa4tU/6OF2CyBicLtzENGmXRJH6wQ==",
+      "observedLicense": "LGPL-3.0-only",
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "9bffc36c403d2722d712731930ce9fb6295186d9a7b474b86e867e116430f800",
+          "bytes": 429
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "e72f4d9507cdd50cf2d3c638a8307d3255bcbc72c14ef72bc3d57f8860ce8268"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "c3803beb4dbbecd2e159c68c1714dd6a29dc869a1630ca76d6d8ba84fbb54369"
+        }
+      ],
+      "scope": "deployment/integration tools only"
+    },
+    {
+      "package": "@img/sharp-libvips-darwin-arm64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-darwin-arm64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.2.4.tgz",
+      "integrity": "sha512-zqjjo7RatFfFoP0MkQ51jfuFZBnVE2pRiaydKJ1G/rHZvnsrHAOcQALIi9sA5co5xenQdTugCvtb1cuf78Vf4g==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "36961cede2dd16bfac3ba20dbd340162e5f06ff0a4c766fb640a3aad2241940b"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "47c37432ea30fcf5767611bca7c054d141f7584479ce8b58b5de6b88f9008d1d"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-darwin-x64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-darwin-x64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.2.4.tgz",
+      "integrity": "sha512-1IOd5xfVhlGwX+zXv2N93k0yMONvUlANylbJw1eTah8K/Jtpi15KC+WSiaX/nBmbm2HxRM1gZ0nSdjSsrZbGKg==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "691aea0e6739dbe349f8555757c1db28f991043fea9eafcf74359edd607c5649"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "52285e4c80313e1908d0e06242e5a92b41d1c41da4265839fa9504e094aa754a"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linux-arm",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-arm",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.2.4.tgz",
+      "integrity": "sha512-bFI7xcKFELdiNCVov8e44Ia4u2byA+l3XtsAj+Q8tfCwO6BQ8iDojYdvoPMqsKDkuoOo+X6HZA0s0q11ANMQ8A==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "67f3a722c0f4c3e1dd09f94b8c7cd5edd4d455f0c17cf7c4c83b3a77ec48e111"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "37cb710e8ee2b708014c141a46155504291a48c5b8fa47b8a26a8cad37f02f29"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linux-arm64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-arm64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.2.4.tgz",
+      "integrity": "sha512-excjX8DfsIcJ10x1Kzr4RcWe1edC9PquDRRPx3YVCvQv+U5p7Yin2s32ftzikXojb1PIFc/9Mt28/y+iRklkrw==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "f0383b3d469797a6253f5327c773bf03eaf1a809535e8905b0e4f063312220ff"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "de09df342530281cba5657f97d8cbf1b356a8e83c09407595b7843ff8aab014f"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linux-ppc64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-ppc64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.2.4.tgz",
+      "integrity": "sha512-FMuvGijLDYG6lW+b/UvyilUWu5Ayu+3r2d1S8notiGCIyYU/76eig1UfMmkZ7vwgOrzKzlQbFSuQfgm7GYUPpA==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "cd176e54e518e9b01f8c5a523ff65484a607c2e542f42f12d0e1352ba1dace68"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "0d5b31366a119f91cb894b265178db7aa6956b304acf19a0382c2ec274ec0858"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linux-riscv64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-riscv64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.2.4.tgz",
+      "integrity": "sha512-oVDbcR4zUC0ce82teubSm+x6ETixtKZBh/qbREIOcI3cULzDyb18Sr/Wcyx7NRQeQzOiHTNbZFF1UwPS2scyGA==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "43448f97e2ee7b71547f0c8ea06868471e8ad350c04847f59be6941f07dc0fd3"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "c48e949a04ec12f560bfdaf61bc64f5ec8cf866f51d4796ee2c85e8b2e6ca0e2"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linux-s390x",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-s390x",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.2.4.tgz",
+      "integrity": "sha512-qmp9VrzgPgMoGZyPvrQHqk02uyjA0/QrTO26Tqk6l4ZV0MPWIW6LTkqOIov+J1yEu7MbFQaDpwdwJKhbJvuRxQ==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "0447fbe2075719d3cf02de4a4a3fa077fc786c9c7dc5d617786043c5eb727f02"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "0c5d9a5743e4d28e8d3bfddb175d17a15f937cff6e739c9516d4a0382c42dfb5"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linux-x64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-x64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.4.tgz",
+      "integrity": "sha512-tJxiiLsmHc9Ax1bz3oaOYBURTXGIRDODBqhveVHonrHJ9/+k89qbLl0bcJns+e4t4rvaNBxaEZsFtSfAdquPrw==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "d45b80cb79391bbfe21e935e599d30c545b62f5c255d96fee2cb7b6f0b171f5a"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "cabdbb8c9c67431d964dabd29630f07813cd58a0e090f280a88a58887757821d"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linuxmusl-arm64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linuxmusl-arm64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.2.4.tgz",
+      "integrity": "sha512-FVQHuwx1IIuNow9QAbYUzJ+En8KcVm9Lk5+uGUQJHaZmMECZmOlix9HnH7n1TRkXMS0pGxIJokIVB9SuqZGGXw==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "aedb492773955b0078e6a0fc5c5411ab914db1edb7504118fc945767a62140ce"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "65fbbdcf0f5a01f58739c80b21d95918cc7163a3f6829c57dcc0af27e7c3b5e1"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-libvips-linuxmusl-x64",
+      "version": "1.2.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linuxmusl-x64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.2.4.tgz",
+      "integrity": "sha512-+LpyBk7L44ZIXwz/VYfglaX/okxezESc6UxDSoyo2Ks6Jxc4Y7sGjpgU9s4PMgqgjj1gZCylTieNamqA1MF7Dg==",
+      "observedLicense": "LGPL-3.0-or-later",
+      "licenseFiles": [],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "c1d9859ac56602e92577bbaee7d4acd788d12e92fa8c715440aa2c6c683107cb"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "f510368e3bbdeea893b6828e2b1fb8d657c1095cc209d05f3191c9b652487512"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-wasm32",
+      "version": "0.34.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-wasm32",
+      "resolved": "https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.34.5.tgz",
+      "integrity": "sha512-OdWTEiVkY2PHwqkbBI8frFxQQFekHaSSkUIJkwzclWZe64O1X4UlUjqqqLaPbUpMOQk6FBu/HtlGXNblIs0huw==",
+      "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "73ba74dfaa520b49a401b5d21459a8523a146f3b7518a833eea5efa85130bf68",
+          "bytes": 10273
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "a619114d72bf5675d8b48657b72c329c2ffa75417f3c84a5cdb554b063031b64"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "5bc125eb20621a634d815adf064072479cd088ebc6c8702caeb24b5cf6e45cb7"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "0bb301492306edb2f7eaecb02de960393f4005e2c8e2be562671ab095a8d064d"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-win32-arm64",
+      "version": "0.34.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-win32-arm64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.34.5.tgz",
+      "integrity": "sha512-WQ3AgWCWYSb2yt+IG8mnC6Jdk9Whs7O0gxphblsLvdhSpSTtmu69ZG1Gkb6NuvxsNACwiPV6cNSZNzt0KPsw7g==",
+      "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "dc1f5d2d43c5531dfe0acaf4e950ea5dbe3e61e1850cf0e983bda7efc10d6693",
+          "bytes": 10464
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "014942af28f1a463877467da615c062071e0f0f9af8ef2211c75aa8fb8c27094"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "f815d8bd4bb148114b6323cb5796a03cdd25638599aa60f88510b5e5f4a317cb"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-win32-ia32",
+      "version": "0.34.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-win32-ia32",
+      "resolved": "https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.34.5.tgz",
+      "integrity": "sha512-FV9m/7NmeCmSHDD5j4+4pNI8Cp3aW+JvLoXcTUo0IqyjSfAZJ8dIUmijx1qaJsIiU+Hosw6xM5KijAWRJCSgNg==",
+      "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "dc1f5d2d43c5531dfe0acaf4e950ea5dbe3e61e1850cf0e983bda7efc10d6693",
+          "bytes": 10464
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "eafa0388f22f225125395105b4c83bc34f5b536f0f9dd1f56199676ac5bcea19"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "091496a408bff5cc42b34158d41eb22638d5fadbd74bc2928fd30e3920005096"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    },
+    {
+      "package": "@img/sharp-win32-x64",
+      "version": "0.34.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-win32-x64",
+      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.34.5.tgz",
+      "integrity": "sha512-+29YMsqY2/9eFEiW93eqWnuLcWcufowXewwSNIT6UwZdUUCrM3oFjMWH/Z6/TMmb4hlFenmfAVbpWeup2jryCw==",
+      "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+      "licenseFiles": [
+        {
+          "member": "package/LICENSE",
+          "sha256": "dc1f5d2d43c5531dfe0acaf4e950ea5dbe3e61e1850cf0e983bda7efc10d6693",
+          "bytes": 10464
+        }
+      ],
+      "metadataFiles": [
+        {
+          "member": "package/package.json",
+          "sha256": "3421485756b0a25573ee62e147a62908608e3014a2bfed64381473a22e9351d2"
+        },
+        {
+          "member": "package/README.md",
+          "sha256": "c416cd0af88256407c36a0613f189ac4257221c7206d0324f7ef5563c66f1125"
+        },
+        {
+          "member": "package/versions.json",
+          "sha256": "e823074bfa33ed7b1861b797dd3c60d7ef8c34cd2faa9a7d22ec32dd6d6ad8ad"
+        }
+      ],
+      "scope": "Next SSR development fixture only"
+    }
+  ]
+}

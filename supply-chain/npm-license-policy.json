@@ -28,11 +28,14 @@
   "exceptionGroups": [
     {
       "id": "npm-missing-or-non-spdx-metadata",
-      "owners": ["@7etsuo", "@signerless"],
+      "owners": [
+        "@7etsuo",
+        "@signerless"
+      ],
       "tracking": "SUPPLY-ASSURANCE-001",
-      "reviewedOn": "2026-07-19",
-      "expiresOn": "2026-10-17",
-      "reason": "These exact immutable package versions omit SPDX metadata or point at a bundled license file; their license evidence was reviewed independently.",
+      "reviewedOn": "2026-10-19",
+      "expiresOn": "2026-11-18",
+      "reason": "These exact immutable package versions omit SPDX metadata or point at a bundled license file; their license evidence was reviewed independently. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-10-19-npm-licenses.json; bounded renewal for maintainer review.",
       "entries": [
         {
           "lockfile": "package-lock.json",
@@ -77,11 +80,14 @@
     },
     {
       "id": "rpc-websockets-lgpl",
-      "owners": ["@7etsuo", "@signerless"],
+      "owners": [
+        "@7etsuo",
+        "@signerless"
+      ],
       "tracking": "SUPPLY-ASSURANCE-001",
-      "reviewedOn": "2026-07-19",
-      "expiresOn": "2026-10-17",
-      "reason": "The exact LGPL package is dynamically consumed through the deployment-only Solana web3 dependency tree and is not copied into AgenC source artifacts.",
+      "reviewedOn": "2026-10-19",
+      "expiresOn": "2026-11-18",
+      "reason": "The exact LGPL package is dynamically consumed through the deployment-only Solana web3 dependency tree and is not copied into AgenC source artifacts. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-10-19-npm-licenses.json; bounded renewal for maintainer review.",
       "entries": [
         {
           "lockfile": "tests-integration/package-lock.json",
@@ -96,26 +102,141 @@
     },
     {
       "id": "next-sharp-optional-platform-binaries",
-      "owners": ["@7etsuo", "@signerless"],
+      "owners": [
+        "@7etsuo",
+        "@signerless"
+      ],
       "tracking": "SUPPLY-ASSURANCE-001",
-      "reviewedOn": "2026-07-19",
-      "expiresOn": "2026-10-17",
-      "reason": "These exact optional sharp/libvips platform artifacts are used only by the Next SSR test fixture; they remain separately licensed binary components and are not published in AgenC npm tarballs.",
+      "reviewedOn": "2026-10-19",
+      "expiresOn": "2026-11-18",
+      "reason": "These exact optional sharp/libvips platform artifacts are used only by the Next SSR test fixture; they remain separately licensed binary components and are not published in AgenC npm tarballs. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-10-19-npm-licenses.json; bounded renewal for maintainer review.",
       "entries": [
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-darwin-arm64", "package": "@img/sharp-libvips-darwin-arm64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-arm64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-darwin-x64", "package": "@img/sharp-libvips-darwin-x64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-x64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linux-arm", "package": "@img/sharp-libvips-linux-arm", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linux-arm64", "package": "@img/sharp-libvips-linux-arm64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linux-ppc64", "package": "@img/sharp-libvips-linux-ppc64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-ppc64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linux-riscv64", "package": "@img/sharp-libvips-linux-riscv64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-riscv64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linux-s390x", "package": "@img/sharp-libvips-linux-s390x", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-s390x/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linux-x64", "package": "@img/sharp-libvips-linux-x64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-x64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linuxmusl-arm64", "package": "@img/sharp-libvips-linuxmusl-arm64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-arm64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-libvips-linuxmusl-x64", "package": "@img/sharp-libvips-linuxmusl-x64", "version": "1.2.4", "observedLicense": "LGPL-3.0-or-later", "approvedLicense": "LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-x64/v/1.2.4" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-wasm32", "package": "@img/sharp-wasm32", "version": "0.34.5", "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT", "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT", "evidence": "https://www.npmjs.com/package/@img/sharp-wasm32/v/0.34.5" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-win32-arm64", "package": "@img/sharp-win32-arm64", "version": "0.34.5", "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later", "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-win32-arm64/v/0.34.5" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-win32-ia32", "package": "@img/sharp-win32-ia32", "version": "0.34.5", "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later", "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-win32-ia32/v/0.34.5" },
-        { "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json", "path": "node_modules/@img/sharp-win32-x64", "package": "@img/sharp-win32-x64", "version": "0.34.5", "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later", "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later", "evidence": "https://www.npmjs.com/package/@img/sharp-win32-x64/v/0.34.5" }
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-darwin-arm64",
+          "package": "@img/sharp-libvips-darwin-arm64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-arm64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-darwin-x64",
+          "package": "@img/sharp-libvips-darwin-x64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-darwin-x64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linux-arm",
+          "package": "@img/sharp-libvips-linux-arm",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linux-arm64",
+          "package": "@img/sharp-libvips-linux-arm64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-arm64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linux-ppc64",
+          "package": "@img/sharp-libvips-linux-ppc64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-ppc64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linux-riscv64",
+          "package": "@img/sharp-libvips-linux-riscv64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-riscv64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linux-s390x",
+          "package": "@img/sharp-libvips-linux-s390x",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-s390x/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linux-x64",
+          "package": "@img/sharp-libvips-linux-x64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linux-x64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linuxmusl-arm64",
+          "package": "@img/sharp-libvips-linuxmusl-arm64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-arm64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-libvips-linuxmusl-x64",
+          "package": "@img/sharp-libvips-linuxmusl-x64",
+          "version": "1.2.4",
+          "observedLicense": "LGPL-3.0-or-later",
+          "approvedLicense": "LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-libvips-linuxmusl-x64/v/1.2.4"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-wasm32",
+          "package": "@img/sharp-wasm32",
+          "version": "0.34.5",
+          "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+          "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-wasm32/v/0.34.5"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-win32-arm64",
+          "package": "@img/sharp-win32-arm64",
+          "version": "0.34.5",
+          "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+          "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-arm64/v/0.34.5"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-win32-ia32",
+          "package": "@img/sharp-win32-ia32",
+          "version": "0.34.5",
+          "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+          "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-ia32/v/0.34.5"
+        },
+        {
+          "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+          "path": "node_modules/@img/sharp-win32-x64",
+          "package": "@img/sharp-win32-x64",
+          "version": "0.34.5",
+          "observedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+          "approvedLicense": "Apache-2.0 AND LGPL-3.0-or-later",
+          "evidence": "https://www.npmjs.com/package/@img/sharp-win32-x64/v/0.34.5"
+        }
       ]
     }
   ]
