@@ -1,4 +1,5 @@
 // Read-only RPC monitor. It has no signer, key-file argument, or broadcast path.
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,10 +17,17 @@ import {
   validateSettings,
 } from "./watchdog-core.mjs";
 
+class GenesisMismatch extends Error {
+  constructor() {
+    super("RPC genesis mismatch");
+    this.name = "GenesisMismatch";
+  }
+}
+
 export async function captureBaseline(connection, input) {
   const settings = validateSettings(input);
   if ((await connection.getGenesisHash()) !== settings.genesisHash)
-    throw new Error("RPC genesis mismatch");
+    throw new GenesisMismatch();
   const fixed = fixedAccounts(settings);
   const { context, value } = await connection.getMultipleAccountsInfoAndContext(
     fixed.map(({ address }) => new PublicKey(address)),
@@ -123,9 +131,13 @@ export async function watch({
     });
   // Fail startup on a wrong endpoint; never monitor a different cluster silently.
   if ((await connection.getGenesisHash()) !== settings.genesisHash) {
-    emit({ type: "rpc-genesis-mismatch" });
+    emit({
+      type: "rpc-genesis-mismatch",
+      occurredAt: new Date().toISOString(),
+      occurrenceId: randomUUID(),
+    });
     await outbox.deliver();
-    throw new Error("RPC genesis mismatch");
+    throw new GenesisMismatch();
   }
   const tracker = new ObservationTracker(baseline, emit);
   const removers = [];
@@ -208,7 +220,7 @@ export async function watch({
         nextPoll = now + settings.pollIntervalMs;
         try {
           if ((await connection.getGenesisHash()) !== settings.genesisHash)
-            throw new Error("GenesisMismatch");
+            throw new GenesisMismatch();
           const entries = [...tracker.latest.values()];
           for (let index = 0; index < entries.length; index += 100) {
             const batch = entries.slice(index, index + 100);
@@ -260,20 +272,23 @@ export async function watch({
       }
       if (fatal) throw fatal;
       const checkedAt = Date.now();
+      const deadLetterIds = outbox.deadLetterIds();
       const degraded =
         pollError ??
-        (outbox.lastDeliveryError
-          ? "pager-delivery-failed"
-          : checkedAt - lastPollAt > settings.staleAfterMs
-            ? "rpc-poll-stale"
-            : checkedAt - lastDiscoveryAt >
-                settings.discoveryIntervalMs + settings.staleAfterMs
-              ? "discovery-stale"
-              : checkedAt - lastAdvancingSlotAt > settings.staleAfterMs
-                ? "rpc-slot-stale"
-                : !pollingOnly && checkedAt - lastWsAt > settings.staleAfterMs
-                  ? "subscription-stale"
-                  : null);
+        (deadLetterIds.length
+          ? "pager-dead-letter"
+          : outbox.lastDeliveryError
+            ? "pager-delivery-failed"
+            : checkedAt - lastPollAt > settings.staleAfterMs
+              ? "rpc-poll-stale"
+              : checkedAt - lastDiscoveryAt >
+                  settings.discoveryIntervalMs + settings.staleAfterMs
+                ? "discovery-stale"
+                : checkedAt - lastAdvancingSlotAt > settings.staleAfterMs
+                  ? "rpc-slot-stale"
+                  : !pollingOnly && checkedAt - lastWsAt > settings.staleAfterMs
+                    ? "subscription-stale"
+                    : null);
       const state = degraded ?? "healthy";
       if (state !== failureState) {
         emit({
@@ -281,6 +296,8 @@ export async function watch({
           reason: state,
           // A new occurrence must not deduplicate an earlier recovered outage.
           occurredAt: new Date().toISOString(),
+          occurrenceId: randomUUID(),
+          ...(deadLetterIds.length ? { deadLetterIds } : {}),
         });
         failureState = state;
       }
@@ -294,6 +311,7 @@ export async function watch({
         lastDiscoveryAt,
         lastWsAt,
         pendingAlerts: outbox.pending().length,
+        deadLetterIds,
         baselineSha256,
       });
       await delay(200, undefined, { signal }).catch((e) => {

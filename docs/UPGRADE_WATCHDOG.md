@@ -13,6 +13,8 @@ allocated payload hash, upgrade-authority, custody-account or proposal change
 creates an alert. Vault movements exceeding the configured cumulative threshold
 also alert; the example's 0.001 SOL thresholds require operator review, not a
 claim that smaller or offsetting transfers are harmless.
+Lamport-only credits to Program or ProgramData do not emit upgrade alerts;
+their owner, executable flag, account bytes, slot and authority remain monitored.
 
 **Buffers do not name a target program.** The [loader Buffer state](https://docs.rs/solana-loader-v3-interface/3.0.0/src/solana_loader_v3_interface/state.rs.html)
 contains an authority and bytes. Add every approved staging authority to the
@@ -51,13 +53,17 @@ template; installing it or providing a real pager endpoint requires an operator.
    with independently obtained approved-release evidence before installing the
    baseline. The payload hash includes allocated zero padding; it is not a
    trimmed ELF or normalized `solana-verify` hash. Capture alone approves nothing.
+
 3. Install the reviewed baseline read-only at `/etc/agenc/watchdog-baseline.json`.
    Store the RPC URL, `AGENC_WATCHDOG_WEBHOOK_URL`, and optional
    `AGENC_WATCHDOG_WEBHOOK_TOKEN` in the protected service environment file.
    The webhook must use HTTPS (HTTP is permitted only on loopback for tests).
    It receives JSON alerts and must acknowledge only after durable acceptance
    with a 2xx response. Deduplicate by `id`/`Idempotency-Key`; delivery is
-   at-least-once. Redirects are refused. No credentials appear in the baseline
+   at-least-once. For an already durably accepted id, the receiver may instead
+   return HTTP 409 with **both** `Idempotency-Key: <that exact id>` and
+   `X-AgenC-Delivery-Status: duplicate`. A bare 409 or 422 remains a failure.
+   Redirects are refused. No credentials appear in the baseline
    or alert body. State/outbox files require persistent storage.
 4. Enable the service and an **independent** health check of
    `node scripts/check-watchdog-health.mjs /var/lib/agenc-watchdog/health.json`.
@@ -76,6 +82,19 @@ missed notifications and detect missing/invalid accounts. Older context slots
 cannot overwrite newer observations. `--polling-only true` exists to rehearse the
 fallback, and is recorded in health output.
 
+Delivery processes eligible alerts in observation-time order, isolates each
+failure, and persists its attempt count and next retry time before sending.
+Backoff starts at one second and doubles to a 60-second cap. A rejected or timed
+out alert cannot prevent later eligible alerts from being delivered. After eight
+attempts, its immutable payload moves to `outbox/dead-letter/`; retry evidence
+remains in `outbox/attempts/`. Health reports `pager-dead-letter` with the affected
+`deadLetterIds` (also present when another health failure takes precedence).
+The independent health check must page on this degraded state. Restart does not
+reset attempts, backoff or dead letters. After repairing the receiver, stop the
+service, preserve an incident copy of the dead-letter payload and attempt record,
+move that payload back to `outbox/`, remove its `attempts/<id>.json`, and restart.
+Never discard a failed alert merely to make health green.
+
 ## Detection limits and response
 
 Confirmed subscriptions do **not** guarantee detection within one slot. Network
@@ -85,6 +104,11 @@ balance flows between observations. Both channels share the configured provider;
 run a separately operated second instance/provider and independent liveness
 monitor for stronger coverage. For a hard per-slot feed, commission a measured
 validator/Geyser transaction stream rather than relabeling this RPC monitor.
+
+A zero Squads time lock permits an upgrade quorum to execute before an operator
+can respond. In that configuration this watchdog detects changes; it cannot
+prevent an authorized malicious upgrade. Record the observed time lock and a
+reviewed custody/time-lock decision as part of #280 operational acceptance.
 
 An alert contains context slot, source (`websocket`/`poll`), observation time,
 baseline digest, and prior/current account evidence. Triage unexpected deployment,
@@ -108,6 +132,8 @@ daemon never pauses, signs, advances nonces, rotates authorities or deploys.
 - Record an authorized **devnet** Buffer drill and actual delivery timing. The
   automated local-validator test below is implementation evidence, not that
   operational acceptance ceremony or a sub-slot latency guarantee.
+- Record the live Squads time lock, the response window it provides, and the
+  independently approved decision to change it or accept the residual risk.
 
 ## Executable evidence
 
@@ -126,6 +152,12 @@ HTTP-only phase proves reconciliation. JSON evidence includes program/source
 hashes, transaction signatures/metadata and received alerts. The test does not
 deploy Squads: its namespace/decoder cases are covered by unit fixtures, and a
 full Squads proposal and independent pager drill remains an operational gate.
+It also rejects one real buffer alert while later authority and upgrade alerts
+must arrive, verifies a one-lamport ProgramData donation does not page, and
+compares the CLI's confirmed buffer allocation/funding transaction with
+`loaderRentDataLengths()` and the validator's rent calculation. HTTP regression
+tests separately prove bounded retries, durable dead letters and a lost-response
+retry acknowledged by the documented duplicate contract.
 
 The pinned program currently emits sBPFv0. Agave 4.1.0 local validators activate
 SIMD-0500 by default, which rejects new v0 deployments while existing programs

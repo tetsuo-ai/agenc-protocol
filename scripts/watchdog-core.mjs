@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -239,7 +240,18 @@ export function atomicJson(path, value) {
 
 /** A local durable outbox. Delivery is at-least-once; receivers deduplicate by id. */
 export class AlertOutbox {
-  constructor(directory, webhook, token) {
+  constructor(
+    directory,
+    webhook,
+    token,
+    {
+      now = Date.now,
+      maxAttempts = 8,
+      retryBaseMs = 1000,
+      retryMaxMs = 60_000,
+      requestTimeoutMs = 5000,
+    } = {},
+  ) {
     this.directory = directory;
     this.webhook = new URL(webhook);
     if (
@@ -253,61 +265,183 @@ export class AlertOutbox {
     )
       throw new Error("webhook requires HTTPS (HTTP allowed only on loopback)");
     this.token = token;
+    for (const value of [
+      maxAttempts,
+      retryBaseMs,
+      retryMaxMs,
+      requestTimeoutMs,
+    ])
+      if (!Number.isSafeInteger(value) || value < 1)
+        throw new Error("invalid outbox retry policy");
+    this.now = now;
+    this.maxAttempts = maxAttempts;
+    this.retryBaseMs = retryBaseMs;
+    this.retryMaxMs = retryMaxMs;
+    this.requestTimeoutMs = requestTimeoutMs;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    mkdirSync(join(directory, "delivered"), { recursive: true, mode: 0o700 });
-    this.lastDeliveryError = null;
+    for (const subdirectory of ["delivered", "attempts", "dead-letter"])
+      mkdirSync(join(directory, subdirectory), {
+        recursive: true,
+        mode: 0o700,
+      });
+    this.refreshDeliveryError();
   }
   enqueue(event) {
     const id = hash(JSON.stringify(event));
     const path = join(this.directory, `${id}.json`);
     if (
       !existsSync(path) &&
-      !existsSync(join(this.directory, "delivered", `${id}.json`))
+      !existsSync(join(this.directory, "delivered", `${id}.json`)) &&
+      !existsSync(join(this.directory, "dead-letter", `${id}.json`))
     )
       atomicJson(path, {
+        ...event,
         schemaVersion: 1,
         id,
-        observedAt: new Date().toISOString(),
-        ...event,
+        observedAt: new Date(this.now()).toISOString(),
       });
     return id;
   }
   pending() {
     return readdirSync(this.directory)
       .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => {
+        let observedAt = "";
+        try {
+          observedAt =
+            JSON.parse(readFileSync(join(this.directory, name), "utf8"))
+              .observedAt ?? "";
+        } catch {
+          /* Invalid records are quarantined individually by deliver(). */
+        }
+        return { name, observedAt: String(observedAt) };
+      })
+      .sort(
+        (a, b) =>
+          a.observedAt.localeCompare(b.observedAt) ||
+          a.name.localeCompare(b.name),
+      )
+      .map(({ name }) => name);
+  }
+  deadLetterIds() {
+    return readdirSync(join(this.directory, "dead-letter"))
+      .filter((name) => /^[a-f0-9]{64}\.json$/.test(name))
+      .map((name) => name.slice(0, -5))
       .sort();
+  }
+  refreshDeliveryError() {
+    this.lastDeliveryError = this.pending().some((name) =>
+      existsSync(join(this.directory, "attempts", name)),
+    )
+      ? "RetryPending"
+      : null;
+  }
+  move(name, destination) {
+    renameSync(
+      join(this.directory, name),
+      join(this.directory, destination, name),
+    );
+    for (const directory of [
+      this.directory,
+      join(this.directory, destination),
+    ]) {
+      const fd = openSync(directory, "r");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    }
   }
   async deliver({ signal } = {}) {
     if (this.delivering) return;
     this.delivering = true;
     try {
-      for (const name of this.pending().slice(0, 20)) {
+      let attempted = 0;
+      for (const name of this.pending()) {
         if (signal?.aborted) break;
-        const path = join(this.directory, name);
-        const body = readFileSync(path, "utf8");
-        const response = await fetch(this.webhook, {
-          method: "POST",
-          redirect: "error",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": name.slice(0, -5),
-            ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-          },
-          body,
-          signal: signal
-            ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
-            : AbortSignal.timeout(5000),
-        });
-        await response.body?.cancel();
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        renameSync(path, join(this.directory, "delivered", name));
+        const attemptPath = join(this.directory, "attempts", name);
+        let retry, body;
+        try {
+          retry = existsSync(attemptPath)
+            ? JSON.parse(readFileSync(attemptPath, "utf8"))
+            : { attempts: 0, nextAttemptAt: 0 };
+          if (
+            !Number.isSafeInteger(retry.attempts) ||
+            retry.attempts < 0 ||
+            !Number.isSafeInteger(retry.nextAttemptAt) ||
+            retry.nextAttemptAt < 0
+          )
+            throw new Error("invalid retry state");
+          body = readFileSync(join(this.directory, name), "utf8");
+          const event = JSON.parse(body);
+          if (
+            event.id !== name.slice(0, -5) ||
+            event.schemaVersion !== 1 ||
+            !Number.isFinite(Date.parse(event.observedAt))
+          )
+            throw new Error("invalid alert record");
+        } catch {
+          atomicJson(attemptPath, { lastError: "InvalidOutboxRecord" });
+          this.move(name, "dead-letter");
+          continue;
+        }
+        if (retry.attempts >= this.maxAttempts) {
+          this.move(name, "dead-letter");
+          continue;
+        }
+        if (retry.nextAttemptAt > this.now()) continue;
+        if (attempted++ >= 20) break;
+        retry = {
+          attempts: retry.attempts + 1,
+          nextAttemptAt:
+            this.now() +
+            Math.min(
+              this.retryMaxMs,
+              this.retryBaseMs * 2 ** Math.min(retry.attempts, 30),
+            ),
+          lastError: "DeliveryInterrupted",
+        };
+        // Write before sending: a process crash cannot reset attempts or backoff.
+        atomicJson(attemptPath, retry);
+        let delivered = false;
+        try {
+          const timeout = AbortSignal.timeout(this.requestTimeoutMs);
+          const response = await fetch(this.webhook, {
+            method: "POST",
+            redirect: "error",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": name.slice(0, -5),
+              ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+            },
+            body,
+            signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+          });
+          // A bare 409/422 is not proof of durable acceptance by the receiver.
+          delivered =
+            response.ok ||
+            (response.status === 409 &&
+              response.headers.get("idempotency-key") === name.slice(0, -5) &&
+              response.headers.get("x-agenc-delivery-status") === "duplicate");
+          await response.body?.cancel();
+          if (!delivered) retry.lastError = `HTTP${response.status}`;
+        } catch (error) {
+          // Never persist endpoint credentials, headers or arbitrary error messages.
+          retry.lastError =
+            error?.name === "TimeoutError" ? "TimeoutError" : "DeliveryError";
+        }
+        if (delivered) {
+          this.move(name, "delivered");
+          unlinkSync(attemptPath);
+        } else {
+          atomicJson(attemptPath, retry);
+          if (retry.attempts >= this.maxAttempts)
+            this.move(name, "dead-letter");
+        }
       }
-      this.lastDeliveryError = null;
-    } catch (error) {
-      // Never print endpoint credentials, authorization headers, or RPC URLs.
-      this.lastDeliveryError =
-        error instanceof Error ? error.name : "DeliveryError";
     } finally {
+      this.refreshDeliveryError();
       this.delivering = false;
     }
   }
@@ -336,8 +470,15 @@ export class ObservationTracker {
       };
     }
     const entry = { kind, address, slot, view };
+    const comparable = (value) => {
+      if (kind !== "program" && kind !== "program-data") return value;
+      const { lamports: _donations, ...semantic } = value;
+      return semantic;
+    };
     const changed =
-      !previous || JSON.stringify(previous.view) !== JSON.stringify(view);
+      !previous ||
+      JSON.stringify(comparable(previous.view)) !==
+        JSON.stringify(comparable(view));
     if (!changed) {
       this.latest.set(address, entry);
       return;
