@@ -117,11 +117,44 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
         } else {
             None
         };
-        task.status = restore_status_after_dispute_cancel(
+        let restored = restore_status_after_dispute_cancel(
             task.live_submissions(),
             task.current_workers,
             legacy_pending_submissions,
         );
+        task.status = restored;
+        // AGNC-03: returning a task with live submissions to review must hand
+        // the creator back the review time the dispute froze out. Accumulate
+        // the disputed duration as task-level review-clock debt; the
+        // auto-accept deadline consumer adds it to every submission's fixed
+        // review_deadline_at. Without this, a worker could submit, self-dispute,
+        // let the deadline lapse, then cancel + auto-accept in one transaction.
+        if restored == TaskStatus::PendingValidation {
+            let disputed_secs = clock
+                .unix_timestamp
+                .saturating_sub(dispute.created_at)
+                .min(i64::from(u32::MAX));
+            let config_info = ctx
+                .remaining_accounts
+                .get(1)
+                .ok_or(CoordinationError::TaskValidationConfigRequired)?;
+            require!(
+                config_info.is_writable,
+                CoordinationError::TaskValidationConfigRequired
+            );
+            validate_account_owner(config_info)?;
+            let mut config_data = config_info.try_borrow_mut_data()?;
+            let mut validation_config =
+                TaskValidationConfig::try_deserialize(&mut &config_data[..])?;
+            require!(
+                validation_config.task == task.key(),
+                CoordinationError::TaskValidationConfigRequired
+            );
+            validation_config.add_review_debt_secs(disputed_secs);
+            // Borsh-only rewrite (fix #960): never double-write the discriminator.
+            AnchorSerialize::serialize(&validation_config, &mut &mut config_data[8..])
+                .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize)?;
+        }
     }
 
     // Decrement defendant dispute counter (fix #544, #842)

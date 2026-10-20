@@ -630,11 +630,16 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
     .instruction(), [w.provider]), "slash:initiate");
 
   // Cancel (no votes cast) -> DisputeStatus::Cancelled => initiator always loses.
-  // cancel_dispute requires dispute.defendant as the single remaining account.
+  // cancel_dispute remaining accounts: [0] dispute.defendant, [1] the writable
+  // TaskValidationConfig (required when the restore lands on PendingValidation —
+  // AGNC-03 review-clock debt accumulates there).
   expectOk(send(w.svm, await w.providerProg.methods
     .cancelDispute()
     .accounts({ protocolConfig: w.protocolPda, dispute, task: m.task, authority: w.provider.publicKey })
-    .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])
+    .remainingAccounts([
+      { pubkey: w.providerAgent, isSigner: false, isWritable: true },
+      { pubkey: m.validation, isSigner: false, isWritable: true },
+    ])
     .instruction(), [w.provider]), "slash:cancel");
 
   return { dispute, task: m.task, initiatorAgent: w.providerAgent };
