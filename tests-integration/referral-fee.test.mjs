@@ -345,6 +345,68 @@ test("migrate_task: reallocs a 432B Batch-2 Task to 466B with referrer fields ze
   assert.equal(t2.referrer_fee_bps, 0, "referrer_fee_bps zero-filled");
 });
 
+// ---------------------------------------------------------------------------
+// AGNC-02: a payee that settlement can never credit is rejected at snapshot time.
+// Anchor resolves an optional account equal to the program id to None, and the
+// runtime demotes reserved builtin/sysvar keys to read-only, so a snapshotted
+// referrer/operator equal to one of them would make every worker payout revert.
+// ---------------------------------------------------------------------------
+const UNPAYABLE_PAYEES = [
+  ["program id", PID],
+  ["Clock sysvar", new PublicKey("SysvarC1ock11111111111111111111111111111111")],
+  ["upgradeable loader", new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111")],
+];
+
+async function createTaskIx(w, referrer, referrerFeeBps) {
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  return w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(5_000_000), 1, new BN(now + 3600), 0, null, 0, null, referrer, referrerFeeBps)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction();
+}
+
+test("AGNC-02: hire_from_listing rejects a program-id or reserved-key referrer", async () => {
+  for (const [label, payee] of UNPAYABLE_PAYEES) {
+    const w = await freshWorld({ moderationEnabled: true, price: 5_000_000 });
+    const listingMod = await recordListingClean(w);
+    const { ix } = await hireIx(w, { listingModeration: listingMod, referrer: payee, referrerFeeBps: 500 });
+    expectFail(send(w.svm, ix, [w.buyer]), "MarketplacePayeeUnpayable", `hire with ${label} referrer`);
+  }
+  // A zero fee snapshots no leg at all, so the same key is harmless there.
+  const w = await freshWorld({ moderationEnabled: true, price: 5_000_000 });
+  const listingMod = await recordListingClean(w);
+  const { ix, task } = await hireIx(w, { listingModeration: listingMod, referrer: PID, referrerFeeBps: 0 });
+  expectOk(send(w.svm, ix, [w.buyer]), "zero-fee program-id referrer hire");
+  const t = decode(w.svm, "Task", task);
+  assert.equal(t.referrer.toBase58(), PublicKey.default.toBase58());
+  assert.equal(t.referrer_fee_bps, 0);
+});
+
+test("AGNC-02: create_task rejects a program-id or reserved-key referrer", async () => {
+  for (const [label, payee] of UNPAYABLE_PAYEES) {
+    const w = await freshWorld({ price: 1_000_000 });
+    expectFail(send(w.svm, await createTaskIx(w, payee, 500), [w.buyer]), "MarketplacePayeeUnpayable", `create_task with ${label} referrer`);
+  }
+  const w = await freshWorld({ price: 1_000_000 });
+  expectOk(send(w.svm, await createTaskIx(w, Keypair.generate().publicKey, 500), [w.buyer]), "create_task with a wallet referrer");
+});
+
+test("AGNC-02: a service listing cannot carry a program-id or reserved-key operator", async () => {
+  for (const [label, payee] of UNPAYABLE_PAYEES) {
+    const w = await freshWorld({ price: 1_000_000 });
+    expectFail(send(w.svm, await w.providerProg.methods
+      .updateServiceListing(null, null, null, null, null, null, null, payee, 100)
+      .accounts({ listing: w.listing, providerAgent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
+      .instruction(), [w.provider]), "MarketplacePayeeUnpayable", `listing operator ${label}`);
+  }
+});
+
 test("SPL path: a token-denominated create_task with a referrer fee is rejected (referrer leg is SOL-only)", async () => {
   // The referrer leg pays in lamports (like the operator leg), so it is SOL-only. A
   // token-denominated create_task carrying a referrer fee is rejected at creation

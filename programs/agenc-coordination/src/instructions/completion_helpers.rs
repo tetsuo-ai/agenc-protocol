@@ -573,13 +573,63 @@ pub fn calculate_combined_fees(
     Ok((operator_fee, referrer_fee))
 }
 
+/// Runtime-reserved account keys (AGNC-02): builtins and sysvars, active and
+/// feature-pending, per solana-reserved-account-keys 2.2.2. The runtime demotes
+/// every reserved key to read-only, so a payee slot holding one fails its
+/// `#[account(mut)]` constraint on every settlement path. The System program is
+/// omitted: it is `Pubkey::default()`, the no-payee sentinel, rejected separately.
+const UNPAYABLE_RESERVED_PAYEES: [Pubkey; 30] = [
+    anchor_lang::pubkey!("AddressLookupTab1e1111111111111111111111111"),
+    anchor_lang::pubkey!("BPFLoader1111111111111111111111111111111111"),
+    anchor_lang::pubkey!("BPFLoader2111111111111111111111111111111111"),
+    anchor_lang::pubkey!("BPFLoaderUpgradeab1e11111111111111111111111"),
+    anchor_lang::pubkey!("ComputeBudget111111111111111111111111111111"),
+    anchor_lang::pubkey!("Config1111111111111111111111111111111111111"),
+    anchor_lang::pubkey!("Ed25519SigVerify111111111111111111111111111"),
+    anchor_lang::pubkey!("Feature111111111111111111111111111111111111"),
+    anchor_lang::pubkey!("KeccakSecp256k11111111111111111111111111111"),
+    anchor_lang::pubkey!("LoaderV411111111111111111111111111111111111"),
+    anchor_lang::pubkey!("NativeLoader1111111111111111111111111111111"),
+    anchor_lang::pubkey!("Secp256r1SigVerify1111111111111111111111111"),
+    anchor_lang::pubkey!("Stake11111111111111111111111111111111111111"),
+    anchor_lang::pubkey!("StakeConfig11111111111111111111111111111111"),
+    anchor_lang::pubkey!("Vote111111111111111111111111111111111111111"),
+    anchor_lang::pubkey!("ZkE1Gama1Proof11111111111111111111111111111"),
+    anchor_lang::pubkey!("ZkTokenProof1111111111111111111111111111111"),
+    anchor_lang::pubkey!("Sysvar1111111111111111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarC1ock11111111111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarEpochRewards1111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarEpochSchedu1e111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarFees111111111111111111111111111111111"),
+    anchor_lang::pubkey!("Sysvar1nstructions1111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarLastRestartS1ot1111111111111111111111"),
+    anchor_lang::pubkey!("SysvarRecentB1ockHashes11111111111111111111"),
+    anchor_lang::pubkey!("SysvarRent111111111111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarRewards111111111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarS1otHashes111111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarS1otHistory11111111111111111111111111"),
+    anchor_lang::pubkey!("SysvarStakeHistory1111111111111111111111111"),
+];
+
+/// True when no settlement transaction can ever credit `payee` (AGNC-02).
+///
+/// Anchor resolves an optional account equal to the program id to `None`, so a
+/// snapshotted program-id payee can never be supplied: its mandatory leg fails
+/// `MissingReferrerAccount` / `MissingOperatorAccount` on every payout path and
+/// strands the worker's reward and bond. Reserved keys fail `ConstraintMut` the
+/// same way. Snapshot paths reject both so no new Task can carry such a leg.
+pub(crate) fn is_unpayable_marketplace_payee(payee: &Pubkey) -> bool {
+    *payee == crate::ID || UNPAYABLE_RESERVED_PAYEES.contains(payee)
+}
+
 /// Normalize + validate referrer args at snapshot time (hire / create-task), so a
 /// bad referral is rejected at task creation rather than surfacing only at
 /// settlement. Returns the canonical `(referrer_pubkey, referrer_fee_bps)` to stamp
 /// onto the Task / HireRecord:
 ///   * `referrer == None` OR `referrer_fee_bps == 0` → `(default, 0)` (no leg).
 ///   * otherwise validates the per-leg cap, the combined cap against the (already
-///     bounded) protocol + operator fees, and the no-self-deal guard.
+///     bounded) protocol + operator fees, the no-self-deal guard, and that the
+///     payee is creditable at settlement (AGNC-02).
 ///
 /// `operator_fee_bps` is the operator leg that will co-exist on this task (0 when
 /// there is none), so the combined cap is enforced at creation with the SAME math
@@ -620,6 +670,11 @@ pub fn resolve_referrer_snapshot(
     require!(
         referrer_key != creator,
         CoordinationError::ReferrerIsCreator
+    );
+    // AGNC-02: a leg settlement can never pay would block every worker payout.
+    require!(
+        !is_unpayable_marketplace_payee(&referrer_key),
+        CoordinationError::MarketplacePayeeUnpayable
     );
     Ok((referrer_key, referrer_fee_bps))
 }
@@ -728,9 +783,11 @@ pub fn build_marketplace_fee_legs<'info>(
 /// A payee equal to the escrow makes a direct lamport transfer a net-zero while
 /// settlement accounting records it as paid; closing escrow then returns the
 /// retained fee to the creator. A payee equal to the Task similarly parks the fee
-/// in a creator-closed lifecycle account. Creation paths call this before funding,
-/// and settlement calls it again through `build_marketplace_fee_legs` for defense
-/// in depth and legacy-state fail-closed behavior.
+/// in a creator-closed lifecycle account. A payee that settlement can never credit
+/// (the program id or a runtime-reserved key, AGNC-02) would make the mandatory
+/// leg block every payout. Creation paths call this before funding, and
+/// settlement calls it again through `build_marketplace_fee_legs` for defense in
+/// depth and legacy-state fail-closed behavior.
 pub(crate) fn validate_marketplace_payee_destinations(
     task_key: Pubkey,
     escrow_key: Pubkey,
@@ -750,6 +807,10 @@ pub(crate) fn validate_marketplace_payee_destinations(
             operator != task_key && operator != escrow_key,
             CoordinationError::MarketplacePayeeAccountAlias
         );
+        require!(
+            !is_unpayable_marketplace_payee(&operator),
+            CoordinationError::MarketplacePayeeUnpayable
+        );
     }
     if referrer_fee_bps > 0 {
         require!(
@@ -760,6 +821,10 @@ pub(crate) fn validate_marketplace_payee_destinations(
         require!(
             referrer != task_key && referrer != escrow_key,
             CoordinationError::MarketplacePayeeAccountAlias
+        );
+        require!(
+            !is_unpayable_marketplace_payee(&referrer),
+            CoordinationError::MarketplacePayeeUnpayable
         );
     }
     Ok(())
@@ -1410,6 +1475,89 @@ mod tests {
             resolve_referrer_snapshot(Some(referrer), MAX_REFERRER_FEE_BPS + 1, 0, 0, creator)
                 .is_err()
         );
+    }
+
+    // ---- AGNC-02: payees settlement can never credit ----
+
+    fn unpayable_payees() -> Vec<Pubkey> {
+        let mut keys = vec![crate::ID];
+        keys.extend(UNPAYABLE_RESERVED_PAYEES);
+        keys
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn unpayable_payee_denylist_matches_runtime_ids() {
+        use anchor_lang::solana_program::{bpf_loader_upgradeable, feature, sysvar};
+        // Every id Anchor re-exports must be denied; the remaining builtins are
+        // literals copied from solana-sdk-ids 2.2.1.
+        let mut runtime_ids = vec![
+            bpf_loader_upgradeable::ID,
+            feature::ID,
+            sysvar::ID,
+            sysvar::epoch_rewards::ID,
+            sysvar::last_restart_slot::ID,
+        ];
+        runtime_ids.extend(sysvar::ALL_IDS.iter().copied());
+        for id in runtime_ids {
+            assert!(UNPAYABLE_RESERVED_PAYEES.contains(&id), "{id} missing");
+        }
+        let mut unique = UNPAYABLE_RESERVED_PAYEES.to_vec();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), UNPAYABLE_RESERVED_PAYEES.len());
+        // The no-payee sentinel keeps its own error; ordinary keys stay payable.
+        assert!(!is_unpayable_marketplace_payee(&Pubkey::default()));
+        assert!(!is_unpayable_marketplace_payee(&Pubkey::new_unique()));
+        assert!(is_unpayable_marketplace_payee(&crate::ID));
+    }
+
+    #[test]
+    fn test_resolve_referrer_unpayable_payee_rejected() {
+        let creator = Pubkey::new_unique();
+        for payee in unpayable_payees() {
+            assert_eq!(
+                resolve_referrer_snapshot(Some(payee), 500, 100, 0, creator).unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into(),
+                "{payee}"
+            );
+            // A zero fee normalizes to no leg, so nothing is ever owed to the key.
+            assert_eq!(
+                resolve_referrer_snapshot(Some(payee), 0, 100, 0, creator).unwrap(),
+                (Pubkey::default(), 0)
+            );
+        }
+    }
+
+    #[test]
+    fn active_marketplace_payees_must_be_creditable() {
+        let task = Pubkey::new_unique();
+        let escrow = Pubkey::new_unique();
+        let creator = Pubkey::new_unique();
+        let payable = Pubkey::new_unique();
+        for payee in unpayable_payees() {
+            assert_eq!(
+                validate_marketplace_payee_destinations(
+                    task, escrow, creator, payee, 100, payable, 100,
+                )
+                .unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into(),
+                "operator {payee}"
+            );
+            assert_eq!(
+                validate_marketplace_payee_destinations(
+                    task, escrow, creator, payable, 100, payee, 100,
+                )
+                .unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into(),
+                "referrer {payee}"
+            );
+            // Inactive legs move no money and stay backward-compatible.
+            assert!(validate_marketplace_payee_destinations(
+                task, escrow, creator, payee, 0, payee, 0,
+            )
+            .is_ok());
+        }
     }
 
     /// Create a test task with configurable parameters

@@ -1219,4 +1219,6 @@ pub enum CoordinationError {
     InvalidTaskQuotaAccount,
     #[msg("Rating requires a recorded SOL protocol fee of at least 100000 lamports")]
     RatingFeeNotQualified,
+    #[msg("A marketplace fee payee cannot be the program id or a runtime-reserved account")]
+    MarketplacePayeeUnpayable,
 }

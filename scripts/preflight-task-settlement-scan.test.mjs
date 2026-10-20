@@ -5,6 +5,7 @@ import test from "node:test";
 import { MAINNET_GENESIS, PROGRAM_ID } from "./preflight-dispute-scan.mjs";
 import { decodeHireRecordProvider } from "./preflight-hire-provider-scan.mjs";
 import {
+  UNPAYABLE_MARKETPLACE_PAYEES,
   inspectTaskSettlementRecord,
   isRevision4BondPostEligible,
   scanTaskSettlementSafety,
@@ -172,6 +173,103 @@ test("applies canonical legacy HireRecord fee terms when Task terms are empty", 
   assert.equal(result.blockers[0].kind, "operator-payee-alias");
 });
 
+test("AGNC-02: blocks active program-id and reserved-key operator/referrer payees", () => {
+  const unpayable = [
+    [PROGRAM_ID, "program-id"],
+    [new PublicKey("SysvarC1ock11111111111111111111111111111111"), "reserved-account-key"],
+    [new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111"), "reserved-account-key"],
+    [new PublicKey("Sysvar1111111111111111111111111111111111111"), "reserved-account-key"],
+  ];
+  for (const [payee, reason] of unpayable) {
+    const referrer = taskFixture({
+      operator: PublicKey.default,
+      referrer: payee,
+      referrerFeeBps: 500,
+    });
+    const referrerResult = inspectTaskSettlementRecord(
+      referrer.address,
+      referrer.data,
+    );
+    assert.equal(referrerResult.blockers.length, 1);
+    assert.equal(referrerResult.blockers[0].kind, "referrer-payee-unpayable");
+    assert.equal(referrerResult.blockers[0].reason, reason);
+    assert.equal(referrerResult.payeeUnpayableCount, 1);
+    assert.equal(referrerResult.payeeAliasCount, 0);
+
+    const operator = taskFixture({
+      operator: payee,
+      operatorFeeBps: 100,
+      referrer: PublicKey.default,
+    });
+    assert.equal(
+      inspectTaskSettlementRecord(operator.address, operator.data).blockers[0]
+        .kind,
+      "operator-payee-unpayable",
+    );
+
+    // A zero-fee snapshot has no settlement leg to strand.
+    const inactive = taskFixture({
+      operator: PublicKey.default,
+      referrer: payee,
+      referrerFeeBps: 0,
+    });
+    assert.deepEqual(
+      inspectTaskSettlementRecord(inactive.address, inactive.data).blockers,
+      [],
+    );
+
+    const terminal = taskFixture({
+      status: 4,
+      operator: PublicKey.default,
+      referrer: payee,
+      referrerFeeBps: 500,
+    });
+    const terminalResult = inspectTaskSettlementRecord(
+      terminal.address,
+      terminal.data,
+    );
+    assert.deepEqual(terminalResult.blockers, []);
+    assert.equal(terminalResult.inventory[0].kind, "referrer-payee-unpayable");
+  }
+
+  const legacy = taskFixture({
+    operator: PublicKey.default,
+    referrer: PublicKey.default,
+  });
+  const hire = hireFixture(legacy.address, {
+    referrer: PROGRAM_ID,
+    referrerFeeBps: 500,
+  });
+  const legacyResult = inspectTaskSettlementRecord(
+    legacy.address,
+    legacy.data,
+    hire,
+  );
+  assert.equal(legacyResult.feeTermsSource, "hire-record");
+  assert.equal(legacyResult.blockers[0].kind, "referrer-payee-unpayable");
+});
+
+test("AGNC-02 denylist is the program id plus every reserved non-System key", () => {
+  assert.equal(UNPAYABLE_MARKETPLACE_PAYEES.size, 31);
+  assert.equal(UNPAYABLE_MARKETPLACE_PAYEES.get(PROGRAM_ID.toBase58()), "program-id");
+  assert.equal(UNPAYABLE_MARKETPLACE_PAYEES.has(PublicKey.default.toBase58()), false);
+  for (const [key, reason] of UNPAYABLE_MARKETPLACE_PAYEES) {
+    assert.equal(new PublicKey(key).toBase58(), key);
+    if (key !== PROGRAM_ID.toBase58()) assert.equal(reason, "reserved-account-key");
+  }
+
+  // Ordinary wallets and PDAs remain payable.
+  const wallet = taskFixture({
+    operator: PublicKey.default,
+    referrer: new PublicKey(Buffer.alloc(32, 72)),
+    referrerFeeBps: 500,
+  });
+  assert.deepEqual(
+    inspectTaskSettlementRecord(wallet.address, wallet.data).blockers,
+    [],
+  );
+});
+
 test("terminal hazards remain inventory and cannot strand an upgrade", () => {
   const value = taskFixture({
     rewardAmount: 3n,
@@ -280,6 +378,7 @@ test("full scanner requires the exact mainnet genesis", async () => {
     getProgramAccounts: async () => [],
   });
   assert.equal(empty.taskCount, 0);
+  assert.equal(empty.payeeUnpayableCount, 0);
   assert.equal(empty.revision4BondPostEligibleTaskCount, 0);
   assert.deepEqual(empty.revision4BondPostEligibleTasks, []);
   assert.deepEqual(empty.blockers, []);

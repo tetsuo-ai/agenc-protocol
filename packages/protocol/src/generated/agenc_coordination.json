@@ -21194,6 +21194,11 @@
       "code": 6414,
       "name": "RatingFeeNotQualified",
       "msg": "Rating requires a recorded SOL protocol fee of at least 100000 lamports"
+    },
+    {
+      "code": 6415,
+      "name": "MarketplacePayeeUnpayable",
+      "msg": "A marketplace fee payee cannot be the program id or a runtime-reserved account"
     }
   ],
   "types": [

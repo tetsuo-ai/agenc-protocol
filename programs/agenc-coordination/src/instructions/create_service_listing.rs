@@ -5,14 +5,16 @@
 
 use crate::errors::CoordinationError;
 use crate::events::ServiceListingCreated;
+use crate::instructions::completion_helpers::is_unpayable_marketplace_payee;
 use crate::instructions::constants::{MAX_DEADLINE_SECONDS, MAX_OPERATOR_FEE_BPS, MIN_SKILL_PRICE};
 use crate::state::{AgentRegistration, AgentStatus, ListingState, ProtocolConfig, ServiceListing};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
 /// A non-zero operator fee must name a payee (else it would settle to nobody once
-/// the Batch-2 split lands) and must not exceed the cap. Single source for the
-/// create and update paths so both enforce the identical invariant.
+/// the Batch-2 split lands), that payee must be creditable at settlement (AGNC-02),
+/// and the fee must not exceed the cap. Single source for the create and update
+/// paths so both enforce the identical invariant.
 pub(crate) fn validate_operator_fee_invariant(
     operator: Pubkey,
     operator_fee_bps: u16,
@@ -24,6 +26,10 @@ pub(crate) fn validate_operator_fee_invariant(
     require!(
         operator_fee_bps == 0 || operator != Pubkey::default(),
         CoordinationError::ListingOperatorRequired
+    );
+    require!(
+        operator_fee_bps == 0 || !is_unpayable_marketplace_payee(&operator),
+        CoordinationError::MarketplacePayeeUnpayable
     );
     Ok(())
 }
@@ -205,6 +211,18 @@ mod tests {
     #[test]
     fn operator_invariant_allows_zero_fee_no_payee() {
         assert!(validate_operator_fee_invariant(Pubkey::default(), 0).is_ok());
+    }
+
+    #[test]
+    fn operator_invariant_rejects_unpayable_payee() {
+        // AGNC-02: hires snapshot this operator; settlement could never credit it.
+        for payee in [crate::ID, anchor_lang::solana_program::sysvar::clock::ID] {
+            assert_eq!(
+                validate_operator_fee_invariant(payee, 100).unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            assert!(validate_operator_fee_invariant(payee, 0).is_ok());
+        }
     }
 
     #[test]

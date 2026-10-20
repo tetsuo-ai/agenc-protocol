@@ -101,6 +101,19 @@ Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
 - set service listing state
 - hire from listing / hire from listing humanless (humanless pins CreatorReview in the same tx)
 
+Source hardening for AGNC-02 (not evidence of a mainnet deployment): the
+referrer and operator legs are mandatory at settlement, so a snapshotted payee
+that no transaction can credit would block every worker payout. Anchor resolves
+an optional account equal to the program id to `None`, and the runtime demotes
+reserved builtin/sysvar keys to read-only. `create_task`, `create_task_humanless`,
+both hire instructions and service-listing create/update now reject such a payee
+with a nonzero fee (`MarketplacePayeeUnpayable`, 6415); settlement re-checks
+Task-stamped and legacy HireRecord terms. A zero fee still snapshots no leg.
+Instruction accounts, arguments and account layouts are unchanged.
+`scripts/preflight-task-settlement-scan.mjs` blocks an upgrade while any
+nonterminal Task carries such a payee; the 2026-10-20 mainnet inventory found
+none in all 753 Tasks ever created.
+
 ### Store identity
 
 - register / update / close store

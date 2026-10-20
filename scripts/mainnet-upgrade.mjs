@@ -2458,7 +2458,7 @@ export function assertRevision4BondEntryClosed(
       ...new Set(taskSettlement.blockers.map((item) => item.kind)),
     ];
     throw new Error(
-      `${stage}: task settlement scan found ${taskSettlement.blockers.length} insolvent, aliased, or malformed condition(s) ` +
+      `${stage}: task settlement scan found ${taskSettlement.blockers.length} insolvent, aliased, unpayable, or malformed condition(s) ` +
         `(${kinds.join(", ")}). Run scripts/preflight-task-settlement-scan.mjs and remediate before continuing.`,
     );
   }
