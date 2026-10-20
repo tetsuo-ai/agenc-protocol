@@ -69,7 +69,13 @@ pub struct InitiateDispute<'info> {
     pub initiator_claim: Option<Box<Account<'info, TaskClaim>>>,
 
     /// Worker agent to be disputed; required when initiator is task creator.
-    #[account(mut)]
+    #[account(
+        mut,
+        // Never alias `agent`: both slots are writable and Anchor writes this copy
+        // back after `agent`, silently discarding the initiator and defendant
+        // counter increments recorded on `agent`.
+        constraint = worker_agent.key() != agent.key() @ CoordinationError::InvalidInput
+    )]
     pub worker_agent: Option<Box<Account<'info, AgentRegistration>>>,
 
     /// Defendant's live claim; required when the initiator is task creator.

@@ -106,7 +106,13 @@ pub struct ValidateTaskResult<'info> {
     /// Optional validator agent for validator-quorum mode, validated in handler.
     /// Writable because a quorum vote must lock the registration stake against
     /// immediate identity recycling (see `last_vote_timestamp` in the handler).
-    #[account(mut)]
+    #[account(
+        mut,
+        // Never alias `worker`: both slots are writable and Anchor writes this copy
+        // back after `worker`, silently discarding the worker's settlement updates.
+        // The quorum branch already rejects this pairing; this covers every mode.
+        constraint = validator_agent.key() != worker.key() @ CoordinationError::UnauthorizedTaskValidator
+    )]
     pub validator_agent: Option<Box<Account<'info, AgentRegistration>>>,
 
     /// CHECK: Protocol treasury account, validated against protocol config.
