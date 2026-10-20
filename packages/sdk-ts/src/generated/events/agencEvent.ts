@@ -171,6 +171,10 @@ import {
   type ListingRatedEventData,
 } from "./listingRated";
 import {
+  getMarketplaceFeeForfeitedEventDecoder,
+  type MarketplaceFeeForfeitedEventData,
+} from "./marketplaceFeeForfeited";
+import {
   getMigrationCompletedEventDecoder,
   type MigrationCompletedEventData,
 } from "./migrationCompleted";
@@ -484,6 +488,7 @@ export type AgencEvent =
   | { eventName: "LaunchControlsUpdated"; data: LaunchControlsUpdatedEventData }
   | { eventName: "ListingModerationRecorded"; data: ListingModerationRecordedEventData }
   | { eventName: "ListingRated"; data: ListingRatedEventData }
+  | { eventName: "MarketplaceFeeForfeited"; data: MarketplaceFeeForfeitedEventData }
   | { eventName: "MigrationCompleted"; data: MigrationCompletedEventData }
   | { eventName: "ModerationAttestorAssigned"; data: ModerationAttestorAssignedEventData }
   | { eventName: "ModerationAttestorRegistered"; data: ModerationAttestorRegisteredEventData }
@@ -855,6 +860,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "ListingRated",
       data: getListingRatedEventDecoder().decode(payload),
+    }),
+  },
+  "db7b3739bd69e170": {
+    eventName: "MarketplaceFeeForfeited",
+    decode: (payload) => ({
+      eventName: "MarketplaceFeeForfeited",
+      data: getMarketplaceFeeForfeitedEventDecoder().decode(payload),
     }),
   },
   "df2d7bc06af906f1": {

@@ -4,8 +4,8 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{
-    reputation_reason, OperatorFeePaid, ReferrerFeePaid, ReputationChanged, RewardDistributed,
-    TaskCompleted,
+    marketplace_fee_role, reputation_reason, MarketplaceFeeForfeited, OperatorFeePaid,
+    ReferrerFeePaid, ReputationChanged, RewardDistributed, TaskCompleted,
 };
 use crate::instructions::constants::{
     BASIS_POINTS_DIVISOR, MAX_COMBINED_FEE_BPS, MAX_OPERATOR_FEE_BPS, MAX_REFERRER_FEE_BPS,
@@ -849,6 +849,125 @@ pub(crate) fn validate_marketplace_payee_destinations(
     Ok(())
 }
 
+/// Marketplace fee legs of one settlement, split into the lamports each payee
+/// is paid and the lamports forfeited to the worker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CreditableMarketplaceFees {
+    pub operator_fee: u64,
+    pub referrer_fee: u64,
+    pub forfeited_operator_fee: u64,
+    pub forfeited_referrer_fee: u64,
+}
+
+impl CreditableMarketplaceFees {
+    pub(crate) fn forfeited(&self) -> Result<u64> {
+        self.forfeited_operator_fee
+            .checked_add(self.forfeited_referrer_fee)
+            .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
+    }
+}
+
+/// True when crediting `credit` lamports leaves `payee` rent-exempt, which is
+/// what the runtime requires of a credited account at the end of a transaction.
+/// An overflowing credit is left to the transfer, which rejects it.
+fn marketplace_payee_accepts(payee: &AccountInfo, credit: u64, rent: &Rent) -> bool {
+    payee
+        .lamports()
+        .checked_add(credit)
+        .is_none_or(|balance| rent.is_exempt(balance, payee.data_len()))
+}
+
+/// Decide which marketplace fee legs settlement can credit (AGNC-02).
+///
+/// The runtime fails a transaction with `InsufficientFundsForRent` when it
+/// leaves a credited account below `Rent::minimum_balance(data_len)`. A fee
+/// smaller than that floor, owed to an unfunded (or legacy rent-paying) payee,
+/// would revert every payout path until someone funded the payee, so the worker
+/// would have to pay rent to an address the creator or provider chose. Such a
+/// leg is forfeited to the worker instead. Both legs are carved from the
+/// worker's share, so the creator, the treasury and escrow accounting see the
+/// same totals either way.
+///
+/// Only the payee (or its owning program) can lower its balance, so no other
+/// party can force a creditable leg into forfeit, and anyone can fund the payee
+/// before settlement to have it paid. Callers bind the payee accounts to the
+/// snapshot first, so omitting a payee still fails instead of forfeiting. One
+/// payee holding both legs is checked against their sum.
+pub(crate) fn split_creditable_marketplace_fees(
+    operator: Option<(&AccountInfo, u64)>,
+    referrer: Option<(&AccountInfo, u64)>,
+    rent: &Rent,
+) -> CreditableMarketplaceFees {
+    let operator_fee = operator.map_or(0, |(_, fee)| fee);
+    let referrer_fee = referrer.map_or(0, |(_, fee)| fee);
+    let shared_payee = matches!(
+        (operator, referrer),
+        (Some((operator_payee, _)), Some((referrer_payee, _)))
+            if operator_payee.key == referrer_payee.key
+    );
+    let creditable = |leg: Option<(&AccountInfo, u64)>| match leg {
+        Some((payee, fee)) if fee > 0 => {
+            let credit = if shared_payee {
+                operator_fee.saturating_add(referrer_fee)
+            } else {
+                fee
+            };
+            marketplace_payee_accepts(payee, credit, rent)
+        }
+        _ => true,
+    };
+    let (operator_fee, forfeited_operator_fee) = if creditable(operator) {
+        (operator_fee, 0)
+    } else {
+        (0, operator_fee)
+    };
+    let (referrer_fee, forfeited_referrer_fee) = if creditable(referrer) {
+        (referrer_fee, 0)
+    } else {
+        (0, referrer_fee)
+    };
+    CreditableMarketplaceFees {
+        operator_fee,
+        referrer_fee,
+        forfeited_operator_fee,
+        forfeited_referrer_fee,
+    }
+}
+
+/// Emit `MarketplaceFeeForfeited` for each leg `split_creditable_marketplace_fees`
+/// forfeited. `operator` and `referrer` are the snapshotted `(payee, fee_bps)`.
+pub(crate) fn emit_marketplace_fee_forfeits(
+    task_id: [u8; 32],
+    fees: &CreditableMarketplaceFees,
+    operator: (Pubkey, u16),
+    referrer: (Pubkey, u16),
+    timestamp: i64,
+) {
+    for (role, (payee, fee_bps), amount) in [
+        (
+            marketplace_fee_role::OPERATOR,
+            operator,
+            fees.forfeited_operator_fee,
+        ),
+        (
+            marketplace_fee_role::REFERRER,
+            referrer,
+            fees.forfeited_referrer_fee,
+        ),
+    ] {
+        if amount > 0 {
+            emit!(MarketplaceFeeForfeited {
+                task_id,
+                role,
+                payee,
+                amount,
+                fee_bps,
+                timestamp,
+            });
+        }
+    }
+}
+
 /// Execute reward transfer, state updates, event emissions, and conditional escrow closure.
 ///
 /// Shared by both `complete_task` (public) and `complete_task_private` (ZK) handlers.
@@ -917,7 +1036,7 @@ pub fn execute_completion_rewards<'a, 'info>(
         0
     };
 
-    let (operator_fee, referrer_fee) = if operator_active || referrer_active {
+    let marketplace_fees = if operator_active || referrer_active {
         require!(
             task.reward_mint.is_none() && token_accounts.is_none(),
             CoordinationError::InvalidTokenMint
@@ -937,10 +1056,22 @@ pub fn execute_completion_rewards<'a, 'info>(
             .checked_sub(total_legs)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         require!(worker_reward > 0, CoordinationError::RewardTooSmall);
-        (op_fee, ref_fee)
+        // A leg whose payee cannot be credited above the rent floor stays with the
+        // worker instead of reverting the settlement (AGNC-02).
+        let fees = split_creditable_marketplace_fees(
+            operator_leg.as_ref().map(|leg| (&leg.payee, op_fee)),
+            referrer_leg.as_ref().map(|leg| (&leg.payee, ref_fee)),
+            &Rent::get()?,
+        );
+        worker_reward = worker_reward
+            .checked_add(fees.forfeited()?)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        fees
     } else {
-        (0, 0)
+        CreditableMarketplaceFees::default()
     };
+    let operator_fee = marketplace_fees.operator_fee;
+    let referrer_fee = marketplace_fees.referrer_fee;
 
     // Checks: validate escrow balance for SOL path before any state mutations.
     if token_accounts.is_none() {
@@ -1044,6 +1175,17 @@ pub fn execute_completion_rewards<'a, 'info>(
             });
         }
     }
+    emit_marketplace_fee_forfeits(
+        task.task_id,
+        &marketplace_fees,
+        operator_leg
+            .as_ref()
+            .map_or((Pubkey::default(), 0), |leg| (leg.payee.key(), leg.fee_bps)),
+        referrer_leg
+            .as_ref()
+            .map_or((Pubkey::default(), 0), |leg| (leg.payee.key(), leg.fee_bps)),
+        clock.unix_timestamp,
+    );
     let operator_xfer: Option<(&AccountInfo<'info>, u64)> = if operator_fee > 0 {
         operator_leg.as_ref().map(|leg| (&leg.payee, operator_fee))
     } else {
@@ -1724,6 +1866,204 @@ mod tests {
                 build_marketplace_fee_legs(&task, task_key, &forged_info, None, None),
                 CoordinationError::InvalidHireRecord,
             );
+        }
+    }
+
+    mod marketplace_rent_floor_tests {
+        use super::*;
+        use anchor_lang::solana_program::system_program;
+
+        /// Mainnet Rent sysvar on 2026-10-20: a 0-byte wallet needs 650,240.
+        fn mainnet_rent() -> Rent {
+            Rent {
+                lamports_per_byte_year: 5_080,
+                exemption_threshold: 1.0,
+                ..Rent::default()
+            }
+        }
+
+        fn payee(key: Pubkey, lamports: u64, data_len: usize) -> AccountInfo<'static> {
+            build_unchecked_account(key, system_program::ID, lamports, vec![0; data_len])
+                .to_account_info()
+        }
+
+        fn wallet(lamports: u64) -> AccountInfo<'static> {
+            payee(Pubkey::new_unique(), lamports, 0)
+        }
+
+        /// Agave's end-of-transaction rent-state rule for an account whose data
+        /// length is unchanged: it may end empty or rent-exempt, or stay
+        /// rent-paying without gaining lamports. Anything else fails the
+        /// transaction with InsufficientFundsForRent.
+        fn runtime_allows(pre: u64, post: u64, data_len: usize, rent: &Rent) -> bool {
+            let rent_paying = |lamports: u64| lamports > 0 && !rent.is_exempt(lamports, data_len);
+            !rent_paying(post) || (rent_paying(pre) && post <= pre)
+        }
+
+        #[test]
+        fn unfunded_referrer_below_the_rent_floor_is_forfeited() {
+            // The two expired mainnet Open Tasks: referrer FmkgwnhA… does not
+            // exist and its fee is 250 bps of 1,000,000.
+            let rent = mainnet_rent();
+            assert_eq!(rent.minimum_balance(0), 650_240);
+            let referrer = wallet(0);
+            let fees = split_creditable_marketplace_fees(None, Some((&referrer, 25_000)), &rent);
+            assert_eq!(
+                fees,
+                CreditableMarketplaceFees {
+                    referrer_fee: 0,
+                    forfeited_referrer_fee: 25_000,
+                    ..CreditableMarketplaceFees::default()
+                }
+            );
+            assert_eq!(fees.forfeited().unwrap(), 25_000);
+        }
+
+        #[test]
+        fn a_fee_that_reaches_the_floor_is_paid_even_to_an_unfunded_payee() {
+            let rent = mainnet_rent();
+            let floor = rent.minimum_balance(0);
+            let referrer = wallet(0);
+            let at_floor = split_creditable_marketplace_fees(None, Some((&referrer, floor)), &rent);
+            assert_eq!(at_floor.referrer_fee, floor);
+            assert_eq!(at_floor.forfeited().unwrap(), 0);
+            let below =
+                split_creditable_marketplace_fees(None, Some((&referrer, floor - 1)), &rent);
+            assert_eq!(below.referrer_fee, 0);
+            assert_eq!(below.forfeited_referrer_fee, floor - 1);
+        }
+
+        #[test]
+        fn a_rent_exempt_payee_is_paid_any_fee() {
+            let rent = mainnet_rent();
+            for lamports in [rent.minimum_balance(0), 1_000_000_000] {
+                let operator = wallet(lamports);
+                let fees = split_creditable_marketplace_fees(Some((&operator, 1)), None, &rent);
+                assert_eq!(fees.operator_fee, 1);
+                assert_eq!(fees.forfeited().unwrap(), 0);
+            }
+        }
+
+        #[test]
+        fn a_rent_paying_payee_is_paid_only_when_the_fee_lifts_it_to_the_floor() {
+            let rent = mainnet_rent();
+            let floor = rent.minimum_balance(0);
+            let referrer = wallet(floor - 100);
+            let lifted = split_creditable_marketplace_fees(None, Some((&referrer, 100)), &rent);
+            assert_eq!(lifted.referrer_fee, 100);
+            let short = split_creditable_marketplace_fees(None, Some((&referrer, 99)), &rent);
+            assert_eq!(short.forfeited_referrer_fee, 99);
+        }
+
+        #[test]
+        fn the_floor_follows_the_payee_data_length() {
+            let rent = mainnet_rent();
+            // Exempt as a 0-byte wallet, short as a 165-byte account.
+            let operator = payee(Pubkey::new_unique(), rent.minimum_balance(0), 165);
+            let fees = split_creditable_marketplace_fees(Some((&operator, 1)), None, &rent);
+            assert_eq!(fees.forfeited_operator_fee, 1);
+            let gap = rent.minimum_balance(165) - rent.minimum_balance(0);
+            let fees = split_creditable_marketplace_fees(Some((&operator, gap)), None, &rent);
+            assert_eq!(fees.operator_fee, gap);
+        }
+
+        #[test]
+        fn each_payee_is_judged_on_its_own_balance() {
+            let rent = mainnet_rent();
+            let funded = wallet(rent.minimum_balance(0));
+            let unfunded = wallet(0);
+            let fees = split_creditable_marketplace_fees(
+                Some((&funded, 40_000)),
+                Some((&unfunded, 20_000)),
+                &rent,
+            );
+            assert_eq!(
+                fees,
+                CreditableMarketplaceFees {
+                    operator_fee: 40_000,
+                    referrer_fee: 0,
+                    forfeited_operator_fee: 0,
+                    forfeited_referrer_fee: 20_000,
+                }
+            );
+            let fees = split_creditable_marketplace_fees(
+                Some((&unfunded, 40_000)),
+                Some((&funded, 20_000)),
+                &rent,
+            );
+            assert_eq!((fees.operator_fee, fees.referrer_fee), (0, 20_000));
+            assert_eq!(fees.forfeited_operator_fee, 40_000);
+        }
+
+        #[test]
+        fn one_payee_holding_both_legs_is_judged_on_their_sum() {
+            let rent = mainnet_rent();
+            let key = Pubkey::new_unique();
+            let (as_operator, as_referrer) = (payee(key, 0, 0), payee(key, 0, 0));
+            // 400,000 + 300,000 reaches 650,240 although neither leg does alone.
+            let fees = split_creditable_marketplace_fees(
+                Some((&as_operator, 400_000)),
+                Some((&as_referrer, 300_000)),
+                &rent,
+            );
+            assert_eq!((fees.operator_fee, fees.referrer_fee), (400_000, 300_000));
+            assert_eq!(fees.forfeited().unwrap(), 0);
+            let fees = split_creditable_marketplace_fees(
+                Some((&as_operator, 400_000)),
+                Some((&as_referrer, 200_000)),
+                &rent,
+            );
+            assert_eq!((fees.operator_fee, fees.referrer_fee), (0, 0));
+            assert_eq!(fees.forfeited().unwrap(), 600_000);
+        }
+
+        #[test]
+        fn zero_fee_legs_never_forfeit() {
+            let rent = mainnet_rent();
+            let unfunded = wallet(0);
+            let fees = split_creditable_marketplace_fees(
+                Some((&unfunded, 0)),
+                Some((&unfunded, 0)),
+                &rent,
+            );
+            assert_eq!(fees, CreditableMarketplaceFees::default());
+        }
+
+        /// The split pays exactly the legs the runtime would let settlement
+        /// credit, and paid plus forfeited always equals the carved fees.
+        #[test]
+        fn paying_matches_the_runtime_rent_rule_and_conserves_the_fees() {
+            for rent in [mainnet_rent(), Rent::default()] {
+                for data_len in [0usize, 165] {
+                    let floor = rent.minimum_balance(data_len);
+                    for pre in [0, 1, floor / 2, floor - 1, floor, floor + 1, 10 * floor] {
+                        for fee in [
+                            1,
+                            25_000,
+                            floor / 2,
+                            floor - pre.min(floor),
+                            floor,
+                            2 * floor,
+                        ] {
+                            if fee == 0 {
+                                continue;
+                            }
+                            let referrer = payee(Pubkey::new_unique(), pre, data_len);
+                            let fees = split_creditable_marketplace_fees(
+                                None,
+                                Some((&referrer, fee)),
+                                &rent,
+                            );
+                            assert_eq!(
+                                fees.referrer_fee > 0,
+                                runtime_allows(pre, pre + fee, data_len, &rent),
+                                "pre {pre}, fee {fee}, data {data_len}"
+                            );
+                            assert_eq!(fees.referrer_fee + fees.forfeited().unwrap(), fee);
+                        }
+                    }
+                }
+            }
         }
     }
 

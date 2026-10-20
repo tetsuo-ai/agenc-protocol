@@ -673,7 +673,8 @@ pub struct RewardDistributed {
 }
 
 /// Emitted when an operator (embedding-site) fee leg is paid out of a settlement
-/// (spec §4 3-way split). Only emitted when the operator leg is non-zero.
+/// (spec §4 3-way split). Only emitted when the operator leg is non-zero. A leg
+/// its payee cannot receive emits `MarketplaceFeeForfeited` instead.
 #[event]
 pub struct OperatorFeePaid {
     pub task_id: [u8; 32],
@@ -685,13 +686,37 @@ pub struct OperatorFeePaid {
 
 /// Emitted when a referrer (demand-side embedder) fee leg is paid out of a
 /// settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is
-/// non-zero.
+/// non-zero. A leg its payee cannot receive emits `MarketplaceFeeForfeited`
+/// instead.
 #[event]
 pub struct ReferrerFeePaid {
     pub task_id: [u8; 32],
     pub referrer: Pubkey,
     pub amount: u64,
     pub referrer_fee_bps: u16,
+    pub timestamp: i64,
+}
+
+/// Marketplace fee leg roles carried by [`MarketplaceFeeForfeited`].
+pub mod marketplace_fee_role {
+    /// The listing operator (embedding-site) leg.
+    pub const OPERATOR: u8 = 0;
+    /// The demand-side referrer leg.
+    pub const REFERRER: u8 = 1;
+}
+
+/// Emitted instead of `OperatorFeePaid` / `ReferrerFeePaid` when settlement
+/// cannot credit a fee leg because the credit would leave its payee below the
+/// rent-exempt minimum (AGNC-02). The runtime would revert the whole settlement,
+/// so the leg stays with the worker and `amount` is part of the worker payout.
+#[event]
+pub struct MarketplaceFeeForfeited {
+    pub task_id: [u8; 32],
+    /// Forfeited leg: 0 = operator, 1 = referrer (`marketplace_fee_role`).
+    pub role: u8,
+    pub payee: Pubkey,
+    pub amount: u64,
+    pub fee_bps: u16,
     pub timestamp: i64,
 }
 

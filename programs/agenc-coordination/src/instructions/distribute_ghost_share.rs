@@ -27,8 +27,9 @@ use crate::events::{
 };
 use crate::instructions::completion_helpers::{
     build_referrer_leg, calculate_combined_fees, calculate_fee_with_reputation,
-    calculate_reward_split_for_amount, transfer_rewards, update_claim_state, update_worker_state,
-    RewardDenomination,
+    calculate_reward_split_for_amount, emit_marketplace_fee_forfeits,
+    split_creditable_marketplace_fees, transfer_rewards, update_claim_state, update_worker_state,
+    CreditableMarketplaceFees, RewardDenomination,
 };
 use crate::instructions::task_validation_helpers::{
     contest_ghost_at, decrement_pending_submission_count, ensure_validation_config,
@@ -245,29 +246,40 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
     )?;
     let referrer_fee_bps = referrer_leg.as_ref().map(|l| l.fee_bps).unwrap_or(0);
 
-    let (operator_fee, referrer_fee) =
-        if slice_total > 0 && (operator_leg_active || referrer_fee_bps > 0) {
-            let (op_fee, ref_fee) = calculate_combined_fees(
-                slice_total,
-                protocol_fee_bps,
-                if operator_leg_active {
-                    operator_fee_bps
-                } else {
-                    0
-                },
-                referrer_fee_bps,
-            )?;
-            let total_legs = op_fee
-                .checked_add(ref_fee)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            worker_reward = worker_reward
-                .checked_sub(total_legs)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            require!(worker_reward > 0, CoordinationError::RewardTooSmall);
-            (op_fee, ref_fee)
-        } else {
-            (0, 0)
-        };
+    let marketplace_fees = if slice_total > 0 && (operator_leg_active || referrer_fee_bps > 0) {
+        let (op_fee, ref_fee) = calculate_combined_fees(
+            slice_total,
+            protocol_fee_bps,
+            if operator_leg_active {
+                operator_fee_bps
+            } else {
+                0
+            },
+            referrer_fee_bps,
+        )?;
+        let total_legs = op_fee
+            .checked_add(ref_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        worker_reward = worker_reward
+            .checked_sub(total_legs)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        require!(worker_reward > 0, CoordinationError::RewardTooSmall);
+        // Same rent-floor rule as the accept path (AGNC-02): a leg whose payee
+        // cannot be credited stays with this slice's submitter.
+        let fees = split_creditable_marketplace_fees(
+            operator_account.as_ref().map(|info| (info, op_fee)),
+            referrer_leg.as_ref().map(|leg| (&leg.payee, ref_fee)),
+            &Rent::get()?,
+        );
+        worker_reward = worker_reward
+            .checked_add(fees.forfeited()?)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        fees
+    } else {
+        CreditableMarketplaceFees::default()
+    };
+    let operator_fee = marketplace_fees.operator_fee;
+    let referrer_fee = marketplace_fees.referrer_fee;
 
     // Checks: the escrow must actually hold the slice before any state mutation.
     let slice_paid_total = worker_reward
@@ -409,6 +421,16 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
             });
         }
     }
+    emit_marketplace_fee_forfeits(
+        ctx.accounts.task.task_id,
+        &marketplace_fees,
+        (operator_pubkey, operator_fee_bps),
+        (
+            ctx.accounts.task.referrer,
+            ctx.accounts.task.referrer_fee_bps,
+        ),
+        clock.unix_timestamp,
+    );
     emit!(GhostShareDistributed {
         task: ctx.accounts.task.key(),
         worker_agent: ctx.accounts.worker.key(),
