@@ -25,6 +25,16 @@ pub(crate) fn validate_operator_fee_invariant(
         operator_fee_bps == 0 || operator != Pubkey::default(),
         CoordinationError::ListingOperatorRequired
     );
+    // AGNC-02 (operator leg): an operator that can never receive the fee at settlement
+    // (the program id → Anchor `None`; a sysvar / builtin → non-writable) would freeze
+    // every hired-task payout. Reject it when the listing is created/updated, the
+    // earliest attributable point. Settlement re-checks via
+    // `validate_marketplace_payee_destinations` for defense in depth.
+    require!(
+        operator_fee_bps == 0
+            || !crate::instructions::completion_helpers::marketplace_payee_is_unpayable(&operator),
+        CoordinationError::MarketplacePayeeAccountAlias
+    );
     Ok(())
 }
 
