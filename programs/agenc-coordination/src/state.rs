@@ -838,6 +838,43 @@ impl TaskValidationConfig {
         self._reserved[1] = bytes[0];
         self._reserved[2] = bytes[1];
     }
+
+    /// AGNC-03: review-clock debt (seconds) carved into `_reserved[3..7]`.
+    ///
+    /// While a task is `Disputed`, every creator review action is refused yet
+    /// each live submission's `review_deadline_at` keeps running. A worker
+    /// could submit, self-dispute to freeze the creator out, wait for the
+    /// deadline to lapse, then cancel the dispute and permissionlessly
+    /// auto-accept in one transaction — collecting the full reward for work
+    /// the creator never had a chance to review.
+    ///
+    /// Every transition `Disputed -> PendingValidation` (currently only
+    /// `cancel_dispute`) accumulates the time the task spent disputed here.
+    /// The deadline consumer (`auto_accept_task_result`) must wait for
+    /// `review_deadline_at + review_debt_secs`, so the creator regains the
+    /// review time the dispute consumed. The debt is task-level and monotone:
+    /// it is deliberately never cleared, so a peer's fresh submission cannot
+    /// shrink another worker's accumulated protection, and any historical
+    /// dispute only ever delays auto-acceptance (never accelerates it).
+    pub fn review_debt_secs(&self) -> u32 {
+        u32::from_le_bytes([
+            self._reserved[3],
+            self._reserved[4],
+            self._reserved[5],
+            self._reserved[6],
+        ])
+    }
+
+    /// Saturating accumulation; zero is the historical (pre-carve) value.
+    pub fn add_review_debt_secs(&mut self, secs: i64) {
+        let current = self.review_debt_secs();
+        let extra = secs.max(0).min(u32::MAX as i64) as u32;
+        let bytes = current.saturating_add(extra).to_le_bytes();
+        self._reserved[3] = bytes[0];
+        self._reserved[4] = bytes[1];
+        self._reserved[5] = bytes[2];
+        self._reserved[6] = bytes[3];
+    }
 }
 
 /// Task-level external attestor configuration.
@@ -4255,6 +4292,30 @@ mod tests {
         task._reserved[11] = 2;
         assert!(task.peer_settlement_pending());
         assert!(!task.validate_reserved_fields());
+    }
+
+    #[test]
+    fn review_debt_carve_preserves_neighbors_and_never_wraps() {
+        let mut cfg = TaskValidationConfig::default();
+        cfg.set_validator_quorum(3);
+        cfg.set_pending_submission_count(0x0B_EE);
+        assert_eq!(cfg.review_debt_secs(), 0, "legacy zero default");
+
+        cfg.add_review_debt_secs(3_600);
+        cfg.add_review_debt_secs(120);
+        assert_eq!(cfg.review_debt_secs(), 3_720);
+        assert_eq!(cfg.validator_quorum(), 3, "quorum byte untouched");
+        assert_eq!(
+            cfg.pending_submission_count(),
+            0x0B_EE,
+            "pending count untouched"
+        );
+
+        // Negative and absurd inputs clamp instead of wrapping or panicking.
+        cfg.add_review_debt_secs(-5);
+        assert_eq!(cfg.review_debt_secs(), 3_720);
+        cfg.add_review_debt_secs(i64::MAX);
+        assert_eq!(cfg.review_debt_secs(), u32::MAX);
     }
 
     #[test]

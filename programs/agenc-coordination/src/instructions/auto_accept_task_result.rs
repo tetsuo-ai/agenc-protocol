@@ -209,8 +209,16 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         !ctx.accounts.task.is_contest_task(),
         CoordinationError::ContestAutoAcceptDisabled
     );
+    // AGNC-03: the deadline consumer honors the task's review-clock debt —
+    // time the task spent Disputed while every creator review action was
+    // refused. Without it, a worker could submit, self-dispute, wait out the
+    // window, then cancel + auto-accept in one transaction and collect the
+    // reward for unreviewed work.
+    let effective_review_deadline =
+        i64::from(ctx.accounts.task_validation_config.review_debt_secs())
+            .saturating_add(ctx.accounts.task_submission.review_deadline_at);
     require!(
-        clock.unix_timestamp >= ctx.accounts.task_submission.review_deadline_at,
+        clock.unix_timestamp >= effective_review_deadline,
         CoordinationError::ReviewWindowNotElapsed
     );
 
