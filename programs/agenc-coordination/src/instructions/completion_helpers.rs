@@ -574,7 +574,7 @@ pub fn calculate_combined_fees(
 }
 
 /// A marketplace fee payee (operator or referrer) must be a normal account that can
-/// actually RECEIVE a lamport transfer at settlement. Four address classes can never
+/// actually RECEIVE a lamport transfer at settlement. These address classes can never
 /// be a writable, lamport-receiving payee, and snapshotting one permanently FREEZES
 /// the worker's payout because the required fee leg can then never be satisfied:
 ///
@@ -583,24 +583,25 @@ pub fn calculate_combined_fees(
 ///     required referrer/operator account can NEVER be supplied at settlement; every
 ///     completion/accept/auto-accept/dispute exit reverts with
 ///     `MissingReferrerAccount` / `MissingOperatorAccount`. This is AGNC-02.
-///   * any sysvar, the System Program, and the upgradeable BPF loader — runtime
-///     reserved keys that cannot be marked writable, so the escrow→payee transfer
-///     reverts (`ReadonlyLamportChange`).
+///   * the System Program and the upgradeable BPF loader — runtime reserved keys that
+///     cannot be marked writable, so the escrow→payee transfer reverts
+///     (`ReadonlyLamportChange`).
 ///
 /// A creator supplies the referrer and a listing supplies the operator, so both are
 /// attacker-influenced; rejecting these at snapshot time (create / hire) stops an
-/// unpayable payee from ever being stamped onto a `Task` / `HireRecord`. (A fresh,
-/// never-funded normal address is NOT rejected here: its only effect is that the
-/// settler must pre-fund it to the rent-exempt minimum, which the worker can always
-/// do, so it is self-curable griefing rather than a permanent freeze.)
+/// unpayable payee from ever being stamped onto a `Task` / `HireRecord`.
+///
+/// Compared by `==` against inlined `Pubkey` consts ONLY: this keeps the SBF `.so`
+/// free of any new monomorphized/static symbol (e.g. `sysvar::is_sysvar_id`'s
+/// `ALL_IDS.iter().any(..)`), whose long mangled section name the on-chain ELF loader
+/// rejects (`Section or symbol name ... longer than 16 bytes`). Other reserved keys
+/// (sysvars, the remaining builtins) are a narrower, implausible referrer/operator
+/// choice and still fail CLOSED at settlement when their non-writable transfer reverts;
+/// they are simply not pre-screened at creation. A fresh, never-funded NORMAL address
+/// is likewise not rejected — the settler can pre-fund it to the rent-exempt minimum,
+/// so it is self-curable griefing, not a permanent freeze.
 pub(crate) fn marketplace_payee_is_unpayable(key: &Pubkey) -> bool {
-    // `is_sysvar_id` is deprecated in favor of an account-owner check, but at snapshot
-    // time only the pubkey is known (no account), so the pubkey-set test is exactly
-    // what we need. Scope the allow to this call only.
-    #[allow(deprecated)]
-    let is_sysvar = anchor_lang::solana_program::sysvar::is_sysvar_id(key);
     *key == crate::ID
-        || is_sysvar
         || *key == anchor_lang::system_program::ID
         || *key == anchor_lang::solana_program::bpf_loader_upgradeable::ID
 }
@@ -655,7 +656,7 @@ pub fn resolve_referrer_snapshot(
     );
     // AGNC-02: a non-zero referrer leg makes the referrer account REQUIRED at
     // settlement, so an unpayable snapshot (the program id → Anchor `None`; a
-    // sysvar / builtin → non-writable) would permanently brick the worker's payout.
+    // builtin → non-writable) would permanently brick the worker's payout.
     // Reject it here, at creation, where the failure is attributable to the caller.
     require!(
         !marketplace_payee_is_unpayable(&referrer_key),
@@ -790,8 +791,8 @@ pub(crate) fn validate_marketplace_payee_destinations(
             operator != task_key && operator != escrow_key,
             CoordinationError::MarketplacePayeeAccountAlias
         );
-        // AGNC-02 (operator leg shares the referrer freeze): the program id, sysvars,
-        // and builtins can never receive the operator fee at settlement.
+        // AGNC-02 (operator leg shares the referrer freeze): the program id and the
+        // reserved builtins can never receive the operator fee at settlement.
         require!(
             !marketplace_payee_is_unpayable(&operator),
             CoordinationError::MarketplacePayeeAccountAlias
@@ -1477,7 +1478,6 @@ mod tests {
         assert!(marketplace_payee_is_unpayable(
             &anchor_lang::solana_program::bpf_loader_upgradeable::ID
         ));
-        // (The sysvar branch forwards to the stdlib `is_sysvar_id` set.)
         // A normal wallet address is payable.
         assert!(!marketplace_payee_is_unpayable(&Pubkey::new_unique()));
     }
