@@ -4,9 +4,10 @@
 // The upgraded program rejects collaborative tasks that cannot pay at least one
 // gross reward unit per required completion. It also rejects active marketplace
 // payees aliased to the creator-owned Task/escrow lifecycle, where a same-account
-// transfer could otherwise be counted without moving value. This scanner proves
-// that every nonterminal live Task can pass those fail-closed settlement guards
-// before the binary is upgraded.
+// transfer could otherwise be counted without moving value, and (AGNC-02) active
+// payees that settlement can never credit: the program id and the runtime-reserved
+// builtin/sysvar keys. This scanner proves that every nonterminal live Task can
+// pass those fail-closed settlement guards before the binary is upgraded.
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -40,6 +41,60 @@ const TASK_TYPE_COLLABORATIVE = 1;
 const ZERO_HASH = Buffer.alloc(32);
 const COMPLETIONS_OFFSET = 308;
 const REQUIRED_COMPLETIONS_OFFSET = 309;
+
+/**
+ * AGNC-02: marketplace payees that no settlement transaction can credit.
+ *
+ * Anchor resolves an optional account equal to the program id to `None`, so a
+ * snapshotted program-id payee can never be supplied and its mandatory leg fails
+ * `MissingReferrerAccount`/`MissingOperatorAccount`. The runtime demotes every
+ * reserved account key (builtins and sysvars, active and feature-pending, per
+ * solana-reserved-account-keys 2.2.2) to read-only, so the `#[account(mut)]`
+ * payee slot fails `ConstraintMut`. The System program is the default-payee
+ * sentinel and is reported as `*-payee-missing` instead. Mirrors exactly the
+ * program's `require_payable_marketplace_payee` guard (`crate::ID` plus
+ * `RESERVED_PAYEE_KEYS` in completion_helpers.rs), which the fixed binary also
+ * re-checks at settlement, so any listed payee on a nonterminal Task would
+ * strand its payout across the upgrade.
+ */
+export const UNPAYABLE_MARKETPLACE_PAYEES = new Map([
+  [PROGRAM_ID.toBase58(), "program-id"],
+  // Not a reserved key (credits are burned, not refused), but the program
+  // guard denies it, so a legacy snapshot naming it is equally stranded.
+  ["1nc1nerator11111111111111111111111111111111", "incinerator"],
+  ...[
+    "AddressLookupTab1e1111111111111111111111111",
+    "BPFLoader1111111111111111111111111111111111",
+    "BPFLoader2111111111111111111111111111111111",
+    "BPFLoaderUpgradeab1e11111111111111111111111",
+    "ComputeBudget111111111111111111111111111111",
+    "Config1111111111111111111111111111111111111",
+    "Ed25519SigVerify111111111111111111111111111",
+    "Feature111111111111111111111111111111111111",
+    "KeccakSecp256k11111111111111111111111111111",
+    "LoaderV411111111111111111111111111111111111",
+    "NativeLoader1111111111111111111111111111111",
+    "Secp256r1SigVerify1111111111111111111111111",
+    "Stake11111111111111111111111111111111111111",
+    "StakeConfig11111111111111111111111111111111",
+    "Vote111111111111111111111111111111111111111",
+    "ZkE1Gama1Proof11111111111111111111111111111",
+    "ZkTokenProof1111111111111111111111111111111",
+    "Sysvar1111111111111111111111111111111111111",
+    "SysvarC1ock11111111111111111111111111111111",
+    "SysvarEpochRewards1111111111111111111111111",
+    "SysvarEpochSchedu1e111111111111111111111111",
+    "SysvarFees111111111111111111111111111111111",
+    "Sysvar1nstructions1111111111111111111111111",
+    "SysvarLastRestartS1ot1111111111111111111111",
+    "SysvarRecentB1ockHashes11111111111111111111",
+    "SysvarRent111111111111111111111111111111111",
+    "SysvarRewards111111111111111111111111111111",
+    "SysvarS1otHashes111111111111111111111111111",
+    "SysvarS1otHistory11111111111111111111111111",
+    "SysvarStakeHistory1111111111111111111111111",
+  ].map((key) => [new PublicKey(key).toBase58(), "reserved-account-key"]),
+]);
 
 function asPublicKey(value) {
   return value instanceof PublicKey ? value : new PublicKey(value);
@@ -77,6 +132,18 @@ function activePayeeIssues({
           taskAddress,
           `${source} ${role}_fee_bps=${feeBps} has the default payee`,
           { role, source, feeBps },
+        ),
+      );
+      continue;
+    }
+    const unpayable = UNPAYABLE_MARKETPLACE_PAYEES.get(payee.toBase58());
+    if (unpayable) {
+      issues.push(
+        issue(
+          `${role}-payee-unpayable`,
+          taskAddress,
+          `${source} ${role} payee ${payee.toBase58()} is a ${unpayable} that settlement cannot credit`,
+          { role, source, reason: unpayable, payee: payee.toBase58(), feeBps },
         ),
       );
       continue;
@@ -253,6 +320,9 @@ export function inspectTaskSettlementRecord(
     payeeAliasCount: economicIssues.filter((item) =>
       item.kind.endsWith("-payee-alias")
     ).length,
+    payeeUnpayableCount: economicIssues.filter((item) =>
+      item.kind.endsWith("-payee-unpayable")
+    ).length,
     inventory: economicIssues,
     blockers: terminal ? [] : economicIssues,
   };
@@ -378,6 +448,10 @@ export async function scanTaskSettlementSafety(connection) {
     ).length,
     payeeAliasCount: records.reduce(
       (sum, record) => sum + record.payeeAliasCount,
+      0,
+    ),
+    payeeUnpayableCount: records.reduce(
+      (sum, record) => sum + record.payeeUnpayableCount,
       0,
     ),
     sharedOperatorReferrerCount: records.filter(
