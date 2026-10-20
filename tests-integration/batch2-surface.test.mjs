@@ -239,6 +239,9 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
   const operatorKp = Keypair.generate();
   const referrerKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: REWARD, operator: operatorKp.publicKey, operatorFeeBps: OP_BPS });
+  // Rent-exempt before receiving its leg: an unfunded payee forfeits a sub-floor
+  // fee to the worker (payee-rent-floor.test.mjs).
+  w.svm.airdrop(referrerKp.publicKey, BigInt(1e9));
   const authorityResolver = await seatTestAuthorityResolver(w);
   const modProg = makeProgram(w.modAuth);
 

@@ -25,7 +25,8 @@ export const REFERRER_FEE_PAID_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uin
 /**
  * Emitted when a referrer (demand-side embedder) fee leg is paid out of a
  * settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is
- * non-zero.
+ * non-zero. A leg its payee cannot receive emits `MarketplaceFeeForfeited`
+ * instead.
  */
 export type ReferrerFeePaidEventData = {
   taskId: ReadonlyUint8Array;

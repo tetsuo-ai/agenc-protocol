@@ -46,6 +46,7 @@ export * from "./governanceVoteCast";
 export * from "./launchControlsUpdated";
 export * from "./listingModerationRecorded";
 export * from "./listingRated";
+export * from "./marketplaceFeeForfeited";
 export * from "./migrationCompleted";
 export * from "./moderationAttestorAssigned";
 export * from "./moderationAttestorRegistered";

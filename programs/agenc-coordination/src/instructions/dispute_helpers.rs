@@ -6,7 +6,9 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{OperatorFeePaid, ReferrerFeePaid};
-use crate::instructions::completion_helpers::calculate_combined_fees;
+use crate::instructions::completion_helpers::{
+    calculate_combined_fees, emit_marketplace_fee_forfeits, split_creditable_marketplace_fees,
+};
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, is_manual_validation_task,
@@ -94,6 +96,9 @@ pub(crate) fn resolve_task_marketplace_terms(
 /// is byte-identical to before. Both legs are SOL-only (the snapshots originate
 /// from SOL hires/creates). Emits `OperatorFeePaid` / `ReferrerFeePaid` for each
 /// non-zero leg so indexers see dispute-path fee legs like any other settlement.
+/// A leg whose payee cannot be credited above its rent floor is neither
+/// transferred nor counted in the returned total, so it stays with the worker
+/// (`MarketplaceFeeForfeited`, AGNC-02).
 pub(crate) fn pay_dispute_marketplace_legs<'info>(
     terms: &MarketplaceTerms,
     operator: Option<AccountInfo<'info>>,
@@ -123,42 +128,63 @@ pub(crate) fn pay_dispute_marketplace_legs<'info>(
     let (operator_fee, referrer_fee) =
         calculate_combined_fees(worker_gross, 0, operator_fee_bps, referrer_fee_bps)?;
 
-    if operator_active {
+    let operator = if operator_active {
         let op = operator.ok_or(CoordinationError::MissingOperatorAccount)?;
         require!(
             op.key() == terms.operator,
             CoordinationError::InvalidOperatorAccount
         );
-        if operator_fee > 0 {
-            transfer_lamports(escrow, &op, operator_fee)?;
-            emit!(OperatorFeePaid {
-                task_id,
-                operator: terms.operator,
-                amount: operator_fee,
-                operator_fee_bps,
-                timestamp: now,
-            });
-        }
-    }
-    if referrer_active {
+        Some(op)
+    } else {
+        None
+    };
+    let referrer = if referrer_active {
         let rf = referrer.ok_or(CoordinationError::MissingReferrerAccount)?;
         require!(
             rf.key() == terms.referrer,
             CoordinationError::InvalidReferrerAccount
         );
-        if referrer_fee > 0 {
-            transfer_lamports(escrow, &rf, referrer_fee)?;
-            emit!(ReferrerFeePaid {
-                task_id,
-                referrer: terms.referrer,
-                amount: referrer_fee,
-                referrer_fee_bps,
-                timestamp: now,
-            });
-        }
+        Some(rf)
+    } else {
+        None
+    };
+    // Same rent-floor rule as the accept path (AGNC-02): a leg whose payee cannot
+    // be credited is not carved, so it stays in the worker's payout.
+    let fees = split_creditable_marketplace_fees(
+        operator.as_ref().map(|op| (op, operator_fee)),
+        referrer.as_ref().map(|rf| (rf, referrer_fee)),
+        &Rent::get()?,
+    );
+
+    if let Some(op) = operator.as_ref().filter(|_| fees.operator_fee > 0) {
+        transfer_lamports(escrow, op, fees.operator_fee)?;
+        emit!(OperatorFeePaid {
+            task_id,
+            operator: terms.operator,
+            amount: fees.operator_fee,
+            operator_fee_bps,
+            timestamp: now,
+        });
     }
-    operator_fee
-        .checked_add(referrer_fee)
+    if let Some(rf) = referrer.as_ref().filter(|_| fees.referrer_fee > 0) {
+        transfer_lamports(escrow, rf, fees.referrer_fee)?;
+        emit!(ReferrerFeePaid {
+            task_id,
+            referrer: terms.referrer,
+            amount: fees.referrer_fee,
+            referrer_fee_bps,
+            timestamp: now,
+        });
+    }
+    emit_marketplace_fee_forfeits(
+        task_id,
+        &fees,
+        (terms.operator, operator_fee_bps),
+        (terms.referrer, referrer_fee_bps),
+        now,
+    );
+    fees.operator_fee
+        .checked_add(fees.referrer_fee)
         .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
 }
 

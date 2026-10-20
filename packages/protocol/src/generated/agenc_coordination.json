@@ -18315,6 +18315,19 @@
       ]
     },
     {
+      "name": "MarketplaceFeeForfeited",
+      "discriminator": [
+        219,
+        123,
+        55,
+        57,
+        189,
+        105,
+        225,
+        112
+      ]
+    },
+    {
       "name": "MigrationCompleted",
       "discriminator": [
         223,
@@ -25061,6 +25074,52 @@
       }
     },
     {
+      "name": "MarketplaceFeeForfeited",
+      "docs": [
+        "Emitted instead of `OperatorFeePaid` / `ReferrerFeePaid` when settlement",
+        "cannot credit a fee leg because the credit would leave its payee below the",
+        "rent-exempt minimum (AGNC-02). The runtime would revert the whole settlement,",
+        "so the leg stays with the worker and `amount` is part of the worker payout."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "docs": [
+              "Forfeited leg: 0 = operator, 1 = referrer (`marketplace_fee_role`)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "payee",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "MatchingPolicy",
       "docs": [
         "Matching policy declared on a bid book."
@@ -25590,7 +25649,8 @@
       "name": "OperatorFeePaid",
       "docs": [
         "Emitted when an operator (embedding-site) fee leg is paid out of a settlement",
-        "(spec §4 3-way split). Only emitted when the operator leg is non-zero."
+        "(spec §4 3-way split). Only emitted when the operator leg is non-zero. A leg",
+        "its payee cannot receive emits `MarketplaceFeeForfeited` instead."
       ],
       "type": {
         "kind": "struct",
@@ -26607,7 +26667,8 @@
       "docs": [
         "Emitted when a referrer (demand-side embedder) fee leg is paid out of a",
         "settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is",
-        "non-zero."
+        "non-zero. A leg its payee cannot receive emits `MarketplaceFeeForfeited`",
+        "instead."
       ],
       "type": {
         "kind": "struct",

@@ -17,7 +17,7 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 
 Candidate build breakdown: default production (`spl-token-rewards`) is **103
 instructions**, explicit `private-zk` is **106**, and `mainnet-canary` remains
-**25**. The committed candidate IDL has **45 accounts / 106 events / 416 errors**;
+**25**. The committed candidate IDL has **45 accounts / 107 events / 416 errors**;
 the generated reference describes this candidate. `validation-timings` only
 shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
 
@@ -100,6 +100,23 @@ Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
 - create / update service listing
 - set service listing state
 - hire from listing / hire from listing humanless (humanless pins CreatorReview in the same tx)
+
+Source hardening (AGNC-02 follow-up, not evidence of a mainnet deployment):
+settlement no longer reverts on a marketplace payee it can address but cannot
+credit. The runtime rejects a transaction that leaves a credited account below
+`Rent::minimum_balance(data_len)`, so a fee smaller than that floor (650,240
+lamports for a 0-byte wallet at mainnet rent), owed to an unfunded or
+rent-paying payee, made every payout fail with `InsufficientFundsForRent` until
+someone funded the payee. Every settlement path (complete/accept/auto-accept,
+frozen-rejection exits, dispute Complete/Split, contest ghost shares) now pays
+such a leg to the worker instead and emits `MarketplaceFeeForfeited` in place of
+`OperatorFeePaid` / `ReferrerFeePaid`. Both legs are carved from the worker's
+share, so creator refunds, the protocol fee and escrow totals are unchanged.
+Only the payee can lower its own balance, so nobody else can force a forfeit,
+and anyone can fund the payee before settlement to have it paid. The payee
+account is still required and bound to the snapshot. Operators and referrers
+must keep their payout address rent-exempt. No instruction, account or error
+changes; the IDL gains one event.
 
 ### Store identity
 

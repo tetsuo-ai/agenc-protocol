@@ -18321,6 +18321,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "marketplaceFeeForfeited",
+      "discriminator": [
+        219,
+        123,
+        55,
+        57,
+        189,
+        105,
+        225,
+        112
+      ]
+    },
+    {
       "name": "migrationCompleted",
       "discriminator": [
         223,
@@ -25067,6 +25080,52 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "marketplaceFeeForfeited",
+      "docs": [
+        "Emitted instead of `OperatorFeePaid` / `ReferrerFeePaid` when settlement",
+        "cannot credit a fee leg because the credit would leave its payee below the",
+        "rent-exempt minimum (AGNC-02). The runtime would revert the whole settlement,",
+        "so the leg stays with the worker and `amount` is part of the worker payout."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "taskId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "docs": [
+              "Forfeited leg: 0 = operator, 1 = referrer (`marketplace_fee_role`)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "payee",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "feeBps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "matchingPolicy",
       "docs": [
         "Matching policy declared on a bid book."
@@ -25596,7 +25655,8 @@ export type AgencCoordination = {
       "name": "operatorFeePaid",
       "docs": [
         "Emitted when an operator (embedding-site) fee leg is paid out of a settlement",
-        "(spec §4 3-way split). Only emitted when the operator leg is non-zero."
+        "(spec §4 3-way split). Only emitted when the operator leg is non-zero. A leg",
+        "its payee cannot receive emits `MarketplaceFeeForfeited` instead."
       ],
       "type": {
         "kind": "struct",
@@ -26613,7 +26673,8 @@ export type AgencCoordination = {
       "docs": [
         "Emitted when a referrer (demand-side embedder) fee leg is paid out of a",
         "settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is",
-        "non-zero."
+        "non-zero. A leg its payee cannot receive emits `MarketplaceFeeForfeited`",
+        "instead."
       ],
       "type": {
         "kind": "struct",
