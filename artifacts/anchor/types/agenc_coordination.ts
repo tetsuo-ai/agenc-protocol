@@ -5487,6 +5487,7 @@ export type AgencCoordination = {
         },
         {
           "name": "bid",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -5529,6 +5530,46 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "bidderMarketState",
+          "docs": [
+            "leader; decremented exactly once because the bid account is closed below."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  100,
+                  101,
+                  114,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidderAuthority",
+          "docs": [
+            "bidder's stored authority wallet."
+          ],
+          "writable": true
         },
         {
           "name": "authority",

@@ -1308,6 +1308,22 @@ pub fn update_bid_handler(
         ),
         CoordinationError::InsufficientStake
     );
+    // AGNC-04: an update installs the refreshed bid as the tracked winner, so
+    // the updater must satisfy the exact eligibility predicate promote_bid
+    // enforces. Without this, a bidder that made its own agent unacceptable
+    // (Inactive, missing capability, over the active-task cap) could keep
+    // reinstalling itself as the leader for transaction-fee cost and block
+    // acceptance of every honest bid for the life of the task.
+    require!(
+        bidder_is_currently_eligible(
+            &ctx.accounts.bidder.key(),
+            ctx.accounts.bidder.as_ref(),
+            ctx.accounts.bid.as_ref(),
+            ctx.accounts.task.as_ref(),
+            ctx.accounts.protocol_config.min_agent_stake,
+        ),
+        CoordinationError::BidDoesNotSatisfyMatchingPolicy
+    );
     require!(
         requested_reward_lamports > 0,
         CoordinationError::InvalidReward
@@ -2080,6 +2096,8 @@ pub struct DemoteIneligibleBest<'info> {
     pub bid_book: Box<Account<'info, TaskBidBook>>,
 
     #[account(
+        mut,
+        close = bidder_authority,
         seeds = [b"bid", task.key().as_ref(), bidder.key().as_ref()],
         bump = bid.bump,
         constraint = bid.task == task.key() @ CoordinationError::InvalidInput,
@@ -2093,6 +2111,24 @@ pub struct DemoteIneligibleBest<'info> {
         bump = bidder.bump
     )]
     pub bidder: Box<Account<'info, AgentRegistration>>,
+
+    /// CHECK: canonical ["bidder_market", bidder] slot counter for the demoted
+    /// leader; decremented exactly once because the bid account is closed below.
+    #[account(
+        mut,
+        seeds = [b"bidder_market", bidder.key().as_ref()],
+        bump = bidder_market_state.bump,
+        constraint = bidder_market_state.bidder == bidder.key() @ CoordinationError::InvalidInput
+    )]
+    pub bidder_market_state: Box<Account<'info, BidderMarketState>>,
+
+    /// CHECK: receives the closed bid's rent + bond; validated to be the
+    /// bidder's stored authority wallet.
+    #[account(
+        mut,
+        constraint = bidder_authority.key() == bidder.authority @ CoordinationError::UnauthorizedAgent
+    )]
+    pub bidder_authority: UncheckedAccount<'info>,
 
     pub authority: Signer<'info>,
 }
@@ -2143,13 +2179,28 @@ pub fn demote_ineligible_best_handler(ctx: Context<DemoteIneligibleBest>) -> Res
         CoordinationError::BidWinnerStillEligible
     );
 
+    // AGNC-04: a provably-dead leader is not merely untracked — its bid is
+    // closed (rent + bond back to the bidder). Leaving it open let an
+    // ineligible bidder reinstall itself through update_bid inside every
+    // re-promotion grace window for transaction-fee cost; reinstalling now
+    // requires a fresh create_bid, which is subject to the per-bidder rate
+    // limits the O(1) design relies on to bound cancel churn.
     let bid_book = ctx.accounts.bid_book.as_mut();
+    bid_book.active_bids = bid_book
+        .active_bids
+        .checked_sub(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
     clear_best(bid_book, now);
     bid_book.version = bid_book
         .version
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
+    let bidder_state = ctx.accounts.bidder_market_state.as_mut();
+    bidder_state.active_bid_count = bidder_state
+        .active_bid_count
+        .checked_sub(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
 
     emit!(BidWinnerDemoted {
         task: ctx.accounts.task.key(),
