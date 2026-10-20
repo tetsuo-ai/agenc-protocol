@@ -45,6 +45,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "indexmap",
+ "solana-sdk-ids",
  "solana-sha256-hasher",
  "spl-associated-token-account-client",
 ]

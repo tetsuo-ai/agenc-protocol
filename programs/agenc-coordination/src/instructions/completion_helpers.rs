@@ -723,12 +723,94 @@ pub fn build_marketplace_fee_legs<'info>(
     Ok((operator_leg, referrer_leg))
 }
 
-/// Bind active marketplace payees away from task-owned lifecycle accounts.
+/// Agave reserved account keys (every active + pending key in
+/// `solana-reserved-account-keys`), minus the System program, which is
+/// `Pubkey::default()` and is already rejected by the zero-payee guards. The
+/// runtime demotes each of these to read-only when it is passed writable, so a
+/// lamport credit to one reverts `ConstraintMut` — see
+/// `is_reserved_payee`. Addresses come from the canonical, lock-pinned
+/// `solana-sdk-ids` crate, so a Solana rename can never drift this list
+/// silently. `stake::config`, `sysvar::fees`, and `sysvar::recent_blockhashes`
+/// are deprecated but remain reserved on the live runtime.
+#[allow(deprecated)]
+const RESERVED_PAYEE_KEYS: &[Pubkey] = &[
+    solana_sdk_ids::address_lookup_table::ID,
+    solana_sdk_ids::bpf_loader::ID,
+    solana_sdk_ids::bpf_loader_deprecated::ID,
+    solana_sdk_ids::bpf_loader_upgradeable::ID,
+    solana_sdk_ids::compute_budget::ID,
+    solana_sdk_ids::config::ID,
+    solana_sdk_ids::ed25519_program::ID,
+    solana_sdk_ids::feature::ID,
+    solana_sdk_ids::incinerator::ID,
+    solana_sdk_ids::loader_v4::ID,
+    solana_sdk_ids::native_loader::ID,
+    solana_sdk_ids::secp256k1_program::ID,
+    solana_sdk_ids::secp256r1_program::ID,
+    solana_sdk_ids::stake::ID,
+    solana_sdk_ids::stake::config::ID,
+    solana_sdk_ids::vote::ID,
+    solana_sdk_ids::zk_token_proof_program::ID,
+    solana_sdk_ids::zk_elgamal_proof_program::ID,
+    solana_sdk_ids::sysvar::ID,
+    solana_sdk_ids::sysvar::clock::ID,
+    solana_sdk_ids::sysvar::epoch_rewards::ID,
+    solana_sdk_ids::sysvar::epoch_schedule::ID,
+    solana_sdk_ids::sysvar::fees::ID,
+    solana_sdk_ids::sysvar::instructions::ID,
+    solana_sdk_ids::sysvar::last_restart_slot::ID,
+    solana_sdk_ids::sysvar::recent_blockhashes::ID,
+    solana_sdk_ids::sysvar::rent::ID,
+    solana_sdk_ids::sysvar::rewards::ID,
+    solana_sdk_ids::sysvar::slot_hashes::ID,
+    solana_sdk_ids::sysvar::slot_history::ID,
+    solana_sdk_ids::sysvar::stake_history::ID,
+];
+
+/// True when `key` is an Agave reserved account key (see `RESERVED_PAYEE_KEYS`).
+fn is_reserved_payee(key: &Pubkey) -> bool {
+    RESERVED_PAYEE_KEYS.contains(key)
+}
+
+/// AGNC-02: reject a marketplace payee (operator or referrer) that can never
+/// receive a lamport fee as a writable account, so a creator or listing cannot
+/// snapshot a payee that makes every settlement path revert.
+///
+/// A fee leg is MANDATORY at settlement once a non-zero fee is snapshotted (the
+/// worker cannot dodge it, by design), so an unpayable payee permanently bricks
+/// `complete_task`, `accept_task_result`, `auto_accept_task_result`,
+/// `resolve_dispute` (Complete/Split), `distribute_ghost_share`, and the
+/// reject-frozen exits for that task — and a malicious creator can then forfeit
+/// the worker's completion bond via `expire_claim` and recover escrow via
+/// `cancel_task`. Two permanent-lock classes were reproduced on agave 4.1.0.
+///
+/// The program id: Anchor decodes an optional account whose key equals the
+/// program id as `None`, so the mandatory leg can never be supplied
+/// (`MissingOperatorAccount` / `MissingReferrerAccount` forever). Agave reserved
+/// account keys: demoted to read-only when writable, so the fee transfer reverts
+/// `ConstraintMut`.
+///
+/// Rejecting at the snapshot chokepoint prevents the unpayable task from ever
+/// being created; the same check runs again at settlement for defense in depth.
+/// It never fires for a legitimate embedder payout wallet (including a
+/// program-owned multisig vault PDA, which is not a reserved key).
+pub(crate) fn require_payable_marketplace_payee(payee: Pubkey) -> Result<()> {
+    require!(
+        payee != crate::ID && !is_reserved_payee(&payee),
+        CoordinationError::MarketplacePayeeUnpayable
+    );
+    Ok(())
+}
+
+/// Bind active marketplace payees away from task-owned lifecycle accounts and
+/// statically unpayable keys.
 ///
 /// A payee equal to the escrow makes a direct lamport transfer a net-zero while
 /// settlement accounting records it as paid; closing escrow then returns the
 /// retained fee to the creator. A payee equal to the Task similarly parks the fee
-/// in a creator-closed lifecycle account. Creation paths call this before funding,
+/// in a creator-closed lifecycle account. A payee equal to the program id or an
+/// Agave reserved account key can never receive the fee at all, bricking every
+/// settlement path (AGNC-02). Creation paths call this before funding,
 /// and settlement calls it again through `build_marketplace_fee_legs` for defense
 /// in depth and legacy-state fail-closed behavior.
 pub(crate) fn validate_marketplace_payee_destinations(
@@ -750,6 +832,7 @@ pub(crate) fn validate_marketplace_payee_destinations(
             operator != task_key && operator != escrow_key,
             CoordinationError::MarketplacePayeeAccountAlias
         );
+        require_payable_marketplace_payee(operator)?;
     }
     if referrer_fee_bps > 0 {
         require!(
@@ -761,6 +844,7 @@ pub(crate) fn validate_marketplace_payee_destinations(
             referrer != task_key && referrer != escrow_key,
             CoordinationError::MarketplacePayeeAccountAlias
         );
+        require_payable_marketplace_payee(referrer)?;
     }
     Ok(())
 }
@@ -2027,6 +2111,154 @@ mod tests {
             assert_eq!(effective_bps, 490); // 10 bps discount on 500
             assert_eq!(fee, 122); // 4.9% of 2500 = 122.5 -> rounds down
             assert_eq!(worker, 2378);
+        }
+    }
+
+    /// AGNC-02: a marketplace payee (operator / referrer) that can never receive
+    /// a lamport fee as a writable account must be rejected at the snapshot
+    /// chokepoint, so an unpayable task/listing can never be created.
+    mod agnc02_unpayable_payee {
+        use super::*;
+
+        #[test]
+        fn reserved_set_is_canonical_distinct_and_excludes_system_and_program() {
+            let mut seen = std::collections::BTreeSet::new();
+            for key in RESERVED_PAYEE_KEYS {
+                // The System program is Pubkey::default(), guarded separately; the
+                // program id is handled by its own branch. Neither belongs here.
+                assert_ne!(*key, Pubkey::default(), "system program must not be listed");
+                assert_ne!(*key, crate::ID, "program id is handled separately");
+                assert!(seen.insert(key.to_bytes()), "duplicate reserved key {key}");
+            }
+            // Canonical anchors across the native-program + sysvar families.
+            assert!(is_reserved_payee(
+                &solana_sdk_ids::bpf_loader_upgradeable::ID
+            ));
+            assert!(is_reserved_payee(&solana_sdk_ids::vote::ID));
+            assert!(is_reserved_payee(&solana_sdk_ids::sysvar::clock::ID));
+            assert!(is_reserved_payee(&solana_sdk_ids::sysvar::rent::ID));
+            assert!(is_reserved_payee(&solana_sdk_ids::sysvar::instructions::ID));
+        }
+
+        #[test]
+        fn program_id_and_every_reserved_key_are_unpayable() {
+            assert_eq!(
+                require_payable_marketplace_payee(crate::ID).unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            for key in RESERVED_PAYEE_KEYS {
+                assert_eq!(
+                    require_payable_marketplace_payee(*key).unwrap_err(),
+                    CoordinationError::MarketplacePayeeUnpayable.into(),
+                    "{key} must be unpayable"
+                );
+            }
+        }
+
+        #[test]
+        fn ordinary_wallets_and_non_reserved_pdas_remain_payable() {
+            for _ in 0..16 {
+                require_payable_marketplace_payee(Pubkey::new_unique()).unwrap();
+            }
+            // A program-owned multisig-vault-style PDA is NOT a reserved key, so the
+            // documented program-owned-operator use keeps working.
+            let (vault, _bump) = Pubkey::find_program_address(&[b"vault"], &crate::ID);
+            require_payable_marketplace_payee(vault).unwrap();
+        }
+
+        #[test]
+        fn destinations_reject_unpayable_legs_but_accept_good_wallets() {
+            let task = Pubkey::new_unique();
+            let escrow = Pubkey::new_unique();
+            let creator = Pubkey::new_unique();
+            let wallet = Pubkey::new_unique();
+
+            // Program-id referrer -> the dedicated error.
+            assert_eq!(
+                validate_marketplace_payee_destinations(
+                    task,
+                    escrow,
+                    creator,
+                    Pubkey::default(),
+                    0,
+                    crate::ID,
+                    500,
+                )
+                .unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            // Reserved-key referrer.
+            assert_eq!(
+                validate_marketplace_payee_destinations(
+                    task,
+                    escrow,
+                    creator,
+                    Pubkey::default(),
+                    0,
+                    solana_sdk_ids::sysvar::clock::ID,
+                    500,
+                )
+                .unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            // Program-id operator.
+            assert_eq!(
+                validate_marketplace_payee_destinations(
+                    task,
+                    escrow,
+                    creator,
+                    crate::ID,
+                    500,
+                    Pubkey::default(),
+                    0,
+                )
+                .unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            // A legitimate wallet payee still passes on both legs.
+            validate_marketplace_payee_destinations(
+                task,
+                escrow,
+                creator,
+                wallet,
+                500,
+                Pubkey::new_unique(),
+                500,
+            )
+            .unwrap();
+            // Zero-fee legs carry no payment, so the key is never inspected.
+            validate_marketplace_payee_destinations(
+                task,
+                escrow,
+                creator,
+                crate::ID,
+                0,
+                crate::ID,
+                0,
+            )
+            .unwrap();
+        }
+
+        // The goods surface (create_goods_listing / purchase_good) is full-surface
+        // only; the canary build excludes it, so gate this case to match.
+        #[cfg(not(feature = "mainnet-canary"))]
+        #[test]
+        fn goods_operator_terms_reject_unpayable_operator() {
+            use crate::instructions::create_goods_listing::validate_operator_terms;
+            let seller = Pubkey::new_unique();
+            let good = Pubkey::new_unique();
+            assert_eq!(
+                validate_operator_terms(crate::ID, 500, seller, good).unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            assert_eq!(
+                validate_operator_terms(solana_sdk_ids::sysvar::rent::ID, 500, seller, good)
+                    .unwrap_err(),
+                CoordinationError::MarketplacePayeeUnpayable.into()
+            );
+            // Normal wallet operator and the no-operator case both pass.
+            validate_operator_terms(Pubkey::new_unique(), 500, seller, good).unwrap();
+            validate_operator_terms(Pubkey::default(), 0, seller, good).unwrap();
         }
     }
 }
