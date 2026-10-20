@@ -1219,4 +1219,7 @@ pub enum CoordinationError {
     InvalidTaskQuotaAccount,
     #[msg("Rating requires a recorded SOL protocol fee of at least 100000 lamports")]
     RatingFeeNotQualified,
+    // Append-only: preserve every existing Anchor error discriminant.
+    #[msg("Referrer payee can never be credited (program id, system program, or sysvar)")]
+    InvalidReferrerPayee,
 }

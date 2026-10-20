@@ -584,6 +584,34 @@ pub fn calculate_combined_fees(
 /// `operator_fee_bps` is the operator leg that will co-exist on this task (0 when
 /// there is none), so the combined cap is enforced at creation with the SAME math
 /// the settlement path uses.
+/// Payee addresses that can never receive the referrer leg, so snapshotting a
+/// fee onto them permanently bricks every worker-paying settlement path
+/// (AGNC-02): this program's own id is Anchor's optional-account sentinel, and
+/// sysvar accounts are read-only. The system program is the canonical burn
+/// address — payable but unrecoverable — and is rejected because the fee would
+/// silently vanish from the worker's share.
+pub fn is_unpayable_referrer_payee(key: &Pubkey) -> bool {
+    use anchor_lang::solana_program::{sysvar, system_program};
+    if *key == crate::ID || *key == system_program::ID {
+        return true;
+    }
+    [
+        sysvar::clock::id(),
+        sysvar::epoch_rewards::id(),
+        sysvar::epoch_schedule::id(),
+        sysvar::fees::id(),
+        sysvar::instructions::id(),
+        sysvar::last_restart_slot::id(),
+        sysvar::recent_blockhashes::id(),
+        sysvar::rent::id(),
+        sysvar::rewards::id(),
+        sysvar::slot_hashes::id(),
+        sysvar::slot_history::id(),
+        sysvar::stake_history::id(),
+    ]
+    .contains(key)
+}
+
 pub fn resolve_referrer_snapshot(
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
@@ -601,6 +629,14 @@ pub fn resolve_referrer_snapshot(
         );
         return Ok((Pubkey::default(), 0));
     }
+    // AGNC-02: a referrer leg whose payee can never be credited turns every
+    // worker payout into a permanent revert while the creator's refund exits
+    // keep working — the worker is then baited into unpayable work and a
+    // no-show bond forfeit. Reject the unpayable payee class at snapshot time.
+    require!(
+        !is_unpayable_referrer_payee(&referrer_key),
+        CoordinationError::InvalidReferrerPayee
+    );
     require!(
         referrer_fee_bps <= MAX_REFERRER_FEE_BPS,
         CoordinationError::ReferrerFeeTooHigh
@@ -1400,6 +1436,48 @@ mod tests {
         assert!(resolve_referrer_snapshot(Some(referrer), 1, 2000, 2000, creator).is_err());
         // 2000 + 1000 + 1000 = 4000 -> ok.
         assert!(resolve_referrer_snapshot(Some(referrer), 1000, 2000, 1000, creator).is_ok());
+    }
+
+    #[test]
+    fn test_resolve_referrer_rejects_unpayable_payees() {
+        // AGNC-02: the program id (Anchor's optional-account sentinel), the
+        // system program (burn address), and every sysvar must be refused as
+        // the referrer payee when a fee is snapshotted — none can ever be
+        // credited at settlement.
+        let creator = Pubkey::new_unique();
+        assert!(resolve_referrer_snapshot(Some(crate::ID), 500, 100, 0, creator).is_err());
+        assert!(
+            resolve_referrer_snapshot(
+                Some(anchor_lang::solana_program::system_program::ID),
+                500,
+                100,
+                0,
+                creator
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_referrer_snapshot(
+                Some(anchor_lang::solana_program::sysvar::clock::id()),
+                500,
+                100,
+                0,
+                creator
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_referrer_snapshot(
+                Some(anchor_lang::solana_program::sysvar::rent::id()),
+                1,
+                100,
+                0,
+                creator
+            )
+            .is_err()
+        );
+        // A zero fee on an unpayable payee remains a no-leg snapshot.
+        assert!(resolve_referrer_snapshot(Some(crate::ID), 0, 100, 0, creator).is_ok());
     }
 
     #[test]
