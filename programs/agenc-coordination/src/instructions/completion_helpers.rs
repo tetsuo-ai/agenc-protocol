@@ -591,7 +591,7 @@ pub fn calculate_combined_fees(
 /// address — payable but unrecoverable — and is rejected because the fee would
 /// silently vanish from the worker's share.
 pub fn is_unpayable_referrer_payee(key: &Pubkey) -> bool {
-    use anchor_lang::solana_program::{sysvar, system_program};
+    use anchor_lang::solana_program::{system_program, sysvar};
     if *key == crate::ID || *key == system_program::ID {
         return true;
     }
@@ -1446,36 +1446,30 @@ mod tests {
         // credited at settlement.
         let creator = Pubkey::new_unique();
         assert!(resolve_referrer_snapshot(Some(crate::ID), 500, 100, 0, creator).is_err());
-        assert!(
-            resolve_referrer_snapshot(
-                Some(anchor_lang::solana_program::system_program::ID),
-                500,
-                100,
-                0,
-                creator
-            )
-            .is_err()
-        );
-        assert!(
-            resolve_referrer_snapshot(
-                Some(anchor_lang::solana_program::sysvar::clock::id()),
-                500,
-                100,
-                0,
-                creator
-            )
-            .is_err()
-        );
-        assert!(
-            resolve_referrer_snapshot(
-                Some(anchor_lang::solana_program::sysvar::rent::id()),
-                1,
-                100,
-                0,
-                creator
-            )
-            .is_err()
-        );
+        assert!(resolve_referrer_snapshot(
+            Some(anchor_lang::solana_program::system_program::ID),
+            500,
+            100,
+            0,
+            creator
+        )
+        .is_err());
+        assert!(resolve_referrer_snapshot(
+            Some(anchor_lang::solana_program::sysvar::clock::id()),
+            500,
+            100,
+            0,
+            creator
+        )
+        .is_err());
+        assert!(resolve_referrer_snapshot(
+            Some(anchor_lang::solana_program::sysvar::rent::id()),
+            1,
+            100,
+            0,
+            creator
+        )
+        .is_err());
         // A zero fee on an unpayable payee remains a no-leg snapshot.
         assert!(resolve_referrer_snapshot(Some(crate::ID), 0, 100, 0, creator).is_ok());
     }
