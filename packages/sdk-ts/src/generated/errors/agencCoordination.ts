@@ -844,6 +844,8 @@ export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA = 0x190c; // 6412
 export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA_ACCOUNT = 0x190d; // 6413
 /** RatingFeeNotQualified: Rating requires a recorded SOL protocol fee of at least 100000 lamports */
 export const AGENC_COORDINATION_ERROR__RATING_FEE_NOT_QUALIFIED = 0x190e; // 6414
+/** MarketplacePayeeUnpayable: Marketplace payee cannot receive a fee: program id or reserved account key */
+export const AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_UNPAYABLE = 0x190f; // 6415
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -1085,6 +1087,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_PRIVATE_TASK_UNSUPPORTED
   | typeof AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_REQUIRES_REVIEW_FLOW
   | typeof AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_ACCOUNT_ALIAS
+  | typeof AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_UNPAYABLE
   | typeof AGENC_COORDINATION_ERROR__MAX_ACTIVE_TASKS_REACHED
   | typeof AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED
   | typeof AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT
@@ -1506,6 +1509,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_PRIVATE_TASK_UNSUPPORTED]: `Creator-review validation is not supported for private tasks yet`,
     [AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_REQUIRES_REVIEW_FLOW]: `Task uses creator-review validation and must submit through Task Validation V2`,
     [AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_ACCOUNT_ALIAS]: `A marketplace fee payee cannot alias the task or its escrow account`,
+    [AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_UNPAYABLE]: `Marketplace payee cannot receive a fee: program id or reserved account key`,
     [AGENC_COORDINATION_ERROR__MAX_ACTIVE_TASKS_REACHED]: `Agent has reached maximum active tasks`,
     [AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED]: `Maximum revision rounds exceeded; escalate to reject`,
     [AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT]: `A required completion bond account was not provided`,

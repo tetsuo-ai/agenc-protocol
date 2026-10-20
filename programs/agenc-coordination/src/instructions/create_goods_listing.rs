@@ -67,6 +67,15 @@ pub struct CreateGoodsListing<'info> {
 /// in the uncloseable listing account; batch-4 review GOODS-OP-PDA-02).
 /// NOTE: a program-owned operator (e.g. a multisig vault PDA) is otherwise
 /// allowed — only the listing's own address is rejected.
+///
+/// AGNC-02: additionally reject an operator that can never receive the fee as a
+/// writable account — the program id (Anchor None-decodes the optional leg
+/// account) or an Agave reserved account key (demoted to read-only). Such an
+/// operator bricks every `purchase_good` on the listing. This is the same root
+/// cause as the task-flow referrer/operator lock, scoped here to the goods
+/// synchronous-purchase path (no escrow or bond is at risk). A multisig vault
+/// PDA is not a reserved key, so the documented program-owned-operator use
+/// still works.
 pub(crate) fn validate_operator_terms(
     operator: Pubkey,
     operator_fee_bps: u16,
@@ -90,6 +99,9 @@ pub(crate) fn validate_operator_terms(
         operator != good_key,
         CoordinationError::GoodsInvalidOperatorTerms
     );
+    if has_operator {
+        crate::instructions::completion_helpers::require_payable_marketplace_payee(operator)?;
+    }
     Ok(())
 }
 

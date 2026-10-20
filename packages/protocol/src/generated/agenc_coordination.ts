@@ -21241,6 +21241,11 @@ export type AgencCoordination = {
       "code": 6414,
       "name": "ratingFeeNotQualified",
       "msg": "Rating requires a recorded SOL protocol fee of at least 100000 lamports"
+    },
+    {
+      "code": 6415,
+      "name": "marketplacePayeeUnpayable",
+      "msg": "Marketplace payee cannot receive a fee: program id or reserved account key"
     }
   ],
   "types": [

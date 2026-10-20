@@ -59,6 +59,12 @@ indexmap = "=2.12.0"
 # no-default `mainnet-canary`; neither may silently lose bid-term commitments.
 solana-sha256-hasher = { version = "=2.3.0", features = ["sha2"] }
 
+# Canonical native-program + sysvar address constants for the AGNC-02
+# unpayable-marketplace-payee guard (see completion_helpers::is_reserved_payee).
+# Already in the locked graph as an anchor-lang transitive dependency; making it
+# direct adds no new compiled code and no Cargo.lock change. Pinned to the lock.
+solana-sdk-ids = "=2.2.1"
+
 # Defense-in-depth: the Rust release profile defaults overflow-checks = false, so any
 # integer add/sub/mul not written with checked_*/saturating_* would SILENTLY WRAP in the
 # deployed SBF program. All money paths already use checked arithmetic; this is the second

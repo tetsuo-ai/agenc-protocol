@@ -17,7 +17,7 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 
 Candidate build breakdown: default production (`spl-token-rewards`) is **103
 instructions**, explicit `private-zk` is **106**, and `mainnet-canary` remains
-**25**. The committed candidate IDL has **45 accounts / 106 events / 415 errors**;
+**25**. The committed candidate IDL has **45 accounts / 106 events / 416 errors**;
 the generated reference describes this candidate. `validation-timings` only
 shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
 
@@ -45,7 +45,7 @@ aggregates are not retrospectively filtered. See [rating policy](design/fee-qual
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (415 variants in the candidate IDL)
+- `src/errors.rs` - program error codes (416 variants in the candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
