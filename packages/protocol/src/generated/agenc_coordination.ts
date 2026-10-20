@@ -21200,6 +21200,11 @@ export type AgencCoordination = {
       "code": 6414,
       "name": "ratingFeeNotQualified",
       "msg": "Rating requires a recorded SOL protocol fee of at least 100000 lamports"
+    },
+    {
+      "code": 6415,
+      "name": "invalidReferrerPayee",
+      "msg": "Referrer payee can never be credited (program id, system program, or sysvar)"
     }
   ],
   "types": [
