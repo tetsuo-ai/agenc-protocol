@@ -237,3 +237,21 @@ test("refuses non-mainnet before enumerating validation configs", async () => {
   );
   assert.equal(enumerated, false);
 });
+
+
+test("AGNC-03 review debt is valid across pending, completed and orphaned configs", async () => {
+  for (const debt of [1, 0x01020304, 0xffffffff, 0]) {
+    for (const status of [2, 3]) {
+      const value = scenario({ mode: 1, status });
+      value.configData.writeUInt32LE(debt, 101);
+      const result = await scanTaskValidationConfigs(connectionFor(value));
+      assert.deepEqual(result.blockers, []);
+      assert.equal(decodeTaskValidationConfig(value.configData).reviewDebtSecs, debt);
+      if (status === 3) {
+        const orphan = await scanTaskValidationConfigs(connectionFor(value, { missingTask: true }));
+        assert.deepEqual(orphan.blockers, []);
+        assert.equal(orphan.orphans[0].risk, "rent-only");
+      }
+    }
+  }
+});
