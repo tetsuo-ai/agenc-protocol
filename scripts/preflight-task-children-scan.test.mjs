@@ -304,6 +304,45 @@ test("aggregates live CompletionBond principal even while its Task parent exists
   assert.deepEqual(result.blockers, []);
 });
 
+function bidBookFixture(task, { size = 174, state = 2, activeBids = 0 } = {}) {
+  const [address, bump] = PublicKey.findProgramAddressSync(
+    [Buffer.from("bid_book"), task.toBuffer()],
+    PROGRAM_ID,
+  );
+  const data = Buffer.alloc(size);
+  disc("TaskBidBook").copy(data);
+  task.toBuffer().copy(data, 8);
+  data[40] = state;
+  data[41] = 0;
+  data[50] = 0; // accepted_bid = None
+  data.writeBigUInt64LE(1n, 51);
+  data.writeUInt32LE(activeBids, 59);
+  data.writeUInt16LE(activeBids, 63);
+  data.writeBigInt64LE(100n, 65);
+  data.writeBigInt64LE(101n, 73);
+  data[81] = bump;
+  // Stale bytes after the serialized end, as a reopened book leaves them.
+  data.fill(0xab, size - 32);
+  return { address, data, lamports: 1_500_000 };
+}
+
+test("decodes legacy 114-byte and current 174-byte TaskBidBook children", async () => {
+  for (const size of [114, 174]) {
+    const task = new PublicKey(Buffer.alloc(32, 90 + (size === 174 ? 1 : 0)));
+    const book = bidBookFixture(task, { size });
+    const result = await scanTaskChildren(connectionWith([book]));
+    assert.equal(result.families.TaskBidBook.orphanCount, 1);
+    assert.equal(result.families.TaskBidBook.rentOnlyOrphanCount, 1);
+    assert.ok(
+      !result.blockers.some((item) => item.kind === "invalid-child-layout"),
+      `size ${size} decodes`,
+    );
+  }
+  const wrong = bidBookFixture(new PublicKey(Buffer.alloc(32, 92)), { size: 175 });
+  const result = await scanTaskChildren(connectionWith([wrong]));
+  assert.ok(result.blockers.some((item) => item.kind === "invalid-child-layout"));
+});
+
 test("decodes the append-only 252-byte BoundActive TaskBid principal", async () => {
   const task = new PublicKey(Buffer.alloc(32, 83));
   const bidder = new PublicKey(Buffer.alloc(32, 84));

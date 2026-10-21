@@ -47,13 +47,20 @@ function taskFixture(marker = 191) {
 
 function bookFixture(
   task,
-  { state = 0, acceptedBid = null, activeBids = 1, totalBids = activeBids } = {},
+  {
+    state = 0,
+    acceptedBid = null,
+    activeBids = 1,
+    totalBids = activeBids,
+    size = 114,
+    staleTail = false,
+  } = {},
 ) {
   const [address, bump] = PublicKey.findProgramAddressSync(
     [Buffer.from("bid_book"), task.address.toBuffer()],
     PROGRAM_ID,
   );
-  const data = Buffer.alloc(114);
+  const data = Buffer.alloc(size);
   disc("TaskBidBook").copy(data);
   task.address.toBuffer().copy(data, 8);
   data[40] = state;
@@ -73,6 +80,24 @@ function bookFixture(
   data.writeBigInt64LE(100n, end + 14);
   data.writeBigInt64LE(101n, end + 22);
   data[end + 30] = bump;
+  let serializedEnd = end + 31;
+  if (size === 174) {
+    // Cached-winner append (best bid, reward, eta, confidence, reputation,
+    // stale-since, frozen score window).
+    Buffer.alloc(32, 198).copy(data, serializedEnd);
+    data.writeBigUInt64LE(40_000n, serializedEnd + 32);
+    data.writeUInt32LE(3_600, serializedEnd + 40);
+    data.writeUInt16LE(9_000, serializedEnd + 44);
+    data.writeUInt16LE(5_000, serializedEnd + 46);
+    data.writeBigInt64LE(0n, serializedEnd + 48);
+    data.writeUInt32LE(86_400, serializedEnd + 56);
+    serializedEnd += 60;
+  }
+  if (staleTail) {
+    // A book reopened from Some(accepted_bid) to None is re-serialized 32
+    // bytes shorter into the same allocation; the old tail stays in place.
+    data.fill(0xab, serializedEnd);
+  }
   return { address, data };
 }
 
@@ -234,6 +259,54 @@ test("exact-decodes bid state offset and bid-book dynamic option tail", () => {
     () => decodeTaskBid(invalidSlash),
     /invalid snapshot\/timestamp terms/,
   );
+});
+
+test("decodes the current 174-byte bid book and reopened books with a stale tail", () => {
+  const task = taskFixture();
+  const accepted = new PublicKey(Buffer.alloc(32, 199));
+  const current = decodeTaskBidBook(
+    bookFixture(task, { size: 174, state: 1, acceptedBid: accepted }).data,
+  );
+  assert.equal(current.accountSize, 174);
+  assert.equal(current.acceptedBid.toBase58(), accepted.toBase58());
+  assert.equal(current.cachedWinner.bestRewardLamports, 40_000n);
+  assert.equal(current.cachedWinner.bestEtaSeconds, 3_600);
+  assert.equal(current.cachedWinner.scoreWindowSecs, 86_400);
+
+  for (const size of [114, 174]) {
+    const reopened = bookFixture(task, { size, state: 0, staleTail: true });
+    assert.notDeepEqual(
+      reopened.data.subarray(reopened.data.length - 32),
+      Buffer.alloc(32),
+      "fixture carries a nonzero stale tail",
+    );
+    const decoded = decodeTaskBidBook(reopened.data);
+    assert.equal(decoded.acceptedBid, null);
+    assert.equal(decoded.accountSize, size);
+    assert.equal(decoded.cachedWinner === null, size === 114);
+  }
+
+  const legacy = bookFixture(task);
+  for (const size of [113, 115, 173, 175]) {
+    const wrong = Buffer.alloc(size);
+    legacy.data.copy(wrong, 0, 0, Math.min(size, legacy.data.length));
+    assert.throws(() => decodeTaskBidBook(wrong), /unexpected size/);
+  }
+});
+
+test("scanner accepts current-layout and reopened bid books", async () => {
+  const task = taskFixture();
+  for (const book of [
+    bookFixture(task, { size: 174 }),
+    bookFixture(task, { size: 174, staleTail: true }),
+  ]) {
+    const bid = bidFixture(task, book, { state: 0 });
+    const result = await scanBidContracts(
+      connectionFor({ tasks: [task], books: [book], bids: [bid] }),
+    );
+    assert.deepEqual(result.blockers, []);
+    assert.equal(result.legacyActiveCount, 1);
+  }
 });
 
 test("legacy Active bid is refundable inventory even without a job spec", async () => {
