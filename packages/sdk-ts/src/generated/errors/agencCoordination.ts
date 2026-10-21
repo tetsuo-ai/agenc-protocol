@@ -846,6 +846,10 @@ export const AGENC_COORDINATION_ERROR__INVALID_TASK_QUOTA_ACCOUNT = 0x190d; // 6
 export const AGENC_COORDINATION_ERROR__RATING_FEE_NOT_QUALIFIED = 0x190e; // 6414
 /** MarketplacePayeeUnpayable: Marketplace payee cannot receive a fee: program id or reserved account key */
 export const AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_UNPAYABLE = 0x190f; // 6415
+/** DisputeCounterRepairNotApplicable: Dispute counter repair does not apply to these disputes */
+export const AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_REPAIR_NOT_APPLICABLE = 0x1910; // 6416
+/** DisputeCounterNotDeficient: Initiator counter still holds a unit; finalize the outcomes that own one first */
+export const AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_NOT_DEFICIENT = 0x1911; // 6417
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -934,6 +938,8 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_NOT_DEFICIENT
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_REPAIR_NOT_APPLICABLE
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED
@@ -1356,6 +1362,8 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED]: `Delegation must be active for minimum duration before revocation`,
     [AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED]: `Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use.`,
     [AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED]: `Dispute has already been resolved`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_NOT_DEFICIENT]: `Initiator counter still holds a unit; finalize the outcomes that own one first`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_REPAIR_NOT_APPLICABLE]: `Dispute counter repair does not apply to these disputes`,
     [AGENC_COORDINATION_ERROR__DISPUTE_DEFENDANT_NOT_PEER]: `The defendant claim settles through the ruling, not peer settlement`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE]: `Dispute is not active`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED]: `Dispute has not expired`,

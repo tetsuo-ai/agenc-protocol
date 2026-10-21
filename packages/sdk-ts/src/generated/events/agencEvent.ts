@@ -119,6 +119,10 @@ import {
   type DisputeInitiatedEventData,
 } from "./disputeInitiated";
 import {
+  getDisputeInitiatorCounterRepairedEventDecoder,
+  type DisputeInitiatorCounterRepairedEventData,
+} from "./disputeInitiatorCounterRepaired";
+import {
   getDisputePeerClaimSettledEventDecoder,
   type DisputePeerClaimSettledEventData,
 } from "./disputePeerClaimSettled";
@@ -475,6 +479,7 @@ export type AgencEvent =
   | { eventName: "DisputeCancelled"; data: DisputeCancelledEventData }
   | { eventName: "DisputeExpired"; data: DisputeExpiredEventData }
   | { eventName: "DisputeInitiated"; data: DisputeInitiatedEventData }
+  | { eventName: "DisputeInitiatorCounterRepaired"; data: DisputeInitiatorCounterRepairedEventData }
   | { eventName: "DisputePeerClaimSettled"; data: DisputePeerClaimSettledEventData }
   | { eventName: "DisputeResolved"; data: DisputeResolvedEventData }
   | { eventName: "DisputeResolverAssigned"; data: DisputeResolverAssignedEventData }
@@ -769,6 +774,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "DisputeInitiated",
       data: getDisputeInitiatedEventDecoder().decode(payload),
+    }),
+  },
+  "a3e2889315b81a08": {
+    eventName: "DisputeInitiatorCounterRepaired",
+    decode: (payload) => ({
+      eventName: "DisputeInitiatorCounterRepaired",
+      data: getDisputeInitiatorCounterRepairedEventDecoder().decode(payload),
     }),
   },
   "7028149881ecda7f": {

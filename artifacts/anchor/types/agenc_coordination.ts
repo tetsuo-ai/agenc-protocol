@@ -12121,6 +12121,196 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "repairDisputeInitiatorCounter",
+      "docs": [
+        "Restore, once per incident, the initiator-outcome counter unit that a",
+        "historical duplicate-account `initiate_dispute` lost, so the stranded",
+        "outcome can finalize through `apply_initiator_slash`. The protocol",
+        "authority proposes and the configured M-of-N owners approve; it applies",
+        "only when the initiator's counter is zero while a finalizable tracked",
+        "outcome of that initiator is pending."
+      ],
+      "discriminator": [
+        225,
+        75,
+        211,
+        96,
+        189,
+        248,
+        128,
+        146
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "incidentDispute",
+          "docs": [
+            "The dispute whose initiation lost the counter units. Its address seeds",
+            "the one-time receipt. Read-only."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "incident_dispute.dispute_id",
+                "account": "dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pendingDispute",
+          "docs": [
+            "The terminal dispute of the same initiator whose outcome cannot be",
+            "finalized because the initiator holds no counter unit. This is the",
+            "incident itself unless another dispute of the same initiator finalized",
+            "first and consumed the only unit. Read-only; may alias `incident_dispute`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pending_dispute.dispute_id",
+                "account": "dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "initiatorAgent",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "initiator_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "repairReceipt",
+          "docs": [
+            "One-time receipt. `init` fails if this incident was already repaired."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  99,
+                  111,
+                  117,
+                  110,
+                  116,
+                  101,
+                  114,
+                  95,
+                  114,
+                  101,
+                  112,
+                  97,
+                  105,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "incidentDispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Protocol authority proposes and pays; the configured M-of-N",
+            "ProtocolConfig owners approve through remaining accounts."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "incidentSignature",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "requestAttestorExit",
       "docs": [
         "Start the two-step attestor exit (P1.2 §4.2). Monotonic — a running exit clock",
@@ -17344,6 +17534,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "disputeCounterRepair",
+      "discriminator": [
+        235,
+        220,
+        42,
+        72,
+        52,
+        243,
+        134,
+        80
+      ]
+    },
+    {
       "name": "disputeResolver",
       "discriminator": [
         68,
@@ -18149,6 +18352,19 @@ export type AgencCoordination = {
         4,
         183,
         153
+      ]
+    },
+    {
+      "name": "disputeInitiatorCounterRepaired",
+      "discriminator": [
+        163,
+        226,
+        136,
+        147,
+        21,
+        184,
+        26,
+        8
       ]
     },
     {
@@ -21259,6 +21475,16 @@ export type AgencCoordination = {
       "code": 6415,
       "name": "marketplacePayeeUnpayable",
       "msg": "Marketplace payee cannot receive a fee: program id or reserved account key"
+    },
+    {
+      "code": 6416,
+      "name": "disputeCounterRepairNotApplicable",
+      "msg": "Dispute counter repair does not apply to these disputes"
+    },
+    {
+      "code": 6417,
+      "name": "disputeCounterNotDeficient",
+      "msg": "Initiator counter still holds a unit; finalize the outcomes that own one first"
     }
   ],
   "types": [
@@ -23354,6 +23580,85 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "disputeCounterRepair",
+      "docs": [
+        "One-time record of a governance repair that restored an initiator-outcome",
+        "counter unit lost when a historical `initiate_dispute` received the same",
+        "writable AgentRegistration as both `agent` and `worker_agent`.",
+        "Written once by `repair_dispute_initiator_counter`; never mutated or closed.",
+        "PDA seeds: [\"dispute_counter_repair\", incident_dispute]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "incidentDispute",
+            "docs": [
+              "Dispute whose initiation lost the counter units (seeds this receipt)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pendingDispute",
+            "docs": [
+              "Terminal dispute whose pending initiator outcome received the unit.",
+              "Equals `incident_dispute` unless another dispute of the same initiator",
+              "finalized first."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "initiatorAgent",
+            "docs": [
+              "Initiator AgentRegistration whose counter was repaired."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "incidentSignature",
+            "docs": [
+              "Signature of the historical `initiate_dispute` transaction that passed",
+              "the agent in both writable slots. Recorded for public verification."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "repairedBy",
+            "docs": [
+              "Protocol authority that proposed the threshold-approved repair."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "repairedAt",
+            "docs": [
+              "Unix timestamp of the repair."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "initiatorUnitsRestored",
+            "docs": [
+              "Initiator-outcome units restored (always 1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "disputeExpired",
       "docs": [
         "Emitted when a dispute expires without resolution",
@@ -23449,6 +23754,63 @@ export type AgencCoordination = {
           {
             "name": "votingDeadline",
             "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeInitiatorCounterRepaired",
+      "docs": [
+        "Emitted when threshold-approved governance restores the initiator-outcome",
+        "counter unit that a historical duplicate-account dispute initiation lost."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "incidentDispute",
+            "docs": [
+              "Dispute whose initiation lost the unit (seeds the one-time receipt)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pendingDispute",
+            "docs": [
+              "Terminal dispute whose pending initiator outcome received the unit."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "initiatorAgent",
+            "type": "pubkey"
+          },
+          {
+            "name": "incidentSignature",
+            "docs": [
+              "Historical `initiate_dispute` transaction signature (evidence)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "pendingInitiatorOutcomes",
+            "docs": [
+              "Initiator pending-outcome counter after the repair."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "repairedBy",
+            "type": "pubkey"
           },
           {
             "name": "timestamp",

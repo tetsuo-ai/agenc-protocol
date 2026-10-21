@@ -46,6 +46,7 @@ export * from "./quotaAuthorityRateLimit";
 export * from "./rateSkillPurchaseRecord";
 export * from "./ratingAccount";
 export * from "./recordListingModerationModerationAttestor";
+export * from "./repairReceipt";
 export * from "./reputationStake";
 export * from "./saleReceipt";
 export * from "./skill";

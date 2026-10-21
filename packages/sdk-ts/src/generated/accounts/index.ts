@@ -17,6 +17,7 @@ export * from "./completionBond";
 export * from "./coordinationState";
 export * from "./defaultTrustList";
 export * from "./dispute";
+export * from "./disputeCounterRepair";
 export * from "./disputeResolver";
 export * from "./feedAuthorityVote";
 export * from "./feedPost";

@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**103 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**104 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -77,6 +77,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`register_store`](#register_store)
 - [`reject_and_freeze`](#reject_and_freeze)
 - [`reject_task_result`](#reject_task_result)
+- [`repair_dispute_initiator_counter`](#repair_dispute_initiator_counter)
 - [`request_attestor_exit`](#request_attestor_exit)
 - [`request_changes`](#request_changes)
 - [`resolve_dispute`](#resolve_dispute)
@@ -1883,6 +1884,33 @@ Reject a creator-reviewed submission and return the task to active work.
 | # | Arg | Type |
 |---|---|---|
 | 1 | `rejection_hash` | `[u8; 32]` |
+
+## repair_dispute_initiator_counter
+
+Restore, once per incident, the initiator-outcome counter unit that a
+historical duplicate-account `initiate_dispute` lost, so the stranded
+outcome can finalize through `apply_initiator_slash`. The protocol
+authority proposes and the configured M-of-N owners approve; it applies
+only when the initiator's counter is zero while a finalizable tracked
+outcome of that initiator is pending.
+
+### Accounts (7)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 2 | `incident_dispute` |  |  |  | PDA ["dispute", account:incident_dispute.dispute_id (Dispute)] | The dispute whose initiation lost the counter units. Its address seeds the one-time receipt. Read-only. |
+| 3 | `pending_dispute` |  |  |  | PDA ["dispute", account:pending_dispute.dispute_id (Dispute)] | The terminal dispute of the same initiator whose outcome cannot be finalized because the initiator holds no counter unit. This is the incident itself unless another dispute of the same initiator finalized first and consumed the only unit. Read-only; may alias `incident_dispute`. |
+| 4 | `initiator_agent` | yes |  |  | PDA ["agent", account:initiator_agent.agent_id (AgentRegistration)] |  |
+| 5 | `repair_receipt` | yes |  |  | PDA ["dispute_counter_repair", account:incident_dispute] | One-time receipt. `init` fails if this incident was already repaired. |
+| 6 | `authority` | yes | yes |  |  | Protocol authority proposes and pays; the configured M-of-N ProtocolConfig owners approve through remaining accounts. |
+| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (1)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `incident_signature` | `[u8; 64]` |
 
 ## request_attestor_exit
 
