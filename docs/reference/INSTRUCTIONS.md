@@ -883,16 +883,18 @@ Retired. Always returns `ReputationDelegationDisabled`.
 Permissionlessly demote a provably dead tracked winner and open the
 re-promotion grace window.
 
-### Accounts (6)
+### Accounts (8)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 2 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
-| 4 | `bid` |  |  |  | PDA ["bid", account:task, account:bidder] |  |
+| 4 | `bid` | yes |  |  | PDA ["bid", account:task, account:bidder] |  |
 | 5 | `bidder` |  |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
-| 6 | `authority` |  | yes |  |  |  |
+| 6 | `bidder_market_state` | yes |  |  | PDA ["bidder_market", account:bidder] | leader; decremented exactly once because the bid account is closed below. |
+| 7 | `bidder_authority` | yes |  |  |  | bidder's stored authority wallet. |
+| 8 | `authority` |  | yes |  |  |  |
 
 ### Args (0)
 

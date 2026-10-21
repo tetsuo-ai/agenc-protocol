@@ -37,7 +37,12 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findBidBookPda, findBidPda, findProtocolConfigPda } from "../pdas";
+import {
+  findBidBookPda,
+  findBidderMarketStatePda,
+  findBidPda,
+  findProtocolConfigPda,
+} from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const DEMOTE_INELIGIBLE_BEST_DISCRIMINATOR: ReadonlyUint8Array =
@@ -54,6 +59,8 @@ export type DemoteIneligibleBestInstruction<
   TAccountBidBook extends string | AccountMeta<string> = string,
   TAccountBid extends string | AccountMeta<string> = string,
   TAccountBidder extends string | AccountMeta<string> = string,
+  TAccountBidderMarketState extends string | AccountMeta<string> = string,
+  TAccountBidderAuthority extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
@@ -69,10 +76,16 @@ export type DemoteIneligibleBestInstruction<
       TAccountBidBook extends string
         ? WritableAccount<TAccountBidBook>
         : TAccountBidBook,
-      TAccountBid extends string ? ReadonlyAccount<TAccountBid> : TAccountBid,
+      TAccountBid extends string ? WritableAccount<TAccountBid> : TAccountBid,
       TAccountBidder extends string
         ? ReadonlyAccount<TAccountBidder>
         : TAccountBidder,
+      TAccountBidderMarketState extends string
+        ? WritableAccount<TAccountBidderMarketState>
+        : TAccountBidderMarketState,
+      TAccountBidderAuthority extends string
+        ? WritableAccount<TAccountBidderAuthority>
+        : TAccountBidderAuthority,
       TAccountAuthority extends string
         ? ReadonlySignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
@@ -121,6 +134,8 @@ export type DemoteIneligibleBestAsyncInput<
   TAccountBidBook extends string = string,
   TAccountBid extends string = string,
   TAccountBidder extends string = string,
+  TAccountBidderMarketState extends string = string,
+  TAccountBidderAuthority extends string = string,
   TAccountAuthority extends string = string,
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
@@ -128,6 +143,10 @@ export type DemoteIneligibleBestAsyncInput<
   bidBook?: Address<TAccountBidBook>;
   bid?: Address<TAccountBid>;
   bidder: Address<TAccountBidder>;
+  /** leader; decremented exactly once because the bid account is closed below. */
+  bidderMarketState?: Address<TAccountBidderMarketState>;
+  /** bidder's stored authority wallet. */
+  bidderAuthority: Address<TAccountBidderAuthority>;
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -137,6 +156,8 @@ export async function getDemoteIneligibleBestInstructionAsync<
   TAccountBidBook extends string,
   TAccountBid extends string,
   TAccountBidder extends string,
+  TAccountBidderMarketState extends string,
+  TAccountBidderAuthority extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -146,6 +167,8 @@ export async function getDemoteIneligibleBestInstructionAsync<
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
+    TAccountBidderMarketState,
+    TAccountBidderAuthority,
     TAccountAuthority
   >,
   config?: { programAddress?: TProgramAddress },
@@ -157,6 +180,8 @@ export async function getDemoteIneligibleBestInstructionAsync<
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
+    TAccountBidderMarketState,
+    TAccountBidderAuthority,
     TAccountAuthority
   >
 > {
@@ -169,8 +194,13 @@ export async function getDemoteIneligibleBestInstructionAsync<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: false },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
-    bid: { value: input.bid ?? null, isWritable: false },
+    bid: { value: input.bid ?? null, isWritable: true },
     bidder: { value: input.bidder ?? null, isWritable: false },
+    bidderMarketState: {
+      value: input.bidderMarketState ?? null,
+      isWritable: true,
+    },
+    bidderAuthority: { value: input.bidderAuthority ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -202,6 +232,14 @@ export async function getDemoteIneligibleBestInstructionAsync<
       ),
     });
   }
+  if (!accounts.bidderMarketState.value) {
+    accounts.bidderMarketState.value = await findBidderMarketStatePda({
+      bidder: getAddressFromResolvedInstructionAccount(
+        "bidder",
+        accounts.bidder.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -211,6 +249,8 @@ export async function getDemoteIneligibleBestInstructionAsync<
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("bid", accounts.bid),
       getAccountMeta("bidder", accounts.bidder),
+      getAccountMeta("bidderMarketState", accounts.bidderMarketState),
+      getAccountMeta("bidderAuthority", accounts.bidderAuthority),
       getAccountMeta("authority", accounts.authority),
     ],
     data: getDemoteIneligibleBestInstructionDataEncoder().encode({}),
@@ -222,6 +262,8 @@ export async function getDemoteIneligibleBestInstructionAsync<
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
+    TAccountBidderMarketState,
+    TAccountBidderAuthority,
     TAccountAuthority
   >);
 }
@@ -232,6 +274,8 @@ export type DemoteIneligibleBestInput<
   TAccountBidBook extends string = string,
   TAccountBid extends string = string,
   TAccountBidder extends string = string,
+  TAccountBidderMarketState extends string = string,
+  TAccountBidderAuthority extends string = string,
   TAccountAuthority extends string = string,
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
@@ -239,6 +283,10 @@ export type DemoteIneligibleBestInput<
   bidBook: Address<TAccountBidBook>;
   bid: Address<TAccountBid>;
   bidder: Address<TAccountBidder>;
+  /** leader; decremented exactly once because the bid account is closed below. */
+  bidderMarketState: Address<TAccountBidderMarketState>;
+  /** bidder's stored authority wallet. */
+  bidderAuthority: Address<TAccountBidderAuthority>;
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -248,6 +296,8 @@ export function getDemoteIneligibleBestInstruction<
   TAccountBidBook extends string,
   TAccountBid extends string,
   TAccountBidder extends string,
+  TAccountBidderMarketState extends string,
+  TAccountBidderAuthority extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -257,6 +307,8 @@ export function getDemoteIneligibleBestInstruction<
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
+    TAccountBidderMarketState,
+    TAccountBidderAuthority,
     TAccountAuthority
   >,
   config?: { programAddress?: TProgramAddress },
@@ -267,6 +319,8 @@ export function getDemoteIneligibleBestInstruction<
   TAccountBidBook,
   TAccountBid,
   TAccountBidder,
+  TAccountBidderMarketState,
+  TAccountBidderAuthority,
   TAccountAuthority
 > {
   // Program address.
@@ -278,8 +332,13 @@ export function getDemoteIneligibleBestInstruction<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: false },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
-    bid: { value: input.bid ?? null, isWritable: false },
+    bid: { value: input.bid ?? null, isWritable: true },
     bidder: { value: input.bidder ?? null, isWritable: false },
+    bidderMarketState: {
+      value: input.bidderMarketState ?? null,
+      isWritable: true,
+    },
+    bidderAuthority: { value: input.bidderAuthority ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -295,6 +354,8 @@ export function getDemoteIneligibleBestInstruction<
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("bid", accounts.bid),
       getAccountMeta("bidder", accounts.bidder),
+      getAccountMeta("bidderMarketState", accounts.bidderMarketState),
+      getAccountMeta("bidderAuthority", accounts.bidderAuthority),
       getAccountMeta("authority", accounts.authority),
     ],
     data: getDemoteIneligibleBestInstructionDataEncoder().encode({}),
@@ -306,6 +367,8 @@ export function getDemoteIneligibleBestInstruction<
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
+    TAccountBidderMarketState,
+    TAccountBidderAuthority,
     TAccountAuthority
   >);
 }
@@ -321,7 +384,11 @@ export type ParsedDemoteIneligibleBestInstruction<
     bidBook: TAccountMetas[2];
     bid: TAccountMetas[3];
     bidder: TAccountMetas[4];
-    authority: TAccountMetas[5];
+    /** leader; decremented exactly once because the bid account is closed below. */
+    bidderMarketState: TAccountMetas[5];
+    /** bidder's stored authority wallet. */
+    bidderAuthority: TAccountMetas[6];
+    authority: TAccountMetas[7];
   };
   data: DemoteIneligibleBestInstructionData;
 };
@@ -334,12 +401,12 @@ export function parseDemoteIneligibleBestInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedDemoteIneligibleBestInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 6) {
+  if (instruction.accounts.length < 8) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 6,
+        expectedAccountMetas: 8,
       },
     );
   }
@@ -357,6 +424,8 @@ export function parseDemoteIneligibleBestInstruction<
       bidBook: getNextAccount(),
       bid: getNextAccount(),
       bidder: getNextAccount(),
+      bidderMarketState: getNextAccount(),
+      bidderAuthority: getNextAccount(),
       authority: getNextAccount(),
     },
     data: getDemoteIneligibleBestInstructionDataDecoder().decode(
