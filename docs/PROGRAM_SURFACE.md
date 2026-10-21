@@ -15,9 +15,9 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 `initialize_zk_config`, and `update_zk_image_id` exist only in the explicit
 `private-zk` development build.
 
-Candidate build breakdown: default production (`spl-token-rewards`) is **103
-instructions**, explicit `private-zk` is **106**, and `mainnet-canary` remains
-**25**. The committed candidate IDL has **45 accounts / 107 events / 416 errors**;
+Candidate build breakdown: default production (`spl-token-rewards`) is **104
+instructions**, explicit `private-zk` is **107**, and `mainnet-canary` remains
+**25**. The committed candidate IDL has **46 accounts / 108 events / 418 errors**;
 the generated reference describes this candidate. `validation-timings` only
 shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
 
@@ -45,7 +45,7 @@ aggregates are not retrospectively filtered. See [rating policy](design/fee-qual
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (416 variants in the candidate IDL)
+- `src/errors.rs` - program error codes (418 variants in the candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
@@ -117,6 +117,20 @@ and anyone can fund the payee before settlement to have it paid. The payee
 account is still required and bound to the snapshot. Operators and referrers
 must keep their payout address rent-exempt. No instruction, account or error
 changes; the IDL gains one event.
+
+Dispute counter repair (candidate, not evidence of a mainnet deployment):
+`repair_dispute_initiator_counter` restores one initiator-outcome counter unit
+that a historical `initiate_dispute` lost when the same AgentRegistration was
+passed as both `agent` and `worker_agent` (now rejected at initiation). It
+applies only when the initiator's counter is zero while a finalizable,
+counter-tracked outcome of that initiator is still pending, so it cannot create
+a liability the agent does not owe. The protocol authority proposes, the
+ProtocolConfig M-of-N owners approve, and a `DisputeCounterRepair` receipt PDA
+seeded by the incident dispute makes it one-time. The ordinary permissionless
+`apply_initiator_slash` then finalizes the outcome. The known mainnet incident
+and the release order are recorded in
+[the remediation record](../artifacts/remediation/2026-10-21-dispute-counter-repair.json)
+and [the design note](design/dispute-counter-repair.md).
 
 ### Store identity
 

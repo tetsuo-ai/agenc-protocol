@@ -809,6 +809,20 @@ pub mod agenc_coordination {
         instructions::apply_initiator_slash::handler(ctx)
     }
 
+    /// Restore, once per incident, the initiator-outcome counter unit that a
+    /// historical duplicate-account `initiate_dispute` lost, so the stranded
+    /// outcome can finalize through `apply_initiator_slash`. The protocol
+    /// authority proposes and the configured M-of-N owners approve; it applies
+    /// only when the initiator's counter is zero while a finalizable tracked
+    /// outcome of that initiator is pending.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn repair_dispute_initiator_counter(
+        ctx: Context<RepairDisputeInitiatorCounter>,
+        incident_signature: [u8; 64],
+    ) -> Result<()> {
+        instructions::repair_dispute_initiator_counter::handler(ctx, incident_signature)
+    }
+
     /// Expire a dispute after the maximum duration has passed.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn expire_dispute<'info>(

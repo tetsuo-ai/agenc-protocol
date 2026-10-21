@@ -2566,6 +2566,41 @@ impl DisputeResolver {
     }
 }
 
+/// One-time record of a governance repair that restored an initiator-outcome
+/// counter unit lost when a historical `initiate_dispute` received the same
+/// writable AgentRegistration as both `agent` and `worker_agent`.
+/// Written once by `repair_dispute_initiator_counter`; never mutated or closed.
+/// PDA seeds: ["dispute_counter_repair", incident_dispute]
+#[account]
+#[derive(InitSpace)]
+pub struct DisputeCounterRepair {
+    /// Dispute whose initiation lost the counter units (seeds this receipt).
+    pub incident_dispute: Pubkey,
+    /// Terminal dispute whose pending initiator outcome received the unit.
+    /// Equals `incident_dispute` unless another dispute of the same initiator
+    /// finalized first.
+    pub pending_dispute: Pubkey,
+    /// Initiator AgentRegistration whose counter was repaired.
+    pub initiator_agent: Pubkey,
+    /// Signature of the historical `initiate_dispute` transaction that passed
+    /// the agent in both writable slots. Recorded for public verification.
+    pub incident_signature: [u8; 64],
+    /// Protocol authority that proposed the threshold-approved repair.
+    pub repaired_by: Pubkey,
+    /// Unix timestamp of the repair.
+    pub repaired_at: i64,
+    /// Initiator-outcome units restored (always 1).
+    pub initiator_units_restored: u8,
+    /// PDA bump.
+    pub bump: u8,
+}
+
+impl DisputeCounterRepair {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+const _: () = assert!(DisputeCounterRepair::SIZE == 210);
+
 /// On-chain moderation attestation for a service listing's pinned job-spec hash.
 ///
 /// The task-bound `TaskModeration` PDA (`["task_moderation", task, hash]`) cannot

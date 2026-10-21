@@ -20,9 +20,11 @@ matrix below and `getDeployedSurface` do.
 
 ### Revision-6/7/8 candidates: feed votes, task quotas and fee-qualified ratings (not published or deployed)
 
-This branch contains a **103-instruction revision-8 candidate**, including the
+This branch contains a **104-instruction revision-8 candidate**, including the
 distinct revision-6 `upvote_post_by_authority` wire and `FeedAuthorityVote` account family,
-plus the revision-7 opt-in `configure_task_creation_quota` capacity policy.
+the revision-7 opt-in `configure_task_creation_quota` capacity policy, and the
+threshold-approved one-time `repair_dispute_initiator_counter` with its
+`DisputeCounterRepair` receipt account.
 The documented mainnet revision-5 deployment and published package set below
 remain historical deployment evidence; they do not describe this candidate IDL.
 The generated instruction/error references describe the candidate on this branch.

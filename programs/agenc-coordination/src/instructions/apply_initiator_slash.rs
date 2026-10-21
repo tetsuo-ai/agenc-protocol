@@ -59,8 +59,10 @@ pub struct ApplyInitiatorSlash<'info> {
 
 /// Interpret the terminal initiator outcome without consulting mutable protocol
 /// thresholds. P6.3 writes exactly one of `(1,0)` / `(0,1)` for a resolver ruling;
-/// expiry is no-fault and cancellation is an explicit initiator loss.
-fn terminal_initiator_lost(
+/// expiry is no-fault and cancellation is an explicit initiator loss. Shared with
+/// `repair_dispute_initiator_counter`, which restores a unit only for an outcome
+/// this decoder accepts.
+pub(crate) fn terminal_initiator_lost(
     status: DisputeStatus,
     votes_for: u64,
     votes_against: u64,

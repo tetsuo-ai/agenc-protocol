@@ -1222,4 +1222,8 @@ pub enum CoordinationError {
     // Append-only: preserve every existing Anchor error discriminant.
     #[msg("Marketplace payee cannot receive a fee: program id or reserved account key")]
     MarketplacePayeeUnpayable,
+    #[msg("Dispute counter repair does not apply to these disputes")]
+    DisputeCounterRepairNotApplicable,
+    #[msg("Initiator counter still holds a unit; finalize the outcomes that own one first")]
+    DisputeCounterNotDeficient,
 }

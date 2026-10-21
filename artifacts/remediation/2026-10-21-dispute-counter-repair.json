@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "network": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programId": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+  "repairInstruction": "repair_dispute_initiator_counter",
+  "initiatorAgent": "FPppuvejNG8T2iQFnQaezfxjW6WGMN4KkRHeEHgFiu1A",
+  "incident": {
+    "dispute": "4Ei4hU9C7CjdEH5Zb8CdiPEGzyjQSSaKTvjJrmRMvPXL",
+    "task": "39beiUWoVR5oZRukgd7JUjAsmhmZuHijinKbZUCZ64nA",
+    "claim": "AgzPrpEQU5yp9UDqZ8Xxu3hod9yU9B2zFAb5sVWxiSLz",
+    "initiateDisputeSignature": "3eqScvKRWfphz2MUATtyrsowQVATiQK82ZCEJe4CHJkydWHWrqXeNy221cFWZ9Qfhm2ajWe7CeBkwmjwir1cf3q1",
+    "slot": 435321062,
+    "blockTime": 1785064045,
+    "evidence": "initiate_dispute account 2 (agent) and account 6 (worker_agent) are both the initiator agent, and account 7 (worker_claim) repeats account 5 (initiator_claim). The unmodified worker_agent copy was written back last, so the initiator and defendant increments were lost."
+  },
+  "siblingDisputes": [
+    {
+      "dispute": "HycAkBQBynmyvxrkHcEK95snxYy7q2EUJ3ZvUD4qYp9v",
+      "task": "HEAfmrgXJhGNf3iBuD6PukSoCBKoACP4hXKr5KACcZxJ",
+      "initiateDisputeSignature": "4hFye6RAhyfAaCtsHNYEr6xhYWEJ2Uxw54JDX9vZ65YQtLuKJga2aQTWsgPWAkdUDXFtxu7TZeqKRpiUPMW163Su",
+      "slot": 435119953,
+      "blockTime": 1784979603,
+      "evidence": "initiate_dispute without worker_agent or worker_claim; both counter increments were recorded."
+    }
+  ],
+  "observed": {
+    "method": "read-only getTransaction and getAccountInfo at finalized commitment",
+    "date": "2026-10-21",
+    "slot": 459695333,
+    "agent": {
+      "pendingInitiatorOutcomes": 1,
+      "disputesAsDefendant": 1,
+      "stakeLamports": 10000000
+    },
+    "disputes": {
+      "4Ei4hU9C7CjdEH5Zb8CdiPEGzyjQSSaKTvjJrmRMvPXL": {
+        "status": "Active",
+        "counterTracked": true,
+        "initiatorSlashApplied": false,
+        "votingDeadline": 1785150445,
+        "expiresAt": 1785668845
+      },
+      "HycAkBQBynmyvxrkHcEK95snxYy7q2EUJ3ZvUD4qYp9v": {
+        "status": "Active",
+        "counterTracked": true,
+        "initiatorSlashApplied": false,
+        "votingDeadline": 1785066003,
+        "expiresAt": 1785584403
+      }
+    }
+  },
+  "priorRevision": {
+    "surfaceRevision": 5,
+    "sourceCommit": "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d",
+    "payloadSha256": "049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2"
+  },
+  "plan": [
+    "Pause the protocol through the ProtocolConfig multisig.",
+    "Under revision 5, expire both disputes and finalize one of them with apply_initiator_slash. The initiator and defendant counters both reach zero; exactly one tracked outcome stays unfinalized because it owns no counter unit.",
+    "Upgrade to the reviewed binary. The predeploy dispute gate accepts only this exact state, only while the live payload is the revision-5 payload above, and only with AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1.",
+    "Run scripts/mainnet-repair-dispute-counter.mjs: repair_dispute_initiator_counter restores the one unit (threshold-approved, one-time receipt) and apply_initiator_slash finalizes the remaining outcome in the same transaction.",
+    "Re-run the release rail. The postdeploy and prestamp dispute gates have no allowance and must report zero blockers before the revision stamp."
+  ]
+}
