@@ -33,6 +33,7 @@ export * from "./dependentTaskCreated";
 export * from "./disputeCancelled";
 export * from "./disputeExpired";
 export * from "./disputeInitiated";
+export * from "./disputeInitiatorCounterRepaired";
 export * from "./disputePeerClaimSettled";
 export * from "./disputeResolved";
 export * from "./disputeResolverAssigned";

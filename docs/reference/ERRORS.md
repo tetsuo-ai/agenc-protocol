@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**416 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**418 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -427,3 +427,5 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6413 | 0x190d | `InvalidTaskQuotaAccount` | Task quota account is not the canonical writable wallet quota |
 | 6414 | 0x190e | `RatingFeeNotQualified` | Rating requires a recorded SOL protocol fee of at least 100000 lamports |
 | 6415 | 0x190f | `MarketplacePayeeUnpayable` | Marketplace payee cannot receive a fee: program id or reserved account key |
+| 6416 | 0x1910 | `DisputeCounterRepairNotApplicable` | Dispute counter repair does not apply to these disputes |
+| 6417 | 0x1911 | `DisputeCounterNotDeficient` | Initiator counter still holds a unit; finalize the outcomes that own one first |

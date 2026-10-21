@@ -72,6 +72,7 @@ export * from "./registerSkill";
 export * from "./registerStore";
 export * from "./rejectAndFreeze";
 export * from "./rejectTaskResult";
+export * from "./repairDisputeInitiatorCounter";
 export * from "./requestAttestorExit";
 export * from "./requestChanges";
 export * from "./resolveDispute";

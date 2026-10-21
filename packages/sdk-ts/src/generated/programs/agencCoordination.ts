@@ -45,6 +45,7 @@ import {
   getCoordinationStateCodec,
   getDefaultTrustListCodec,
   getDisputeCodec,
+  getDisputeCounterRepairCodec,
   getDisputeResolverCodec,
   getFeedAuthorityVoteCodec,
   getFeedPostCodec,
@@ -101,6 +102,8 @@ import {
   type DefaultTrustListArgs,
   type Dispute,
   type DisputeArgs,
+  type DisputeCounterRepair,
+  type DisputeCounterRepairArgs,
   type DisputeResolver,
   type DisputeResolverArgs,
   type FeedAuthorityVote,
@@ -237,6 +240,7 @@ import {
   getRegisterStoreInstructionAsync,
   getRejectAndFreezeInstructionAsync,
   getRejectTaskResultInstructionAsync,
+  getRepairDisputeInitiatorCounterInstructionAsync,
   getRequestAttestorExitInstruction,
   getRequestChangesInstructionAsync,
   getResolveDisputeInstructionAsync,
@@ -340,6 +344,7 @@ import {
   parseRegisterStoreInstruction,
   parseRejectAndFreezeInstruction,
   parseRejectTaskResultInstruction,
+  parseRepairDisputeInitiatorCounterInstruction,
   parseRequestAttestorExitInstruction,
   parseRequestChangesInstruction,
   parseResolveDisputeInstruction,
@@ -490,6 +495,7 @@ import {
   type ParsedRegisterStoreInstruction,
   type ParsedRejectAndFreezeInstruction,
   type ParsedRejectTaskResultInstruction,
+  type ParsedRepairDisputeInitiatorCounterInstruction,
   type ParsedRequestAttestorExitInstruction,
   type ParsedRequestChangesInstruction,
   type ParsedResolveDisputeInstruction,
@@ -546,6 +552,7 @@ import {
   type RegisterStoreAsyncInput,
   type RejectAndFreezeAsyncInput,
   type RejectTaskResultAsyncInput,
+  type RepairDisputeInitiatorCounterAsyncInput,
   type RequestAttestorExitInput,
   type RequestChangesAsyncInput,
   type ResolveDisputeAsyncInput,
@@ -625,6 +632,7 @@ import {
   findRateSkillPurchaseRecordPda,
   findRatingAccountPda,
   findRecordListingModerationModerationAttestorPda,
+  findRepairReceiptPda,
   findReputationStakePda,
   findSaleReceiptPda,
   findSkillPda,
@@ -658,6 +666,7 @@ export enum AgencCoordinationAccount {
   CoordinationState,
   DefaultTrustList,
   Dispute,
+  DisputeCounterRepair,
   DisputeResolver,
   FeedAuthorityVote,
   FeedPost,
@@ -818,6 +827,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.Dispute;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([235, 220, 42, 72, 52, 243, 134, 80]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.DisputeCounterRepair;
   }
   if (
     containsBytes(
@@ -1266,6 +1286,7 @@ export enum AgencCoordinationInstruction {
   RegisterStore,
   RejectAndFreeze,
   RejectTaskResult,
+  RepairDisputeInitiatorCounter,
   RequestAttestorExit,
   RequestChanges,
   ResolveDispute,
@@ -2039,6 +2060,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
+        new Uint8Array([225, 75, 211, 96, 189, 248, 128, 146]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RepairDisputeInitiatorCounter;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([94, 3, 20, 231, 175, 66, 101, 44]),
       ),
       0,
@@ -2650,6 +2682,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.RejectTaskResult;
     } & ParsedRejectTaskResultInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.RepairDisputeInitiatorCounter;
+    } & ParsedRepairDisputeInitiatorCounterInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.RequestAttestorExit;
     } & ParsedRequestAttestorExitInstruction<TProgram>)
   | ({
@@ -3230,6 +3265,14 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseRejectTaskResultInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.RepairDisputeInitiatorCounter: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType:
+          AgencCoordinationInstruction.RepairDisputeInitiatorCounter,
+        ...parseRepairDisputeInitiatorCounterInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.RequestAttestorExit: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3530,6 +3573,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<DefaultTrustListArgs, DefaultTrustList>;
   dispute: ReturnType<typeof getDisputeCodec> &
     SelfFetchFunctions<DisputeArgs, Dispute>;
+  disputeCounterRepair: ReturnType<typeof getDisputeCounterRepairCodec> &
+    SelfFetchFunctions<DisputeCounterRepairArgs, DisputeCounterRepair>;
   disputeResolver: ReturnType<typeof getDisputeResolverCodec> &
     SelfFetchFunctions<DisputeResolverArgs, DisputeResolver>;
   feedAuthorityVote: ReturnType<typeof getFeedAuthorityVoteCodec> &
@@ -3863,6 +3908,10 @@ export type AgencCoordinationPluginInstructions = {
     input: RejectTaskResultAsyncInput,
   ) => ReturnType<typeof getRejectTaskResultInstructionAsync> &
     SelfPlanAndSendFunctions;
+  repairDisputeInitiatorCounter: (
+    input: RepairDisputeInitiatorCounterAsyncInput,
+  ) => ReturnType<typeof getRepairDisputeInitiatorCounterInstructionAsync> &
+    SelfPlanAndSendFunctions;
   requestAttestorExit: (
     input: RequestAttestorExitInput,
   ) => ReturnType<typeof getRequestAttestorExitInstruction> &
@@ -4062,6 +4111,7 @@ export type AgencCoordinationPluginPdas = {
   taskModeration: typeof findTaskModerationPda;
   agent: typeof findAgentPda;
   skill: typeof findSkillPda;
+  repairReceipt: typeof findRepairReceiptPda;
   defaultTrustList: typeof findDefaultTrustListPda;
   moderationBlock: typeof findModerationBlockPda;
   state: typeof findStatePda;
@@ -4125,6 +4175,10 @@ export function agencCoordinationProgram() {
             getDefaultTrustListCodec(),
           ),
           dispute: addSelfFetchFunctions(client, getDisputeCodec()),
+          disputeCounterRepair: addSelfFetchFunctions(
+            client,
+            getDisputeCounterRepairCodec(),
+          ),
           disputeResolver: addSelfFetchFunctions(
             client,
             getDisputeResolverCodec(),
@@ -4554,6 +4608,11 @@ export function agencCoordinationProgram() {
               client,
               getRejectTaskResultInstructionAsync(input),
             ),
+          repairDisputeInitiatorCounter: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRepairDisputeInitiatorCounterInstructionAsync(input),
+            ),
           requestAttestorExit: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4793,6 +4852,7 @@ export function agencCoordinationProgram() {
           taskModeration: findTaskModerationPda,
           agent: findAgentPda,
           skill: findSkillPda,
+          repairReceipt: findRepairReceiptPda,
           defaultTrustList: findDefaultTrustListPda,
           moderationBlock: findModerationBlockPda,
           state: findStatePda,
