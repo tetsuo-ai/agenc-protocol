@@ -722,40 +722,122 @@ test("AGNC-01: Task peer reservation is a separate canonical bool", () => {
 });
 
 for (const [name, fields, count, expected] of [
-  ["historical two active disputes", { status: 0, resolvedAt: 0n, pendingInitiatorOutcomes: 1 }, 2, 2],
-  ["after expiry and one finalization", { status: 2 }, 1, 1],
+  [
+    "historical two active disputes",
+    { status: 0, resolvedAt: 0n, pendingInitiatorOutcomes: 1 },
+    2,
+    2,
+  ],
+  [
+    "after expiry and one finalization",
+    { status: 2, finalizeSibling: true },
+    2,
+    1,
+  ],
   ["matching counters", { status: 2, pendingInitiatorOutcomes: 2 }, 2, 0],
-  ["pending peer settlement", { status: 4, peerWorkersTotal: 1, pendingTerminalStatus: 2 }, 1, 1],
+  [
+    "pending peer settlement",
+    { status: 4, peerWorkersTotal: 1, pendingTerminalStatus: 2 },
+    1,
+    1,
+  ],
   ["legacy zero marker", { status: 2, totalVoters: 0 }, 2, 0],
-  ["finalized tracked outcomes", { status: 2, initiatorSlashApplied: true }, 2, 0],
+  [
+    "finalized tracked outcomes",
+    { status: 2, initiatorSlashApplied: true },
+    2,
+    0,
+  ],
 ]) {
   test(`initiator deficit: ${name}`, async () => {
-    const value = scenario({ totalVoters: 0xff, initiatorSlashApplied: false, ...fields });
+    const value = scenario({
+      totalVoters: 0xff,
+      initiatorSlashApplied: false,
+      ...fields,
+    });
     const connection = connectionFor(value);
     const original = connection.getProgramAccounts;
     const disputes = Array.from({ length: count }, (_, i) => {
       const data = Buffer.from(value.account.data);
       const id = Buffer.alloc(32, 30 + i);
-      const [pubkey, bump] = PublicKey.findProgramAddressSync([Buffer.from("dispute"), id], PROGRAM_ID);
+      const [pubkey, bump] = PublicKey.findProgramAddressSync(
+        [Buffer.from("dispute"), id],
+        PROGRAM_ID,
+      );
       id.copy(data, 8);
       data[230] = bump;
+      if (fields.finalizeSibling && i === 1) data[220] = 1;
       return { pubkey, account: { ...value.account, data } };
     });
     connection.getProgramAccounts = async (program, options) =>
-      options.filters[0].memcmp.bytes === discriminator("Dispute").toString("base64")
-        ? disputes : original(program, options);
+      options.filters[0].memcmp.bytes ===
+      discriminator("Dispute").toString("base64")
+        ? disputes
+        : original(program, options);
     const result = await scanDisputes(connection, { nowUnixTimestamp: 100n });
     assert.equal(typeof result.agentCount, "number");
     assert.equal(result.initiatorCounterDeficits.length, expected ? 1 : 0);
-    const blockers = result.blockers.filter((b) => b.kind === "tracked-initiator-counter-deficit");
+    const blockers = result.blockers.filter(
+      (b) => b.kind === "tracked-initiator-counter-deficit",
+    );
     assert.equal(blockers.length, expected ? 1 : 0);
     if (expected) {
       const deficit = result.initiatorCounterDeficits[0];
       assert.equal(deficit.unfinalizedTrackedDisputes, expected);
       assert.ok(deficit.initiator.equals(value.agentPubkey));
       assert.ok(blockers[0].dispute.equals(value.agentPubkey));
-      assert.deepEqual(deficit.disputes.map(String), disputes.map((d) => String(d.pubkey)).sort((a, b) => a.localeCompare(b)));
-      assert.equal(blockers[0].detail, `pending_initiator_outcomes=${fields.pendingInitiatorOutcomes ?? 0} unfinalized_tracked_disputes=${expected} disputes=${deficit.disputes.join(",")}`);
+      assert.deepEqual(
+        deficit.disputes.map(String),
+        disputes
+          .filter((d) => d.account.data[220] === 0)
+          .map((d) => String(d.pubkey))
+          .sort(),
+      );
+      assert.equal(
+        blockers[0].detail,
+        `pending_initiator_outcomes=${fields.pendingInitiatorOutcomes ?? 0} unfinalized_tracked_disputes=${expected} disputes=${deficit.disputes.join(",")}`,
+      );
     }
   });
 }
+
+test("missing or undecodable enumerated agents do not create a speculative deficit", async () => {
+  for (const invalid of [false, true]) {
+    const value = scenario({
+      status: 2,
+      totalVoters: 255,
+      initiatorSlashApplied: false,
+    });
+    const connection = connectionFor(value);
+    const original = connection.getProgramAccounts;
+    connection.getProgramAccounts = async (program, options) => {
+      if (
+        options.filters[0].memcmp.bytes ===
+        discriminator("AgentRegistration").toString("base64")
+      ) {
+        return invalid
+          ? [
+              {
+                pubkey: value.agentPubkey,
+                account: { ...value.agentAccount, data: Buffer.alloc(1) },
+              },
+            ]
+          : [];
+      }
+      return original(program, options);
+    };
+    connection.getAccountInfo = async () =>
+      invalid
+        ? { ...value.agentAccount, lamports: 1, data: Buffer.alloc(1) }
+        : null;
+    const result = await scanDisputes(connection, { nowUnixTimestamp: 100n });
+    assert.deepEqual(result.initiatorCounterDeficits, []);
+    assert.ok(
+      result.blockers.some(
+        (b) =>
+          b.kind ===
+          (invalid ? "invalid-agent-layout" : "missing-dispute-initiator"),
+      ),
+    );
+  }
+});
