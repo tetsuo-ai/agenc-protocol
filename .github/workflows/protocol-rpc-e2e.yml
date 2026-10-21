@@ -79,6 +79,10 @@ jobs:
       - name: Stop owned validator
         if: always()
         run: node scripts/localnet-down.mjs
+      - name: Rehearse the dispute counter repair rail on an owned validator
+        env:
+          AGENC_RPC_E2E: "1"
+        run: node --test scripts/preflight-dispute-counter-repair-rpc.test.mjs
       - name: Preserve transaction and program-hash evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
