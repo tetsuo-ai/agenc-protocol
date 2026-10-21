@@ -159,7 +159,7 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
 
     // Decrement defendant dispute counter (fix #544, #842)
     // remaining_accounts: [0] = dispute.defendant (required); [1] = TaskValidationConfig
-    // (optional, required only for schema-0 manual-validation tasks — see H-1 above).
+    // (writable; required for PendingValidation restoration and schema-0 manual review).
     require!(
         ctx.remaining_accounts.len() == 1 || ctx.remaining_accounts.len() == 2,
         CoordinationError::InvalidInput

@@ -1,3 +1,4 @@
+import { findTaskValidationConfigPda } from "../src/generated/index.js";
 import { describe, it, expect } from "vitest";
 import { AccountRole, address, createNoopSigner } from "@solana/kit";
 import {
@@ -311,11 +312,7 @@ describe("disputes facade (structural)", () => {
 
     const ix = await instructionPromise;
     const [bidBook] = await findBidBookPda({ task: TASK });
-    expect(order(ix).slice(-3)).toEqual([
-      bidBook,
-      ACCEPTED_BID,
-      BIDDER_STATE,
-    ]);
+    expect(order(ix).slice(-3)).toEqual([bidBook, ACCEPTED_BID, BIDDER_STATE]);
   });
 
   it("cancelDispute: program, account order, data round-trip", async () => {
@@ -336,11 +333,25 @@ describe("disputes facade (structural)", () => {
     expect(accs[4]).toBe(WORKER_AGENT);
     expect(ix.accounts[4]?.role).toBe(AccountRole.WRITABLE);
     expect(accs[5]).toBe(CLAIM);
-    expect(ix.accounts[5]?.role).toBe(AccountRole.READONLY);
+    expect(ix.accounts[5]?.role).toBe(AccountRole.WRITABLE);
 
     expect(() =>
       getCancelDisputeInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
+  });
+
+  it("cancelDispute derives a writable review config when omitted", async () => {
+    const ix = await facade.cancelDispute({
+      dispute: DISPUTE,
+      task: TASK,
+      authority: AUTHORITY,
+      defendant: WORKER_AGENT,
+    });
+    const [validation] = await findTaskValidationConfigPda({ task: TASK });
+    expect(ix.accounts[5]).toEqual({
+      address: validation,
+      role: AccountRole.WRITABLE,
+    });
   });
 
   it("applyDisputeSlash: program, account order, data round-trip", async () => {

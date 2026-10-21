@@ -191,3 +191,29 @@ test("AGNC-03: normal auto-accept timing is unchanged when no dispute ever happe
   expectOk(send(w.svm, await autoAcceptIx(w, r, w.provider), [w.provider]), "auto-accept after the plain window");
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
 });
+
+test("review debt cannot be bypassed by omitting or downgrading the config account", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  await fundStake(w, w.providerAgent, WORKER_STAKE);
+  const r = await setupClaimed(w, 3_600);
+  expectOk(send(w.svm, r.submitIx, [w.provider]), "submit");
+  const d = await disputeIx(w, r);
+  expectOk(send(w.svm, d.ix, [w.provider]), "dispute");
+  warp(w, 100);
+  const missing = await cancelDisputeIx(w, r, d.dispute);
+  missing.keys.pop();
+  expectFail(send(w.svm, missing, [w.provider]), "TaskValidationConfigRequired", "missing config refused");
+  const readonly = await cancelDisputeIx(w, r, d.dispute);
+  readonly.keys.at(-1).isWritable = false;
+  expectFail(send(w.svm, readonly, [w.provider]), "TaskValidationConfigRequired", "readonly config refused");
+  assert.ok(decode(w.svm, "Task", r.task).status.Disputed !== undefined, "failed cancels roll back");
+  expectOk(send(w.svm, await cancelDisputeIx(w, r, d.dispute), [w.provider]), "writable cancellation");
+  const cfg = decode(w.svm, "TaskValidationConfig", r.validation);
+  assert.equal(Buffer.from(cfg._reserved).readUInt32LE(3), 100);
+  // Exactly the paused duration is restored; acceptance becomes possible at
+  // the effective deadline, rather than locking the worker out indefinitely.
+  warp(w, 3_599);
+  expectFail(send(w.svm, await autoAcceptIx(w, r, w.provider), [w.provider]), "ReviewWindowNotElapsed", "one second before effective deadline");
+  warp(w, 1);
+  expectOk(send(w.svm, await autoAcceptIx(w, r, w.provider), [w.provider]), "accept at effective deadline");
+});

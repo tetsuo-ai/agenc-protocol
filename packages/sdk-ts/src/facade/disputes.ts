@@ -42,6 +42,7 @@ import {
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
   findTaskSubmissionPda,
+  findTaskValidationConfigPda,
   findBidBookPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../generated/index.js";
@@ -408,36 +409,31 @@ export async function settleDisputeClaim(input: SettleDisputeClaimInput) {
  *
  * The facade appends the required remaining accounts in their frozen order:
  * - `[0]` `defendant`, the dispute defendant's writable AgentRegistration.
- * - `[1]` `taskValidationConfig` — REQUIRED when the task is a schema-0
- *   (pre-batch-3) manual-validation task (audit H-1 follow-up): the program derives
- *   the restore status from its pending-submission counter for legacy tasks and fails
- *   closed with TaskValidationConfigRequired when it is missing. Schema-1 and
- *   non-manual tasks do not need it.
+ * - `[1]` writable `taskValidationConfig`, derived from `task` unless supplied.
+ *   Required when cancellation restores PendingValidation (review-clock debt),
+ *   and for schema-0 manual-validation tasks (pending-submission count).
+ *   Non-review tasks may supply the empty canonical PDA; it is not read.
  */
 export type CancelDisputeInput = CancelDisputeAsyncInput & {
   /** The dispute's defendant AgentRegistration; always writable and required. */
   defendant: Address;
-  /** Required only for schema-0 manual-validation tasks. */
+  /** Defaults to the canonical task validation PDA; always writable. */
   taskValidationConfig?: Address;
 };
 
 export async function cancelDispute(input: CancelDisputeInput) {
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   const { defendant, taskValidationConfig, ...generatedInput } = stableInput;
+  const validation =
+    taskValidationConfig ??
+    (await findTaskValidationConfigPda({ task: generatedInput.task }))[0];
   const instruction = await getCancelDisputeInstructionAsync(generatedInput);
   return {
     ...instruction,
     accounts: [
       ...instruction.accounts,
       { address: defendant, role: AccountRole.WRITABLE },
-      ...(taskValidationConfig
-        ? [
-            {
-              address: taskValidationConfig,
-              role: AccountRole.READONLY,
-            } as const,
-          ]
-        : []),
+      { address: validation, role: AccountRole.WRITABLE },
     ],
   };
 }
