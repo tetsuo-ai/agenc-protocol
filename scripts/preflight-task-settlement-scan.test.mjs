@@ -375,6 +375,38 @@ test("fails closed on noncanonical Task/escrow bindings and malformed cardinalit
   );
 });
 
+test("contest ghost-share payouts may record completions up to max_workers", () => {
+  const contest = taskFixture({
+    taskType: 2,
+    requiredCompletions: 1,
+    status: 3,
+    rewardAmount: 4n,
+  });
+  contest.data[184] = 3; // max_workers
+  contest.data[352] = 1; // _reserved[0] task_schema = contest aware
+  contest.data[308] = 3; // three paid ghost shares
+  assert.deepEqual(
+    inspectTaskSettlementRecord(contest.address, contest.data).blockers,
+    [],
+  );
+
+  const over = Buffer.from(contest.data);
+  over[308] = 4;
+  assert.throws(
+    () => inspectTaskSettlementRecord(contest.address, over),
+    /completions=4 exceeds contest max_workers=3/,
+  );
+
+  // A pre-contest (schema-0) Competitive task still settles exactly once.
+  const legacy = Buffer.from(contest.data);
+  legacy[352] = 0;
+  legacy[308] = 2;
+  assert.throws(
+    () => inspectTaskSettlementRecord(contest.address, legacy),
+    /completions=2 exceeds required_completions=1/,
+  );
+});
+
 test("full scanner requires the exact mainnet genesis", async () => {
   await assert.rejects(
     () => scanTaskSettlementSafety({

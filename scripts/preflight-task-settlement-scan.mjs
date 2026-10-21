@@ -38,6 +38,8 @@ const TERMINAL_STATUSES = new Set([3, 4]);
 const REVISION4_BOND_POST_STATUSES = new Set([0, 1, 2]);
 const TASK_TYPE_EXCLUSIVE = 0;
 const TASK_TYPE_COLLABORATIVE = 1;
+const TASK_TYPE_COMPETITIVE = 2;
+const TASK_SCHEMA_CONTEST_AWARE = 1;
 const ZERO_HASH = Buffer.alloc(32);
 const COMPLETIONS_OFFSET = 308;
 const REQUIRED_COMPLETIONS_OFFSET = 309;
@@ -227,9 +229,16 @@ export function inspectTaskSettlementRecord(
       `Task.required_completions=${requiredCompletions}; expected ${expectedRequired}`,
     );
   }
-  if (completions > requiredCompletions) {
+  // A contest (schema-1 Competitive) keeps required_completions = 1, but
+  // distribute_ghost_share pays every live submission after the selection
+  // window and counts each paid submitter as a completion, up to max_workers.
+  const contestTask =
+    task.taskType === TASK_TYPE_COMPETITIVE &&
+    task.taskSchema >= TASK_SCHEMA_CONTEST_AWARE;
+  const completionCeiling = contestTask ? task.maxWorkers : requiredCompletions;
+  if (completions > completionCeiling) {
     throw new Error(
-      `Task.completions=${completions} exceeds required_completions=${requiredCompletions}`,
+      `Task.completions=${completions} exceeds ${contestTask ? `contest max_workers=${task.maxWorkers}` : `required_completions=${requiredCompletions}`}`,
     );
   }
   if (task.currentWorkers > task.maxWorkers) {
