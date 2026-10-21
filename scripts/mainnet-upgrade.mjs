@@ -2435,16 +2435,105 @@ async function readAnchorIdlPublicationState(
   };
 }
 
+export const DISPUTE_COUNTER_REPAIR_RECORD_URL = new URL(
+  "../artifacts/remediation/2026-10-21-dispute-counter-repair.json", import.meta.url,
+);
+
+export function validateDisputeCounterRepairRecord(record) {
+  const fail = (detail) => { throw new Error(`invalid dispute counter remediation record: ${detail}`); };
+  if (!record || record.schemaVersion !== 1 || record.network !== "mainnet-beta" ||
+      record.genesisHash !== MAINNET_GENESIS || record.programId !== PROGRAM_ID_STR ||
+      record.repairInstruction !== "repair_dispute_initiator_counter" ||
+      record.priorRevision?.surfaceRevision !== 5 ||
+      !/^[0-9a-fA-F]{64}$/.test(record.priorRevision?.payloadSha256 ?? "")) {
+    fail("schema, network, program, prior revision hash, or instruction mismatch");
+  }
+  const key = (value) => {
+    try {
+      if (typeof value !== "string" || new PublicKey(value).toBase58() !== value) fail("noncanonical key");
+    } catch { fail("invalid base58 key"); }
+  };
+  const signature = (value) => {
+    try {
+      if (typeof value !== "string") fail("signature must be base58");
+      const bytes = bs58.decode(value);
+      if (bytes.length !== 64 || bytes.every((byte) => byte === 0) || bs58.encode(bytes) !== value) fail("invalid signature");
+    } catch { fail("signature must decode to 64 nonzero bytes"); }
+  };
+  key(record.initiatorAgent);
+  key(record.incident?.dispute);
+  key(record.incident?.task);
+  key(record.incident?.claim);
+  signature(record.incident?.initiateDisputeSignature);
+  if (!Array.isArray(record.siblingDisputes) || record.siblingDisputes.length !== 1) fail("expected one reviewed sibling");
+  for (const sibling of record.siblingDisputes) {
+    key(sibling?.dispute);
+    key(sibling?.task);
+    signature(sibling?.initiateDisputeSignature);
+    if (sibling.dispute === record.incident.dispute) fail("duplicate dispute");
+  }
+  return record;
+}
+
+export function loadDisputeCounterRepairRecord(recordPath = DISPUTE_COUNTER_REPAIR_RECORD_URL) {
+  return validateDisputeCounterRepairRecord(JSON.parse(readFileSync(recordPath, "utf8")));
+}
+
+export function createDisputeCounterRepairAllowance({
+  livePayloadSha256,
+  record = loadDisputeCounterRepairRecord(),
+  env = process.env,
+  warn = console.warn,
+} = {}) {
+  validateDisputeCounterRepairRecord(record);
+  const accepted = env.AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR === "1";
+  const revision5Live = livePayloadSha256 === record.priorRevision.payloadSha256.toLowerCase();
+  if (accepted && !revision5Live) {
+    warn("WARNING: ignoring AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: live ProgramData payload is not the reviewed revision-5 payload.");
+  }
+  return { active: accepted && revision5Live, accepted, livePayloadSha256, record };
+}
+
+function reviewedDisputeCounterRepairShape(disputes, record) {
+  if (disputes.statusCounts.active !== 0 || disputes.blockers.length !== 2 ||
+      disputes.initiatorCounterDeficits?.length !== 1) return null;
+  const deficitBlocker = disputes.blockers.find((item) => item.kind === "tracked-initiator-counter-deficit");
+  const pendingBlocker = disputes.blockers.find((item) => item.kind === "tracked-initiator-outcome-unapplied");
+  const pending = pendingBlocker?.dispute?.toBase58?.();
+  const allowed = [record.incident.dispute, ...record.siblingDisputes.map((item) => item.dispute)];
+  const deficit = disputes.initiatorCounterDeficits[0];
+  if (deficitBlocker?.dispute?.toBase58?.() !== record.initiatorAgent ||
+      !allowed.includes(pending) || deficit.initiator?.toBase58?.() !== record.initiatorAgent ||
+      deficit.pendingInitiatorOutcomes !== 0 || deficit.unfinalizedTrackedDisputes !== 1 ||
+      deficit.disputes?.length !== 1 || deficit.disputes[0]?.toBase58?.() !== pending) return null;
+  return { agent: record.initiatorAgent, pendingDispute: pending, incidentDispute: record.incident.dispute };
+}
+
 export function assertRevision5DisputeCutover(
   disputes,
   stage = "Revision-5 cutover",
+  options = {},
 ) {
   if (disputes.blockers.length > 0 || disputes.statusCounts.active !== 0) {
+    const allowance = options.repairAllowance;
+    const record = validateDisputeCounterRepairRecord(allowance?.record ?? loadDisputeCounterRepairRecord());
+    const pendingRepair = reviewedDisputeCounterRepairShape(disputes, record);
+    // Postdeploy and prestamp callers never receive an allowance. Also refuse
+    // an accidentally forwarded one at these irreversible release boundaries.
+    const prestamp = /postdeploy|prestamp/i.test(stage);
+    if (pendingRepair && !prestamp && allowance?.active === true && allowance.accepted === true &&
+        allowance.livePayloadSha256 === record.priorRevision.payloadSha256.toLowerCase()) {
+      console.warn(`WARNING: ${stage}: REVIEWED DISPUTE COUNTER REPAIR PENDING: agent=${pendingRepair.agent} pending=${pendingRepair.pendingDispute} incident=${pendingRepair.incidentDispute}. Run scripts/mainnet-repair-dispute-counter.mjs --phase repair right after the upgrade, BEFORE ANY STAMP. Keep the protocol paused.`);
+      return pendingRepair;
+    }
     const kinds = [...new Set(disputes.blockers.map((item) => item.kind))];
+    const repairHelp = pendingRepair
+      ? " Set AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1 for the predeploy run only while the reviewed revision-5 payload is live; run scripts/mainnet-repair-dispute-counter.mjs --phase repair right after the upgrade, before any stamp. Postdeploy/prestamp gates never allow this state."
+      : "";
     throw new Error(
       `${stage}: dispute cutover requires zero Active and no incompatible finalizers; ` +
         `found ${disputes.blockers.length} blocker(s) (${kinds.join(", ") || "active-count invariant failure"}). ` +
-        "Run scripts/preflight-dispute-scan.mjs and remediate before continuing.",
+        "Run scripts/preflight-dispute-scan.mjs and remediate before continuing." + repairHelp,
     );
   }
 }
@@ -2508,12 +2597,13 @@ export async function scanStableRevision5CompletionBondCutover(
   disputes,
   stage = "Revision-5 cutover",
   scanners = {},
+  options = {},
 ) {
   const scanTaskSettlement =
     scanners.scanTaskSettlement ?? scanTaskSettlementSafety;
   const scanChildren = scanners.scanTaskChildren ?? scanTaskChildren;
 
-  assertRevision5DisputeCutover(disputes, stage);
+  assertRevision5DisputeCutover(disputes, stage, options);
   const taskSettlement = await scanTaskSettlement(connection);
   // Deliberately fail before the child scan. Scanning children first permits a
   // revision-4 caller to post, detach, and orphan a bond in the RPC gap.
@@ -2563,6 +2653,7 @@ export function assertRevision5CutoverResults(
     taskSettlement,
   },
   stage = "Revision-5 cutover",
+  options = {},
 ) {
   if (delegation.blockers.length > 0 || delegation.accountCount !== 0) {
     const kinds = [...new Set(delegation.blockers.map((item) => item.kind))];
@@ -2679,7 +2770,7 @@ export function assertRevision5CutoverResults(
         "Run scripts/preflight-reputation-stake-scan.mjs and remediate before continuing.",
     );
   }
-  assertRevision5DisputeCutover(disputes, stage);
+  assertRevision5DisputeCutover(disputes, stage, options);
   if (
     validation.blockers.length > 0 ||
     validation.modeCounts.validatorQuorum !== 0
@@ -2809,8 +2900,9 @@ export async function verifyRevision5CutoverState(
   rpcConnection,
   protocolPda,
   stage,
-  { minContextSlot = 0 } = {},
+  { minContextSlot = 0, repairAllowance } = {},
 ) {
+  const options = { repairAllowance };
   const pinned = await withPinnedRevision5CutoverContext(
     rpcConnection,
     protocolPda,
@@ -2958,6 +3050,8 @@ export async function verifyRevision5CutoverState(
           connection,
           disputes,
           stage,
+          {},
+          options,
         );
       info(
         `${stage}: settlement_tasks=${taskSettlement.taskCount}, ` +
@@ -3000,6 +3094,7 @@ export async function verifyRevision5CutoverState(
           taskSettlement,
         },
         stage,
+        options,
       );
 
       return {
@@ -3105,7 +3200,11 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
     connection,
     protocolPda,
     "Predeploy cutover snapshot",
-    { minContextSlot: loaderSnapshot.contextSlot },
+    { minContextSlot: loaderSnapshot.contextSlot,
+      repairAllowance: createDisputeCounterRepairAllowance({
+        livePayloadSha256: createHash("sha256").update(loaderSnapshot.payload).digest("hex"),
+      }),
+    },
   );
   const postCutoverLoader = await readVerifiedLoaderSnapshot(
     connection,
@@ -4866,7 +4965,11 @@ async function main() {
         connection,
         pf.protocolPda,
         "Immediate predeploy rescan",
-        { minContextSlot: immediatePreUpgradeLoader.contextSlot },
+        { minContextSlot: immediatePreUpgradeLoader.contextSlot,
+          repairAllowance: createDisputeCounterRepairAllowance({
+            livePayloadSha256: createHash("sha256").update(immediatePreUpgradeLoader.payload).digest("hex"),
+          }),
+        },
       );
       const immediatePreDeployLoader = await readVerifiedLoaderSnapshot(
         connection,
