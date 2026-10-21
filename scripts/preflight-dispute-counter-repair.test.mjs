@@ -172,6 +172,6 @@ test("postdeploy and prestamp reject even an accidentally forwarded allowance", 
   );
   assert.match(
     source,
-    /"Postdeploy\/prestamp rescan",\s*\{ minContextSlot: prestampLoaderBefore.contextSlot \},/,
+    /"Postdeploy\/prestamp rescan",\s*\{ minContextSlot: prestampLoaderBefore.contextSlot, bondEntryPauseGated: true \},/,
   );
 });
