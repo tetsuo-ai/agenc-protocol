@@ -97,9 +97,9 @@ export function decodeTaskValidationConfig(dataLike) {
       `TaskValidationConfig: mode ${mode} has invalid validator_quorum=${validatorQuorum}`,
     );
   }
-  if (!reserved.subarray(3).equals(Buffer.alloc(4))) {
-    throw new Error("TaskValidationConfig: unknown reserved bytes are nonzero");
-  }
+  // AGNC-03 assigns the complete remaining tail to monotone review-clock debt.
+  // Legacy zero remains valid; a nonzero u32 is ordinary post-upgrade state.
+  const reviewDebtSecs = reserved.readUInt32LE(3);
 
   return {
     task: new PublicKey(data.subarray(8, 40)),
@@ -111,6 +111,7 @@ export function decodeTaskValidationConfig(dataLike) {
     bump: data[97],
     validatorQuorum,
     pendingSubmissionCount,
+    reviewDebtSecs,
   };
 }
 
