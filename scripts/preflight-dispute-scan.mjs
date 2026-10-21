@@ -8,6 +8,7 @@
 //   is repurposed as the pending initiator-outcome counter;
 // - any non-zero defendant-dispute counter before deregistration changes from a
 //   timestamp bypass to an exact terminal/finalizer gate;
+// - initiator counters below their unfinalized tracked dispute count in any status;
 // - active disputes whose canonical Task/defendant claim is missing or invalid;
 // - every SettlementPending dispute: peers created before the AGNC-01 guard
 //   have no Task reservation bit and must be settled before cutover;
@@ -442,7 +443,8 @@ function blocker(kind, pubkey, detail) {
   return { kind, dispute: pubkey, detail };
 }
 
-async function inspectAgentCounterCutover(connection, blockers) {
+export async function inspectAgentCounterCutover(connection, blockers) {
+  const counters = new Map();
   const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
     filters: [
       {
@@ -470,6 +472,10 @@ async function inspectAgentCounterCutover(connection, blockers) {
         blockers.push(blocker("invalid-agent-pda", pubkey));
         continue;
       }
+      counters.set(pubkey.toBase58(), {
+        pendingInitiatorOutcomes: agent.pendingInitiatorOutcomes,
+        disputesAsDefendant: agent.disputesAsDefendant,
+      });
       // Hard cutover invariant: this byte belonged to retired arbiter voting in
       // the old binary. New code treats it as a pending initiator-outcome count,
       // so any non-zero legacy value would create an unowned deregistration lock.
@@ -505,7 +511,7 @@ async function inspectAgentCounterCutover(connection, blockers) {
     }
   }
 
-  return accounts.length;
+  return { agentCount: accounts.length, counters };
 }
 
 async function inspectTaskAndClaim(
@@ -677,7 +683,8 @@ export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
     now = BigInt(now);
   }
   const blockers = [];
-  const agentCount = await inspectAgentCounterCutover(connection, blockers);
+  const { agentCount, counters } = await inspectAgentCounterCutover(connection, blockers);
+  const trackedByInitiator = new Map();
   const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
     filters: [
       {
@@ -723,6 +730,12 @@ export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
         ),
       );
       continue;
+    }
+
+    if (dispute.totalVoters === INITIATOR_OUTCOME_COUNTER_MARKER && !dispute.initiatorSlashApplied) {
+      const key = dispute.initiator.toBase58();
+      if (!trackedByInitiator.has(key)) trackedByInitiator.set(key, []);
+      trackedByInitiator.get(key).push(pubkey);
     }
 
     const statusName = [
@@ -925,7 +938,25 @@ export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
     }
   }
 
+  const initiatorCounterDeficits = [];
+  for (const [key, disputes] of trackedByInitiator) {
+    const counter = counters.get(key);
+    if (!counter || counter.pendingInitiatorOutcomes >= disputes.length) continue;
+    disputes.sort((a, b) => a.toBase58().localeCompare(b.toBase58()));
+    const initiator = new PublicKey(key);
+    const pendingInitiatorOutcomes = counter.pendingInitiatorOutcomes;
+    initiatorCounterDeficits.push({
+      initiator, pendingInitiatorOutcomes,
+      unfinalizedTrackedDisputes: disputes.length, disputes,
+    });
+    blockers.push(blocker(
+      "tracked-initiator-counter-deficit", initiator,
+      `pending_initiator_outcomes=${pendingInitiatorOutcomes} unfinalized_tracked_disputes=${disputes.length} disputes=${disputes.map((key) => key.toBase58()).join(",")}`,
+    ));
+  }
+
   return {
+    initiatorCounterDeficits,
     accountCount: accounts.length,
     agentCount,
     statusCounts,
@@ -958,7 +989,7 @@ async function main() {
     );
   }
   console.log(
-    "PREFLIGHT OK: every agent liability counter is zero, zero disputes are Active or SettlementPending, and no tagged or still-actionable legacy initiator outcome is unapplied.",
+    "PREFLIGHT OK: every agent liability counter is zero with no tracked initiator deficit, zero disputes are Active or SettlementPending, and no tagged or still-actionable legacy initiator outcome is unapplied.",
   );
 }
 
