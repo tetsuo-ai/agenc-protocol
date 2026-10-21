@@ -1,0 +1,67 @@
+{
+  "observedAt": "2026-10-21T15:55:00.098Z",
+  "npmVersion": "11.18.0",
+  "decision": "Upgrade patched development dependencies; no new advisory exception. Existing exact braces review remains unchanged.",
+  "sources": [
+    "https://github.com/advisories/GHSA-vfgh-jcmw-g37q",
+    "https://github.com/advisories/GHSA-gfr2-rv44-r23c",
+    "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
+    "https://github.com/advisories/GHSA-r825-w8mm-5pxw",
+    "https://github.com/advisories/GHSA-587h-7wmj-h5pm"
+  ],
+  "versions": {
+    "markdown-it": {
+      "from": "14.3.2",
+      "to": "14.3.3"
+    },
+    "vite": {
+      "from": "6.4.3",
+      "to": "6.4.5"
+    }
+  },
+  "scope": "Development-only Changesets Markdown parsing and Vite tooling in the root, starter and checkout locks. No major-version migration or install-script permission expansion.",
+  "fullRawReportSha256": "c15564874774e10aa3dccff8b278027f07d4b706bc8b6b6d3ba72dd25a2ec616",
+  "locks": [
+    {
+      "root": ".",
+      "lockSha256": "59487dda63b4c200a15e16951396a34ced6f76feef18fd18f55698327be04b86",
+      "packages": {
+        "node_modules/markdown-it": {
+          "version": "14.3.3",
+          "integrity": "sha512-L//tDAkjTjJCU6pBUSBTgs3Kg4InVaZuUZog/b6V12UKhcDQ7S78877ibbCanRExwPuYP1CZD7Gd2dxSy1GXRg==",
+          "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.3.tgz"
+        },
+        "node_modules/vite": {
+          "version": "6.4.5",
+          "integrity": "sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==",
+          "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.5.tgz"
+        }
+      }
+    },
+    {
+      "root": "packages/marketplace-react/examples/marketplace-starter",
+      "lockSha256": "0d64257fd0d5454c00ebc335606913e81750fdeb76d5311a28c76cbab05680f1",
+      "packages": {
+        "node_modules/vite": {
+          "version": "6.4.5",
+          "integrity": "sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==",
+          "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.5.tgz"
+        }
+      }
+    },
+    {
+      "root": "packages/marketplace-react/test-apps/checkout",
+      "lockSha256": "3c0165e47cc078a5b12290a9f0e57a70d78c721ca2dcb5c987773ac213fe01ce",
+      "packages": {
+        "node_modules/vite": {
+          "version": "6.4.5",
+          "integrity": "sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==",
+          "resolved": "https://registry.npmjs.org/vite/-/vite-6.4.5.tgz"
+        }
+      }
+    }
+  ],
+  "accepted": true,
+  "runtimeFindings": 0,
+  "remainingReview": "GHSA-vfj7-8cjw-p6xm: braces 3.0.3, exact existing root archive, expires 2026-11-18T13:55:00Z"
+}
