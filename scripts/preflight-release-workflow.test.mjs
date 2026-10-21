@@ -972,3 +972,39 @@ test("an existing npm version resumes only after exact integrity and provenance 
   assert.match(stateSource, /registryResponse\.status !== 404/);
   assert.match(stateSource, /refusing to move npm \$\{distTag\} backwards/);
 });
+
+test("repair RPC rehearsal runs after validator cleanup with existing build prerequisites", async () => {
+  const workflow = await loadWorkflow(
+    new URL("../.github/workflows/protocol-rpc-e2e.yml", import.meta.url),
+  );
+  const steps = workflow.jobs["settlement-rpc"].steps;
+  const index = steps.findIndex(
+    (step) =>
+      step.name ===
+      "Rehearse the dispute counter repair rail on an owned validator",
+  );
+  assert.ok(index > 0);
+  assert.equal(steps[index - 1].name, "Stop owned validator");
+  assert.equal(steps[index - 1].run, "node scripts/localnet-down.mjs");
+  assert.equal(
+    steps[index].if,
+    undefined,
+    "rehearsal must require preceding steps to succeed",
+  );
+  assert.equal(steps[index].env.AGENC_RPC_E2E, "1");
+  assert.equal(
+    steps[index].run,
+    "node --test scripts/preflight-dispute-counter-repair-rpc.test.mjs",
+  );
+  const precedingCommands = steps
+    .slice(0, index)
+    .map((step) => step.run ?? "")
+    .join("\n");
+  assert.match(precedingCommands, /agave-install-init/);
+  assert.match(precedingCommands, /npm ci\n/);
+  assert.match(precedingCommands, /npm ci --prefix tests-integration/);
+  assert.match(
+    precedingCommands,
+    /cargo build-sbf --manifest-path programs\/agenc-coordination\/Cargo.toml/,
+  );
+});
