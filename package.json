@@ -56,11 +56,11 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
-    "@solana-program/program-metadata": "0.7.0",
+    "@solana-program/program-metadata": "0.11.0",
     "@types/node": "^25.4.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.1"
   },
   "overrides": {
     "tsup": {
