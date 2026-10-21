@@ -8,10 +8,12 @@ release profiles:
 - the full production surface (revision 5 is **101 instructions** with default
   features — live on mainnet since 2026-07-22).
 
-This branch's **unreleased revision-7 candidate** has 103 production instructions
-and the `feedAuthorityVotes` (revision 6) and `taskCreationQuotas` (revision 7) capabilities. It retains the 25-instruction canary.
+This branch's **unreleased revision-8 candidate** has 104 production instructions
+and the `feedAuthorityVotes` (revision 6), `taskCreationQuotas` (revision 7) and
+`feeQualifiedRatings` (revision 8) capabilities, plus the threshold-approved
+one-time `repair_dispute_initiator_counter`. It retains the 25-instruction canary.
 An explicit development-only `private-zk` feature adds three quarantined proof
-instructions, producing a 106-instruction candidate build. It is not a release surface and
+instructions, producing a 107-instruction candidate build. It is not a release surface and
 the deployment preflight rejects a production build or IDL that contains it.
 
 > **As of 2026-07-22 the full 101-instruction revision-5 surface is live on
@@ -100,7 +102,8 @@ unpaused on that conservative surface.
 | full (revision 6 candidate) | **102 ix** | disposable local validation only; no deployment claim | `6` (AUTHORITY_FEED) | planned SDK **0.13.0**, unpublished | `true` | `true` |
 | full (revision 7 candidate) | **103 ix** | disposable local validation only; no deployment claim | `7` (TASK_QUOTAS) | same planned SDK **0.13.0** train, unpublished | `true` | `true` |
 | full (revision 4, superseded) | **99 ix** | mainnet (live 2026-07-09 → 2026-07-22) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| explicit `private-zk` candidate build | 106 ix | local development only | not releasable | unsupported | n/a | n/a |
+| full (revision 8 candidate) | **104 ix** | disposable local validation only; no deployment claim | `8` (FEE_QUALIFIED_RATINGS) | same planned SDK **0.13.0** train, unpublished | `true` | `true` |
+| explicit `private-zk` candidate build | 107 ix | local development only | not releasable | unsupported | n/a | n/a |
 | historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 

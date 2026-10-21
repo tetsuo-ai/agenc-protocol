@@ -489,6 +489,23 @@ pub struct DisputeResolverRevoked {
     pub timestamp: i64,
 }
 
+/// Emitted when threshold-approved governance restores the initiator-outcome
+/// counter unit that a historical duplicate-account dispute initiation lost.
+#[event]
+pub struct DisputeInitiatorCounterRepaired {
+    /// Dispute whose initiation lost the unit (seeds the one-time receipt).
+    pub incident_dispute: Pubkey,
+    /// Terminal dispute whose pending initiator outcome received the unit.
+    pub pending_dispute: Pubkey,
+    pub initiator_agent: Pubkey,
+    /// Historical `initiate_dispute` transaction signature (evidence).
+    pub incident_signature: [u8; 64],
+    /// Initiator pending-outcome counter after the repair.
+    pub pending_initiator_outcomes: u8,
+    pub repaired_by: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when the protocol authority assigns a wallet to the moderation-attestor roster (P6.8).
 #[event]
 pub struct ModerationAttestorAssigned {
