@@ -289,6 +289,7 @@ export function decodeTaskBinding(dataLike) {
       dependencyType,
       rewardMint: rewardMintOption.value,
       bump,
+      taskSchema: 0,
       workerSlashPending: false,
       peerSettlementPending: false,
       protocolFeeBps,
@@ -343,6 +344,8 @@ export function decodeTaskBinding(dataLike) {
     dependencyType,
     rewardMint: rewardMintOption.value,
     bump,
+    // Batch-3 carve-out: `_reserved[0]` is the task schema (1 = contest aware).
+    taskSchema: reserved[0],
     workerSlashPending: reserved[2] === 1,
     peerSettlementPending: reserved[11] === 1,
     protocolFeeBps,
