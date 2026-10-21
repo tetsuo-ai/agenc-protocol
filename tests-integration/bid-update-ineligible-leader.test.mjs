@@ -133,10 +133,21 @@ test("AGNC-04: an Inactive bidder cannot install via update_bid; demote closes t
   expectOk(send(w.svm, await s.mProg.methods.updateAgent(null, null, null, 0).accounts({ agent: s.mAgent, authority: s.m.publicKey }).instruction(), [s.m]), "attacker goes Inactive again");
 
   const bidderBefore = Number(w.svm.getBalance(s.m.publicKey));
+  const bidLamports = Number(w.svm.getBalance(s.mBid));
+  const market = pda([enc("bidder_market"), s.mAgent.toBuffer()])[0];
+  const activeBefore = decode(w.svm, "TaskBidBook", s.b.bidBook).active_bids;
+  const bidderActiveBefore = decode(w.svm, "BidderMarketState", market).active_bid_count;
+  expectFail(send(w.svm, await demoteIx(w, s.b, s.mBid, s.mAgent, stranger.publicKey, stranger), [stranger]),
+    "UnauthorizedAgent", "demotion cannot redirect the closed bid refund");
   expectOk(send(w.svm, await demoteIx(w, s.b, s.mBid, s.mAgent, s.m.publicKey, stranger), [stranger]),
     "stranger demotes the ineligible leader");
   assert.ok(isClosed(w.svm, s.mBid), "dead leader's bid is closed, not merely untracked");
-  assert.ok(Number(w.svm.getBalance(s.m.publicKey)) > bidderBefore, "bond + rent returned to the bidder");
+  assert.equal(Number(w.svm.getBalance(s.m.publicKey)), bidderBefore + bidLamports, "exact bond + rent returned to bidder");
+  assert.equal(decode(w.svm, "TaskBidBook", s.b.bidBook).active_bids, activeBefore - 1);
+  assert.equal(decode(w.svm, "BidderMarketState", market).active_bid_count, bidderActiveBefore - 1);
+  w.svm.expireBlockhash(); // Make the retry a new transaction, not AlreadyProcessed.
+  expectFail(send(w.svm, await demoteIx(w, s.b, s.mBid, s.mAgent, s.m.publicKey, stranger), [stranger]),
+    "AccountNotInitialized", "demoted bid cannot decrement counters twice");
   expectFail(send(w.svm, await mUpdateIx(w, s, 13), [s.m]), "AccountNotInitialized",
     "the closed bid can no longer be updated at all");
 

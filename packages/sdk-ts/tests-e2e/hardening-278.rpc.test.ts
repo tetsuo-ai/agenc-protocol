@@ -308,6 +308,7 @@ describe.skipIf(!RPC_ENABLED)(
         sdk.facade.demoteIneligibleBest({
           task,
           bidder: bid.agent,
+          bidderAuthority: bid.signer.address,
           authority: crank,
         });
       async function accept(bid: typeof best) {
@@ -354,13 +355,25 @@ describe.skipIf(!RPC_ENABLED)(
         [await promote(middle)],
         sdk.AGENC_COORDINATION_ERROR__BID_NOT_BETTER_THAN_TRACKED_BEST,
       );
+      const demotedLamports = (await h.info(best.bid))!.lamports;
+      const demotedAuthorityBefore = await h.balance(best.signer.address);
+      const activeBefore = (await book()).activeBids;
       await h.send("permissionless demotion", crank, [await demote(best)]);
+      expect(await h.info(best.bid)).toBeNull();
+      expect(await h.balance(best.signer.address)).toBe(
+        demotedAuthorityBefore + demotedLamports,
+      );
+      expect((await book()).activeBids).toBe(activeBefore - 1);
+      expect(
+        (await h.read(best.market, sdk.getBidderMarketStateDecoder()))
+          .activeBidCount,
+      ).toBe(0);
       const graceStarted = (await book()).winnerStaleSince;
       await h.reject(
         "duplicate demotion cannot restart grace",
         crank,
         [await demote(best)],
-        sdk.AGENC_COORDINATION_ERROR__BID_NOT_BOOK_BEST,
+        3012, // Anchor AccountNotInitialized: the demoted bid is closed.
       );
       await h.send("worse contender arrives first", crank, [
         await promote(worst),
@@ -372,13 +385,13 @@ describe.skipIf(!RPC_ENABLED)(
         "stale contender cannot demote current winner",
         crank,
         [await demote(best)],
-        sdk.AGENC_COORDINATION_ERROR__BID_NOT_BOOK_BEST,
+        3012, // Anchor AccountNotInitialized: the demoted bid is closed.
       );
       await h.reject(
         "ineligible contender cannot promote",
         crank,
         [await promote(best)],
-        sdk.AGENC_COORDINATION_ERROR__BID_DOES_NOT_SATISFY_MATCHING_POLICY,
+        3012, // Anchor AccountNotInitialized.
       );
       await h.reject(
         "current eligible winner cannot reset grace",
@@ -411,7 +424,7 @@ describe.skipIf(!RPC_ENABLED)(
       await h.send("accept recovered policy winner", creator.signer, [
         await accept(middle),
       ]);
-      for (const losing of [best, worst]) {
+      for (const losing of [worst]) {
         const state = await h.read(losing.bid, sdk.getTaskBidDecoder());
         const bidLamports = (await h.info(losing.bid))!.lamports;
         expect(bidLamports).toBeGreaterThan(state.bondLamports);

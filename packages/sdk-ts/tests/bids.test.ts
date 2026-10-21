@@ -12,6 +12,7 @@ import {
   cancelBid,
   updateBid,
   expireBid,
+  demoteIneligibleBest,
   acceptBid,
   initializeBidMarketplace,
   initializeBidBook,
@@ -412,8 +413,6 @@ describe("acceptBid facade", () => {
     expect(ix.accounts).toHaveLength(12);
   });
 
-
-
   it("detaches the CAS hashes before awaiting", async () => {
     const creator = createNoopSigner(
       address("Vote111111111111111111111111111111111111111"),
@@ -438,7 +437,6 @@ describe("acceptBid facade", () => {
       getAcceptBidInstructionDataDecoder().decode(ix.data).expectedBidTermsHash,
     ).toEqual(new Uint8Array(32).fill(45));
   });
-
 });
 
 describe("initializeBidMarketplace facade", () => {
@@ -778,5 +776,31 @@ describe("updateBidMarketplaceConfig facade", () => {
         acceptedNoShowSlashBps: 750,
       }),
     ).rejects.toThrow(/duplicate signer address/u);
+  });
+});
+
+describe("demoteIneligibleBest facade", () => {
+  it("includes the writable bid, derived market state and exact refund authority", async () => {
+    const ix = await demoteIneligibleBest({
+      task,
+      bidder,
+      bidderAuthority: secondMultisigSigner.address,
+      authority,
+    });
+    const [bid] = await findBidPda({ task, bidder });
+    const [market] = await findBidderMarketStatePda({ bidder });
+    expect(ix.accounts[3]).toEqual({
+      address: bid,
+      role: AccountRole.WRITABLE,
+    });
+    expect(ix.accounts[5]).toEqual({
+      address: market,
+      role: AccountRole.WRITABLE,
+    });
+    expect(ix.accounts[6]).toEqual({
+      address: secondMultisigSigner.address,
+      role: AccountRole.WRITABLE,
+    });
+    expect(ix.accounts[7]?.address).toBe(authority.address);
   });
 });

@@ -1012,6 +1012,12 @@ pub fn create_bid_handler(
         ctx.accounts.bidder.status == AgentStatus::Active,
         CoordinationError::AgentNotActive
     );
+    // Creation also installs the tracked winner: do not let a bidder that
+    // cannot accept another task displace an eligible incumbent.
+    require!(
+        ctx.accounts.bidder.active_tasks < MAX_ACTIVE_TASKS,
+        CoordinationError::MaxActiveTasksReached
+    );
     require!(
         has_required_assignment_stake(
             ctx.accounts.bidder.stake,
