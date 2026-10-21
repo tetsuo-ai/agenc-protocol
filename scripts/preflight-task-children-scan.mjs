@@ -380,7 +380,10 @@ const FAMILIES = [
     name: "TaskBidBook",
     discriminator: discriminator("TaskBidBook"),
     decode(dataLike) {
-      const data = exact(dataLike, "TaskBidBook", 114);
+      // 114 bytes before the cached-winner append, 174 since; the offsets
+      // below are shared because the append follows `bump`.
+      const raw = Buffer.from(dataLike);
+      const data = exact(raw, "TaskBidBook", raw.length === 114 ? 114 : 174);
       const task = pubkey(data, 8);
       const state = data[40];
       if (state > 2 || data[41] > 2) throw new Error("TaskBidBook: invalid enum");

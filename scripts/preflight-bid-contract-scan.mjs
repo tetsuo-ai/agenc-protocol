@@ -23,7 +23,11 @@ const require = createRequire(path.join(ROOT, "tests-integration", "package.json
 const { Connection, PublicKey } = require("@solana/web3.js");
 
 const BID_SIZE = 252;
-const BOOK_SIZE = 114;
+// TaskBidBook: 114 bytes before the O(1)-accept cached-winner fields were
+// appended, 174 bytes (TaskBidBook::SIZE) since. Both can exist on chain.
+const LEGACY_BOOK_SIZE = 114;
+const BOOK_SIZE = 174;
+const BOOK_SIZES = new Set([LEGACY_BOOK_SIZE, BOOK_SIZE]);
 const BID_TERMS_HASH_DOMAIN = Buffer.from("agenc:bid-terms:v1", "utf8");
 const BID_DISCRIMINATOR = createHash("sha256")
   .update("account:TaskBid")
@@ -58,12 +62,6 @@ function optionPubkey(data, offset, field) {
     };
   }
   throw new Error(`${field}: invalid/truncated Option tag ${data[offset]}`);
-}
-
-function requireZero(data, start, end, field) {
-  if (!data.subarray(start, end).equals(Buffer.alloc(end - start))) {
-    throw new Error(`${field}: allocation padding is nonzero`);
-  }
 }
 
 export function decodeTaskBid(dataLike) {
@@ -112,7 +110,13 @@ export function decodeTaskBid(dataLike) {
 }
 
 export function decodeTaskBidBook(dataLike) {
-  const data = exact(dataLike, BOOK_SIZE, BOOK_DISCRIMINATOR, "TaskBidBook");
+  const raw = Buffer.from(dataLike);
+  const data = exact(
+    raw,
+    BOOK_SIZES.has(raw.length) ? raw.length : BOOK_SIZE,
+    BOOK_DISCRIMINATOR,
+    "TaskBidBook",
+  );
   const state = data[40];
   const policy = data[41];
   if (state > 2 || policy > 2) {
@@ -135,7 +139,22 @@ export function decodeTaskBidBook(dataLike) {
   const createdAt = data.readBigInt64LE(accepted.end + 14);
   const updatedAt = data.readBigInt64LE(accepted.end + 22);
   const bump = data[accepted.end + 30];
-  requireZero(data, accepted.end + 31, data.length, "TaskBidBook");
+  // No trailing-zero check: when `accepted_bid` returns from Some to None (a
+  // reopened book), the program re-serializes 32 bytes shorter into the same
+  // allocation and leaves the old tail in place. Borsh never reads it.
+  let cachedWinner = null;
+  if (data.length === BOOK_SIZE) {
+    const start = accepted.end + 31;
+    cachedWinner = {
+      bestBid: new PublicKey(data.subarray(start, start + 32)),
+      bestRewardLamports: data.readBigUInt64LE(start + 32),
+      bestEtaSeconds: data.readUInt32LE(start + 40),
+      bestConfidenceBps: data.readUInt16LE(start + 44),
+      bestReputationBps: data.readUInt16LE(start + 46),
+      winnerStaleSince: data.readBigInt64LE(start + 48),
+      scoreWindowSecs: data.readUInt32LE(start + 56),
+    };
+  }
   if (activeBids > totalBids || createdAt <= 0n || updatedAt < createdAt) {
     throw new Error("TaskBidBook: invalid counts/timestamps");
   }
@@ -157,6 +176,8 @@ export function decodeTaskBidBook(dataLike) {
     createdAt,
     updatedAt,
     bump,
+    accountSize: data.length,
+    cachedWinner,
   };
 }
 
