@@ -95,3 +95,57 @@ the release:
 5. Re-run the release rail. The postdeploy and prestamp gates have no allowance.
    They must report zero dispute blockers before the revision stamp, and the
    protocol cannot unpause without that stamp.
+
+## Operator rail
+
+Use `scripts/mainnet-repair-dispute-counter.mjs --phase prepare` while the
+reviewed revision-5 payload is live. `RPC_URL` must select mainnet-beta and
+`PAYER_KEYPAIR` must name a plain 64-byte JSON keypair file. The protocol must
+already be paused. The default PLAN simulates each required expiry with zero
+signatures. It never sends or signs a transaction. If either dispute is still
+Active, the finalizer simulation is deferred until both are terminal. EXECUTE
+expires each Active dispute, reads the resulting state, then finalizes the
+recorded sibling. It verifies counters 0/0 and exactly one pending outcome.
+
+Execution requires both `--execute` and
+`--confirm 4Ei4hU9C7CjdEH5Zb8CdiPEGzyjQSSaKTvjJrmRMvPXL`. Both phases bind the
+live loader and its custody to the committed upgrade-authority policy and
+recheck that binding before signing and after confirmation. RPC URLs are
+redacted. Only explicitly configured key file paths are loaded.
+
+After upgrading, use `--phase repair` with `AUTHORITY_KEYPAIR` naming the
+ProtocolConfig authority file, and `COSIGNERS` listing other owner file paths,
+separated by commas. Supply independently reviewed `EXPECTED_IDL_SHA256` and
+`EXPECTED_SO_SHA256`; optional `IDL_PATH` and `SO_PATH` select the corresponding
+local artifacts. The IDL must include the canonical repair ABI. The approved
+SBF must exactly match the live ProgramData payload, allowing only zero padding.
+PLAN simulates the single transaction containing repair followed by finalization.
+EXECUTE uses the same explicit incident confirmation. The rail checks the
+receipt, both counters, finalization, and the full dispute scanner after sending.
+
+The prepare rail supports single-worker SOL Exclusive and BidExclusive tasks.
+It supplies parent evidence for dependent tasks, the accepted-bid suffix for
+BidExclusive tasks, canonical completion bonds, and submission evidence. A
+Submitted manual-validation record also requires its validation config. Token
+rewards and peer-worker settlement are refused with an explicit unsupported-shape
+error. These cases require a separately reviewed rail.
+
+The predeploy exception requires `AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1` and
+the exact recorded revision-5 payload hash. It only permits the one recorded
+agent with zero counters and one unfinalized tracked outcome. Any additional
+blocker fails closed. The postdeploy and prestamp gates never accept the
+exception. Keep the protocol paused, repair immediately after upgrading, then
+resume the release rail before any stamp.
+
+Local proof: `AGENC_RPC_E2E=1 node --test
+scripts/preflight-dispute-counter-repair-rpc.test.mjs` starts a disposable
+validator on `AGENC_REPAIR_RPC_PORT` (default 19899), deriving its WebSocket,
+faucet, gossip, and dynamic ports from that base. It refuses unavailable ports
+or a missing `solana-test-validator`. The test needs the installed Agave tools,
+root and tests-integration npm dependencies, the committed current IDL, and the
+SBF produced by `cargo build-sbf`; no Anchor CLI or existing wallet is required.
+It uses the real program ID and creates throwaway signer keys in memory. Genesis account overrides
+reproduce the historical state by changing only the two counter bytes from 2/2
+to 1/1. The test executes both exported phases and checks the complete final
+state. Local genesis and executable checks are injected into exported helpers;
+the CLI has no switch to bypass its mainnet or artifact checks.

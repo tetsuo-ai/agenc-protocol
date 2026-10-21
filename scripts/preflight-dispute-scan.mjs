@@ -683,7 +683,10 @@ export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
     now = BigInt(now);
   }
   const blockers = [];
-  const { agentCount, counters } = await inspectAgentCounterCutover(connection, blockers);
+  const { agentCount, counters } = await inspectAgentCounterCutover(
+    connection,
+    blockers,
+  );
   const trackedByInitiator = new Map();
   const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
     filters: [
@@ -732,7 +735,10 @@ export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
       continue;
     }
 
-    if (dispute.totalVoters === INITIATOR_OUTCOME_COUNTER_MARKER && !dispute.initiatorSlashApplied) {
+    if (
+      dispute.totalVoters === INITIATOR_OUTCOME_COUNTER_MARKER &&
+      !dispute.initiatorSlashApplied
+    ) {
       const key = dispute.initiator.toBase58();
       if (!trackedByInitiator.has(key)) trackedByInitiator.set(key, []);
       trackedByInitiator.get(key).push(pubkey);
@@ -941,18 +947,26 @@ export async function scanDisputes(connection, { nowUnixTimestamp } = {}) {
   const initiatorCounterDeficits = [];
   for (const [key, disputes] of trackedByInitiator) {
     const counter = counters.get(key);
-    if (!counter || counter.pendingInitiatorOutcomes >= disputes.length) continue;
-    disputes.sort((a, b) => a.toBase58().localeCompare(b.toBase58()));
+    if (!counter || counter.pendingInitiatorOutcomes >= disputes.length)
+      continue;
+    disputes.sort((a, b) =>
+      a.toBase58() < b.toBase58() ? -1 : a.toBase58() > b.toBase58() ? 1 : 0,
+    );
     const initiator = new PublicKey(key);
     const pendingInitiatorOutcomes = counter.pendingInitiatorOutcomes;
     initiatorCounterDeficits.push({
-      initiator, pendingInitiatorOutcomes,
-      unfinalizedTrackedDisputes: disputes.length, disputes,
+      initiator,
+      pendingInitiatorOutcomes,
+      unfinalizedTrackedDisputes: disputes.length,
+      disputes,
     });
-    blockers.push(blocker(
-      "tracked-initiator-counter-deficit", initiator,
-      `pending_initiator_outcomes=${pendingInitiatorOutcomes} unfinalized_tracked_disputes=${disputes.length} disputes=${disputes.map((key) => key.toBase58()).join(",")}`,
-    ));
+    blockers.push(
+      blocker(
+        "tracked-initiator-counter-deficit",
+        initiator,
+        `pending_initiator_outcomes=${pendingInitiatorOutcomes} unfinalized_tracked_disputes=${disputes.length} disputes=${disputes.map((key) => key.toBase58()).join(",")}`,
+      ),
+    );
   }
 
   return {

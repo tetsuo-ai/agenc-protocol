@@ -2436,36 +2436,64 @@ async function readAnchorIdlPublicationState(
 }
 
 export const DISPUTE_COUNTER_REPAIR_RECORD_URL = new URL(
-  "../artifacts/remediation/2026-10-21-dispute-counter-repair.json", import.meta.url,
+  "../artifacts/remediation/2026-10-21-dispute-counter-repair.json",
+  import.meta.url,
 );
 
 export function validateDisputeCounterRepairRecord(record) {
-  const fail = (detail) => { throw new Error(`invalid dispute counter remediation record: ${detail}`); };
-  if (!record || record.schemaVersion !== 1 || record.network !== "mainnet-beta" ||
-      record.genesisHash !== MAINNET_GENESIS || record.programId !== PROGRAM_ID_STR ||
-      record.repairInstruction !== "repair_dispute_initiator_counter" ||
-      record.priorRevision?.surfaceRevision !== 5 ||
-      !/^[0-9a-fA-F]{64}$/.test(record.priorRevision?.payloadSha256 ?? "")) {
-    fail("schema, network, program, prior revision hash, or instruction mismatch");
+  const fail = (detail) => {
+    throw new Error(`invalid dispute counter remediation record: ${detail}`);
+  };
+  if (
+    !record ||
+    record.schemaVersion !== 1 ||
+    record.network !== "mainnet-beta" ||
+    record.genesisHash !== MAINNET_GENESIS ||
+    record.programId !== PROGRAM_ID_STR ||
+    record.repairInstruction !== "repair_dispute_initiator_counter" ||
+    record.priorRevision?.surfaceRevision !== 5 ||
+    typeof record.priorRevision?.payloadSha256 !== "string" ||
+    !/^[0-9a-fA-F]{64}$/.test(record.priorRevision.payloadSha256)
+  ) {
+    fail(
+      "schema, network, program, prior revision hash, or instruction mismatch",
+    );
   }
   const key = (value) => {
     try {
-      if (typeof value !== "string" || new PublicKey(value).toBase58() !== value) fail("noncanonical key");
-    } catch { fail("invalid base58 key"); }
+      if (
+        typeof value !== "string" ||
+        new PublicKey(value).toBase58() !== value
+      )
+        fail("noncanonical key");
+    } catch {
+      fail("invalid base58 key");
+    }
   };
   const signature = (value) => {
     try {
       if (typeof value !== "string") fail("signature must be base58");
       const bytes = bs58.decode(value);
-      if (bytes.length !== 64 || bytes.every((byte) => byte === 0) || bs58.encode(bytes) !== value) fail("invalid signature");
-    } catch { fail("signature must decode to 64 nonzero bytes"); }
+      if (
+        bytes.length !== 64 ||
+        bytes.every((byte) => byte === 0) ||
+        bs58.encode(bytes) !== value
+      )
+        fail("invalid signature");
+    } catch {
+      fail("signature must decode to 64 bytes and not be all zero");
+    }
   };
   key(record.initiatorAgent);
   key(record.incident?.dispute);
   key(record.incident?.task);
   key(record.incident?.claim);
   signature(record.incident?.initiateDisputeSignature);
-  if (!Array.isArray(record.siblingDisputes) || record.siblingDisputes.length !== 1) fail("expected one reviewed sibling");
+  if (
+    !Array.isArray(record.siblingDisputes) ||
+    record.siblingDisputes.length !== 1
+  )
+    fail("expected one reviewed sibling");
   for (const sibling of record.siblingDisputes) {
     key(sibling?.dispute);
     key(sibling?.task);
@@ -2475,8 +2503,12 @@ export function validateDisputeCounterRepairRecord(record) {
   return record;
 }
 
-export function loadDisputeCounterRepairRecord(recordPath = DISPUTE_COUNTER_REPAIR_RECORD_URL) {
-  return validateDisputeCounterRepairRecord(JSON.parse(readFileSync(recordPath, "utf8")));
+export function loadDisputeCounterRepairRecord(
+  recordPath = DISPUTE_COUNTER_REPAIR_RECORD_URL,
+) {
+  return validateDisputeCounterRepairRecord(
+    JSON.parse(readFileSync(recordPath, "utf8")),
+  );
 }
 
 export function createDisputeCounterRepairAllowance({
@@ -2487,26 +2519,55 @@ export function createDisputeCounterRepairAllowance({
 } = {}) {
   validateDisputeCounterRepairRecord(record);
   const accepted = env.AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR === "1";
-  const revision5Live = livePayloadSha256 === record.priorRevision.payloadSha256.toLowerCase();
+  const revision5Live =
+    livePayloadSha256 === record.priorRevision.payloadSha256.toLowerCase();
   if (accepted && !revision5Live) {
-    warn("WARNING: ignoring AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: live ProgramData payload is not the reviewed revision-5 payload.");
+    warn(
+      "WARNING: ignoring AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: live ProgramData payload is not the reviewed revision-5 payload.",
+    );
   }
-  return { active: accepted && revision5Live, accepted, livePayloadSha256, record };
+  return {
+    active: accepted && revision5Live,
+    accepted,
+    livePayloadSha256,
+    record,
+  };
 }
 
 function reviewedDisputeCounterRepairShape(disputes, record) {
-  if (disputes.statusCounts.active !== 0 || disputes.blockers.length !== 2 ||
-      disputes.initiatorCounterDeficits?.length !== 1) return null;
-  const deficitBlocker = disputes.blockers.find((item) => item.kind === "tracked-initiator-counter-deficit");
-  const pendingBlocker = disputes.blockers.find((item) => item.kind === "tracked-initiator-outcome-unapplied");
+  if (
+    disputes.statusCounts.active !== 0 ||
+    disputes.blockers.length !== 2 ||
+    disputes.initiatorCounterDeficits?.length !== 1
+  )
+    return null;
+  const deficitBlocker = disputes.blockers.find(
+    (item) => item.kind === "tracked-initiator-counter-deficit",
+  );
+  const pendingBlocker = disputes.blockers.find(
+    (item) => item.kind === "tracked-initiator-outcome-unapplied",
+  );
   const pending = pendingBlocker?.dispute?.toBase58?.();
-  const allowed = [record.incident.dispute, ...record.siblingDisputes.map((item) => item.dispute)];
+  const allowed = [
+    record.incident.dispute,
+    ...record.siblingDisputes.map((item) => item.dispute),
+  ];
   const deficit = disputes.initiatorCounterDeficits[0];
-  if (deficitBlocker?.dispute?.toBase58?.() !== record.initiatorAgent ||
-      !allowed.includes(pending) || deficit.initiator?.toBase58?.() !== record.initiatorAgent ||
-      deficit.pendingInitiatorOutcomes !== 0 || deficit.unfinalizedTrackedDisputes !== 1 ||
-      deficit.disputes?.length !== 1 || deficit.disputes[0]?.toBase58?.() !== pending) return null;
-  return { agent: record.initiatorAgent, pendingDispute: pending, incidentDispute: record.incident.dispute };
+  if (
+    deficitBlocker?.dispute?.toBase58?.() !== record.initiatorAgent ||
+    !allowed.includes(pending) ||
+    deficit.initiator?.toBase58?.() !== record.initiatorAgent ||
+    deficit.pendingInitiatorOutcomes !== 0 ||
+    deficit.unfinalizedTrackedDisputes !== 1 ||
+    deficit.disputes?.length !== 1 ||
+    deficit.disputes[0]?.toBase58?.() !== pending
+  )
+    return null;
+  return {
+    agent: record.initiatorAgent,
+    pendingDispute: pending,
+    incidentDispute: record.incident.dispute,
+  };
 }
 
 export function assertRevision5DisputeCutover(
@@ -2516,14 +2577,24 @@ export function assertRevision5DisputeCutover(
 ) {
   if (disputes.blockers.length > 0 || disputes.statusCounts.active !== 0) {
     const allowance = options.repairAllowance;
-    const record = validateDisputeCounterRepairRecord(allowance?.record ?? loadDisputeCounterRepairRecord());
+    const record = validateDisputeCounterRepairRecord(
+      allowance?.record ?? loadDisputeCounterRepairRecord(),
+    );
     const pendingRepair = reviewedDisputeCounterRepairShape(disputes, record);
     // Postdeploy and prestamp callers never receive an allowance. Also refuse
     // an accidentally forwarded one at these irreversible release boundaries.
     const prestamp = /postdeploy|prestamp/i.test(stage);
-    if (pendingRepair && !prestamp && allowance?.active === true && allowance.accepted === true &&
-        allowance.livePayloadSha256 === record.priorRevision.payloadSha256.toLowerCase()) {
-      console.warn(`WARNING: ${stage}: REVIEWED DISPUTE COUNTER REPAIR PENDING: agent=${pendingRepair.agent} pending=${pendingRepair.pendingDispute} incident=${pendingRepair.incidentDispute}. Run scripts/mainnet-repair-dispute-counter.mjs --phase repair right after the upgrade, BEFORE ANY STAMP. Keep the protocol paused.`);
+    if (
+      pendingRepair &&
+      !prestamp &&
+      allowance?.active === true &&
+      allowance.accepted === true &&
+      allowance.livePayloadSha256 ===
+        record.priorRevision.payloadSha256.toLowerCase()
+    ) {
+      console.warn(
+        `WARNING: ${stage}: REVIEWED DISPUTE COUNTER REPAIR PENDING: agent=${pendingRepair.agent} pending=${pendingRepair.pendingDispute} incident=${pendingRepair.incidentDispute}. Run scripts/mainnet-repair-dispute-counter.mjs --phase repair right after the upgrade, BEFORE ANY STAMP. Keep the protocol paused.`,
+      );
       return pendingRepair;
     }
     const kinds = [...new Set(disputes.blockers.map((item) => item.kind))];
@@ -2533,7 +2604,8 @@ export function assertRevision5DisputeCutover(
     throw new Error(
       `${stage}: dispute cutover requires zero Active and no incompatible finalizers; ` +
         `found ${disputes.blockers.length} blocker(s) (${kinds.join(", ") || "active-count invariant failure"}). ` +
-        "Run scripts/preflight-dispute-scan.mjs and remediate before continuing." + repairHelp,
+        "Run scripts/preflight-dispute-scan.mjs and remediate before continuing." +
+        repairHelp,
     );
   }
 }

@@ -10,6 +10,8 @@ import {
   assertProgramDataCapacityUnchanged,
   assertProgramSurfaceReleasePolicy,
   assertRevision5CutoverResults,
+  loadDisputeCounterRepairRecord,
+  createDisputeCounterRepairAllowance,
   assertRevision5Paused,
   assertSafeSelectedSteps,
   assertTreasuryAccountBoundary,
@@ -1335,5 +1337,73 @@ test("revision-5 cutover blocks the deployed unpaused bond-post surface", () => 
 test("revision-5 cutover accepts only a fully empty/canonical snapshot", () => {
   assert.doesNotThrow(() =>
     assertRevision5CutoverResults(safeSnapshot(), "postdeploy/prestamp"),
+  );
+});
+
+test("both cutover assertion paths receive the same predeploy repair allowance", async () => {
+  const record = loadDisputeCounterRepairRecord();
+  const snapshot = safeSnapshot();
+  const agent = new PublicKey(record.initiatorAgent);
+  const pending = new PublicKey(record.incident.dispute);
+  snapshot.disputes.blockers = [
+    { kind: "tracked-initiator-counter-deficit", dispute: agent },
+    { kind: "tracked-initiator-outcome-unapplied", dispute: pending },
+  ];
+  snapshot.disputes.initiatorCounterDeficits = [
+    {
+      initiator: agent,
+      pendingInitiatorOutcomes: 0,
+      unfinalizedTrackedDisputes: 1,
+      disputes: [pending],
+    },
+  ];
+  const options = {
+    repairAllowance: createDisputeCounterRepairAllowance({
+      record,
+      env: { AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: "1" },
+      livePayloadSha256: record.priorRevision.payloadSha256,
+    }),
+  };
+  const scanners = {
+    scanTaskSettlement: async () => snapshot.taskSettlement,
+    scanTaskChildren: async () => snapshot.taskChildren,
+  };
+  await assert.rejects(
+    scanStableRevision5CompletionBondCutover(
+      {},
+      snapshot.disputes,
+      "Predeploy",
+      scanners,
+    ),
+    /dispute cutover requires/,
+  );
+  await scanStableRevision5CompletionBondCutover(
+    {},
+    snapshot.disputes,
+    "Predeploy",
+    scanners,
+    options,
+  );
+  assert.throws(
+    () => assertRevision5CutoverResults(snapshot, "Predeploy"),
+    /dispute cutover requires/,
+  );
+  assert.doesNotThrow(() =>
+    assertRevision5CutoverResults(snapshot, "Predeploy", options),
+  );
+  await assert.rejects(
+    scanStableRevision5CompletionBondCutover(
+      {},
+      snapshot.disputes,
+      "Postdeploy/prestamp",
+      scanners,
+      options,
+    ),
+    /dispute cutover requires/,
+  );
+  assert.throws(
+    () =>
+      assertRevision5CutoverResults(snapshot, "Postdeploy/prestamp", options),
+    /dispute cutover requires/,
   );
 });
