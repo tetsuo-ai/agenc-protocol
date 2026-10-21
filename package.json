@@ -69,6 +69,8 @@
     "hono": "^4.13.1",
     "@hono/node-server": "^2.0.5",
     "read-yaml-file": "2.1.0",
-    "postcss-selector-parser": "7.1.6"
+    "postcss-selector-parser": "7.1.6",
+    "markdown-it": "^14.3.3",
+    "vite": "^6.4.5"
   }
 }
