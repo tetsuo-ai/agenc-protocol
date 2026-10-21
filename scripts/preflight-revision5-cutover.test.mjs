@@ -10,6 +10,10 @@ import {
   assertProgramDataCapacityUnchanged,
   assertProgramSurfaceReleasePolicy,
   assertRevision5CutoverResults,
+  REVIEWED_REVISION5_PAYLOAD_SHA256,
+  isBondEntryPauseGatedForPayload,
+  bondEntryPauseGatedForSnapshot,
+  readApprovedCutoverBinary,
   loadDisputeCounterRepairRecord,
   createDisputeCounterRepairAllowance,
   assertRevision5Paused,
@@ -30,7 +34,7 @@ import {
   withPinnedRevision5CutoverContext,
 } from "./mainnet-upgrade.mjs";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../tests-integration/package.json", import.meta.url),
@@ -677,7 +681,7 @@ test("execute wiring anchors postdeploy scans between verified loader snapshots"
   );
   assert.match(
     source,
-    /"Postdeploy\/prestamp rescan",\s*\{ minContextSlot: prestampLoaderBefore\.contextSlot \}/,
+    /"Postdeploy\/prestamp rescan",\s*\{ minContextSlot: prestampLoaderBefore\.contextSlot, bondEntryPauseGated: true \}/,
   );
   assert.match(
     source,
@@ -1405,5 +1409,308 @@ test("both cutover assertion paths receive the same predeploy repair allowance",
     () =>
       assertRevision5CutoverResults(snapshot, "Postdeploy/prestamp", options),
     /dispute cutover requires/,
+  );
+});
+
+test("bond entry assumption is pinned to the reviewed revision-5 payload and the candidate entry gate", () => {
+  assert.equal(
+    REVIEWED_REVISION5_PAYLOAD_SHA256,
+    loadDisputeCounterRepairRecord().priorRevision.payloadSha256,
+  );
+  const source = readFileSync(
+    new URL(
+      "../programs/agenc-coordination/src/instructions/post_completion_bond.rs",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const handler = source.slice(source.indexOf("pub fn handler("));
+  assert.ok(handler.length > 0);
+  const code = handler.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "");
+  assert.match(
+    code,
+    /\bcheck_version_compatible\(\s*&ctx\.accounts\.protocol_config\s*\)\s*\?/,
+  );
+  assert.doesNotMatch(code, /\bcheck_version_compatible_for_exit\(/);
+  assert.equal(
+    isBondEntryPauseGatedForPayload(REVIEWED_REVISION5_PAYLOAD_SHA256),
+    true,
+  );
+  assert.equal(isBondEntryPauseGatedForPayload("0".repeat(64)), false);
+  assert.equal(isBondEntryPauseGatedForPayload(undefined), false);
+  assert.equal(isBondEntryPauseGatedForPayload("0".repeat(64), "true"), false);
+});
+
+test("approved cutover artifact is read and hash-verified before exact live payload matching", () => {
+  const directory = mkdtempSync(
+    new URL("../.bond-cutover-test-", import.meta.url),
+  );
+  const file = `${directory}/approved.so`;
+  const bytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3]);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const previous = {
+    so: process.env.SO_PATH,
+    hash: process.env.EXPECTED_SO_SHA256,
+  };
+  try {
+    writeFileSync(file, bytes);
+    const approved = readApprovedCutoverBinary({
+      so: file,
+      "expected-so-sha256": digest,
+    });
+    assert.equal(approved.soSha, digest);
+    assert.deepEqual(approved.soBytes, bytes);
+    assert.equal(
+      bondEntryPauseGatedForSnapshot({ payload: bytes }, approved),
+      true,
+    );
+    assert.equal(
+      bondEntryPauseGatedForSnapshot(
+        { payload: Buffer.concat([bytes, Buffer.alloc(20)]) },
+        approved,
+      ),
+      true,
+    );
+    for (const payload of [
+      Buffer.alloc(20),
+      bytes.subarray(1),
+      Buffer.concat([bytes, Buffer.from([1])]),
+    ]) {
+      assert.equal(
+        bondEntryPauseGatedForSnapshot(
+          { payload, surfaceRevision: 5 },
+          approved,
+        ),
+        false,
+      );
+    }
+    assert.throws(
+      () =>
+        readApprovedCutoverBinary({
+          so: file,
+          "expected-so-sha256": "0".repeat(64),
+        }),
+      /cutover .so sha256/,
+    );
+    assert.throws(
+      () =>
+        bondEntryPauseGatedForSnapshot(
+          { payload: bytes },
+          { ...approved, soBytes: Buffer.from([1]) },
+        ),
+      /in-memory reviewed SBF sha256/,
+    );
+    process.env.SO_PATH = file;
+    process.env.EXPECTED_SO_SHA256 = digest;
+    assert.deepEqual(readApprovedCutoverBinary({}), approved);
+  } finally {
+    if (previous.so === undefined) delete process.env.SO_PATH;
+    else process.env.SO_PATH = previous.so;
+    if (previous.hash === undefined) delete process.env.EXPECTED_SO_SHA256;
+    else process.env.EXPECTED_SO_SHA256 = previous.hash;
+    unlinkSync(file);
+    rmdirSync(directory);
+  }
+});
+
+function bondScanners(snapshot, calls = []) {
+  return {
+    scanTaskSettlement: async () => {
+      calls.push("settlement");
+      return snapshot.taskSettlement;
+    },
+    scanTaskChildren: async () => {
+      calls.push("inventory");
+      return snapshot.taskChildren;
+    },
+  };
+}
+
+for (const [label, pauseGated] of [
+  ["unknown payload", isBondEntryPauseGatedForPayload("0".repeat(64))],
+  [
+    "reviewed revision-5 payload",
+    isBondEntryPauseGatedForPayload(REVIEWED_REVISION5_PAYLOAD_SHA256),
+  ],
+  ["approved binary", isBondEntryPauseGatedForPayload("0".repeat(64), true)],
+]) {
+  test(`${label}: both cutover paths apply the correct bond-entry gate`, async () => {
+    const saved = process.env.AGENC_ACCEPT_BOND_RACE;
+    delete process.env.AGENC_ACCEPT_BOND_RACE;
+    try {
+      const snapshot = safeSnapshot();
+      snapshot.taskSettlement.revision4BondPostEligibleTaskCount = 61;
+      const options = { bondEntryPauseGated: pauseGated };
+      const calls = [];
+      const stable = () =>
+        scanStableRevision5CompletionBondCutover(
+          {},
+          snapshot.disputes,
+          "predeploy",
+          bondScanners(snapshot, calls),
+          options,
+        );
+      const aggregate = () =>
+        assertRevision5CutoverResults(snapshot, "predeploy", options);
+      if (pauseGated) {
+        await stable();
+        aggregate();
+        assert.deepEqual(calls, ["settlement", "inventory"]);
+        snapshot.taskSettlement.blockers.push({
+          kind: "underfunded-collaborative-task",
+        });
+        await assert.rejects(stable(), /task settlement scan/);
+        assert.throws(aggregate, /task settlement scan/);
+      } else {
+        await assert.rejects(
+          stable(),
+          /zero Tasks eligible for deployed revision-4/,
+        );
+        assert.throws(aggregate, /zero Tasks eligible for deployed revision-4/);
+        assert.deepEqual(calls, ["settlement"]);
+      }
+    } finally {
+      if (saved === undefined) delete process.env.AGENC_ACCEPT_BOND_RACE;
+      else process.env.AGENC_ACCEPT_BOND_RACE = saved;
+    }
+  });
+}
+
+test("legacy explicit bond-race opt-in behavior is unchanged on unknown binaries", async () => {
+  const saved = process.env.AGENC_ACCEPT_BOND_RACE;
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (message) => warnings.push(message);
+  try {
+    const snapshot = safeSnapshot();
+    snapshot.taskSettlement.revision4BondPostEligibleTaskCount = 61;
+    // Preserve the old bypass's complete behavior, including its settlement check.
+    snapshot.taskSettlement.blockers.push({ kind: "legacy-bypass-fixture" });
+    process.env.AGENC_ACCEPT_BOND_RACE = "1";
+    await scanStableRevision5CompletionBondCutover(
+      {},
+      snapshot.disputes,
+      "predeploy",
+      bondScanners(snapshot),
+      { bondEntryPauseGated: false },
+    );
+    assertRevision5CutoverResults(snapshot, "predeploy", {
+      bondEntryPauseGated: false,
+    });
+    assert.equal(warnings.length, 2);
+    assert.ok(
+      warnings.every(
+        (line) =>
+          /BYPASSING assertRevision4BondEntryClosed.*explicit/.test(line) &&
+          /AGENC_ACCEPT_BOND_RACE=1/.test(line),
+      ),
+    );
+    for (const raw of ["0", "true", ""]) {
+      process.env.AGENC_ACCEPT_BOND_RACE = raw;
+      await assert.rejects(
+        scanStableRevision5CompletionBondCutover(
+          {},
+          snapshot.disputes,
+          "predeploy",
+          bondScanners(snapshot),
+        ),
+        /task settlement scan/,
+      );
+      assert.throws(
+        () => assertRevision5CutoverResults(snapshot),
+        /task settlement scan/,
+      );
+    }
+  } finally {
+    console.warn = originalWarn;
+    if (saved === undefined) delete process.env.AGENC_ACCEPT_BOND_RACE;
+    else process.env.AGENC_ACCEPT_BOND_RACE = saved;
+  }
+});
+
+test("completion-bond inventory remains mandatory with every entry-gate option and opt-in", async () => {
+  const saved = process.env.AGENC_ACCEPT_BOND_RACE;
+  try {
+    for (const pauseGated of [false, true]) {
+      for (const accepted of [undefined, "1"]) {
+        if (accepted === undefined) delete process.env.AGENC_ACCEPT_BOND_RACE;
+        else process.env.AGENC_ACCEPT_BOND_RACE = accepted;
+        for (const mutate of [
+          (children) => (children.liveCompletionBondCount = 1),
+          (children) => (children.liveCompletionBondPrincipal = 1n),
+          (children) =>
+            children.blockers.push({ kind: "malformed-completion-bond" }),
+        ]) {
+          const snapshot = safeSnapshot();
+          snapshot.taskSettlement.revision4BondPostEligibleTaskCount =
+            pauseGated || accepted ? 61 : 0;
+          mutate(snapshot.taskChildren);
+          const options = { bondEntryPauseGated: pauseGated };
+          await assert.rejects(
+            scanStableRevision5CompletionBondCutover(
+              {},
+              snapshot.disputes,
+              "predeploy",
+              bondScanners(snapshot),
+              options,
+            ),
+            /CompletionBond|task-child inventory/,
+          );
+          assert.throws(
+            () => assertRevision5CutoverResults(snapshot, "predeploy", options),
+            /CompletionBond|task-child inventory/,
+          );
+        }
+      }
+    }
+  } finally {
+    if (saved === undefined) delete process.env.AGENC_ACCEPT_BOND_RACE;
+    else process.env.AGENC_ACCEPT_BOND_RACE = saved;
+  }
+});
+
+test("predeploy approves the artifact before scanning, fresh rescan reclassifies, and prestamp passes true only after binary verification", () => {
+  const source = readFileSync(
+    new URL("./mainnet-upgrade.mjs", import.meta.url),
+    "utf8",
+  );
+  const preflight = source.slice(
+    source.indexOf("async function preflight("),
+    source.indexOf("function isProgramBinaryExactForSnapshot("),
+  );
+  assert.ok(
+    preflight.indexOf("readApprovedCutoverBinary(args)") <
+      preflight.indexOf("await verifyRevision5CutoverState("),
+  );
+  assert.ok(
+    preflight.indexOf(
+      "bondEntryPauseGatedForSnapshot(loaderSnapshot, approvedCutoverBinary)",
+    ) < preflight.indexOf("await verifyRevision5CutoverState("),
+  );
+  assert.match(
+    preflight,
+    /"Predeploy cutover snapshot",\s*\{[^}]*bondEntryPauseGated,/,
+  );
+  assert.ok(
+    preflight.indexOf("// (a) Artifacts exist") >
+      preflight.indexOf("await verifyRevision5CutoverState("),
+  );
+  assert.match(
+    source,
+    /"Immediate predeploy rescan",\s*\{[^}]*bondEntryPauseGated:\s*bondEntryPauseGatedForSnapshot\(immediatePreUpgradeLoader, pf\)/,
+  );
+  const prestamp = source.slice(
+    source.indexOf(
+      "if (!isProgramBinaryExactForSnapshot(prestampLoaderBefore, pf))",
+    ),
+  );
+  assert.ok(prestamp.length > 0);
+  assert.match(
+    prestamp,
+    /"Postdeploy\/prestamp rescan",\s*\{\s*minContextSlot: prestampLoaderBefore.contextSlot,\s*bondEntryPauseGated: true\s*\}/,
+  );
+  assert.match(
+    source,
+    /const options = \{ repairAllowance, bondEntryPauseGated \}/,
   );
 });

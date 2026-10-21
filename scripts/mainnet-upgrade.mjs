@@ -2610,10 +2610,58 @@ export function assertRevision5DisputeCutover(
   }
 }
 
-export function assertRevision4BondEntryClosed(
-  taskSettlement,
-  stage = "Revision-5 cutover",
+// Revision 5 added the entry pause check. Keep this hash tied to the reviewed
+// incident record, not to the mutable on-chain surface revision stamp.
+export const REVIEWED_REVISION5_PAYLOAD_SHA256 =
+  "049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2";
+
+export function isBondEntryPauseGatedForPayload(
+  livePayloadSha256,
+  approvedBinaryAlreadyLive = false,
 ) {
+  return (
+    livePayloadSha256 === REVIEWED_REVISION5_PAYLOAD_SHA256 ||
+    approvedBinaryAlreadyLive === true
+  );
+}
+
+export function bondEntryPauseGatedForSnapshot(snapshot, approvedBinary) {
+  const livePayloadSha256 = createHash("sha256")
+    .update(snapshot.payload)
+    .digest("hex");
+  return isBondEntryPauseGatedForPayload(
+    livePayloadSha256,
+    isProgramBinaryExactForSnapshot(snapshot, approvedBinary),
+  );
+}
+
+// The cutover runs before block (a). Read and approve the same SBF here so an
+// already-upgraded deployment can resume without a stale revision-4 entry gate.
+// Block (a) still performs its full independent artifact and capacity checks.
+export function readApprovedCutoverBinary(args) {
+  const soPath = expandHome(
+    args.so ||
+      process.env.SO_PATH ||
+      "programs/agenc-coordination/target/deploy/agenc_coordination.so",
+  );
+  const soAbs = path.isAbsolute(soPath) ? soPath : path.join(ROOT, soPath);
+  const soBytes = readFileSync(soAbs);
+  const soSha = createHash("sha256").update(soBytes).digest("hex");
+  const expectedSoSha = requiredSha256(
+    args,
+    "expected-so-sha256",
+    "EXPECTED_SO_SHA256",
+    ".so approval",
+  );
+  if (soBytes.length === 0 || soSha !== expectedSoSha) {
+    throw new Error(
+      `cutover .so sha256 ${soSha} != approved ${expectedSoSha}, or artifact is empty. Refusing.`,
+    );
+  }
+  return { soBytes, soSha };
+}
+
+function assertTaskSettlementCutoverSafe(taskSettlement, stage) {
   if (taskSettlement.blockers.length > 0) {
     const kinds = [
       ...new Set(taskSettlement.blockers.map((item) => item.kind)),
@@ -2623,6 +2671,21 @@ export function assertRevision4BondEntryClosed(
         `(${kinds.join(", ")}). Run scripts/preflight-task-settlement-scan.mjs and remediate before continuing.`,
     );
   }
+}
+
+function logPauseGatedBondEntry(taskSettlement, stage) {
+  assertTaskSettlementCutoverSafe(taskSettlement, stage);
+  info(
+    `${stage}: skipping revision-4 bond-entry eligibility gate: the verified live binary pause-gates post_completion_bond and ProtocolConfig is paused; ` +
+      `${taskSettlement.revision4BondPostEligibleTaskCount} revision-4-eligible task(s) cannot post a new bond. CompletionBond inventory remains required.`,
+  );
+}
+
+export function assertRevision4BondEntryClosed(
+  taskSettlement,
+  stage = "Revision-5 cutover",
+) {
+  assertTaskSettlementCutoverSafe(taskSettlement, stage);
   if (taskSettlement.revision4BondPostEligibleTaskCount !== 0) {
     throw new Error(
       `${stage}: cutover requires zero Tasks eligible for deployed revision-4 post_completion_bond; ` +
@@ -2660,9 +2723,9 @@ export function assertCompletionBondInventoryEmpty(
 /**
  * Establish the stable completion-bond cutover in its security-critical order:
  * zero Active disputes (no paused exit can restore a bond-eligible status), then
- * zero Tasks accepted by revision 4's unpaused bond entry, and only then the
- * final all-account CompletionBond inventory. Once the first two predicates are
- * true under protocol pause, an unprivileged caller cannot create a new bond.
+ * either a verified pause-gated bond entry or zero Tasks accepted by revision 4's
+ * unpaused entry, and only then the final all-account CompletionBond inventory.
+ * Under protocol pause these predicates prevent new bonds during the scan.
  */
 export async function scanStableRevision5CompletionBondCutover(
   connection,
@@ -2690,7 +2753,9 @@ export async function scanStableRevision5CompletionBondCutover(
   // migrate_task then refuses, leaving it un-migrated and recoverable via
   // reclaim_completion_bond — no fund loss. Set AGENC_ACCEPT_BOND_RACE=1 to
   // proceed. EVERY OTHER cutover gate remains fully enforced.
-  if (process.env.AGENC_ACCEPT_BOND_RACE === "1") {
+  if (options.bondEntryPauseGated === true) {
+    logPauseGatedBondEntry(taskSettlement, stage);
+  } else if (process.env.AGENC_ACCEPT_BOND_RACE === "1") {
     console.warn(
       `WARNING: ${stage}: BYPASSING assertRevision4BondEntryClosed by explicit ` +
         `operator acceptance (AGENC_ACCEPT_BOND_RACE=1). ` +
@@ -2957,7 +3022,9 @@ export function assertRevision5CutoverResults(
   // note at the first assertRevision4BondEntryClosed call site). Founder
   // accepted the bounded window-bond race (AGENC_ACCEPT_BOND_RACE=1); every
   // other cutover-result gate above remains enforced.
-  if (process.env.AGENC_ACCEPT_BOND_RACE === "1") {
+  if (options.bondEntryPauseGated === true) {
+    logPauseGatedBondEntry(taskSettlement, stage);
+  } else if (process.env.AGENC_ACCEPT_BOND_RACE === "1") {
     console.warn(
       `WARNING: ${stage}: BYPASSING assertRevision4BondEntryClosed (results) by explicit ` +
         `operator acceptance (AGENC_ACCEPT_BOND_RACE=1); ` +
@@ -2972,9 +3039,9 @@ export async function verifyRevision5CutoverState(
   rpcConnection,
   protocolPda,
   stage,
-  { minContextSlot = 0, repairAllowance } = {},
+  { minContextSlot = 0, repairAllowance, bondEntryPauseGated = false } = {},
 ) {
-  const options = { repairAllowance };
+  const options = { repairAllowance, bondEntryPauseGated };
   const pinned = await withPinnedRevision5CutoverContext(
     rpcConnection,
     protocolPda,
@@ -3268,11 +3335,14 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
     [Buffer.from("protocol")],
     PROGRAM_ID,
   );
+  const approvedCutoverBinary = readApprovedCutoverBinary(args);
+  const bondEntryPauseGated = bondEntryPauseGatedForSnapshot(loaderSnapshot, approvedCutoverBinary);
   const cutover = await verifyRevision5CutoverState(
     connection,
     protocolPda,
     "Predeploy cutover snapshot",
     { minContextSlot: loaderSnapshot.contextSlot,
+      bondEntryPauseGated,
       repairAllowance: createDisputeCounterRepairAllowance({
         livePayloadSha256: createHash("sha256").update(loaderSnapshot.payload).digest("hex"),
       }),
@@ -3340,7 +3410,7 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
     `bid-contract cutover passed (${cutover.bidContracts.openBidCount} open, ${cutover.bidContracts.acceptedCount} accepted, ${cutover.bidContracts.bondPrincipal} bonded lamports)`,
   );
   pf.checks.push(
-    `task-settlement cutover passed (${cutover.taskSettlement.collaborativeCount} collaborative, ${cutover.taskSettlement.activeFeeTaskCount} nonterminal fee-bearing, zero insolvent/aliased blockers, zero revision-4 bond-post-eligible Tasks)`,
+    `task-settlement cutover passed (${cutover.taskSettlement.collaborativeCount} collaborative, ${cutover.taskSettlement.activeFeeTaskCount} nonterminal fee-bearing, zero insolvent/aliased blockers, ${cutover.taskSettlement.revision4BondPostEligibleTaskCount} revision-4 bond-post-eligible Tasks, live bond entry pause-gated=${bondEntryPauseGated})`,
   );
 
   // (a) Artifacts exist and match independently reviewed, operator-supplied hashes.
@@ -5038,6 +5108,7 @@ async function main() {
         pf.protocolPda,
         "Immediate predeploy rescan",
         { minContextSlot: immediatePreUpgradeLoader.contextSlot,
+          bondEntryPauseGated: bondEntryPauseGatedForSnapshot(immediatePreUpgradeLoader, pf),
           repairAllowance: createDisputeCounterRepairAllowance({
             livePayloadSha256: createHash("sha256").update(immediatePreUpgradeLoader.payload).digest("hex"),
           }),
@@ -5178,7 +5249,7 @@ async function main() {
         connection,
         pf.protocolPda,
         "Postdeploy/prestamp rescan",
-        { minContextSlot: prestampLoaderBefore.contextSlot },
+        { minContextSlot: prestampLoaderBefore.contextSlot, bondEntryPauseGated: true },
       );
       const prestampLoaderAfter = await readVerifiedLoaderSnapshot(
         connection,

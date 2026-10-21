@@ -149,3 +149,21 @@ reproduce the historical state by changing only the two counter bytes from 2/2
 to 1/1. The test executes both exported phases and checks the complete final
 state. Local genesis and executable checks are injected into exported helpers;
 the CLI has no switch to bypass its mainnet or artifact checks.
+
+## Completion-bond cutover gate
+
+The revision-4 eligibility predicate is required only when the live binary can
+post a completion bond while paused. The reviewed revision-5 payload and the
+approved candidate both reject this entry while the protocol is paused. The
+release rail recognizes revision 5 by the payload hash in the remediation record,
+not by the mutable surface stamp. It recognizes the approved candidate by reading
+and hash-verifying the approved SBF before the first cutover scan, then matching
+the live payload with the same exact bytes and zero-padding rule used for deploy
+verification. Block (a) retains its independent artifact checks.
+
+Both predeploy scans classify their own loader snapshot. Unknown payloads retain
+the revision-4 gate and its existing explicit bond-race opt-in. Postdeploy/prestamp
+uses the pause-gated path only after verifying the approved binary is live.
+Settlement safety checks and the zero live CompletionBond inventory remain
+required. A pause-gated binary permits a nonzero revision-4 eligibility count,
+such as the reviewed inventory of 61 tasks, without permitting live bond principal.
