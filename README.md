@@ -54,15 +54,15 @@ The protocol covers that lifecycle plus advanced primitives:
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
   governance (multisig), and a social feed** round out the surface. The live
-  default production surface and committed IDL contain **101 instructions**;
-  the restricted canary remains 25 and explicit private-ZK development is 104.
+  default production surface and committed IDL contain **104 instructions**;
+  the restricted canary remains 25 and explicit private-ZK development is 107.
 
-> **Build surfaces.** `lib.rs` has a default production module (101 instructions in
-> live revision 5) and a conservative **mainnet-canary** module (the
+> **Build surfaces.** `lib.rs` has a default production module (104 instructions in
+> live revision 8) and a conservative **mainnet-canary** module (the
 > frozen 25-instruction build). Enabling `private-zk` adds three quarantined
-> development instructions to production, yielding 104; deployment rails reject
-> that feature for a production release. Mainnet runs the 101-instruction
-> revision-5 binary as of 2026-07-22.
+> development instructions to production, yielding 107; deployment rails reject
+> that feature for a production release. Mainnet runs the 104-instruction
+> revision-8 binary as of 2026-10-28.
 
 ## Mainnet source of truth
 
@@ -71,19 +71,22 @@ currently deployed AgenC mainnet program. The authoritative deployed commit and 
 record are maintained in:
 [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md).
 
-> **As of 2026-07-22 the full 101-instruction revision-5 surface is live on mainnet**
-> (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`, deployed executable
-> SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, all task
+> **As of 2026-10-28 the full 104-instruction revision-8 surface is live on mainnet**
+> (`surface_revision = 8` / `SURFACE_REVISION_FEE_QUALIFIED_RATINGS`, release commit
+> `f39b383e416ec5bc511b0ffb781481a658d137d8`, normalized executable hash
+> `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`, all task
 > types enabled, bid marketplace live, store + contest + goods live. Private-ZK
 > instructions are absent from the production ABI). Growth path: 25-ix canary → 84-ix full surface
 > (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4
-> → 101-ix revision 5 (2026-07-22, O(1) bid-accept redesign).
+> → 101-ix revision 5 (2026-07-22, O(1) bid-accept redesign) → 104-ix revision 8
+> (2026-10-28: wallet feed votes, opt-in task quotas, fee-qualified ratings).
 > Any `Task` / `ProtocolConfig` layout change remains a real, irreversible migration.
 
-- The deployed mainnet binary is revision 5 (executable SHA-256
-  `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, deployed
-  2026-07-22 via the Squads v4 2-of-3 vault). Earlier working-tree candidate hashes
-  in dated evidence snapshots below predate this deployed build.
+- The deployed mainnet binary is revision 8 (release ELF SHA-256
+  `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`, deployment
+  slot 462468899, deployed 2026-10-28 via the Squads v4 2-of-3 vault). Earlier
+  working-tree candidate hashes in dated evidence snapshots below predate this
+  deployed build.
 - See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md),
   [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md) (the completed rollout
   record), and [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md).
@@ -193,9 +196,9 @@ implemented and gated ([enterprise remediation record](docs/audit/ENTERPRISE_REM
 criteria); accepted trade-offs are recorded in
 [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md).
 
-That 2026-07-19 snapshot is historical. The live revision-5 binary (deployed
-2026-07-22) is 2,303,608 bytes, SHA-256
-`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`. Dated later
+That 2026-07-19 snapshot is historical. The live revision-8 binary (deployed
+2026-10-28) is 2,075,896 bytes, SHA-256
+`0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`. Dated later
 gate tables, including the 2026-07-21 candidate run, live in
 [docs/VALIDATION.md](docs/VALIDATION.md). Re-run those commands before claiming
 a current local total. The `5112216b…` / 2,285,640-byte identity was a
@@ -261,12 +264,11 @@ The program custodies escrow, completion bonds, and agent stakes. Trust
 artifacts (PLAN.md Phase 8):
 
 - **Verifiable builds** — the deployed program is built reproducibly from this
-  public repo. The prior OtterSec badge
+  public repo. The OtterSec badge
   ([verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK))
-  reported `is_verified: true` for deployed revision 4 at commit `097ded1`
-  (verified 2026-07-10); revision 5 (deployed 2026-07-22, executable SHA-256
-  `049a66…`) needs the reusable verifiable build re-run to re-attest the new
-  bytecode. Every `protocol-v*` release requires a successful
+  reports `is_verified: true` for the deployed revision 8 at commit `f39b383`
+  (normalized executable hash `ffb8f3cb…`, verified 2026-10-28). Every
+  `protocol-v*` release requires a successful
   reusable verifiable build and records reproducible SHA-256 hashes of the program
   built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
   yourself with `solana-verify verify-from-repo` — see
@@ -285,7 +287,7 @@ artifacts (PLAN.md Phase 8):
   tetsuo-ai hosted dependencies** (own RPC, gPA reads, own moderation key,
   self-chosen artifact storage, on-chain settlement). The runtime independence
   is proven, and the once-deferred pillars have shipped: public source,
-  OtterSec-attested revision 4 (revision 5 still needs re-attest), Squads
+  the OtterSec-attested revision 8, Squads
   multisig custody, permissionless moderation (bonded self-registration on
   the attestor roster). See
   [docs/CREDIBLE_EXIT.md](docs/CREDIBLE_EXIT.md) (run it:
@@ -314,7 +316,7 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)                                         | Accepted design decisions (do not re-file) with rationale                                       |
 | [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md)                                   | SDK build/automation plan + status                                                              |
 | [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md)                                         | Deployed source-of-truth + branch policy                                                        |
-| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge attested revision 4; revision 5 still needs re-attest) |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge attests the deployed revision 8) |
 | [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md)                                       | How `anchor build` output becomes published artifacts                                           |
 | [docs/VALIDATION.md](docs/VALIDATION.md)                                                     | Local toolchain + CI-equivalent commands                                                        |
 | [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                                     | Reviewed-completion validation model                                                            |

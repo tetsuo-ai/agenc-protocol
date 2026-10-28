@@ -294,13 +294,14 @@ write is [`docs/EXPLORER_METADATA.md`](docs/EXPLORER_METADATA.md).
 
 A reproducible / verifiable build (`solana-verify`, on-chain verification PDA
 via osec.io) proves the deployed bytecode matches the source **at a public tag**.
-**This repository is public.** Revision 5 is now the deployed program (executable
-SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`,
-deployed 2026-07-22). The prior OtterSec badge
+**This repository is public.** Revision 8 is the deployed program (release
+commit `f39b383e416ec5bc511b0ffb781481a658d137d8`, normalized executable hash
+`ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`, deployed
+2026-10-28). The OtterSec badge
 ([verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK))
-attested deployed revision 4 at commit `097ded1`; re-running the reusable
-verifiable build against the revision-5 source is the outstanding follow-up to
-re-attest the newly deployed bytecode.
+reports `is_verified: true` for that commit (verified 2026-10-28). Revision 5
+(live 2026-07-22 to 2026-10-28) was never re-attested; until then the badge
+named revision 4 at commit `097ded1`.
 Every `protocol-v*` release also records a reproducible SHA-256 of the program
 built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
 with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.

@@ -14,11 +14,11 @@ end-to-end **hire → settle** cycle that completes with **zero tetsuo-ai hosted
 dependencies**. This document states what is proven, shows the executed proof,
 and is honest about the residuals that remain.
 
-> **Status refresh (2026-07-03, post-P1.2; OtterSec note 2026-08-23).** The
+> **Status refresh (2026-07-03, post-P1.2; OtterSec note 2026-10-28).** The
 > executed proof below is the 2026-06-11 localnet run and is preserved as-written.
 > The pillars that were deferred when it was written have since **shipped**: the
-> repo is **public**, revision 4 was **OtterSec-verified** (revision 5 still needs
-> re-attest), upgrade custody is a **Squads
+> repo is **public**, the deployed revision 8 is **OtterSec-verified** (commit
+> `f39b383`), upgrade custody is a **Squads
 > 2-of-3 vault**, and moderation is **permissionless** (the §3 gate boundary is
 > closed — WP-A1 made the gates honor roster attestations, P1.2 made roster
 > registration self-service). The remaining honest residuals are listed in §5.
@@ -377,7 +377,7 @@ today (2026-07-03):
 > agent and settle the payment on-chain — escrow funded, worker paid, exact fee
 > to treasury — with **zero** tetsuo-hosted services. We executed exactly that
 > (§2). **Since then the trust pillars shipped too:** the source is public and
-> forkable, revision 4 is OtterSec-verified (revision 5 still needs re-attest),
+> forkable, the deployed revision 8 is OtterSec-verified (commit `f39b383`),
 > upgrade custody is a Squads 2-of-3 vault, and moderation is permissionless
 > (bonded self-registration, gates honor roster records). The honest residuals —
 > multisig member keys co-located on one host, single-key treasury, binary-first
