@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
 import { getAddressEncoder } from "@solana/kit";
 import {
@@ -10,6 +19,7 @@ import {
   PROGRAM_ID,
   UPGRADEABLE_LOADER,
   assertIndependentCutoverEvidence,
+  assertReleaseCommitPreservesVerifiedProgram,
   assertVerifiedBuildStatus,
   assertVerifiableBuildManifest,
   deriveProtocolConfigAddress,
@@ -48,6 +58,7 @@ const workspaceManifests = new Map(
     ]),
   ),
 );
+const execFileAsync = promisify(execFile);
 const HASH = "ab".repeat(32);
 const COMMIT = "12".repeat(20);
 
@@ -804,4 +815,367 @@ test("release state matrix resumes safely and rejects inconsistent public state"
     () => planReleaseState({ releaseState: "draft", npmState: "mismatch" }),
     /integrity differs/,
   );
+});
+
+test("verified-build status accepts the registry's tree URL only for the exact commit", () => {
+  const status = {
+    is_verified: true,
+    on_chain_hash: HASH,
+    executable_hash: HASH,
+    commit: COMMIT,
+    // The live verify.osec.io records name the verified tree, not the bare repo.
+    repo_url: `https://github.com/tetsuo-ai/agenc-protocol/tree/${COMMIT}`,
+  };
+  assert.ok(
+    assertVerifiedBuildStatus([status], {
+      expectedHash: HASH,
+      expectedCommit: COMMIT,
+    }),
+  );
+  assert.ok(
+    assertVerifiedBuildStatus(
+      [
+        {
+          ...status,
+          repo_url: `https://github.com/tetsuo-ai/agenc-protocol/tree/${COMMIT.toUpperCase()}/`,
+        },
+      ],
+      { expectedHash: HASH, expectedCommit: COMMIT },
+    ),
+  );
+  for (const repo_url of [
+    `https://github.com/tetsuo-ai/agenc-protocol/tree/${"34".repeat(20)}`,
+    `https://github.com/tetsuo-ai/agenc-protocol/tree/main`,
+    `https://github.com/tetsuo-ai/agenc-protocol-fork/tree/${COMMIT}`,
+    `https://github.com/tetsuo-ai/agenc-protocol/blob/${COMMIT}`,
+    `https://github.com/tetsuo-ai/agenc-protocol/tree/${COMMIT}/programs`,
+  ]) {
+    assert.throws(
+      () =>
+        assertVerifiedBuildStatus([{ ...status, repo_url }], {
+          expectedHash: HASH,
+          expectedCommit: COMMIT,
+        }),
+      /no verified-build record/,
+      repo_url,
+    );
+  }
+});
+
+const PROGRAM_FIXTURE_FILES = {
+  "Anchor.toml": '[toolchain]\nanchor_version = "0.32.1"\n',
+  "rust-toolchain.toml": '[toolchain]\nchannel = "1.85.0"\n',
+  "programs/agenc-coordination/Cargo.toml":
+    '[package]\nname = "agenc-coordination"\n',
+  "programs/agenc-coordination/Cargo.lock": "# lock v1\n",
+  "programs/agenc-coordination/src/lib.rs": "pub fn entry() {}\n",
+  "programs/agenc-coordination/README.md": "# program\n",
+  "programs/agenc-coordination/security.json": '{"version":"8"}\n',
+  "programs/agenc-coordination/fuzz/Cargo.lock": "# fuzz lock v1\n",
+  "artifacts/anchor/idl/agenc_coordination.json": '{"instructions":[]}\n',
+  "artifacts/anchor/manifest.json": '{"idl":"v1"}\n',
+  "packages/protocol/src/generated/agenc_coordination.json":
+    '{"instructions":[]}\n',
+  "packages/protocol/package.json": '{"version":"0.4.0"}\n',
+  "docs/VERSIONING.md": "# versions\n",
+};
+
+async function createProgramFixtureRepository() {
+  const directory = await mkdtemp(join(tmpdir(), "agenc-release-commit-"));
+  const git = async (args) => {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        [
+          "-c",
+          "user.name=AgenC release test",
+          "-c",
+          "user.email=release-test@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "init.defaultBranch=main",
+          ...args,
+        ],
+        { cwd: directory, encoding: "utf8" },
+      );
+      return { code: 0, stdout };
+    } catch (error) {
+      if (Number.isInteger(error?.code)) {
+        return {
+          code: error.code,
+          stdout: String(error.stdout ?? ""),
+          stderr: String(error.stderr ?? ""),
+        };
+      }
+      throw error;
+    }
+  };
+  const write = async (files) => {
+    for (const [path, contents] of Object.entries(files)) {
+      await mkdir(dirname(join(directory, path)), { recursive: true });
+      await writeFile(join(directory, path), contents);
+    }
+  };
+  const commit = async (message) => {
+    const added = await git(["add", "--all"]);
+    assert.equal(added.code, 0, `${message}: ${added.stderr ?? ""}`);
+    const committed = await git(["commit", "--quiet", "-m", message]);
+    assert.equal(
+      committed.code,
+      0,
+      `${message}: ${committed.stdout}${committed.stderr ?? ""}`,
+    );
+    return (await git(["rev-parse", "HEAD"])).stdout.trim();
+  };
+  assert.equal((await git(["init", "--quiet"])).code, 0);
+  await write({ "docs/HISTORY.md": "# before the release\n" });
+  const parent = await commit("pre-release history");
+  await write(PROGRAM_FIXTURE_FILES);
+  const verified = await commit("verified deployment source");
+  return { directory, git, write, commit, parent, verified };
+}
+
+test("a protocol release commit may only descend from the verified commit with byte-identical program inputs", async () => {
+  const repo = await createProgramFixtureRepository();
+  try {
+    const check = (releaseCommit) =>
+      assertReleaseCommitPreservesVerifiedProgram({
+        verifiedCommit: repo.verified,
+        releaseCommit,
+        git: repo.git,
+      });
+
+    // Release preparation that leaves every build input alone is accepted:
+    // package metadata, docs, the explorer security document, the program
+    // README and the separate fuzz crate lock are not program build inputs.
+    await repo.write({
+      "packages/protocol/package.json": '{"version":"0.5.0"}\n',
+      "docs/VERSIONING.md": "# versions\nrevision 8\n",
+      "programs/agenc-coordination/security.json": '{"version":"8.1"}\n',
+      "programs/agenc-coordination/README.md": "# program\nupdated\n",
+      "programs/agenc-coordination/fuzz/Cargo.lock": "# fuzz lock v2\n",
+    });
+    const preparation = await repo.commit("release preparation");
+    assert.equal(await check(preparation), true);
+
+    // Every program-source, lockfile, toolchain or IDL change is rejected,
+    // including a newly added build input and a file-mode-only change.
+    const rejected = [
+      [
+        "program source",
+        {
+          "programs/agenc-coordination/src/lib.rs":
+            "pub fn entry() { let _ = 1; }\n",
+        },
+      ],
+      [
+        "new program module",
+        { "programs/agenc-coordination/src/extra.rs": "pub fn extra() {}\n" },
+      ],
+      [
+        "program manifest",
+        {
+          "programs/agenc-coordination/Cargo.toml":
+            '[package]\nname = "agenc-coordination"\nversion = "0.1.1"\n',
+        },
+      ],
+      [
+        "program lockfile",
+        { "programs/agenc-coordination/Cargo.lock": "# lock v2\n" },
+      ],
+      [
+        "new crate build script",
+        { "programs/agenc-coordination/build.rs": "fn main() {}\n" },
+      ],
+      [
+        "crate cargo config",
+        { "programs/agenc-coordination/.cargo/config.toml": "[build]\n" },
+      ],
+      ["root cargo config", { ".cargo/config.toml": "[build]\n" }],
+      ["root cargo manifest", { "Cargo.toml": "[workspace]\n" }],
+      [
+        "toolchain",
+        { "rust-toolchain.toml": '[toolchain]\nchannel = "1.86.0"\n' },
+      ],
+      [
+        "anchor config",
+        { "Anchor.toml": '[toolchain]\nanchor_version = "0.32.2"\n' },
+      ],
+      [
+        "committed IDL",
+        {
+          "artifacts/anchor/idl/agenc_coordination.json":
+            '{"instructions":[1]}\n',
+        },
+      ],
+      [
+        "artifact manifest",
+        { "artifacts/anchor/manifest.json": '{"idl":"v2"}\n' },
+      ],
+      [
+        "shipped protocol IDL",
+        {
+          "packages/protocol/src/generated/agenc_coordination.json":
+            '{"instructions":[1]}\n',
+        },
+      ],
+    ];
+    for (const [label, files] of rejected) {
+      assert.equal(
+        (await repo.git(["checkout", "--quiet", preparation])).code,
+        0,
+      );
+      await repo.write(files);
+      const changed = await repo.commit(`change ${label}`);
+      await assert.rejects(
+        check(changed),
+        /changes program build input|adds, removes or changes/,
+        label,
+      );
+    }
+
+    assert.equal(
+      (await repo.git(["checkout", "--quiet", preparation])).code,
+      0,
+    );
+    await chmod(
+      join(repo.directory, "programs/agenc-coordination/src/lib.rs"),
+      0o755,
+    );
+    const modeChange = await repo.commit("mode-only change");
+    await assert.rejects(check(modeChange), /changes program build input/);
+
+    assert.equal(
+      (await repo.git(["checkout", "--quiet", preparation])).code,
+      0,
+    );
+    assert.equal(
+      (
+        await repo.git([
+          "rm",
+          "--quiet",
+          "programs/agenc-coordination/Cargo.lock",
+        ])
+      ).code,
+      0,
+    );
+    const removed = await repo.commit("remove the program lockfile");
+    await assert.rejects(check(removed), /changes program build input/);
+
+    // A commit that does not descend from the verified commit is rejected even
+    // when its program inputs match.
+    assert.equal(
+      (await repo.git(["checkout", "--quiet", repo.parent])).code,
+      0,
+    );
+    await repo.write(PROGRAM_FIXTURE_FILES);
+    const sibling = await repo.commit("identical inputs on another branch");
+    await assert.rejects(
+      check(sibling),
+      /does not descend from the verified source commit/,
+    );
+
+    await assert.rejects(
+      check("ab".repeat(20)),
+      /is not available in this checkout/,
+    );
+    await assert.rejects(check("not-a-commit"), /40-character Git object IDs/);
+  } finally {
+    await rm(repo.directory, { recursive: true, force: true });
+  }
+});
+
+test("stable protocol cutover from a descendant release commit binds the rebuilt tag commit", async () => {
+  const repo = await createProgramFixtureRepository();
+  try {
+    await repo.write({
+      "packages/protocol/package.json": '{"version":"0.5.0"}\n',
+    });
+    const releaseCommit = await repo.commit("release preparation");
+    const release = resolveReleaseTag("protocol-v0.5.0", train);
+    const environment = {
+      AGENC_MAINNET_RPC_URLS_JSON: JSON.stringify([
+        "https://rpc-one.example",
+        "https://rpc-two.example",
+      ]),
+      EXPECTED_MAINNET_PROGRAM_SHA256: HASH,
+      EXPECTED_VERIFIED_SOURCE_COMMIT: repo.verified,
+      GITHUB_SHA: releaseCommit,
+      VERIFIABLE_BUILD_MANIFEST: "reviewed-hashes.txt",
+      VERIFICATION_STATUS_BASE_URL: "https://verify.example",
+    };
+    const manifestFor = (commit) =>
+      `# Git commit: ${commit}\nproduction (default features):\n  ${HASH}\n`;
+    const evidence = async ({ url }) => ({
+      genesis: MAINNET_GENESIS,
+      slot: url.includes("one") ? 201 : 202,
+      programDataAddress: "program-data",
+      executableHash: HASH,
+      surfaceRevision: train.surfaceRevision,
+    });
+    const registry = async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return [
+          {
+            is_verified: true,
+            on_chain_hash: HASH,
+            executable_hash: HASH,
+            commit: repo.verified,
+            repo_url: `https://github.com/tetsuo-ai/agenc-protocol/tree/${repo.verified}`,
+          },
+        ];
+      },
+    });
+    const result = await verifyStableCutover({
+      release,
+      train,
+      environment,
+      readFileFn: async () => manifestFor(releaseCommit),
+      readEvidenceFn: evidence,
+      fetchFn: registry,
+      gitFn: repo.git,
+    });
+    assert.deepEqual(result.finalizedSlots, [201, 202]);
+
+    // verify.yml rebuilds the tag commit, so a manifest naming only the
+    // verified commit no longer proves the tagged tree.
+    await assert.rejects(
+      verifyStableCutover({
+        release,
+        train,
+        environment,
+        readFileFn: async () => manifestFor(repo.verified),
+        readEvidenceFn: evidence,
+        fetchFn: registry,
+        gitFn: repo.git,
+      }),
+      /does not bind the expected source commit/,
+    );
+
+    await repo.write({
+      "programs/agenc-coordination/src/lib.rs":
+        "pub fn entry() { let _ = 2; }\n",
+    });
+    const changedProgram = await repo.commit(
+      "program change after verification",
+    );
+    await assert.rejects(
+      verifyStableCutover({
+        release,
+        train,
+        environment: { ...environment, GITHUB_SHA: changedProgram },
+        readFileFn: async () => manifestFor(changedProgram),
+        readEvidenceFn: async () =>
+          assert.fail("RPC evidence must not be read"),
+        fetchFn: async () => assert.fail("verification must not be fetched"),
+        gitFn: repo.git,
+      }),
+      /changes program build input/,
+    );
+  } finally {
+    await rm(repo.directory, { recursive: true, force: true });
+  }
 });

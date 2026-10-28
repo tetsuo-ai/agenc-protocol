@@ -841,15 +841,29 @@ export function assertVerifiedBuildStatus(
   if (!Array.isArray(statuses))
     fail("verified-build status response must be an array");
   const normalizedRepository = expectedRepository.replace(/\/?(?:\.git)?$/, "");
-  const match = statuses.find(
-    (status) =>
+  // verify.osec.io reports repo_url as `<repository>/tree/<commit>`. Accept
+  // that form only for the exact expected commit, or the bare repository.
+  const acceptedRepositoryUrls = new Set([
+    normalizedRepository,
+    `${normalizedRepository}/tree/${expectedCommit.toLowerCase()}`,
+  ]);
+  const match = statuses.find((status) => {
+    const repositoryUrl = String(status?.repo_url).replace(
+      /\/?(?:\.git)?$/,
+      "",
+    );
+    const treeMatch = /^(.*\/tree\/)([0-9a-f]{40})$/i.exec(repositoryUrl);
+    const canonicalUrl = treeMatch
+      ? `${treeMatch[1]}${treeMatch[2].toLowerCase()}`
+      : repositoryUrl;
+    return (
       status?.is_verified === true &&
       String(status.on_chain_hash).toLowerCase() === hash &&
       String(status.executable_hash).toLowerCase() === hash &&
       String(status.commit).toLowerCase() === expectedCommit.toLowerCase() &&
-      String(status.repo_url).replace(/\/?(?:\.git)?$/, "") ===
-        normalizedRepository,
-  );
+      acceptedRepositoryUrls.has(canonicalUrl)
+    );
+  });
   if (!match)
     fail(
       "no verified-build record binds the expected repo commit and live hash",
@@ -881,6 +895,138 @@ export function assertVerifiableBuildManifest(
   return true;
 }
 
+// Inputs of the verified on-chain build and of the published IDL. A protocol
+// release commit that is not the verified commit itself must carry every one
+// of them byte for byte. Entries are compared as git tree records (mode, type
+// and object id), so content, file modes, additions and removals all count.
+// Inside the program crate only the listed non-build entries may differ.
+export const VERIFIED_PROGRAM_CRATE = "programs/agenc-coordination";
+export const VERIFIED_PROGRAM_CRATE_NON_BUILD_ENTRIES = Object.freeze([
+  "README.md",
+  "fuzz",
+  "security.json",
+]);
+export const VERIFIED_PROGRAM_REQUIRED_INPUTS = Object.freeze([
+  "Anchor.toml",
+  "rust-toolchain.toml",
+  `${VERIFIED_PROGRAM_CRATE}/Cargo.toml`,
+  `${VERIFIED_PROGRAM_CRATE}/Cargo.lock`,
+  `${VERIFIED_PROGRAM_CRATE}/src`,
+  "artifacts/anchor",
+  "packages/protocol/src/generated",
+]);
+// Root build configuration that must stay absent or unchanged.
+export const VERIFIED_PROGRAM_OPTIONAL_INPUTS = Object.freeze([
+  ".cargo",
+  "Cargo.toml",
+  "Cargo.lock",
+]);
+const GIT_OBJECT_ID = /^[0-9a-f]{40}$/;
+
+export async function runRepositoryGit(args) {
+  try {
+    const { stdout } = await execFile("git", args, {
+      cwd: fileURLToPath(ROOT),
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return { code: 0, stdout };
+  } catch (error) {
+    if (Number.isInteger(error?.code)) {
+      return { code: error.code, stdout: String(error.stdout ?? "") };
+    }
+    throw error;
+  }
+}
+
+async function gitTreeRecords(git, commit, path) {
+  const result = await git(["ls-tree", "--full-tree", commit, "--", path]);
+  if (result?.code !== 0 || typeof result.stdout !== "string") {
+    fail(`cannot read ${path} at ${commit}`);
+  }
+  return result.stdout;
+}
+
+export async function assertReleaseCommitPreservesVerifiedProgram({
+  verifiedCommit,
+  releaseCommit,
+  git = runRepositoryGit,
+}) {
+  const verified = String(verifiedCommit ?? "").toLowerCase();
+  const release = String(releaseCommit ?? "").toLowerCase();
+  if (!GIT_OBJECT_ID.test(verified) || !GIT_OBJECT_ID.test(release)) {
+    fail("verified and release commits must be 40-character Git object IDs");
+  }
+  for (const commit of [verified, release]) {
+    const resolved = await git([
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${commit}^{commit}`,
+    ]);
+    if (resolved?.code !== 0 || String(resolved.stdout).trim() !== commit) {
+      fail(`commit ${commit} is not available in this checkout`);
+    }
+  }
+  const ancestry = await git([
+    "merge-base",
+    "--is-ancestor",
+    verified,
+    release,
+  ]);
+  if (ancestry?.code === 1) {
+    fail(
+      "protocol release commit does not descend from the verified source commit",
+    );
+  }
+  if (ancestry?.code !== 0) {
+    fail(
+      "cannot determine whether the release commit descends from the verified source commit",
+    );
+  }
+  for (const path of VERIFIED_PROGRAM_REQUIRED_INPUTS) {
+    const verifiedRecord = await gitTreeRecords(git, verified, path);
+    if (verifiedRecord.trim() === "") {
+      fail(`verified source commit has no program build input ${path}`);
+    }
+    if ((await gitTreeRecords(git, release, path)) !== verifiedRecord) {
+      fail(`protocol release commit changes program build input ${path}`);
+    }
+  }
+  for (const path of VERIFIED_PROGRAM_OPTIONAL_INPUTS) {
+    if (
+      (await gitTreeRecords(git, release, path)) !==
+      (await gitTreeRecords(git, verified, path))
+    ) {
+      fail(`protocol release commit changes program build input ${path}`);
+    }
+  }
+  const crateBuildRecords = async (commit) =>
+    (await gitTreeRecords(git, commit, `${VERIFIED_PROGRAM_CRATE}/`))
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .filter((line) => {
+        const path = line.slice(line.indexOf("\t") + 1);
+        const name = path.slice(VERIFIED_PROGRAM_CRATE.length + 1);
+        return !VERIFIED_PROGRAM_CRATE_NON_BUILD_ENTRIES.includes(name);
+      });
+  const verifiedCrate = await crateBuildRecords(verified);
+  if (verifiedCrate.length === 0) {
+    fail(
+      `verified source commit has no ${VERIFIED_PROGRAM_CRATE} build inputs`,
+    );
+  }
+  if (
+    JSON.stringify(await crateBuildRecords(release)) !==
+    JSON.stringify(verifiedCrate)
+  ) {
+    fail(
+      `protocol release commit adds, removes or changes ${VERIFIED_PROGRAM_CRATE} build inputs`,
+    );
+  }
+  return true;
+}
+
 export async function verifyStableCutover({
   release,
   train,
@@ -888,6 +1034,7 @@ export async function verifyStableCutover({
   readFileFn = readFile,
   fetchFn = fetch,
   readEvidenceFn = readFinalizedCutoverEvidence,
+  gitFn = runRepositoryGit,
 }) {
   if (release?.prerelease) {
     return Object.freeze({ prerelease: true });
@@ -936,17 +1083,25 @@ export async function verifyStableCutover({
   if (release?.id === "protocol") {
     const githubSha = requireValue(environment.GITHUB_SHA, "GITHUB_SHA");
     if (expectedCommit.toLowerCase() !== githubSha.toLowerCase()) {
-      fail(
-        "protocol stable release requires verified source commit to equal GITHUB_SHA",
-      );
+      // A release-preparation commit (version bump, changelog, release train)
+      // may follow the verified deployment commit. It is accepted only when
+      // it descends from that commit and every program build input, both
+      // lockfile and committed IDL artifact is byte-identical to it.
+      await assertReleaseCommitPreservesVerifiedProgram({
+        verifiedCommit: expectedCommit,
+        releaseCommit: githubSha,
+        git: gitFn,
+      });
     }
     const manifestPath = requireValue(
       environment.VERIFIABLE_BUILD_MANIFEST,
       "VERIFIABLE_BUILD_MANIFEST",
     );
+    // verify.yml rebuilds the tagged commit itself, so its manifest must bind
+    // GITHUB_SHA. When GITHUB_SHA is the verified commit this is unchanged.
     assertVerifiableBuildManifest(await readFileFn(manifestPath, "utf8"), {
       expectedHash,
-      expectedCommit,
+      expectedCommit: githubSha,
     });
   }
   const evidence = await Promise.all(
