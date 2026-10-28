@@ -5,6 +5,13 @@ All notable changes to `@tetsuo-ai/marketplace-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0
+
+This release depends on `@tetsuo-ai/marketplace-tools@^0.6.0` and
+`@tetsuo-ai/marketplace-sdk@^0.13.0` and belongs to the coordinated revision-8
+package set (deployed 2026-10-28). The MCP tool surface is unchanged. Older
+0.5.0 is the superseded revision-5 pin.
+
 ## 0.5.0 (published 2026-07-22)
 
 ### Release coordination

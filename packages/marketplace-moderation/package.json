@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/marketplace-moderation",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Open MIT reference of the AgenC task-moderation payload canonicalization (agenc-task-moderation-c14n-v1) — compute the moderationPayloadHash the attestation backend re-derives and requires",
   "packageManager": "npm@11.18.0",
   "type": "module",

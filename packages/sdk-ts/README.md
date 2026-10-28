@@ -269,15 +269,18 @@ pin a moderated job spec → claim → submit → accept/close/rate) is in
 [`examples/embeddable-marketplace.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/embeddable-marketplace.ts), and the
 getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
 
-### Workspace status (revision 5)
+### Workspace status (revision 8)
 
-- Published package version is `0.12.0` (npm, 2026-07-22).
-- Generated client covers the live **101-instruction** revision-5 IDL.
-- The older 0.11.0 package targets the superseded 99-instruction revision-4 wire
-  and fails closed against the live program. Pre-1.0 versioning still applies.
+- Package version `0.13.0` is released for the revision-8 program (deployed
+  2026-10-28).
+- Generated client covers the live **104-instruction** revision-8 IDL.
+  `SURFACE_REVISION_CURRENT` is 8 (`SURFACE_REVISION_FEE_QUALIFIED_RATINGS`).
+- The older 0.12.0 package targets the superseded 101-instruction revision-5
+  wire; its changed writes, such as the legacy feed vote, fail closed against
+  the live program. Pre-1.0 versioning still applies.
 - Facade intentionally omits bare `claim_task` (program fail-closed).
   `complete_task_private` is not in the production IDL; it exists only in the
-  unsupported 104-instruction `private-zk` development build.
+  unsupported 107-instruction `private-zk` development build.
 
 ### Historical transaction backfills
 

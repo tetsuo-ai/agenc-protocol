@@ -1,5 +1,14 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.6.0
+
+Released with the coordinated revision-8 package set (deployed 2026-10-28).
+
+### Breaking changes
+
+- Require the revision-8 SDK peer (`@tetsuo-ai/marketplace-sdk@^0.13.0`). The
+  hooks and components are unchanged; React 0.5.0 stays the revision-5 pin.
+
 ## 0.5.0 (published 2026-07-22)
 
 ### Breaking Changes

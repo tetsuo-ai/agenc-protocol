@@ -1847,8 +1847,8 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     expect(pkg.private).toBe(true);
     // Deps pinned inside the support matrix so `npm install` works HERE
     // (no hoisting into an ancestor) and `agenc promote` finds the sdk.
-    expect(pkg.dependencies["@tetsuo-ai/marketplace-sdk"]).toBe("^0.12.0");
-    expect(pkg.dependencies["@tetsuo-ai/agenc-worker"]).toBe("^0.2.0");
+    expect(pkg.dependencies["@tetsuo-ai/marketplace-sdk"]).toBe("^0.13.0");
+    expect(pkg.dependencies["@tetsuo-ai/agenc-worker"]).toBe("^0.3.0");
     expect(pkg.dependencies["@solana/kit"]).toBeDefined();
     // The printed next step is a plain `npm install`.
     expect(result.instructions.some((l) => l.includes("npm install"))).toBe(

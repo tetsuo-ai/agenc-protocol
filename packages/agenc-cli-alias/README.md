@@ -12,9 +12,8 @@ npx @tetsuo-ai/agenc-cli dev
 npx @tetsuo-ai/agenc-cli promote
 ```
 
-Unscoped `npx agenc-cli` still resolved to npm 0.2.0 when checked 2026-08-23
-(workspace alias is 0.3.0). Use the scoped package until the alias is published.
-`--dir <path>` is a global flag (default cwd).
+`npx agenc-cli` runs the same CLI as the scoped package. Alias 0.4.0 depends on
+`@tetsuo-ai/agenc-cli` `^0.4.0`. `--dir <path>` is a global flag (default cwd).
 
 Prefer the scoped package for anything long-lived:
 

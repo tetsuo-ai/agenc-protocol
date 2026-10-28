@@ -218,6 +218,41 @@ describe("getDeployedSurface (the acceptance test)", () => {
   });
 });
 
+describe("revision 8 (live on mainnet since 2026-10-28)", () => {
+  it("is exported from the package root as the current surface", async () => {
+    const root = await import("../src/index.js");
+    expect(root.SURFACE_REVISION_FEE_QUALIFIED_RATINGS).toBe(8);
+    expect(root.SURFACE_REVISION_CURRENT).toBe(8);
+    expect(root.SURFACE_REVISION_CURRENT).toBe(
+      root.SURFACE_REVISION_FEE_QUALIFIED_RATINGS,
+    );
+    expect(root.SURFACE_REVISION_AUTHORITY_FEED).toBe(6);
+    expect(root.SURFACE_REVISION_TASK_QUOTAS).toBe(7);
+  });
+
+  it("reads a stamped revision-8 ProtocolConfig as the full surface", async () => {
+    const surface = await getDeployedSurface(
+      makeAccountRpc(newLayoutBuffer(SURFACE_REVISION_FEE_QUALIFIED_RATINGS)),
+    );
+    expect(surface).toMatchObject({
+      surfaceRevision: 8,
+      fullSurface: true,
+      listings: true,
+      goods: true,
+      feedAuthorityVotes: true,
+      taskCreationQuotas: true,
+      feeQualifiedRatings: true,
+    });
+    for (const capability of [
+      "feedAuthorityVotes",
+      "taskCreationQuotas",
+      "feeQualifiedRatings",
+    ] as const) {
+      expect(() => assertCapability(surface, capability)).not.toThrow();
+    }
+  });
+});
+
 describe("assertCapability + SurfaceNotDeployedError", () => {
   it("throws a typed SurfaceNotDeployedError when the capability is not live", () => {
     const surface: CapabilitySet = capabilitiesForRevision(0);

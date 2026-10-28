@@ -10,8 +10,8 @@ const MARKER = "Written by `agenc init` (@tetsuo-ai/agenc-cli).";
  * the agenc-protocol docs/VERSIONING.md §1.1 support matrix (the same truth
  * `agenc promote` checks against).
  */
-export const SDK_DEP_RANGE = "^0.12.0";
-export const WORKER_DEP_RANGE = "^0.2.0";
+export const SDK_DEP_RANGE = "^0.13.0";
+export const WORKER_DEP_RANGE = "^0.3.0";
 export const KIT_DEP_RANGE = "^6.9.0";
 
 /** Make a directory/config name a valid npm package name. */

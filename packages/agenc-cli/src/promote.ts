@@ -2,13 +2,14 @@
 // signs, never flips config, never touches money paths; it prints pass/fail
 // with the exact next action for each gap.
 //
-// The version matrix mirrors docs/VERSIONING.md §1.1 (published revision 4)
-// and §1.1.1 (published revision-5 set). Update both the document and this
-// constant on a lockstep publish. REVIEWED_MAINNET_RELEASES still lists only
-// revision 4 until the observed 2026-07-22 identity is patched in.
+// The version matrix mirrors docs/VERSIONING.md §1.1 (revision-8 train) and
+// the historical revision-4 and revision-5 sets. Update both the document and
+// this constant on a lockstep publish. REVIEWED_MAINNET_RELEASES holds the
+// deployment identities observed on finalized mainnet after each upgrade.
 // Compatibility is selected by the finalized on-chain surface revision; the
-// two sets must never be unioned because the revision-5 write wire deliberately
-// fails against revision 4 and the revision-4 writers fail against revision 5.
+// sets must never be unioned because each cutover changed the write wire:
+// revision-5 writers fail against revision 4 and the reverse, and revision 8
+// retires the legacy feed vote and requires new demotion accounts.
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -61,6 +62,20 @@ export const REVIEWED_MAINNET_RELEASES = [
       "c6ddc7fdc19f59bb1fcd2f0c87582e09fc1959ee3e615f299c909e07854b4199",
     sourceCommit: "097ded12b03d27e8c89d50ad6ed8813493700129",
   },
+  // Revision 8, upgraded 2026-10-28 by Squads proposal 11 (execute tx
+  // 48YNRN5P4mN8jPAMaoicza86JjYDE3DcyRtMmQp9MdEGo1i11DZ6ACrs1XEVPF3cdedMxcMr2Hg8hZeWN9YTCQVz)
+  // and stamped by stamp_release_surface. Read from finalized mainnet after the
+  // upgrade. executableHash is the ProgramData payload with trailing zero bytes
+  // removed, the same value as `solana-verify get-program-hash` and OtterSec.
+  {
+    surfaceRevision: 8,
+    programDataAddress: "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+    programDataSlot: 462_468_899,
+    upgradeAuthority: "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+    executableHash:
+      "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
+    sourceCommit: "f39b383e416ec5bc511b0ffb781481a658d137d8",
+  },
 ] as const;
 
 type PackageSupportMatrix = Readonly<Record<string, readonly string[]>>;
@@ -96,7 +111,19 @@ export const SUPPORT_MATRIX_BY_SURFACE_REVISION = {
     // 0.6.x line: 0.6.0 is the published revision-4 artifact.
     "@tetsuo-ai/store-core": ["0.6.1"],
   },
-} as const satisfies Readonly<Record<4 | 5, PackageSupportMatrix>>;
+  8: {
+    "@tetsuo-ai/protocol": ["0.5"],
+    "@tetsuo-ai/marketplace-sdk": ["0.13"],
+    "@tetsuo-ai/agenc-worker": ["0.3"],
+    "@tetsuo-ai/marketplace-react": ["0.6"],
+    "@tetsuo-ai/marketplace-tools": ["0.6"],
+    "@tetsuo-ai/marketplace-mcp": ["0.6"],
+    "@tetsuo-ai/marketplace-moderation": ["0.3"],
+    // No reviewed store-core release targets revision 8 yet. Without an
+    // entry an installed store-core fails closed instead of matching a
+    // revision-5 artifact whose SDK peer range rejects SDK 0.13.
+  },
+} as const satisfies Readonly<Record<4 | 5 | 8, PackageSupportMatrix>>;
 
 /**
  * Published revision-4 matrix retained for compatibility with the CLI 0.2
@@ -339,7 +366,7 @@ export function versionInMatrix(
 function matrixForRevision(
   revision: number | undefined,
 ): PackageSupportMatrix | null {
-  if (revision !== 4 && revision !== 5) return null;
+  if (revision !== 4 && revision !== 5 && revision !== 8) return null;
   return SUPPORT_MATRIX_BY_SURFACE_REVISION[revision];
 }
 
@@ -788,8 +815,8 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
   }
 
   // 4) installed package pins inside the matrix for the finalized revision.
-  // Never union revision 4 and revision 5: their write wires are intentionally
-  // bidirectionally incompatible. Independent version buckets are necessary
+  // Never union revisions 4, 5 and 8: their write wires are intentionally
+  // incompatible. Independent version buckets are necessary
   // but insufficient: every installed artifact's own first-party dependency
   // and peer ranges must also admit the selected installed package train.
   pushPackageCoherenceChecks(checks, input);
@@ -877,29 +904,29 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
   const sdkVersion = installedVersion(input, SDK_PACKAGE);
   if (
     config !== null &&
-    (sdkVersion == null || !versionInMatrix(sdkVersion, ["0.12"]))
+    (sdkVersion == null || !versionInMatrix(sdkVersion, ["0.13"]))
   ) {
     checks.push({
       id: "pin:template-sdk",
       label: "generated-template SDK API",
       status: "fail",
-      detail: `generated ${config.kind} code requires @tetsuo-ai/marketplace-sdk 0.12.x (installed: ${sdkVersion ?? "missing"})`,
+      detail: `generated ${config.kind} code requires @tetsuo-ai/marketplace-sdk 0.13.x (installed: ${sdkVersion ?? "missing"})`,
       action:
-        "npm install @tetsuo-ai/marketplace-sdk@^0.12.0 and rebuild the generated surface",
+        "npm install @tetsuo-ai/marketplace-sdk@^0.13.0 and rebuild the generated surface",
     });
   }
   const workerVersion = installedVersion(input, WORKER_RUNTIME_PACKAGE);
   if (
     config?.kind === "worker" &&
-    (workerVersion == null || !versionInMatrix(workerVersion, ["0.2"]))
+    (workerVersion == null || !versionInMatrix(workerVersion, ["0.3"]))
   ) {
     checks.push({
       id: "pin:template-worker",
       label: "generated-worker runtime API",
       status: "fail",
-      detail: `generated worker.mjs requires @tetsuo-ai/agenc-worker 0.2.x (installed: ${workerVersion ?? "missing"})`,
+      detail: `generated worker.mjs requires @tetsuo-ai/agenc-worker 0.3.x (installed: ${workerVersion ?? "missing"})`,
       action:
-        "npm install @tetsuo-ai/agenc-worker@^0.2.0 and rebuild worker.mjs",
+        "npm install @tetsuo-ai/agenc-worker@^0.3.0 and rebuild worker.mjs",
     });
   }
 

@@ -1,5 +1,26 @@
 # @tetsuo-ai/agenc-cli
 
+## 0.4.0
+
+Released for the revision-8 mainnet program (deployed 2026-10-28).
+
+### Release coordination
+
+- Generated projects and runtime dependencies use
+  `@tetsuo-ai/marketplace-sdk@^0.13.0` and `@tetsuo-ai/agenc-worker@^0.3.0`.
+- `agenc promote` accepts the reviewed revision-8 deployment identity:
+  ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, deployment slot
+  462468899, upgrade authority `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`,
+  normalized executable hash
+  `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38` and
+  source commit `f39b383e416ec5bc511b0ffb781481a658d137d8`. These values were
+  read from finalized mainnet after the upgrade.
+- On revision 8, `promote` selects only the coordinated revision-8 set:
+  protocol 0.5.x, SDK 0.13.x, worker 0.3.x, React, tools and MCP 0.6.x and
+  moderation 0.3.x. No published store-core release targets revision 8 yet, so
+  an installed store-core fails closed there. The revision-4 and revision-5
+  sets are unchanged and are never unioned with revision 8.
+
 ## 0.3.0 (published 2026-07-22)
 
 ### Release coordination

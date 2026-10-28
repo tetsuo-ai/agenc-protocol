@@ -66,7 +66,7 @@ These need only a **read transport** in the context: a `@solana/kit` RPC or any
 
 > **Scope note:** the prepare/readonly tool set covers the core hire lifecycle.
 > Store identity, contest cranks, and goods market instructions are available on
-> the full program / SDK facade (`@tetsuo-ai/marketplace-sdk` `^0.12.0`)
+> the full program / SDK facade (`@tetsuo-ai/marketplace-sdk` `^0.13.0`)
 > but are **not** wrapped as tools in this package.
 
 > **The prepare-\* tools never sign and never send.** They build the unsigned

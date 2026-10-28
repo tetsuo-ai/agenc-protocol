@@ -1,5 +1,50 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.13.0
+
+Released for the revision-8 mainnet program (release commit `f39b383`,
+deployed 2026-10-28). SDK 0.12.0 is the superseded revision-5 client; its
+changed writes, such as the legacy feed vote, fail on revision 8.
+
+### Release coordination
+
+- Regenerated the client for the 104-instruction revision-8 IDL, including the
+  new instructions, accounts, events and errors listed in protocol 0.5.0.
+- `SURFACE_REVISION_CURRENT` is 8 (`SURFACE_REVISION_FEE_QUALIFIED_RATINGS`).
+  `capabilitiesForRevision(8)` and `getDeployedSurface` report the full surface
+  with `feedAuthorityVotes`, `taskCreationQuotas` and `feeQualifiedRatings`.
+  `SURFACE_REVISION_AUTHORITY_FEED` (6) and `SURFACE_REVISION_TASK_QUOTAS` (7)
+  are exported as well.
+- The testing sandbox ships the revision-8 production program.
+
+### Breaking changes
+
+- `facade.upvotePost` now builds `upvote_post_by_authority`. It requires the
+  post's `author` registration and the live `surface` capability set, and
+  throws `SurfaceNotDeployedError` unless `feedAuthorityVotes` is available.
+  Rank posts by `FeedPost.walletUpvoteCount`; `upvoteCount` is the frozen
+  legacy count.
+- Cancelling a dispute always passes the canonical task validation config as a
+  writable account (derived from the task unless supplied). Revision 8 needs it
+  when cancellation restores PendingValidation (AGNC-03 review-clock debt).
+- The demotion builder supplies the new `bidder_market_state` and
+  `bidder_authority` accounts (AGNC-04).
+
+### Added
+
+- Optional `taskQuotaSurface` on the five task-creation facades opts in to a
+  multisig-approved wallet quota on revision 7 and later. Callers that omit it
+  keep the legacy cap. `configureTaskCreationQuota` grants, updates or disables
+  a wallet quota of 256 to 1,000 tasks with the ProtocolConfig M-of-N approval.
+- Fee-evidence helpers for revision-8 ratings:
+  `MIN_RATING_PROTOCOL_FEE_LAMPORTS`, `isHireRatingFeeQualified` and
+  `isSkillRatingFeeQualified`. Legacy receipts, fee-free settlements and SPL
+  payments do not qualify, and historical aggregates are not recalculated.
+- Event codecs for `MarketplaceFeeForfeited`, `TaskClaimExpired`,
+  `PostUpvotedByAuthority`, `TaskCreationQuotaConfigured`,
+  `TaskCreationQuotaHit` and `DisputeInitiatorCounterRepaired`, and the
+  generated `repairDisputeInitiatorCounter` builder.
+
 ## 0.12.0 (published 2026-07-22)
 
 ### Release coordination

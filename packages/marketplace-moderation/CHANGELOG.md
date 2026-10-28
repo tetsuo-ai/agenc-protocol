@@ -5,6 +5,11 @@ All notable changes to `@tetsuo-ai/marketplace-moderation` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0
+
+Released with the coordinated revision-8 package set (deployed 2026-10-28).
+The canonicalization and payload rules are unchanged from 0.2.0.
+
 ## 0.2.0 (published 2026-07-22)
 
 ### Changed

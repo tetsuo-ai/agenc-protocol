@@ -30,7 +30,7 @@ for (const router of ["app", "pages"]) {
         scripts: { build: "next build" },
         dependencies: {
           "@solana/kit": "6.9.0",
-          "@tetsuo-ai/marketplace-sdk": "0.12.0",
+          "@tetsuo-ai/marketplace-sdk": "0.13.0",
           next: "15.5.20",
           react: "18.3.1",
           "react-dom": "18.3.1",

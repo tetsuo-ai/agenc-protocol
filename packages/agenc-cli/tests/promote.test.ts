@@ -38,7 +38,7 @@ type PackageMetadata = {
 };
 
 // Exact first-party relationships declared by the reviewed published
-// revision-4 artifacts and the local revision-5 candidate manifests.
+// revision-4 and revision-5 artifacts and the revision-8 train manifests.
 const PACKAGE_METADATA: Record<string, PackageMetadata> = {
   "@tetsuo-ai/agenc-worker@0.1.1": {
     dependencies: {
@@ -82,6 +82,21 @@ const PACKAGE_METADATA: Record<string, PackageMetadata> = {
     peerDependencies: {
       "@tetsuo-ai/marketplace-sdk": "^0.12.0",
       "@tetsuo-ai/marketplace-react": "^0.5.0",
+    },
+  },
+  "@tetsuo-ai/agenc-worker@0.3.0": {
+    dependencies: { "@tetsuo-ai/marketplace-sdk": "^0.13.0" },
+  },
+  "@tetsuo-ai/marketplace-react@0.6.0": {
+    peerDependencies: { "@tetsuo-ai/marketplace-sdk": "^0.13.0" },
+  },
+  "@tetsuo-ai/marketplace-tools@0.6.0": {
+    dependencies: { "@tetsuo-ai/marketplace-sdk": "^0.13.0" },
+  },
+  "@tetsuo-ai/marketplace-mcp@0.6.0": {
+    dependencies: {
+      "@tetsuo-ai/marketplace-sdk": "^0.13.0",
+      "@tetsuo-ai/marketplace-tools": "^0.6.0",
     },
   },
 };
@@ -222,6 +237,32 @@ const REVISION_5_CLIENTS = {
   "@tetsuo-ai/store-core": "0.6.1",
 } as const;
 
+const REVISION_8_CLIENTS = {
+  "@tetsuo-ai/protocol": "0.5.0",
+  "@tetsuo-ai/marketplace-sdk": "0.13.0",
+  "@tetsuo-ai/agenc-worker": "0.3.0",
+  "@tetsuo-ai/marketplace-react": "0.6.0",
+  "@tetsuo-ai/marketplace-tools": "0.6.0",
+  "@tetsuo-ai/marketplace-mcp": "0.6.0",
+  "@tetsuo-ai/marketplace-moderation": "0.3.0",
+} as const;
+
+/** Chain evidence equal to the reviewed revision-8 deployment identity. */
+function useRevision8Identity(input: PromoteInput): void {
+  const reviewed = REVIEWED_MAINNET_RELEASES.find(
+    (release) => release.surfaceRevision === 8,
+  );
+  if (reviewed === undefined) throw new Error("revision 8 is not reviewed");
+  Object.assign(input.chainEvidence!, {
+    programDataAddress: reviewed.programDataAddress,
+    programDataSlot: reviewed.programDataSlot,
+    upgradeAuthority: reviewed.upgradeAuthority,
+    executableHash: reviewed.executableHash,
+    releaseCommit: reviewed.sourceCommit,
+    surfaceRevision: 8,
+  });
+}
+
 const SDK_LINES = ["0.8", "0.9", "0.10", "0.11", "0.12"] as const;
 
 describe("versionInMatrix", () => {
@@ -278,7 +319,7 @@ describe("versionInMatrix", () => {
 });
 
 describe("runPromoteChecks", () => {
-  it("accepts the published revision-4 SDK pin but gates this revision-5 CLI template", () => {
+  it("accepts the published revision-4 SDK pin but gates this revision-8 CLI template", () => {
     const report = runPromoteChecks(readyInput());
     expect(report.ready).toBe(false);
     expect(report.failed).toBe(2);
@@ -534,14 +575,112 @@ describe("runPromoteChecks", () => {
     }
   });
 
-  it.each([6, 7, 8])("does not promote published clients onto unreviewed candidate surface %i", (revision) => {
+  it.each([6, 7])(
+    "does not promote published clients onto unreviewed candidate surface %i",
+    (revision) => {
+      const input = readyInput();
+      input.chainEvidence!.surfaceRevision = revision;
+      setInstalledTrain(input, REVISION_5_CLIENTS);
+      const report = runPromoteChecks(input);
+      for (const pkg of Object.keys(REVISION_5_CLIENTS)) {
+        expect(statusOf(report, `pin:${pkg}`), pkg).toBe("fail");
+      }
+    },
+  );
+
+  it("records the exact revision-8 deployment identity observed after the upgrade", () => {
+    const reviewed = REVIEWED_MAINNET_RELEASES.filter(
+      (release) => release.surfaceRevision === 8,
+    );
+    expect(reviewed).toEqual([
+      {
+        surfaceRevision: 8,
+        programDataAddress: "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+        programDataSlot: 462_468_899,
+        upgradeAuthority: "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+        executableHash:
+          "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
+        sourceCommit: "f39b383e416ec5bc511b0ffb781481a658d137d8",
+      },
+    ]);
+  });
+
+  it("promotes the coordinated revision-8 client set on the reviewed revision-8 deployment", () => {
     const input = readyInput();
-    input.chainEvidence!.surfaceRevision = revision;
+    useRevision8Identity(input);
+    setInstalledTrain(input, REVISION_8_CLIENTS);
+    const report = runPromoteChecks(input);
+    expect(statusOf(report, "chain:program")).toBe("pass");
+    expect(statusOf(report, "chain:surface")).toBe("pass");
+    for (const pkg of Object.keys(REVISION_8_CLIENTS)) {
+      expect(statusOf(report, `pin:${pkg}`), pkg).toBe("pass");
+    }
+    // The template-SDK gate only reports a failure line; 0.13 emits none.
+    expect(statusOf(report, "pin:template-sdk")).toBeUndefined();
+    expect(
+      report.checks
+        .filter((check) => check.id.startsWith("coherence:"))
+        .every((check) => check.status === "pass"),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["programDataSlot", 434_489_452],
+    [
+      "executableHash",
+      "a389e6f5e0dda3cb1b893e2c82ba04272059f33d17df7c00ab8fca73915ef203",
+    ],
+    ["upgradeAuthority", "HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh"],
+    ["releaseCommit", "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d"],
+  ] as const)(
+    "rejects a revision-8 stamp whose %s differs from the reviewed identity",
+    (field, value) => {
+      const input = readyInput();
+      useRevision8Identity(input);
+      Object.assign(input.chainEvidence!, { [field]: value });
+      setInstalledTrain(input, REVISION_8_CLIENTS);
+      expect(statusOf(runPromoteChecks(input), "chain:program")).toBe("fail");
+    },
+  );
+
+  it("rejects every revision-5 client line against revision 8", () => {
+    const input = readyInput();
+    useRevision8Identity(input);
     setInstalledTrain(input, REVISION_5_CLIENTS);
     const report = runPromoteChecks(input);
     for (const pkg of Object.keys(REVISION_5_CLIENTS)) {
       expect(statusOf(report, `pin:${pkg}`), pkg).toBe("fail");
     }
+    expect(statusOf(report, "pin:template-sdk")).toBe("fail");
+  });
+
+  it("rejects every revision-8 client line against revisions 4 and 5", () => {
+    for (const revision of [4, 5]) {
+      const input = readyInput();
+      input.chainEvidence!.surfaceRevision = revision;
+      setInstalledTrain(input, REVISION_8_CLIENTS);
+      const report = runPromoteChecks(input);
+      for (const pkg of Object.keys(REVISION_8_CLIENTS)) {
+        expect(statusOf(report, `pin:${pkg}`), `${pkg} on ${revision}`).toBe(
+          "fail",
+        );
+      }
+    }
+  });
+
+  it("fails an installed store-core closed on revision 8 until a reviewed release exists", () => {
+    const input = readyInput();
+    useRevision8Identity(input);
+    setInstalledTrain(input, {
+      ...REVISION_8_CLIENTS,
+      "@tetsuo-ai/store-core": "0.6.1",
+    });
+    const report = runPromoteChecks(input);
+    expect(statusOf(report, "pin:@tetsuo-ai/store-core")).toBe("fail");
+    expect(
+      report.checks.find((check) => check.id === "pin:@tetsuo-ai/store-core")
+        ?.detail,
+    ).toContain("no reviewed compatibility matrix");
   });
 
   it("gives actionable wallet and RPC hints on FAIL lines", () => {
