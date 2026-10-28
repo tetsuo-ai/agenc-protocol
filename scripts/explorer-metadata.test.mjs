@@ -27,15 +27,15 @@ import {
   PVR_CONTACT,
   renderOperatorCard,
   REPO_URL,
-  REVISION_5_COMMIT,
-  REVISION_5_SLOT,
+  RELEASE_COMMIT,
+  RELEASE_SLOT,
   sha256,
   UPGRADE_AUTHORITY_VAULT,
   validateOsecStatus,
   validateSecurityJson,
   parseSecurityJson,
   validateVerifierExport,
-  REVISION_5_NORMALIZED_SHA256,
+  RELEASE_NORMALIZED_SHA256,
 } from "./explorer-metadata.mjs";
 const require = createRequire(
   new URL("../tests-integration/package.json", import.meta.url),
@@ -85,14 +85,14 @@ const buffer = (change = {}) =>
   );
 
 test("metadata binds the deployed commit and only the confirmed contact, with a real expiry", () => {
-  assert.equal(
-    validateSecurityJson(doc, now).source_revision,
-    REVISION_5_COMMIT,
-  );
+  assert.equal(validateSecurityJson(doc, now).source_revision, RELEASE_COMMIT);
   assert.deepEqual(doc.contacts, [PVR_CONTACT]);
   for (const change of [
     { source_revision: "main" },
+    { source_revision: "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d" },
+    { source_release: "revision-5" },
     { source_release: "revision-7" },
+    { version: "5" },
     { version: 7 },
     { contacts: [PVR_CONTACT, "email:security@agenc.tech"] },
     { contacts: [] },
@@ -186,7 +186,7 @@ test("live revision guard rejects stale source, authority, slot and binary claim
     programId: PROGRAM_ID,
     programData: PROGRAM_DATA,
     authority: UPGRADE_AUTHORITY_VAULT,
-    programDataSlot: REVISION_5_SLOT,
+    programDataSlot: RELEASE_SLOT,
     payload: Buffer.from("changed"),
   };
   for (const change of [
@@ -194,7 +194,8 @@ test("live revision guard rejects stale source, authority, slot and binary claim
     { programId: PMP_ID },
     { programData: PMP_ID },
     { authority: PROGRAM_ID },
-    { programDataSlot: "434489453" },
+    { programDataSlot: "434489452" },
+    { programDataSlot: "462468900" },
   ])
     assert.throws(() => assertDeployedRevision({ ...s, ...change }));
   assert.equal(
@@ -205,10 +206,10 @@ test("live revision guard rejects stale source, authority, slot and binary claim
 test("OtterSec acceptance requires matching current commit, repository, both hashes and open program", () => {
   const s = {
     is_verified: true,
-    commit: REVISION_5_COMMIT,
-    repo_url: `${REPO_URL}/tree/${REVISION_5_COMMIT}`,
-    on_chain_hash: REVISION_5_NORMALIZED_SHA256,
-    executable_hash: REVISION_5_NORMALIZED_SHA256,
+    commit: RELEASE_COMMIT,
+    repo_url: `${REPO_URL}/tree/${RELEASE_COMMIT}`,
+    on_chain_hash: RELEASE_NORMALIZED_SHA256,
+    executable_hash: RELEASE_NORMALIZED_SHA256,
     is_closed: false,
   };
   assert.equal(validateOsecStatus(s), true);
@@ -232,12 +233,12 @@ function verifierTransaction() {
   const count = Buffer.alloc(4);
   count.writeUInt32LE(4);
   const slot = Buffer.alloc(8);
-  slot.writeBigUInt64LE(BigInt(REVISION_5_SLOT));
+  slot.writeBigUInt64LE(BigInt(RELEASE_SLOT));
   const data = Buffer.concat([
     Buffer.from([219, 200, 88, 176, 158, 63, 253, 127]),
     string("0.5.2"),
     string(REPO_URL),
-    string(REVISION_5_COMMIT),
+    string(RELEASE_COMMIT),
     count,
     ...[
       "--mount-path",
@@ -332,7 +333,7 @@ test("read-only entrypoint rejects the old apply/keypair and submit verbs before
         { stdio: "pipe", timeout: 5000 },
       ),
     );
-  assert.ok(buildVerifyPdaExportArgs().includes(REVISION_5_COMMIT));
+  assert.ok(buildVerifyPdaExportArgs().includes(RELEASE_COMMIT));
   assert.ok(!renderOperatorCard().includes("@latest"));
   assert.match(renderOperatorCard(), /Preparation is read-only/);
 });

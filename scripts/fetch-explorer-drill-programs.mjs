@@ -14,7 +14,7 @@ import {
   PMP_ID,
   PMP_SHA256,
   PROGRAM_ID,
-  REVISION_5_SHA256,
+  RELEASE_PAYLOAD_SHA256,
   OTTER_ID,
   sha256,
   json,
@@ -24,7 +24,7 @@ const require = createRequire(
 );
 const { Connection, PublicKey } = require("@solana/web3.js");
 export const PINS = Object.freeze({
-  agenc: { program: PROGRAM_ID, sha256: REVISION_5_SHA256 },
+  agenc: { program: PROGRAM_ID, sha256: RELEASE_PAYLOAD_SHA256 },
   pmp: { program: PMP_ID, sha256: PMP_SHA256 },
   squads: {
     program: "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
