@@ -22,6 +22,7 @@ import {
   DataSource,
 } from "@solana-program/program-metadata";
 import {
+  assertDeployedRevision,
   assertSecurityBuffer,
   buildCanonicalSecurityTransaction,
   buildVerifyPdaExportArgs,
@@ -30,10 +31,14 @@ import {
   defaultSecurityJsonPath,
   json,
   PMP_ID,
+  PROGRAM_DATA,
   PROGRAM_ID,
   OTTER_ID,
-  REVISION_5_COMMIT,
+  RELEASE_ARTIFACT_SHA256,
+  RELEASE_COMMIT,
+  RELEASE_SLOT,
   sha256,
+  UPGRADE_AUTHORITY_VAULT,
   toWeb3Instruction,
   validateVerifierExport,
   VERIFIER_SHA256,
@@ -65,6 +70,23 @@ test(
   async () => {
     const programs = path.join(root, ".localnet/explorer-programs");
     await verifyDrillFiles(programs);
+    // The live revision-8 ProgramData payload is the 2,075,896-byte release ELF
+    // followed only by zero padding. The rebuilt-artifact guard must accept
+    // that exact prefix and reject anything shorter.
+    const livePayload = await readFile(path.join(programs, "agenc.so"));
+    const releaseElf = livePayload.subarray(0, 2_075_896);
+    assert.equal(sha256(releaseElf), RELEASE_ARTIFACT_SHA256);
+    const liveSnapshot = {
+      programId: PROGRAM_ID,
+      programData: PROGRAM_DATA,
+      authority: UPGRADE_AUTHORITY_VAULT,
+      programDataSlot: RELEASE_SLOT,
+      payload: livePayload,
+    };
+    assertDeployedRevision(liveSnapshot, releaseElf);
+    assert.throws(() =>
+      assertDeployedRevision(liveSnapshot, releaseElf.subarray(0, -1)),
+    );
     const verifier = process.env.SOLANA_VERIFY_BIN;
     assert.ok(verifier, "SOLANA_VERIFY_BIN is required");
     assert.equal(sha256(await readFile(verifier)), VERIFIER_SHA256);
@@ -527,7 +549,7 @@ test(
         }),
       );
       const commitOffset = oldTx.instructions[0].data.indexOf(
-        Buffer.from(REVISION_5_COMMIT),
+        Buffer.from(RELEASE_COMMIT),
       );
       assert.ok(commitOffset >= 0);
       Buffer.from(priorCommit).copy(oldTx.instructions[0].data, commitOffset);
@@ -551,7 +573,7 @@ test(
       const verifyAddress = new PublicKey(verifyPacket.verificationPda);
       const stale = await connection.getAccountInfo(verifyAddress);
       assert.ok(stale.data.includes(Buffer.from(priorCommit)));
-      assert.equal(stale.data.includes(Buffer.from(REVISION_5_COMMIT)), false);
+      assert.equal(stale.data.includes(Buffer.from(RELEASE_COMMIT)), false);
       // solana-verify reads finalized state. Wait for the real local root
       // before asking it to choose update rather than initialize.
       let rooted = false;
@@ -607,7 +629,7 @@ test(
         new PublicKey(verifyAccount.data.subarray(40, 72)).toBase58(),
         vault.toBase58(),
       );
-      assert.ok(verifyAccount.data.includes(Buffer.from(REVISION_5_COMMIT)));
+      assert.ok(verifyAccount.data.includes(Buffer.from(RELEASE_COMMIT)));
       assert.equal(
         verifyAccount.data.includes(Buffer.from(priorCommit)),
         false,
