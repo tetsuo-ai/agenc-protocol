@@ -18,6 +18,14 @@ HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` → `Authority:` = the vault above
 > **Residual (tracked):** all three member keys are files on one host — replace
 > one with a Ledger (Squads config tx, no re-transfer) for true distributed custody.
 >
+> **Re-verified 2026-10-28, after the revision-8 upgrade:** the upgrade authority
+> is unchanged (vault index 0, `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`).
+> The multisig is still 2-of-3 with time lock 0 and members
+> `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx`,
+> `6CpyZBmBDymdp56dg1KsNnK1vYqWwz2vemdp9m7a6ufw` and
+> `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`. Its transaction index is now
+> 14. It has no rent collector, so proposal rent is not reclaimable. See §8.
+>
 > **⚠️ Earlier "2026-06-11 done" note was WRONG and is struck** — it conflated the
 > `ProtocolConfig` on-chain config multisig (`Hcecp…/BXDan…/4QcKB…`, 2-of-3, which
 > governs fees / the P1.2 BLOCK floor via `require_multisig_threshold`) with the
@@ -270,8 +278,9 @@ and [SIMD-0431 feature declaration](https://github.com/anza-xyz/agave/blob/v4.1.
 
 1. Re-run the read-only mainnet preflight and re-resolve genesis, loader feature
    activation, Program/ProgramData binding, authority, capacity, balance, rent,
-   and the independently approved SBF/IDL hashes. Deploy remains pinned to Solana
-   CLI 3.0.13; the separate extension rail accepts only official Agave CLI 4.1.0
+   and the independently approved SBF/IDL hashes. For revision 5, deploy was
+   pinned to Solana CLI 3.0.13 (the upgrade rail now pins 4.1.0); the separate
+   extension rail accepts only official Agave CLI 4.1.0
    from the pinned source commit because that release removed the obsolete
    upgrade-authority signer requirement from its legacy-extension client. On
    x86_64 Linux it also requires extracted `solana` binary SHA-256
@@ -370,4 +379,42 @@ to executable SHA-256
 
 The authority migration is complete: `solana program show` reports the Squads
 vault as the mainnet upgrade authority and the custody docs match. The
-revision-5 capacity ceremony in §6 executed on 2026-07-22.
+revision-5 capacity ceremony in §6 executed on 2026-07-22. The revision-8
+upgrade in §8 executed through the same vault on 2026-10-28.
+
+---
+
+## 8. Revision-8 upgrade through the vault (EXECUTED 2026-10-28)
+
+The revision-8 upgrade needed no ProgramData extension. The 2,075,896-byte
+release binary fits the unchanged 2,303,608-byte payload capacity with 227,712
+bytes of headroom, so the §6 extension rail was not used.
+
+- Upload buffer `BvLYRwrim58xJqfug7oSAycdwBzYUdneswWbS1jnZ4QF`, consumed by the
+  upgrade.
+- Squads v4 proposal (transaction index) 11 on multisig
+  `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`, approved by
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and
+  `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx` and executed with signature
+  `48YNRN5P4mN8jPAMaoicza86JjYDE3DcyRtMmQp9MdEGo1i11DZ6ACrs1XEVPF3cdedMxcMr2Hg8hZeWN9YTCQVz`.
+  The new deployment slot is 462468899 (2026-10-28 12:01:55 UTC).
+- The ProgramData payload (SHA-256
+  `ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9`) is the
+  release binary (SHA-256
+  `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`) followed
+  only by zero padding.
+- ProgramData now holds 11.703207480 SOL, its rent floor. The loader returned
+  the 4.331108280 SOL surplus to the spill account
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`.
+- Squads proposals 12 and 13 then updated the vault's verification PDA (see
+  [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md)), and proposal 14 created the
+  canonical PMP security record (see
+  [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md)), so the multisig transaction
+  index is now 14.
+- The authority, threshold, time lock and members are unchanged (see the
+  banner). The multisig has no rent collector, so proposal rent is not
+  reclaimable.
+
+The protocol pause, dispute counter repair, IDL publication and revision stamp
+of the same ceremony are recorded in
+[`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).

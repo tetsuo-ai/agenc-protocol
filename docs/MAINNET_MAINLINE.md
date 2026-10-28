@@ -14,45 +14,187 @@ window or before the deploy is announced publicly.
 
 ## Current Mainnet Deployment
 
-> **As of 2026-07-22 the revision-5 surface is LIVE on mainnet**
-> (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`). The upgrade was
-> executed through the Squads v4 2-of-3 upgrade-authority vault
-> (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`, execute tx
-> `5iZiPGmU5pYSGEaNBHkTR1cpGhmGtffGp8ZSufD71ActwNyTSt4cFkLoGqiucFmQ3DveSRthCK5fuZHb3NB7Smh7`),
-> after a top-level ProgramData extension of +120,384 bytes and preceded/followed
-> by an `update_launch_controls` pause/unpause. Verified on-chain: deployed
-> executable SHA-256
-> `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2` (byte-equal
-> to the reviewed candidate), `ProtocolConfig.surface_revision = 5`,
-> `protocol_paused = false`. The 101-instruction compact IDL was published and
-> `stamp_release_surface` atomically stamped the revision.
+> **As of 2026-10-28 the revision-8 surface is LIVE on mainnet**
+> (`surface_revision = 8` / `SURFACE_REVISION_FEE_QUALIFIED_RATINGS`). The
+> upgrade was Squads v4 proposal (transaction index) 11 on multisig
+> `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`, approved by
+> `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and
+> `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx`, and executed through the
+> 2-of-3 upgrade-authority vault (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`,
+> execute tx
+> `48YNRN5P4mN8jPAMaoicza86JjYDE3DcyRtMmQp9MdEGo1i11DZ6ACrs1XEVPF3cdedMxcMr2Hg8hZeWN9YTCQVz`).
+> No ProgramData extension was needed. The 104-instruction release IDL was
+> published and `stamp_release_surface` atomically stamped the revision while
+> the protocol was paused. `update_launch_controls` reopened it at 2026-10-28
+> 13:08:08 UTC (tx
+> `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`,
+> slot 462487575).
 >
-> Prior state (superseded): from 2026-07-09 the 99-instruction revision-4 surface
-> (`surface_revision = 4` / BATCH4, slot 431918664) was live. Growth path:
-> 25-ix canary → 84-ix full surface (2026-06-11) → 90-ix P1.2 open roster
-> (2026-07-03) → additive batches 2–4 → revision-5 (this deploy).
+> Prior state (superseded): from 2026-07-22 the 101-instruction revision-5
+> surface (`surface_revision = 5` / AUDIT_HARDENING, slot 434489452, executable
+> SHA-256 `049a66e3…`) was live. Before it, from 2026-07-09, the 99-instruction
+> revision-4 surface (`surface_revision = 4` / BATCH4, slot 431918664) was live.
+> Growth path: 25-ix canary, 84-ix full surface (2026-06-11), 90-ix P1.2 open
+> roster (2026-07-03), additive batches 2 to 4, revision 5 (2026-07-22), then
+> revision 8 (this deploy).
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
 - `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
-- Live surface: **101-instruction revision-5 surface** (default features),
-  `surface_revision = 5` (AUDIT_HARDENING)
-- Deployed executable SHA-256:
-  `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2` (2,303,608
-  bytes); ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` grown to
-  2,303,653 account-data bytes.
-- Live instruction inventory: 101 entrypoints (the O(1) bid-accept redesign added
-  `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`).
-- Post-deploy note: 89 revision-4 bond-post-eligible third-party tasks were live
-  through the upload window under an explicit operator-accepted race
-  (`AGENC_ACCEPT_BOND_RACE`); the post-upgrade completion-bond inventory verified
-  zero, so the race did not materialize.
+- Live surface: 104-instruction revision-8 surface (default features),
+  `surface_revision = 8` (FEE_QUALIFIED_RATINGS)
+- Release commit: `f39b383e416ec5bc511b0ffb781481a658d137d8` on `main` (PR #308,
+  rebase-merged 2026-10-21 19:23 UTC), git tree
+  `18f60dac82f2a4ae8856e9ba55ba2d06d5d16884`.
+- Release binary: 2,075,896 bytes, SHA-256
+  `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`. The
+  solana-verify normalized hash (trailing zeros removed) is
+  `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`. Built
+  reproducibly with solana-verify 0.5.2 and the Agave 4.1.0 image
+  `solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
+- ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`: capacity unchanged
+  at 2,303,653 account-data bytes. The 2,303,608-byte payload has SHA-256
+  `ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9`; it is the
+  release binary followed only by zero padding (227,712 bytes of headroom).
+  ProgramData holds 11.703207480 SOL, its rent floor. The loader returned the
+  4.331108280 SOL surplus to the spill account
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`.
+- Deployment slot: 462468899 (block time 2026-10-28 12:01:55 UTC). The upload
+  buffer `BvLYRwrim58xJqfug7oSAycdwBzYUdneswWbS1jnZ4QF` was consumed by the
+  upgrade.
+- On-chain IDL: `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1` holds the
+  104-instruction release IDL. The committed
+  `artifacts/anchor/idl/agenc_coordination.json` has SHA-256
+  `cab00d4029420c91028914cee46bc78c5b4c026b55d0e4561af9531cc8cdec59`.
+- Revision stamp: `stamp_release_surface` set `surface_revision = 8` in tx
+  `5ndbVifEMn7nXWTZXxYSkDR21PrTiGdxuJSQ27ounN99TBWSRoG9Pge7tasZApmLwk6vVQFPiMaVnPjRP68xDMQM`
+  at slot 462470117 (2026-10-28 12:06:15 UTC).
+- `ProtocolConfig` `DeBPkxhzE6MJr66HhEgcHBv5rBFoHWysb6uyK4skufUs`: 351 bytes
+  (layout unchanged), `surface_revision = 8`, `disabled_task_type_mask = 0`.
+  `protocol_paused` was true from 11:31:18 UTC until the 13:08:08 UTC unpause.
+- Verified build: OtterSec reports `is_verified: true` for commit `f39b383…`,
+  with `on_chain_hash` and `executable_hash` both `ffb8f3cb…` (last verified
+  2026-10-28T12:27:32Z). See [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md).
+- Upgrade authority: unchanged, the Squads vault above. See
+  [`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md).
+- Explorer security metadata: Squads proposal 14 created the canonical PMP
+  `security` record `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw` (execute tx
+  `b4sj2V78ddEfN1V6EM9K3krs3LfgTkgSNZxiPT93hbZjZiXgmiKWKa14e9hJgbnZTZBum4rB1PeAkHymVdcrpEZ`,
+  slot 462483846). Its content is the 841-byte
+  `programs/agenc-coordination/security.json` (SHA-256
+  `e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9`).
+  See [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md).
 
-## Revision 5 (deployed 2026-07-22)
+## Revision 8 (deployed 2026-10-28)
 
-The production/default `#[program]` surface contains **101 actual Rust
-entrypoints** — the surface now live on mainnet. That number is derived from the
-cfg-gated source, not this document:
+The production/default `#[program]` surface contains 104 Rust entrypoints. That
+number is derived from the cfg-gated source at the release commit, not this
+document:
+
+- production defaults: 104 (`spl-token-rewards`; `private-zk` off);
+- explicit development `private-zk`: 107;
+- restricted `mainnet-canary`: 25;
+- raw `pub fn` declarations across the mutually exclusive full/canary modules:
+  132, representing 107 unique names because the canary's 25 names are repeated.
+
+`scripts/mainnet-upgrade.mjs` enforces the exact 104/107/25 sets and refuses
+stale artifacts. The three private-proof entrypoints stay quarantined, as in
+revision 5.
+
+Mainnet moved from revision 5 straight to revision 8. Revisions 6 and 7 were
+never stamped on mainnet on their own; their surfaces are part of revision 8.
+The wire changes now live are:
+
+- revision-6 wallet feed votes: `upvote_post_by_authority` and the
+  `FeedAuthorityVote` account family. Legacy `upvote_post` writes fail closed;
+  historical `FeedVote` accounts and events stay readable
+  ([design](./design/authority-feed-votes.md));
+- revision-7 opt-in per-wallet task quotas: `configure_task_creation_quota` and
+  one optional writable suffix on the five creation paths
+  ([design](./design/authority-task-quotas.md));
+- revision-8 fee-qualified ratings: each new listing or skill rating needs a
+  recorded SOL protocol fee of at least 100,000 lamports. Historical aggregates
+  are not recalculated ([design](./design/fee-qualified-ratings.md));
+- AGNC-02: fee-payee snapshots reject payees no transaction can credit
+  (`MarketplacePayeeUnpayable`), and the rent-floor payee forfeit pays a fee leg
+  that would leave its payee below the rent-exempt minimum to the worker and
+  emits `MarketplaceFeeForfeited`;
+- AGNC-03: `cancel_dispute` records the disputed duration as review-clock debt
+  and requires the writable validation config when it restores
+  PendingValidation; `auto_accept_task_result` waits for the review deadline
+  plus that debt;
+- AGNC-04: `update_bid` requires full bidder eligibility, and
+  `demote_ineligible_best` closes the ineligible leader's bid and gains two
+  required accounts (`bidder_market_state`, `bidder_authority`);
+- the dispute duplicate-agent guard: `initiate_dispute` and
+  `validate_task_result` reject the same agent account in a primary and an
+  optional writable slot;
+- the one-time `repair_dispute_initiator_counter` with its
+  `DisputeCounterRepair` receipt ([design](./design/dispute-counter-repair.md)).
+
+The release also carries the other remediation merged since revision 5; see
+[`audit/REMEDIATION_REVIEW_2026-10-19.md`](./audit/REMEDIATION_REVIEW_2026-10-19.md).
+The published advisories GHSA-gx7m-h6rr-c6qr (duplicate agent accounts, Medium
+5.4) and GHSA-qqhf-jhpm-xcw5 (AGNC-02, Medium 5.7) are patched in revision 8.
+
+### Revision-8 ceremony (2026-10-28)
+
+Every step after the pause ran while the protocol was paused:
+
+1. Pause through the ProtocolConfig multisig.
+2. Renew the moderation heartbeat. It is valid for 90 days (window 7,776,000 s),
+   so it lapses around 2027-01-26 unless renewed.
+3. Prepare the dispute repair under revision 5: expire
+   `4Ei4hU9C7CjdEH5Zb8CdiPEGzyjQSSaKTvjJrmRMvPXL` and
+   `HycAkBQBynmyvxrkHcEK95snxYy7q2EUJ3ZvUD4qYp9v`, then finalize `HycAkB…`.
+4. Run the release rail preflight. It passed.
+5. Upload buffer `BvLYRwrim58xJqfug7oSAycdwBzYUdneswWbS1jnZ4QF`.
+6. Execute the Squads upgrade (proposal 11).
+7. Check the bytes: the ProgramData payload is the release binary followed only
+   by zero padding.
+8. Repair the dispute counter atomically: one transaction ran
+   `repair_dispute_initiator_counter` and `apply_initiator_slash` on `4Ei4hU…`.
+   Agent `FPppuvejNG8T2iQFnQaezfxjW6WGMN4KkRHeEHgFiu1A` ended with counters 0/0.
+   The one-time receipt is `3aDqSrQjpR68Jt5ksCb239DXtTFMjLGZSZJPh5s8vL6G`.
+9. Publish the release IDL to `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1`.
+10. Stamp revision 8 with `stamp_release_surface`.
+11. Update the verified-build record through Squads proposals 12 and 13.
+    OtterSec verified it at 12:27:32 UTC.
+12. Create the canonical PMP security record through Squads proposal 14
+    (12:54:52 UTC).
+13. Unpause with `update_launch_controls` (13:08:08 UTC, tx
+    `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`).
+
+The coordinated revision-8 client release train is `@tetsuo-ai/protocol` 0.5.0,
+`@tetsuo-ai/marketplace-sdk` 0.13.0, `@tetsuo-ai/marketplace-react`,
+`@tetsuo-ai/marketplace-tools` and `@tetsuo-ai/marketplace-mcp` 0.6.0,
+`@tetsuo-ai/marketplace-moderation` and `@tetsuo-ai/agenc-worker` 0.3.0, and
+`@tetsuo-ai/agenc-cli` plus the unscoped `agenc-cli` alias 0.4.0. It is released
+through the tag-driven release workflow. See [`VERSIONING.md`](./VERSIONING.md).
+
+## Revision 5 (deployed 2026-07-22, superseded 2026-10-28)
+
+Revision 5 was live on mainnet from 2026-07-22 until the 2026-10-28 revision-8
+upgrade. Its upgrade was executed through the Squads v4 2-of-3 upgrade-authority
+vault (execute tx
+`5iZiPGmU5pYSGEaNBHkTR1cpGhmGtffGp8ZSufD71ActwNyTSt4cFkLoGqiucFmQ3DveSRthCK5fuZHb3NB7Smh7`,
+deployment slot 434489452), after a top-level ProgramData extension of +120,384
+bytes to 2,303,653 account-data bytes, and bracketed by an
+`update_launch_controls` pause/unpause. The deployed executable SHA-256 was
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2` (2,303,608
+bytes, byte-equal to the reviewed candidate). The 101-instruction compact IDL
+was published, `stamp_release_surface` stamped `surface_revision = 5`, and the
+protocol was unpaused (`protocol_paused = false`).
+
+Post-deploy note: 89 revision-4 bond-post-eligible third-party tasks were live
+through the upload window under an explicit operator-accepted race
+(`AGENC_ACCEPT_BOND_RACE`); the post-upgrade completion-bond inventory verified
+zero, so the race did not materialize.
+
+The revision-5 production/default `#[program]` surface contained 101 actual
+Rust entrypoints (the O(1) bid-accept redesign added `promote_bid`,
+`demote_ineligible_best`, and `settle_dispute_claim`). That number was derived
+from the revision-5 cfg-gated source, not this document:
 
 - production defaults: 101 (`spl-token-rewards`; `private-zk` off);
 - explicit development `private-zk`: 104;
@@ -63,8 +205,8 @@ cfg-gated source, not this document:
 The three private-proof entrypoints are quarantined because the guest,
 verifier/router deployment, and end-to-end proof policy have not been
 independently established for mainnet. Production builds and IDLs must exclude
-them; `scripts/mainnet-upgrade.mjs` enforces the exact 101/104/25 sets and
-refuses stale artifacts.
+them; for revision 5, `scripts/mainnet-upgrade.mjs` enforced the exact
+101/104/25 sets and refused stale artifacts.
 
 Revision 5 is a coordinated, paused cutover rather than an in-place client
 compatibility promise. It hardens authority and canonical-PDA checks, principal
@@ -74,7 +216,7 @@ service/goods/skill compare-and-swap semantics, token-account validation, and
 terminal child cleanup. It also adds the narrowly scoped
 `reclaim_orphan_task_child` rent-recovery instruction. `TaskBid` grows
 append-only from 250 to 252 bytes to snapshot its accepted-bid no-show policy;
-the mainnet inventory currently contains no bid accounts.
+the mainnet inventory then contained no bid accounts.
 
 The three funded-hire/activation writes use explicit revision-5 discriminators
 and a separate buyer-specific job-spec commitment; neither old-to-new nor
@@ -84,7 +226,8 @@ legacy-hire exits are in [`REVISION_5_CUTOVER.md`](./REVISION_5_CUTOVER.md).
 
 The deployment rail is deliberately fail-closed:
 
-- it requires a fresh production binary and matching 101-instruction IDL;
+- it requires a fresh production binary and matching production IDL (101
+  instructions for revision 5, 104 for revision 8);
 - it verifies the canonical ProgramData and Squads v4 2-of-3 vault/controller
   policy instead of inferring an EOA from account shape;
 - it proves the approved binary fits the live ProgramData allocation and forces
@@ -123,7 +266,7 @@ All former 2,284,496-byte / 101,272-byte-extension figures (and the earlier
 2,284,384-byte capacity, rent, Buffer, and 101,160-byte extension figures) are
 superseded. For the bound artifact, the target ProgramData account length is
 2,303,653 bytes and the upgrade Buffer length is 2,303,645 bytes. The standard
-rent formula gives a 16,034,315,760-lamport ProgramData floor at that length;
+rent formula then gave a 16,034,315,760-lamport ProgramData floor at that length;
 the 2026-07-20 dual-provider rent/balance evidence (15,901,296,240 /
 15,901,240,560 floors, 15,196,443,120 live balance, 704,853,120-lamport top-up
 at context slots 434137752/434137753) was read for the superseded 2,284,541-byte
@@ -205,7 +348,7 @@ Extension stamps the ProgramData slot, so the extension and
 entire preflight. The separate upgrade rail pins Solana CLI 4.1.0, forces
 `--no-auto-extend`, and rejects pre/post capacity drift. Re-query size, rent,
 authority, balance, feature state, and slot at the ceremony. The 2026-07-22
-extend already ran (see Current Mainnet Deployment above).
+extend already ran (see the start of this section).
 
 Read-only mainnet inventory on 2026-07-18 found no Active disputes, no Active
 governance proposals, no bid accounts, no token-denominated tasks, no
@@ -215,8 +358,9 @@ delete them; the recovery instruction validates every canonical parent/child/
 worker binding before returning rent.
 
 This surface went **live 2026-07-22** via the Squads upgrade and revision-5
-stamp; mainnet now runs the 101-instruction revision-5 binary (executable
-`049a66e3…`), superseding the prior 99-instruction revision-4 binary. The three
+stamp. Mainnet ran the 101-instruction revision-5 binary (executable
+`049a66e3…`) until the 2026-10-28 revision-8 upgrade; it superseded the prior
+99-instruction revision-4 binary. The three
 Squads member key files are currently documented as co-located on one host, so
 host-level quorum compromise remains an
 operational custody risk even though on-chain control is genuinely 2-of-3.
@@ -259,10 +403,13 @@ document was added, the deployed mainnet source tree matched `main`, so `main`
 remains the only branch downstream integrators should treat as canonical.
 
 Historical branches may remain in the repo for auditability, but they are not
-the branch of record once `main` matches the deployed tree. As of 2026-07-22,
-`main` matches the deployed revision-5 tree; released packages and operators
-target revision 5 (surface_revision = 5), the coordinated upgrade having been
-confirmed on-chain.
+the branch of record once `main` matches the deployed tree. The deployed
+revision-8 program was built from `main` commit
+`f39b383e416ec5bc511b0ffb781481a658d137d8`. As of 2026-10-28 the revision-8
+client train is released from `main` through the tag-driven release workflow.
+The published revision-5 set (protocol 0.4.0, SDK 0.12.0 and the rest) is the
+superseded wire for flows that changed; for example, legacy `upvote_post`
+writes fail closed.
 
 ## Release Discipline
 
@@ -325,7 +472,7 @@ Before or during any future mainnet upgrade:
 
 The canonical scanners decode the actual account layouts and PDA bindings from
 program state; they do not use the prose instruction inventory as an authority.
-The latest mainnet snapshot found:
+The latest pre-revision-5 mainnet snapshot found:
 
 - 208 AgentRegistration accounts, all with zero pending initiator outcomes and
   zero defendant-dispute counters. There are three zero-marker Cancelled
