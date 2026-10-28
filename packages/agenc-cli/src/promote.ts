@@ -825,6 +825,20 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
     const version = installedVersion(input, pkg);
     if (version == null) continue; // not a dependency of this project — fine
     const lines = revisionMatrix?.[pkg];
+    if (revisionMatrix !== null && lines === undefined) {
+      // The deployed revision is reviewed, but this package has no reviewed
+      // release for it (for example store-core on revision 8). Fail closed.
+      checks.push({
+        id: `pin:${pkg}`,
+        label: `${pkg} pin`,
+        status: "fail",
+        detail:
+          `${version} cannot be promoted: no reviewed ${pkg} release targets ` +
+          `deployed surface revision ${revision}`,
+        action: `remove ${pkg} from this project or wait for a reviewed ${pkg} release for surface revision ${revision}`,
+      });
+      continue;
+    }
     if (lines === undefined) {
       checks.push({
         id: `pin:${pkg}`,

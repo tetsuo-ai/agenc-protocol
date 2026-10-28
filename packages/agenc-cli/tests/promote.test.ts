@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -654,6 +655,31 @@ describe("runPromoteChecks", () => {
     expect(statusOf(report, "pin:template-sdk")).toBe("fail");
   });
 
+  it.each([6, 7])(
+    "does not map the revision-8 train onto unreviewed surface %i",
+    (revision) => {
+      const input = readyInput();
+      input.chainEvidence!.surfaceRevision = revision;
+      setInstalledTrain(input, REVISION_8_CLIENTS);
+      const report = runPromoteChecks(input);
+      for (const pkg of Object.keys(REVISION_8_CLIENTS)) {
+        expect(statusOf(report, `pin:${pkg}`), pkg).toBe("fail");
+      }
+    },
+  );
+
+  it("rejects an unreviewed newer SDK line on revision 8", () => {
+    const input = readyInput();
+    useRevision8Identity(input);
+    setInstalledTrain(input, {
+      ...REVISION_8_CLIENTS,
+      "@tetsuo-ai/marketplace-sdk": "0.14.0",
+    });
+    expect(
+      statusOf(runPromoteChecks(input), "pin:@tetsuo-ai/marketplace-sdk"),
+    ).toBe("fail");
+  });
+
   it("rejects every revision-8 client line against revisions 4 and 5", () => {
     for (const revision of [4, 5]) {
       const input = readyInput();
@@ -677,10 +703,13 @@ describe("runPromoteChecks", () => {
     });
     const report = runPromoteChecks(input);
     expect(statusOf(report, "pin:@tetsuo-ai/store-core")).toBe("fail");
-    expect(
-      report.checks.find((check) => check.id === "pin:@tetsuo-ai/store-core")
-        ?.detail,
-    ).toContain("no reviewed compatibility matrix");
+    const storeCore = report.checks.find(
+      (check) => check.id === "pin:@tetsuo-ai/store-core",
+    );
+    expect(storeCore?.detail).toContain(
+      "no reviewed @tetsuo-ai/store-core release targets deployed surface revision 8",
+    );
+    expect(storeCore?.action).toContain("remove @tetsuo-ai/store-core");
   });
 
   it("gives actionable wallet and RPC hints on FAIL lines", () => {
@@ -980,7 +1009,9 @@ describe("gatherPromoteInputAsync", () => {
     const upgradeAuthorityBytes = getBase58Encoder().encode(
       address(reviewed.upgradeAuthority),
     );
-    const programData = Buffer.alloc(49);
+    // Allocated ProgramData capacity beyond the executable is zero-filled; the
+    // reviewed hash covers the payload with those trailing zeros removed.
+    const programData = Buffer.alloc(49 + 16);
     programData.writeUInt32LE(3, 0);
     programData.writeBigUInt64LE(BigInt(reviewed.programDataSlot), 4);
     programData[12] = 1;
@@ -1050,6 +1081,9 @@ describe("gatherPromoteInputAsync", () => {
       programDataAddress: reviewed.programDataAddress,
       programDataSlot: reviewed.programDataSlot,
       upgradeAuthority: reviewed.upgradeAuthority,
+      executableHash: createHash("sha256")
+        .update(Buffer.from([1, 2, 3, 4]))
+        .digest("hex"),
       protocolPaused: false,
       protocolVersion: 1,
       minSupportedVersion: 1,
