@@ -18,22 +18,28 @@ matrix below and `getDeployedSurface` do.
 
 ## 1. Support matrix
 
-### Revision-6/7/8 candidates: feed votes, task quotas and fee-qualified ratings (not published or deployed)
+### Revisions 6 to 8: feed votes, task quotas and fee-qualified ratings (deployed 2026-10-28)
 
-This branch contains a **104-instruction revision-8 candidate**, including the
+Mainnet has run the 104-instruction revision-8 surface since 2026-10-28
+(`surface_revision = 8`, release commit `f39b383e416ec5bc511b0ffb781481a658d137d8`;
+see [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md)). It includes the
 distinct revision-6 `upvote_post_by_authority` wire and `FeedAuthorityVote` account family,
 the revision-7 opt-in `configure_task_creation_quota` capacity policy, and the
 threshold-approved one-time `repair_dispute_initiator_counter` with its
-`DisputeCounterRepair` receipt account.
-The documented mainnet revision-5 deployment and published package set below
-remain historical deployment evidence; they do not describe this candidate IDL.
-The generated instruction/error references describe the candidate on this branch.
+`DisputeCounterRepair` receipt account. Revisions 6 and 7 were never stamped on
+mainnet on their own. The protocol was reopened on 2026-10-28 at 13:08:08 UTC.
+The revision-5 deployment and published package set below are now historical
+deployment evidence; they do not describe the revision-8 IDL.
+The generated instruction/error references describe the revision-8 IDL
+committed at the release commit.
 
-The coordinated release targets are protocol **0.5.0**, SDK **0.13.0**,
-React/tools/MCP **0.6.0**, moderation/worker **0.3.0**, and CLI plus its alias
-**0.4.0**. The changeset records these pending minor bumps; package manifests
-retain their current versions until release preparation applies that changeset.
-These are proposed releases, not available-install recommendations. External
+The coordinated revision-8 client set is protocol 0.5.0, SDK 0.13.0,
+React/tools/MCP 0.6.0, moderation/worker 0.3.0, and CLI plus its alias 0.4.0.
+It is released through the tag-driven release workflow. The changeset records
+these pending minor
+bumps; package manifests retain their current versions until release
+preparation applies that changeset. Until publication they are not
+available-install recommendations. External
 store-core, scaffolder, hosted builders and marketplace binary releases still
 require their own tested pins and breaking-change announcements under §2.
 The CLI's reviewed production matrices remain revisions 4 and 5: a candidate
@@ -41,7 +47,8 @@ must not become eligible for `promote` merely because its SDK understands 6, 7 o
 
 Breaking change: `facade.upvotePost` now requires the post's `author` registration
 and the live `surface` capability set, and requires `feedAuthorityVotes` (revision
-6). Legacy `upvote_post` writes fail closed after the upgrade; historical
+6). Legacy `upvote_post` writes have failed closed on mainnet since the
+2026-10-28 upgrade; historical
 `FeedVote` accounts and events remain readable. Ranking must use
 `FeedPost.walletUpvoteCount`; `upvoteCount` becomes the frozen legacy count.
 The post allocation/prefix remains unchanged by using four reserved bytes.
@@ -54,7 +61,7 @@ multisig grants individual wallets a finite 256–1,000 maximum; all consumed
 usage and the shared cooldown carry across legacy and extended writes.
 ProtocolConfig and AuthorityRateLimit layouts remain 351 and 67 bytes. See
 [the quota design](design/authority-task-quotas.md) for the policy tradeoff and
-real RPC volume/settlement acceptance test. These candidate changes form the
+real RPC volume/settlement acceptance test. These changes form the
 same pending client train above; no intermediate publication is claimed.
 
 Revision 8 changes rating eligibility: each new listing/skill rating needs a
@@ -64,18 +71,24 @@ can inspect `feeQualifiedRatings` and the SDK fee-evidence helpers. Existing
 aggregates retain their historical entries and must not be presented as wholly
 fee-qualified. See [the rating policy](design/fee-qualified-ratings.md).
 
-Deployment is gated on the coordinated first-party release, a paused reviewed
-upgrade and IDL publication, then the atomic revision-8 stamp before unpausing.
-Until that ceremony, the candidate must not be advertised as the live surface.
+The paused reviewed upgrade, IDL publication and atomic revision-8 stamp
+completed on 2026-10-28; the ceremony record is in
+[`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
-### 1.1 Current compatible set (as of 2026-07-22)
+### 1.1 Current compatible set (as of 2026-10-28)
 
-The live program wire is the **full 101-instruction revision-5 surface**
-(`surface_revision = 5`, audit hardening; deployed 2026-07-22 via the Squads
-2-of-3, executable SHA-256
-`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`), with **405
-program error variants (6000–6404)**. It supersedes the prior 99-instruction
-revision-4 surface (`surface_revision = 4`, batch-4 goods; live 2026-07-09 →
+The live program wire is the full 104-instruction revision-8 surface
+(`surface_revision = 8`, fee-qualified ratings; deployed 2026-10-28 via the
+Squads 2-of-3 from release commit `f39b383e416ec5bc511b0ffb781481a658d137d8`),
+with 418 program error variants (6000 to 6417). The protocol was reopened on
+2026-10-28 at 13:08:08 UTC. The coordinated revision-8 client set above is the
+package set that speaks the complete revision-8 wire.
+Revision 8 supersedes the 101-instruction revision-5 surface
+(`surface_revision = 5`, audit hardening; live 2026-07-22 to 2026-10-28,
+executable SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, 405 program
+error variants), which superseded the 99-instruction revision-4 surface
+(`surface_revision = 4`, batch-4 goods; live 2026-07-09 to
 2026-07-22, slot 431918664). Its gate shapes descend from the **P1.2 hardened
 open roster** build (deployed 2026-07-03, slot 430491216):
 moderation-consumption gates at
@@ -92,18 +105,21 @@ added the **goods market** (**96 → 99 instructions**: `create_goods_listing`,
 `purchase_good`, `update_goods_listing` — rivalrous direct-buy with per-unit
 `SaleReceipt` provenance and the protocol fee on every sale), fully additive;
 the goods surface is revision-gated, so pre-0.11 SDKs simply do not expose it.
-The recorded revision-5 live wire artifact has **101 instructions / 43 accounts /
-102 events / 405 errors**. Its historical workspace IDL SHA-256 is
+The superseded revision-5 wire artifact had 101 instructions / 43 accounts /
+102 events / 405 errors. Its historical workspace IDL SHA-256 is
 `f8eb548c6c521a4a327bc2adf1cd8920fdf0f15597ae831fb7a1824bc31efd2e`
-(instruction docs only vs the prior `8cfd094d…` hash; ABI unchanged). Current
+(instruction docs only vs the prior `8cfd094d…` hash; ABI unchanged). The
+revision-8 IDL committed at the release commit has 104 instructions / 46
+accounts / 108 events / 418 errors and SHA-256
+`cab00d4029420c91028914cee46bc78c5b4c026b55d0e4561af9531cc8cdec59`. Current
 generated references at
 [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) and
-[`reference/ERRORS.md`](./reference/ERRORS.md) describe this branch's candidate,
-not proof of a new live deployment. `npm run check:idl-reference` keeps those
+[`reference/ERRORS.md`](./reference/ERRORS.md) describe that revision-8 IDL.
+`npm run check:idl-reference` keeps those
 references aligned with the committed IDL.
 
-**The revision-4 published set below now fails closed against the live
-revision-5 program; the coordinated revision-5 client set is in §1.1.1. The
+**The revision-4 published set below has failed closed on changed writes since
+the 2026-07-22 revision-5 cutover; the revision-5 client set is in §1.1.1. The
 prior revision-4 wire-compatible published set was:**
 
 | Package                             | Compatible range                   | Notes                                                                                                                                                                                                                            |
@@ -136,7 +152,9 @@ This repository contains the following coordinated revision-5 clients. The
 store-core and `create-agenc-store` packages live in their separate
 store repositories; they are not agenc-protocol workspace packages.
 The revision-5 program cutover executed on 2026-07-22, so these clients, not the
-revision-4 pins above, speak the live wire. Scoped packages in this table were
+revision-4 pins above, spoke the live wire until the 2026-10-28 revision-8
+upgrade. They are now the superseded wire for flows that changed; for example,
+legacy `upvote_post` writes fail closed. Scoped packages in this table were
 on npm at these versions when checked 2026-08-23:
 
 | Package                                        | Published (2026-07-22 train) | Coordination note                                                                                                               |
@@ -202,6 +220,7 @@ declare compatible ranges. Revision 5 has one coordinated combination: SDK
 | 2026-07-05      | **Batch-3 contest** ([`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md))     | 94 → **96 ix**, `surface_revision = 3`             | additive optional accounts                                                                                                                                                                         | none                                                                                                                                       | sdk **0.10.0** / **0.10.1** additive facade                                                                                                                                                                                                                      |
 | 2026-07-09      | **Batch-4 goods** ([`design/batch-4-goods.md`](./design/batch-4-goods.md))                       | 96 → **99 ix**, `surface_revision = 4`             | goods handlers require rev ≥ 4                                                                                                                                                                     | none for pre-goods flows; goods needs sdk **≥ 0.11.0**                                                                                     | sdk **0.11.0**, protocol **0.3.0**                                                                                                                                                                                                                               |
 | 2026-07-22      | **Revision-5 audit hardening** (executed; [`REVISION_5_CUTOVER.md`](./REVISION_5_CUTOVER.md)) | 99 → **101 production ix**, `surface_revision = 5`  | coordinated account/argument hardening across hire, claim, settlement, cancellation, goods, staking, skills, and governance paths; the three hire/activation writes use explicit v2 discriminators; the O(1) bid-accept redesign added `promote_bid` / `demote_ineligible_best` / `settle_dispute_claim` | sdk **≤0.11.x** and the corresponding old first-party clients fail closed on changed writes; v2 clients also reject the revision-4 program | flag-day release: protocol **0.4.0**, sdk **0.12.0**, react **0.5.0**, tools/MCP **0.5.0**, moderation/worker **0.2.0**, CLI **0.3.0**, store-core/create **0.6.1**; every first-party writer and hosted transaction builder staged before the paused cutover |
+| 2026-10-28      | **Revision-8 fee-qualified ratings** (executed while paused; includes revisions 6 and 7; [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md)) | 101 → **104 production ix**, `surface_revision = 8` | new `upvote_post_by_authority` and `FeedAuthorityVote`; opt-in `configure_task_creation_quota` with one optional writable suffix on the five creation paths; `demote_ineligible_best` gains two required accounts (AGNC-04); `cancel_dispute` requires the writable validation config when it restores PendingValidation (AGNC-03); new listing and skill ratings need a recorded SOL protocol fee of at least 100,000 lamports; one-time `repair_dispute_initiator_counter` | legacy `upvote_post` writes fail closed; the revision-5 clients (sdk **0.12.x** and its train) are the superseded wire for flows that changed | flag-day release: protocol **0.5.0**, sdk **0.13.0**, react/tools/MCP **0.6.0**, moderation/worker **0.3.0**, CLI and alias **0.4.0**, through the tag-driven release workflow |
 
 The 2026-06-11 row is the motivating failure: a flag-day wire change shipped with
 no deprecation window while the old sdk pin was still being scaffolded by public

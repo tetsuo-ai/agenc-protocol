@@ -5,6 +5,98 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-10-28: revision 8 deployed to mainnet
+
+- **Mainnet upgrade executed.** Program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
+  was upgraded to the revision-8 binary through Squads v4 proposal (transaction
+  index) 11 on multisig `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`. Members
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and
+  `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx` approved it, and the 2-of-3
+  upgrade-authority vault (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`)
+  executed it with tx
+  `48YNRN5P4mN8jPAMaoicza86JjYDE3DcyRtMmQp9MdEGo1i11DZ6ACrs1XEVPF3cdedMxcMr2Hg8hZeWN9YTCQVz`.
+  Deployment slot 462468899 (2026-10-28 12:01:55 UTC). Upload buffer
+  `BvLYRwrim58xJqfug7oSAycdwBzYUdneswWbS1jnZ4QF` was consumed by the upgrade. No
+  ProgramData extension was needed.
+- **Release identity:** commit `f39b383e416ec5bc511b0ffb781481a658d137d8` on `main`
+  (PR #308, rebase-merged 2026-10-21 19:23 UTC), git tree
+  `18f60dac82f2a4ae8856e9ba55ba2d06d5d16884`. Release binary 2,075,896 bytes,
+  SHA-256 `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`;
+  solana-verify normalized hash
+  `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`. Built
+  reproducibly with solana-verify 0.5.2 and the Agave 4.1.0 image
+  `solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
+- **Verified on-chain:** the 2,303,608-byte ProgramData payload (SHA-256
+  `ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9`) is the
+  release binary followed only by zero padding, with 227,712 bytes of headroom.
+  ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` holds 11.703207480 SOL,
+  its rent floor; the loader returned the 4.331108280 SOL surplus to the spill
+  account `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`. `ProtocolConfig`
+  (`DeBPkxhzE6MJr66HhEgcHBv5rBFoHWysb6uyK4skufUs`) is 351 bytes with
+  `surface_revision = 8` (SURFACE_REVISION_FEE_QUALIFIED_RATINGS) and
+  `disabled_task_type_mask = 0`.
+- **Ceremony order:** pause through the ProtocolConfig multisig, then, while
+  paused: moderation heartbeat renewed (90-day window of 7,776,000 s, so it
+  lapses around 2027-01-26 unless renewed); dispute repair prepared under
+  revision 5 (disputes `4Ei4hU9C7CjdEH5Zb8CdiPEGzyjQSSaKTvjJrmRMvPXL` and
+  `HycAkBQBynmyvxrkHcEK95snxYy7q2EUJ3ZvUD4qYp9v` expired, `HycAkB…` finalized);
+  release rail preflight passed; buffer upload; Squads upgrade; byte check;
+  atomic dispute counter repair; IDL publication; stamp; verified-build record
+  (Squads proposals 12 and 13); PMP security record (Squads proposal 14);
+  unpause.
+- **Dispute counter repair:** one transaction ran
+  `repair_dispute_initiator_counter` and `apply_initiator_slash` on `4Ei4hU…`.
+  Agent `FPppuvejNG8T2iQFnQaezfxjW6WGMN4KkRHeEHgFiu1A` ended with counters 0/0.
+  One-time receipt: `3aDqSrQjpR68Jt5ksCb239DXtTFMjLGZSZJPh5s8vL6G`.
+- **IDL and stamp:** IDL account `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1`
+  holds the 104-instruction release IDL (committed
+  `artifacts/anchor/idl/agenc_coordination.json` SHA-256
+  `cab00d4029420c91028914cee46bc78c5b4c026b55d0e4561af9531cc8cdec59`).
+  `stamp_release_surface` set `surface_revision = 8` in tx
+  `5ndbVifEMn7nXWTZXxYSkDR21PrTiGdxuJSQ27ounN99TBWSRoG9Pge7tasZApmLwk6vVQFPiMaVnPjRP68xDMQM`
+  at slot 462470117 (2026-10-28 12:06:15 UTC).
+- **Wire changes now live:** production instructions go from 101 to 104.
+  Revision 6 adds wallet feed votes (`upvote_post_by_authority`,
+  `FeedAuthorityVote`); legacy `upvote_post` writes fail closed. Revision 7 adds
+  opt-in per-wallet task quotas (`configure_task_creation_quota`, one optional
+  writable suffix). Revision 8 requires a recorded SOL protocol fee of at least
+  100,000 lamports for each new listing or skill rating. The release also ships
+  the AGNC-02 rent-floor payee forfeit, AGNC-03, AGNC-04
+  (`demote_ineligible_best` gains two required accounts), the dispute
+  duplicate-agent guard and the one-time `repair_dispute_initiator_counter`.
+  Revisions 6 and 7 were never stamped on mainnet on their own. Details:
+  `docs/MAINNET_MAINLINE.md`.
+- **Security advisories:** GHSA-gx7m-h6rr-c6qr (duplicate agent accounts, Medium
+  5.4) and GHSA-qqhf-jhpm-xcw5 (AGNC-02, Medium 5.7) are published and patched in
+  revision 8.
+- **Verified build:** the vault's verification PDA
+  `CVV2Lu42qvCm8PrkzQYaKeHYSvAUjvRc6jBTawtuPfWQ` was updated through Squads
+  proposals 12 and 13. OtterSec job `237eab0c` reports `is_verified: true` for
+  commit `f39b383…`, with `on_chain_hash` and `executable_hash` both
+  `ffb8f3cb…` (last verified 2026-10-28T12:27:32Z). The pending revision-5
+  re-attestation is superseded; revision 5 was never re-attested.
+- **Protocol reopened.** `update_launch_controls` unpaused the protocol at
+  2026-10-28 13:08:08 UTC (tx
+  `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`,
+  slot 462487575). It had been paused since 11:31:18 UTC (tx
+  `2vHNFb5FCwuKn43XAnD9DevrKbc8yoAKK8Aw9q1jtE1bzkyqejcpMpgkWjpSfNcQ3WWcjEvT1pjMSTWHdsdgNeAG`).
+- **Client release train:** protocol 0.5.0, marketplace-sdk 0.13.0,
+  marketplace-react, marketplace-tools and marketplace-mcp 0.6.0,
+  marketplace-moderation and agenc-worker 0.3.0, and agenc-cli plus the
+  unscoped alias 0.4.0, released through the tag-driven release workflow
+  (`.github/workflows/release.yml`). The published revision-5 packages are the
+  superseded wire for flows that changed; for example, legacy `upvote_post`
+  writes fail closed.
+- **Explorer security metadata (issue #199):** Squads proposal 14 created the
+  canonical PMP `security` record `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw`
+  (execute tx
+  `b4sj2V78ddEfN1V6EM9K3krs3LfgTkgSNZxiPT93hbZjZiXgmiKWKa14e9hJgbnZTZBum4rB1PeAkHymVdcrpEZ`,
+  slot 462483846, 2026-10-28 12:54:52 UTC). Its 841 bytes equal
+  `programs/agenc-coordination/security.json` (SHA-256
+  `e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9`).
+  Solscan's Security.txt flag reads this record and now shows true. See
+  `docs/EXPLORER_METADATA.md`.
+
 ## 2026-07-22 — revision 5 DEPLOYED to mainnet
 
 - **Mainnet upgrade executed.** Program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
