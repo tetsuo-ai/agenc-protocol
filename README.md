@@ -130,29 +130,29 @@ surface.
 
 | Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.4.0** (npm)                      | Committed 101-instruction revision-5 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Older 0.3.0 is the superseded revision-4 99-ix wire. |
-| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.12.0** (npm)                     | Codama-generated `@solana/kit` client for the **101-instruction revision-5 surface** + ergonomic facade. Older 0.11.0 is the superseded revision-4 wire. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
-| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.5.0** (npm)                      | React hooks/components for embeddable marketplace UIs; requires the revision-5 SDK and buyer job-spec commitment. |
-| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.5.0** (npm)                      | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
-| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.5.0** (npm)                      | MCP server exposing marketplace tools. |
-| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | **0.2.0** (npm)                      | Shared moderation canon / test vectors. |
-| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | **0.3.0** (npm)                      | `init` / `dev` / `promote` developer CLI. |
-| `agenc-cli`                         | `packages/agenc-cli-alias`        | workspace **0.3.0**; npm still **0.2.0** (checked 2026-08-23) | Thin unscoped alias for the scoped CLI. |
-| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | **0.2.0** (npm)                      | Worker claim/submit runtime loop. |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.5.0** | Committed 104-instruction revision-8 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Older 0.4.0 is the superseded revision-5 101-ix wire. |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.13.0** | Codama-generated `@solana/kit` client for the **104-instruction revision-8 surface** + ergonomic facade. Older 0.12.0 is the superseded revision-5 wire. |
+| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.6.0** | React hooks/components for embeddable marketplace UIs; requires the revision-8 SDK (`^0.13.0`) and buyer job-spec commitment. |
+| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.6.0** | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
+| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.6.0** | MCP server exposing marketplace tools. |
+| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | **0.3.0** | Shared moderation canon / test vectors. |
+| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | **0.4.0** | `init` / `dev` / `promote` developer CLI. |
+| `agenc-cli`                         | `packages/agenc-cli-alias`        | **0.4.0** | Thin unscoped alias for the scoped CLI. |
+| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | **0.3.0** | Worker claim/submit runtime loop. |
 
-Those scoped packages were published with the 2026-07-22 revision-5 cutover. Older revision-4 pins fail closed against the live program.
+These versions form the coordinated revision-8 train for the program deployed on 2026-10-28. They are published through the tag-driven release workflow. The revision-5 set (protocol 0.4.0, SDK 0.12.0 and the rest) is the superseded wire for flows that changed.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## Build, test & validate
 
 Reproducible-build prerequisites: Rust 1.85.0 (declared/tested MSRV 1.82.0),
-Anchor 0.32.1, Solana 3.0.13, Node 24.18.0, and npm 11.18.0. Package builds are
+Anchor 0.32.1, Solana (Agave) 4.1.0, Node 24.18.0, and npm 11.18.0. Package builds are
 also gated at the advertised Node 22.23.1 floor. Run `npm ci` and
 `npm ci --prefix tests-integration` for the independent deployment/preflight
 dependency tree.
 
-Revision-5 packages no longer support Node 20: upstream marks that line EOL,
+The revision-5 and revision-8 packages do not support Node 20: upstream marks that line EOL,
 and production deployments should use an Active or Maintenance LTS release.
 
 ```bash

@@ -35,15 +35,14 @@ committed at the release commit.
 
 The coordinated revision-8 client set is protocol 0.5.0, SDK 0.13.0,
 React/tools/MCP 0.6.0, moderation/worker 0.3.0, and CLI plus its alias 0.4.0.
-It is released through the tag-driven release workflow. The changeset records
-these pending minor
-bumps; package manifests retain their current versions until release
-preparation applies that changeset. Until publication they are not
-available-install recommendations. External
-store-core, scaffolder, hosted builders and marketplace binary releases still
-require their own tested pins and breaking-change announcements under §2.
-The CLI's reviewed production matrices remain revisions 4 and 5: a candidate
-must not become eligible for `promote` merely because its SDK understands 6, 7 or 8.
+The package manifests carry these versions and are released through the
+tag-driven release workflow (`.github/workflows/release.yml`), in dependency
+order: protocol, then SDK and moderation, then React, tools and worker, then
+MCP and the CLI, then the alias. External store-core, scaffolder, hosted
+builders and marketplace binary releases still require their own tested pins
+and breaking-change announcements under §2.
+The CLI's reviewed production matrices are revisions 4, 5 and 8. Revisions 6
+and 7 were never stamped on mainnet on their own and have no matrix.
 
 Breaking change: `facade.upvotePost` now requires the post's `author` registration
 and the live `surface` capability set, and requires `feedAuthorityVotes` (revision
@@ -178,11 +177,18 @@ is intentionally outside this release train's support contract.
 finalized chain evidence reports surface revision 5; revision 4 selects only
 the published set above. The sets are never unioned.
 
-`REVIEWED_MAINNET_RELEASES` in `packages/agenc-cli/src/promote.ts` still lists
-only revision 4. The support matrix already has revision 5 pins, but identity
-matching still needs the observed 2026-07-22 ProgramData address, slot, vault,
-executable SHA-256, and source commit before `promote` will treat a revision-5
-RPC as a reviewed release. Do not invent those values.
+`REVIEWED_MAINNET_RELEASES` in `packages/agenc-cli/src/promote.ts` lists the
+revision-4 identity and, since CLI 0.4.0, the revision-8 identity read from
+finalized mainnet after the 2026-10-28 upgrade: ProgramData
+`E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, deployment slot 462468899,
+upgrade authority `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`, normalized
+executable hash
+`ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38` and source
+commit `f39b383e416ec5bc511b0ffb781481a658d137d8`. The revision-5 identity was
+never patched in; revision 5 is no longer live. On revision 8, `promote`
+selects only the revision-8 set: protocol 0.5.x, SDK 0.13.x, worker 0.3.x,
+React, tools and MCP 0.6.x and moderation 0.3.x. No reviewed store-core release
+targets revision 8 yet, so an installed store-core fails closed there.
 
 ### 1.1.2 Coherent installed combinations
 
@@ -202,12 +208,15 @@ or peer:
 | revision 5 | React/tools/worker `0.5.0`/`0.5.0`/`0.2.0` | SDK `^0.12.0`                                 |
 | revision 5 | MCP `0.5.0`                                | tools `^0.5.0` and SDK `^0.12.0`              |
 | revision 5 | external store-core `0.6.2`                | React `^0.5.0` and SDK `^0.12.0`              |
+| revision 8 | React/tools/worker `0.6.0`/`0.6.0`/`0.3.0` | SDK `^0.13.0`                                 |
+| revision 8 | MCP `0.6.0`                                | tools `^0.6.0` and SDK `^0.13.0`              |
 
 This means a full revision-4 installation containing all published consumers
 uses SDK 0.8.2 (or another version admitted by every installed range), even
 though SDK 0.9–0.11 remain valid for applications whose installed consumers
-declare compatible ranges. Revision 5 has one coordinated combination: SDK
-0.12 with the published train in §1.1.1.
+declare compatible ranges. Revision 5 had one coordinated combination: SDK
+0.12 with the published train in §1.1.1. Revision 8 has one: SDK 0.13 with the
+revision-8 train above.
 
 ### 1.2 Break-event history (why this document exists)
 

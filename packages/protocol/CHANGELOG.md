@@ -1,5 +1,50 @@
 # @tetsuo-ai/protocol
 
+## 0.5.0
+
+Released for the revision-8 mainnet program (release commit `f39b383`,
+deployed 2026-10-28). Protocol 0.4.0 is the superseded revision-5 wire.
+
+### Release coordination
+
+- Regenerated the public artifacts for the 104-instruction revision-8
+  production IDL: 46 accounts, 108 events and 418 errors (revision 5 had 101,
+  43, 102 and 405). The three private-ZK instructions stay out of the
+  production IDL.
+- This package matches the IDL published on chain at
+  `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1`.
+
+### Added
+
+- Revision-6 wallet feed votes: `upvote_post_by_authority`, the
+  `FeedAuthorityVote` account and the `PostUpvotedByAuthority` event. Each
+  wallet votes once per post. Legacy `upvote_post` writes fail closed on
+  revision 8; historical `FeedVote` accounts and events stay readable.
+- Revision-7 opt-in wallet task quotas: `configure_task_creation_quota`, the
+  `AuthorityTaskQuota` account and the `TaskCreationQuotaConfigured` and
+  `TaskCreationQuotaHit` events.
+- Revision-8 fee-qualified ratings: a new listing or skill rating needs a
+  recorded SOL protocol fee of at least 100,000 lamports
+  (`RatingFeeNotQualified`).
+- The one-time governance repair `repair_dispute_initiator_counter`, its
+  `DisputeCounterRepair` receipt and the `DisputeInitiatorCounterRepaired`
+  event.
+- `MarketplaceFeeForfeited` (AGNC-02): a fee leg that would leave its operator
+  or referrer payee below the rent-exempt minimum is paid to the worker instead
+  of blocking settlement.
+- `TaskClaimExpired` from `expire_claim`.
+- New errors: `ClaimSettlementPending`, `InvalidModerationConfig`,
+  `ListingCapacityBelowOpenJobs`, `FeedAgentVotingRetired`,
+  `FeedAuthorityAlreadyVoted`, `FeedAuthorityVotingUnavailable`,
+  `TaskQuotaUnavailable`, `InvalidTaskQuota`, `InvalidTaskQuotaAccount`,
+  `RatingFeeNotQualified`, `MarketplacePayeeUnpayable`,
+  `DisputeCounterRepairNotApplicable` and `DisputeCounterNotDeficient`.
+
+### Breaking changes
+
+- `demote_ineligible_best` gains two required accounts, `bidder_market_state`
+  and `bidder_authority` (AGNC-04).
+
 ## 0.4.0 (published 2026-07-22)
 
 ### Release coordination

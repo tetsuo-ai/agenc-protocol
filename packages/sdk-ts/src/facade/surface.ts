@@ -70,13 +70,16 @@ export const SURFACE_REVISION_BATCH4 = 4;
  */
 export const SURFACE_REVISION_AUDIT_HARDENING = 5;
 
-/** Unreleased revision-6 candidate: one prospective feed vote per wallet. */
+/** Revision 6, deployed as part of revision 8: one prospective feed vote per wallet. */
 export const SURFACE_REVISION_AUTHORITY_FEED = 6;
 
-/** Unreleased revision-7 candidate: bounded multisig-approved task capacity. */
+/** Revision 7, deployed as part of revision 8: bounded multisig-approved task capacity. */
 export const SURFACE_REVISION_TASK_QUOTAS = 7;
 
-/** Unreleased revision-8 candidate: ratings backed by an actual SOL fee floor. */
+/**
+ * Revision 8, live on mainnet since 2026-10-28: ratings backed by an actual SOL
+ * fee floor. It also carries the revision-6 and revision-7 surfaces.
+ */
 export const SURFACE_REVISION_FEE_QUALIFIED_RATINGS = 8;
 
 /** Highest surface revision understood by this SDK build. */

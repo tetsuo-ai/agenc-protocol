@@ -368,7 +368,7 @@ test("release DAG matches first-party manifest edges and exact prerequisite rang
         train,
         new Map(manifests).set("mcp", wrongRange),
       ),
-    /does not admit reviewed 0.12.0/,
+    /does not admit reviewed 0.13.0/,
   );
 
   for (const shadowingSection of ["optionalDependencies", "peerDependencies"]) {
@@ -376,7 +376,7 @@ test("release DAG matches first-party manifest edges and exact prerequisite rang
     shadowedWrongRange.dependencies["@tetsuo-ai/marketplace-sdk"] = "^0.11.0";
     shadowedWrongRange[shadowingSection] = {
       ...(shadowedWrongRange[shadowingSection] ?? {}),
-      "@tetsuo-ai/marketplace-sdk": "^0.12.0",
+      "@tetsuo-ai/marketplace-sdk": "^0.13.0",
     };
     assert.throws(
       () =>
@@ -384,12 +384,12 @@ test("release DAG matches first-party manifest edges and exact prerequisite rang
           train,
           new Map(manifests).set("mcp", shadowedWrongRange),
         ),
-      /does not admit reviewed 0.12.0/,
+      /does not admit reviewed 0.13.0/,
     );
   }
 
   const contradictoryRanges = structuredClone(manifests.get("mcp"));
-  contradictoryRanges.peerDependencies["@tetsuo-ai/marketplace-sdk"] = "0.12.0";
+  contradictoryRanges.peerDependencies["@tetsuo-ai/marketplace-sdk"] = "0.13.0";
   assert.throws(
     () =>
       validateReleaseDependencyGraph(
@@ -400,7 +400,7 @@ test("release DAG matches first-party manifest edges and exact prerequisite rang
   );
 
   const matchingDuplicate = structuredClone(manifests.get("mcp"));
-  matchingDuplicate.peerDependencies["@tetsuo-ai/marketplace-sdk"] = "^0.12.0";
+  matchingDuplicate.peerDependencies["@tetsuo-ai/marketplace-sdk"] = "^0.13.0";
   assert.equal(
     validateReleaseDependencyGraph(
       train,

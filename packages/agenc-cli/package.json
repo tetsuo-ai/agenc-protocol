@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/agenc-cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "The Stripe-4242 moment for AgenC: `agenc init` wires the current repo into an AgenC node, `agenc dev` runs counterparty bots that hire + complete your listing (printing the live 4-way settlement split) against a localnet stack or the zero-setup in-process litesvm sandbox, `agenc promote` diffs against the go-live checklist",
   "packageManager": "npm@11.18.0",
   "type": "module",
@@ -49,8 +49,8 @@
     "test:generated-next": "node tests-e2e/generated-next-build.mjs"
   },
   "dependencies": {
-    "@tetsuo-ai/agenc-worker": "^0.2.0",
-    "@tetsuo-ai/marketplace-sdk": "^0.12.0",
+    "@tetsuo-ai/agenc-worker": "^0.3.0",
+    "@tetsuo-ai/marketplace-sdk": "^0.13.0",
     "litesvm": "1.1.0",
     "semver": "^7.8.5"
   },
