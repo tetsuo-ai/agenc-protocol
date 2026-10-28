@@ -1,48 +1,87 @@
-# Explorer metadata and revision-5 re-attestation
+# Explorer metadata and the verified build
 
-Issue #199 requires two approved on-chain actions: create the canonical `security`
-metadata and update the vault's verification PDA. The program executable is not
-changed by these actions. This procedure builds on wenakita's PR #200.
+Issue #199 asked for two on-chain actions that only the upgrade-authority vault
+can sign: create the canonical Program Metadata Program (PMP) `security` record
+and update the vault's OtterSec verification PDA. Both are live for revision 8
+since 2026-10-28. Neither action changes the program executable. This procedure
+builds on wenakita's PR #200.
 
-## Observed state and reproducibility
-
-On 2026-10-19, read-only mainnet inspection confirmed:
+## Live state (2026-10-28)
 
 | Property | Observed value |
 | --- | --- |
 | Program | `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` |
 | ProgramData | `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` |
-| Last deployment slot | `434489452` |
+| Deployment slot | `462468899` (revision 8) |
 | Upgrade authority | `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` |
-| Custody | Squads v4, autonomous 2-of-3, zero timelock; committed custody policy matches |
-| Canonical security PDA | `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw`, absent |
-| OtterSec registry | `is_verified: false`, still refers to revision-4 commit `097ded1` |
+| Custody | Squads v4 `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`, autonomous 2-of-3, zero timelock; committed custody policy matches; transaction index 14 |
+| Canonical security record | `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw`, present: 841 bytes of UTF-8 JSON, uncompressed, direct data, SHA-256 `e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9` |
+| Record source | Byte-identical to `programs/agenc-coordination/security.json` |
+| Record creation | Squads proposal 14, approved by `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx`, executed in tx `b4sj2V78ddEfN1V6EM9K3krs3LfgTkgSNZxiPT93hbZjZiXgmiKWKa14e9hJgbnZTZBum4rB1PeAkHymVdcrpEZ` at slot 462483846 (12:54:52 UTC) |
+| Verification PDA | `CVV2Lu42qvCm8PrkzQYaKeHYSvAUjvRc6jBTawtuPfWQ`, updated by Squads proposals 12 and 13: verifier 0.5.2, commit `f39b383e416ec5bc511b0ffb781481a658d137d8`, slot 462468899, build arguments pin `--base-image solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab` |
+| OtterSec registry | `is_verified: true` for commit `f39b383`, `on_chain_hash` and `executable_hash` both `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`, last verified 2026-10-28T12:27:32Z |
+| Read-only acceptance | `node scripts/explorer-metadata.mjs status`: `security.matches=true`, `acceptanceMet=true` |
 
-The exact revision-5 source is
-`08a3c87d4729e4a47c3db58cc61f2a8cee8a518d`. A fresh default-feature build with
-checksum-pinned verifier **0.5.2** and its historical Agave **3.0.13** image
-`sha256:2ee1f4c3f0db0e1c1107ffb978b1d16b792194148852f31891adf3ee85970259`
-reproduced the live payload **byte-for-byte**:
+The public observation evidence is in
+`artifacts/explorer-metadata/2026-10-28-revision-8.json`. The superseded
+revision-5 observation (2026-10-19, record absent, registry still on revision 4)
+stays in `artifacts/explorer-metadata/2026-10-19-revision-5.json`.
 
-- Raw ELF/payload SHA-256: `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`.
+## What explorers read
+
+The hosted RFC 9116 files at `agenc.ag/.well-known/security.txt` and
+`agenc.tech/.well-known/security.txt` are separate. Explorers do not read them.
+
+- Solana Explorer reads the PMP canonical `security` record. Its Verified Build
+  tab reads the OtterSec registry.
+- Solscan's "Security.txt" flag also reads the PMP canonical `security` record.
+  Mainnet programs that have only a PMP record and no `.security.txt` ELF
+  section show true, for example
+  `4X79YRjz9KNMhdjdxXg2ZNTS3YnMGYdwJkBHnezMJwr3` and
+  `GpraCzoKRwVb3WfucGxCStTftB42qkoSJtpRLxshFoGF`. When a program has both,
+  Solscan shows the PMP content. A program with only an ELF section still shows
+  true from that section.
+- The AgenC program has no `.security.txt` ELF section, so the PMP record alone
+  set Solscan's flag. Solscan showed true and the record's content shortly
+  after proposal 14 executed.
+- Only the canonical record counts. A third-party (non-canonical) record is
+  ignored. Write the record with JSON format (`--format json`, as below); a
+  record stored with format `none` is shown as raw text and the flag stays
+  false.
+
+## Reproducibility
+
+The deployed source is release commit
+`f39b383e416ec5bc511b0ffb781481a658d137d8`. A default-feature build with the
+checksum-pinned verifier **0.5.2** and the Agave **4.1.0** image
+`solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`
+reproduces the deployed binary:
+
+- Release ELF: 2,075,896 bytes, SHA-256
+  `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`.
+- Live ProgramData payload: 2,303,608 bytes, SHA-256
+  `ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9`. It is the
+  release ELF followed only by zero padding (227,712 bytes of headroom).
 - Verifier normalized hash, after removing trailing zero bytes:
-  `a389e6f5e0dda3cb1b893e2c82ba04272059f33d17df7c00ab8fca73915ef203`.
+  `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`.
 
-These different hashes represent different hashing conventions for the same
-binary. The current Agave 4.1/revision-7 candidate must not be used to attest the
-historical deployed revision. Historical reproduction does not relax the
-current release toolchain floors. Public observation evidence is recorded in
-`artifacts/explorer-metadata/2026-10-19-revision-5.json`.
+These hashes are different conventions for the same binary. Because the payload
+is longer than the ELF, `scripts/explorer-metadata.mjs` checks that a rebuilt
+artifact has the release ELF hash, equals the payload prefix, and that every
+byte after it is zero.
 
-Schedule this revision-5 ceremony before the candidate protocol upgrade if the
-reviewed packet is to be used unchanged. If the upgrade happens first, stop:
-the pinned bytes and deployment slot will correctly fail preflight. Reproduce
-the newly deployed source, capture fresh custody/slot evidence, update
-`security.json` and the verifier packet, and obtain a new review. Do not weaken
-the revision-5 bindings to reuse an obsolete packet. Source merges alone do not
-complete either ceremony, and #199 stays open until live acceptance is recorded.
+The script, `security.json` and its tests are bound to revision 8: commit,
+deployment slot, ELF, payload and normalized hashes. After the next program
+upgrade they correctly fail closed. Reproduce the newly deployed source, capture
+fresh custody and slot evidence, update `security.json` and the bindings, and
+obtain a new review. Do not weaken the bindings to reuse an obsolete packet.
 
-## Prepare a reviewable packet
+`programs/agenc-coordination/security.json` names **only GitHub Private
+Vulnerability Reporting**, the confirmed contact in `SECURITY.md`. It pins the
+revision-8 commit and expires on 2027-07-18. Renewing it before expiry needs a
+new reviewed record write through the vault.
+
+## Check the live state
 
 Install this checkout's locked dependencies, including the independent web3
 preflight graph:
@@ -52,53 +91,54 @@ npm ci
 npm ci --prefix tests-integration
 node --test scripts/explorer-metadata.test.mjs
 node scripts/explorer-metadata.mjs check
-```
-
-Build the exact deployed commit in a separate clean checkout:
-
-```bash
-git worktree add --detach ../agenc-revision-5 08a3c87d4729e4a47c3db58cc61f2a8cee8a518d
-cd ../agenc-revision-5/programs/agenc-coordination
-solana-verify build --library-name agenc_coordination
-```
-
-Use the checksum-pinned verifier from `.github/workflows/verify.yml`. Before
-preparing either proposal, run in the current remediation checkout:
-
-```bash
-node scripts/explorer-metadata.mjs preflight --artifact /absolute/path/to/rebuilt/agenc_coordination.so
 node scripts/explorer-metadata.mjs status
 ```
 
-The preflight binds the mainnet genesis, loader ownership and ProgramData PDA,
+`check` prints the SHA-256 of `security.json`; it must equal the on-chain
+content hash above. `status` reads the loader, custody, PMP executable, the
+canonical record and the OtterSec registry. It distinguishes an absent account
+from an RPC or decoder error; a transport failure is not reported as missing
+metadata. It is read-only.
+
+To bind a rebuilt binary as well, build the release commit in a separate clean
+checkout and run the preflight:
+
+```bash
+git worktree add --detach ../agenc-revision-8 f39b383e416ec5bc511b0ffb781481a658d137d8
+cd ../agenc-revision-8/programs/agenc-coordination
+solana-verify build --url https://api.mainnet-beta.solana.com \
+  --library-name agenc_coordination \
+  --base-image solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab
+cd -
+node scripts/explorer-metadata.mjs preflight --artifact /absolute/path/to/rebuilt/agenc_coordination.so
+```
+
+Pass `--url` so the verifier does not fall back to the default Solana CLI
+config and its key file. The preflight binds the mainnet genesis, loader ownership and ProgramData PDA,
 actual executable bytes, deployment slot, current upgrade vault, complete
-reviewed Squads membership/threshold and deployed PMP binary. A changed
-executable, authority, custody configuration, metadata representation or expired
-contact document fails closed and needs a fresh review. `status` distinguishes
-an absent account from an RPC/decoder error; a transport failure is not reported
-as missing metadata.
+reviewed Squads membership and threshold, and the deployed PMP binary. A changed
+executable, authority, custody configuration, metadata representation or
+expired contact document fails closed and needs a fresh review.
 
-`programs/agenc-coordination/security.json` names **only GitHub Private
-Vulnerability Reporting**, the confirmed contact in `SECURITY.md`. It pins the
-revision-5 commit and expires on 2027-07-18. Renew it deliberately before expiry.
+## How the revision-8 record was created (2026-10-28)
 
-## Operator ceremony, after explicit authorization
+`explorer-metadata.mjs` only reads or exports unsigned proposal inputs. It has
+no key-loading, signing, broadcast or external-job submission mode; the old
+`--apply` form is rejected. Funding, buffer handoff, Squads approval and
+execution are human gates (`MAINNET_ROLLOUT_RUNBOOK.md` §2.5). The revision-8
+record followed these steps:
 
-`explorer-metadata.mjs` only reads or exports unsigned proposal inputs. It has no
-key-loading, signing, broadcast or external-job submission mode; the old
-`--apply` form is rejected. Mainnet funding, buffer handoff, Squads approval and
-execution remain the human gates in `MAINNET_ROLLOUT_RUNBOOK.md` §2.5.
-
-1. Review the document bytes and hash, fresh preflight, rent-return public key,
-   and both proposals. Use independently controlled members per
-   `UPGRADE_AUTHORITY.md`; this PR does not attest actual key custody.
-2. An authorized operator funds and uploads a standalone staging buffer using
-   the **locked local** PMP CLI. Use `--compression none --format json`, then
-   hand that exact buffer to the reviewed upgrade vault. The commands printed
-   by `node scripts/explorer-metadata.mjs` include these settings. Check the
-   buffer's address from the named CLI field; never extract an arbitrary first
-   base58 token from console output. Do not re-create a buffer to retry an export.
-3. Export the canonical write, with the operator's reviewed rent-return address:
+1. A fresh read-only `preflight` with the rebuilt release ELF.
+2. An operator created a standalone staging buffer
+   (`4dH8Pq7LPBFuqBW4WK6YnRKFBuz8gKJjwenLE1peosNQ`) from `security.json` with the
+   **locked local** PMP CLI, `--compression none --format json`, and handed its
+   authority to the vault. The commands printed by
+   `node scripts/explorer-metadata.mjs` include these settings.
+3. `export-security` checked the buffer owner, discriminator, authority and
+   every content byte, and emitted one legacy transaction: exact rent top-up,
+   canonical allocation, buffer copy, initialization and buffer close/refund. It
+   refuses existing metadata and payloads over 8 KiB, and includes no
+   ComputeBudget instruction inside the Squads CPI:
 
    ```bash
    node scripts/explorer-metadata.mjs export-security \
@@ -106,45 +146,23 @@ execution remain the human gates in `MAINNET_ROLLOUT_RUNBOOK.md` §2.5.
      --buffer <BUFFER_PUBLIC_KEY> --rent-return <OPERATOR_PUBLIC_KEY>
    ```
 
-   The exporter checks the buffer owner, discriminator, authority and every
-   content byte. It emits one legacy transaction: exact rent top-up, canonical
-   allocation, buffer copy, initialization and buffer close/refund. It refuses
-   existing metadata and payloads over 8 KiB; there is no hidden multi-extend or
-   overwrite behavior. It includes no ComputeBudget instruction inside the
-   Squads CPI. Review the returned instruction/account list and `rentTopUp`.
-4. Export the verification-PDA update:
+4. The unsigned transaction became Squads proposal 14 (vault index 0). Two
+   distinct members approved it and it was executed.
+5. `status` then reported `security.matches=true` and `acceptanceMet=true`.
 
-   ```bash
-   node scripts/explorer-metadata.mjs export-verify-pda \
-     --artifact /absolute/path/to/rebuilt/agenc_coordination.so \
-     --verifier /absolute/path/to/pinned/solana-verify
-   ```
-
-   The exporter checks the verifier executable SHA-256 and decodes its complete
-   unsigned transaction: exact PDA, accounts/permissions, instruction, repository,
-   commit, verifier version, build arguments and deployment slot. Extra data or
-   instructions are rejected. A fresh loader/custody read must still match the
-   preflight when either export finishes.
-5. Import each `unsignedTransaction` into Squads as base58, vault index 0.
-   Review and approve with two distinct members, then execute. Repeat the
-   read-only preflight immediately before each approval and execution. Stored
-   Squads proposals **do not expire merely because the import's outer blockhash
-   expires**; reject stale proposals after any source/custody/state change.
-6. Confirm the PDA update, then submit the separately approved external job:
-
-   ```bash
-   solana-verify remote submit-job \
-     --program-id HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
-     --uploader Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf
-   node scripts/explorer-metadata.mjs status
-   ```
+The verification PDA was updated earlier the same day, right after the program
+upgrade, through Squads proposals 12 and 13 (see
+[`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md)). Proposal 13 added the
+`--base-image` pin because OtterSec's build server had picked an older Solana
+image for the proposal-12 record. `export-verify-pda` in this script still
+exports the four-argument record without `--base-image`. Do not use it to
+replace the live revision-8 record; a future re-attestation must carry a
+reviewed base-image pin.
 
 Do not commit transient proposal blobs or private keys. Acceptance requires
 `security.matches=true` and OtterSec `is_verified=true` for the exact commit,
-repository and **both** normalized hashes. Confirm the Explorer Security and
-Verified Build tabs separately. The primary metadata program documentation
-notes evolving Explorer support; on-chain success alone does not prove an
-external UI refreshed. If the registry or UI remains stale, leave #199 open.
+repository and **both** normalized hashes, then a separate check of the
+explorer pages.
 
 ## Reproduce the actual RPC rehearsal
 
@@ -158,21 +176,23 @@ AGENC_EXPLORER_RPC_E2E=1 SOLANA_VERIFY_BIN=/absolute/path/to/pinned/solana-verif
   node --test scripts/explorer-metadata.rpc.test.mjs
 ```
 
-The real PMP, Squads and Otter programs execute the complete path: real 2-of-3
-multisig creation, funded buffer upload/handoff, exact unsigned export through
-Squads CPI, one-approval and outsider failures, byte-for-byte readback, exact
-buffer-rent refund, replay rejection, stale verification-PDA creation and its
-approved revision-5 update. The old commit is a deliberate prior-state fixture
-created by transactions. Only Squads' **global fee/config** account is copied at
-genesis; its rent epoch is set to local epoch zero because web3 cannot represent
+The download pins the live revision-8 payload, and the drill first checks that
+the release ELF is its exact prefix. The real PMP, Squads and Otter programs
+then execute the complete path: real 2-of-3 multisig creation, funded buffer
+upload/handoff, exact unsigned export through Squads CPI, one-approval and
+outsider failures, byte-for-byte readback, exact buffer-rent refund, replay
+rejection, stale verification-PDA creation and its approved update to the
+revision-8 commit. The old commit is a deliberate prior-state fixture created by
+transactions. Only Squads' **global fee/config** account is copied at genesis;
+its rent epoch is set to local epoch zero because web3 cannot represent
 `u64::MAX` exactly. No multisig, proposal, buffer or metadata lifecycle account
 is injected. No production timing constants or validator features are disabled.
 
 Evidence in `.localnet/evidence/issue-199-explorer-metadata.json` includes source
 and binary hashes, genesis, signatures, confirmed transaction metadata and
 assertions. CI uploads it. This proves the on-chain ceremony in the local SVM;
-it does not execute the real vault, submit OtterSec jobs or prove Explorer UI
-refresh. Those live acceptance steps remain pending.
+it does not execute the real vault, submit OtterSec jobs or prove an explorer
+refresh. The live acceptance for revision 8 is recorded above.
 
 PMP JavaScript **0.7.0** is pinned in `package-lock.json` because it supports the
 repo's Kit 6.9 line; current 0.11 uses Kit 8. The deployed PMP executable is

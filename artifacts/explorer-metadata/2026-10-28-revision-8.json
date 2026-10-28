@@ -1,0 +1,109 @@
+{
+  "observedOn": "2026-10-28",
+  "liveAcceptanceComplete": true,
+  "loader": {
+    "observedAt": "2026-10-28T12:55:10.043Z",
+    "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+    "authority": "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+    "contextSlot": 462483921,
+    "custody": {
+      "bump": 255,
+      "configAuthority": "11111111111111111111111111111111",
+      "createKey": "5UJUUFZnbGpS65nTrwenvzGNTffkUDrsjGAGg894uZqr",
+      "executorCount": 3,
+      "memberCount": 3,
+      "members": [
+        {
+          "address": "3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx",
+          "permissionsMask": 7
+        },
+        {
+          "address": "6CpyZBmBDymdp56dg1KsNnK1vYqWwz2vemdp9m7a6ufw",
+          "permissionsMask": 7
+        },
+        {
+          "address": "HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh",
+          "permissionsMask": 7
+        }
+      ],
+      "proposerCount": 3,
+      "rentCollector": null,
+      "staleTransactionIndex": "1",
+      "threshold": 2,
+      "timeLockSeconds": 0,
+      "transactionIndex": "14",
+      "voterCount": 3
+    },
+    "custodyAccountDataSha256": "4b0127ea37c86fa3e61b7e80b9c2d249cce9455af4c981132961bb8ea95b26d2",
+    "loaderProgramId": "BPFLoaderUpgradeab1e11111111111111111111111",
+    "metadataBytes": 45,
+    "policySha256": "12c16fa9cd8015158af76e734a254bc367bf94d0d6a0993b8c9dbef11c65637e",
+    "programAccountDataSha256": "c55b153a2c5327bcbfebc4a1bed5b7916063aa6448b34ea7f6a40ecd19fe5bea",
+    "programData": "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+    "programDataAccountDataSha256": "eea168909dc56eb5637c68aa83b723f25ea4ea2e869496d7ef2e7516fb437347",
+    "programDataSlot": "462468899",
+    "programId": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+    "stateDigest": "99de2413c45472a0cebb9088f83f0cd10023121a3b8c0e3b13ba28eb5ee42b0d",
+    "payloadBytes": 2303608,
+    "rawPayloadSha256": "ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9",
+    "normalizedExecutableSha256": "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38"
+  },
+  "pmp": {
+    "observedAt": "2026-10-28T12:55:10.043Z",
+    "contextSlot": 462483929,
+    "programId": "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S",
+    "programData": "F8hZ6cQFCNZ3UdNkhUfjgxxRnUD8HiYPobpk2qRVD7aB",
+    "executableSha256": "3d0c0f7504c01b1f6996d30a5c3dc2cccb8b65dedba80d6fceb60a7cada093e0",
+    "canonicalSecurity": "HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw",
+    "securityAccountExists": true,
+    "securityMatchesRepository": true,
+    "securityContentSha256": "e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9",
+    "securityContentBytes": 841
+  },
+  "ceremony": {
+    "stagingBuffer": "4dH8Pq7LPBFuqBW4WK6YnRKFBuz8gKJjwenLE1peosNQ",
+    "squadsTransactionIndex": 14,
+    "createSignature": "VsB5zgBCKU6Xuf37foHmUap951X8qD2dgH2H5FXHsJgUMaQXY9gxVPFx8F3HM7bfEim8HY6qtEYd7un1jkeYw9Y",
+    "approvals": [
+      {
+        "member": "HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh",
+        "signature": "4jRDSjTPVLTQvr427PigXk1kY8XrkX1vBJKgUk3Rv92tsT31tHCCgJwtNrdRwZT3y89LefthBLNwRGkP2VRRSUBN"
+      },
+      {
+        "member": "3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx",
+        "signature": "2ijn2qR9VxULguDs1NQoACE5ymyrwFXmmUjYkPvjcof8a1GHyvcFYhDTEpTqEHNHRcZU4pevs45aRvZukiZYFvax"
+      }
+    ],
+    "executeSignature": "b4sj2V78ddEfN1V6EM9K3krs3LfgTkgSNZxiPT93hbZjZiXgmiKWKa14e9hJgbnZTZBum4rB1PeAkHymVdcrpEZ",
+    "executeSlot": 462483846,
+    "executedAt": "2026-10-28T12:54:52Z"
+  },
+  "osec": {
+    "is_verified": true,
+    "message": "On chain program verified",
+    "on_chain_hash": "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
+    "executable_hash": "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
+    "repo_url": "https://github.com/tetsuo-ai/agenc-protocol/tree/f39b383e416ec5bc511b0ffb781481a658d137d8",
+    "commit": "f39b383e416ec5bc511b0ffb781481a658d137d8",
+    "last_verified_at": "2026-10-28T12:27:32.868916",
+    "is_frozen": false,
+    "is_closed": false
+  },
+  "explorers": {
+    "solscanSecurityTxt": true,
+    "solscanSource": "PMP canonical security record; programs with only a PMP record and no ELF .security.txt section also show true"
+  },
+  "reproduction": {
+    "commit": "f39b383e416ec5bc511b0ffb781481a658d137d8",
+    "defaultFeatures": true,
+    "verifier": "0.5.2",
+    "agave": "4.1.0",
+    "imageDigest": "sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab",
+    "elfBytes": 2075896,
+    "elfSha256": "0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e",
+    "payloadSha256": "ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9",
+    "normalizedHash": "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
+    "livePayloadIsElfPlusZeroPadding": true,
+    "scope": "Reproducible build of the release commit and read-only mainnet observation, not an external audit."
+  }
+}
