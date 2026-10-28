@@ -10,9 +10,9 @@
   "policy": "https://github.com/tetsuo-ai/agenc-protocol/blob/main/SECURITY.md",
   "preferred_languages": ["en"],
   "source_code": "https://github.com/tetsuo-ai/agenc-protocol",
-  "source_release": "revision-5",
-  "source_revision": "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d",
+  "source_release": "revision-8",
+  "source_revision": "f39b383e416ec5bc511b0ffb781481a658d137d8",
   "acknowledgements": "https://github.com/tetsuo-ai/agenc-protocol/security/advisories",
   "expiry": "2027-07-18",
-  "version": "5"
+  "version": "8"
 }

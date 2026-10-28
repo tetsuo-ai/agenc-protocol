@@ -49,12 +49,16 @@ export const UPGRADE_AUTHORITY_VAULT =
   "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf";
 export const SQUADS_MULTISIG = "7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY";
 export const REPO_URL = "https://github.com/tetsuo-ai/agenc-protocol";
-export const REVISION_5_COMMIT = "08a3c87d4729e4a47c3db58cc61f2a8cee8a518d";
-export const REVISION_5_SHA256 =
-  "049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2";
-export const REVISION_5_NORMALIZED_SHA256 =
-  "a389e6f5e0dda3cb1b893e2c82ba04272059f33d17df7c00ab8fca73915ef203";
-export const REVISION_5_SLOT = "434489452";
+// Revision 8, deployed 2026-10-28 by Squads proposal 11. The ProgramData keeps
+// 227,712 bytes of headroom, so the live payload is the release ELF plus zeros.
+export const RELEASE_COMMIT = "f39b383e416ec5bc511b0ffb781481a658d137d8";
+export const RELEASE_ARTIFACT_SHA256 =
+  "0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e";
+export const RELEASE_PAYLOAD_SHA256 =
+  "ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9";
+export const RELEASE_NORMALIZED_SHA256 =
+  "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38";
+export const RELEASE_SLOT = "462468899";
 export const PMP_ID = "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S";
 export const PMP_SHA256 =
   "3d0c0f7504c01b1f6996d30a5c3dc2cccb8b65dedba80d6fceb60a7cada093e0";
@@ -101,9 +105,9 @@ export function validateSecurityJson(doc, now = new Date()) {
   const expected = {
     name: "AgenC Coordination",
     source_code: REPO_URL,
-    source_revision: REVISION_5_COMMIT,
-    source_release: "revision-5",
-    version: "5",
+    source_revision: RELEASE_COMMIT,
+    source_release: "revision-8",
+    version: "8",
     policy: `${REPO_URL}/blob/main/SECURITY.md`,
     project_url: "https://agenc.ag",
   };
@@ -167,19 +171,22 @@ export function assertDeployedRevision(snapshot, artifact) {
     "upgrade authority changed",
   );
   ensure(
-    String(snapshot.programDataSlot) === REVISION_5_SLOT,
+    String(snapshot.programDataSlot) === RELEASE_SLOT,
     "deployment slot changed; re-review the ceremony",
   );
   ensure(
-    sha256(snapshot.payload) === REVISION_5_SHA256 &&
-      normalizedHash(snapshot.payload) === REVISION_5_NORMALIZED_SHA256,
-    "live executable differs from the reviewed revision-5 build",
+    sha256(snapshot.payload) === RELEASE_PAYLOAD_SHA256 &&
+      normalizedHash(snapshot.payload) === RELEASE_NORMALIZED_SHA256,
+    "live executable differs from the reviewed revision-8 build",
   );
   if (artifact !== undefined)
     ensure(
-      sha256(artifact) === REVISION_5_SHA256 &&
-        Buffer.from(artifact).equals(snapshot.payload),
-      "rebuilt artifact does not match deployed revision 5 byte-for-byte",
+      sha256(artifact) === RELEASE_ARTIFACT_SHA256 &&
+        Buffer.from(artifact).equals(
+          snapshot.payload.subarray(0, artifact.length),
+        ) &&
+        snapshot.payload.subarray(artifact.length).every((b) => b === 0),
+      "rebuilt artifact does not match deployed revision 8 byte-for-byte",
     );
 }
 export function canonicalSecurityAddress(program = PROGRAM_ID) {
@@ -466,7 +473,7 @@ export function buildVerifyPdaExportArgs({
     "--uploader",
     authority,
     "--commit-hash",
-    REVISION_5_COMMIT,
+    RELEASE_COMMIT,
     "--library-name",
     LIBRARY_NAME,
     "--mount-path",
@@ -492,16 +499,16 @@ export function buildSubmitOsecArgs() {
 export function validateOsecStatus(status) {
   return (
     status?.is_verified === true &&
-    status.commit === REVISION_5_COMMIT &&
-    status.on_chain_hash === REVISION_5_NORMALIZED_SHA256 &&
-    status.executable_hash === REVISION_5_NORMALIZED_SHA256 &&
-    status.repo_url === `${REPO_URL}/tree/${REVISION_5_COMMIT}` &&
+    status.commit === RELEASE_COMMIT &&
+    status.on_chain_hash === RELEASE_NORMALIZED_SHA256 &&
+    status.executable_hash === RELEASE_NORMALIZED_SHA256 &&
+    status.repo_url === `${REPO_URL}/tree/${RELEASE_COMMIT}` &&
     status.is_closed === false
   );
 }
 export function validateVerifierExport(
   stdout,
-  { authority = UPGRADE_AUTHORITY_VAULT, deployedSlot = REVISION_5_SLOT } = {},
+  { authority = UPGRADE_AUTHORITY_VAULT, deployedSlot = RELEASE_SLOT } = {},
 ) {
   const candidates = stdout
     .split(/\r?\n/)
@@ -566,7 +573,7 @@ export function validateVerifierExport(
   ensure(
     string() === "0.5.2" &&
       string() === REPO_URL &&
-      string() === REVISION_5_COMMIT,
+      string() === RELEASE_COMMIT,
     "wrong verifier version, repository or commit",
   );
   ensure(
@@ -602,16 +609,16 @@ const shell = (x) => `'${String(x).replaceAll("'", "'\\''")}'`;
 export function renderOperatorCard({ rpc = DEFAULT_RPC } = {}) {
   const cli = "node node_modules/@solana-program/program-metadata/bin/cli.cjs";
   return [
-    `Explorer metadata for ${PROGRAM_ID}; deployed revision 5 at ${REVISION_5_COMMIT}.`,
+    `Explorer metadata for ${PROGRAM_ID}; deployed revision 8 at ${RELEASE_COMMIT}.`,
     "Preparation is read-only. Operator approvals, buffer funding/handoff, Squads execution and OtterSec submission are separate runbook gates.",
     "npm ci && npm ci --prefix tests-integration",
-    "node scripts/explorer-metadata.mjs preflight --artifact <REBUILT_REV5_SO>",
+    "node scripts/explorer-metadata.mjs preflight --artifact <REBUILT_REV8_SO>",
     "After explicit authorization, use a disposable funded operator (never export its secret):",
     `${cli} create-buffer ${SECURITY_JSON_REL} --compression none --format json --rpc ${shell(rpc)} --keypair <OPERATOR_KEYPAIR>`,
     `${cli} set-buffer-authority <BUFFER> --new-authority ${UPGRADE_AUTHORITY_VAULT} --rpc ${shell(rpc)} --keypair <OPERATOR_KEYPAIR>`,
     "Read and compare the exact buffer, then export unsigned proposal inputs:",
-    "node scripts/explorer-metadata.mjs export-security --artifact <REBUILT_REV5_SO> --buffer <BUFFER> --rent-return <OPERATOR_PUBLIC_KEY>",
-    "node scripts/explorer-metadata.mjs export-verify-pda --artifact <REBUILT_REV5_SO> --verifier <PINNED_SOLANA_VERIFY_0.5.2>",
+    "node scripts/explorer-metadata.mjs export-security --artifact <REBUILT_REV8_SO> --buffer <BUFFER> --rent-return <OPERATOR_PUBLIC_KEY>",
+    "node scripts/explorer-metadata.mjs export-verify-pda --artifact <REBUILT_REV8_SO> --verifier <PINNED_SOLANA_VERIFY_0.5.2>",
     "Review each instruction and re-run preflight before both Squads approvals/execution. See docs/EXPLORER_METADATA.md.",
     `After the verification PDA is confirmed and submission is approved: solana-verify ${buildSubmitOsecArgs().join(" ")}`,
     "node scripts/explorer-metadata.mjs status",
@@ -637,7 +644,7 @@ async function preflight(connection, artifact) {
       observedAt: new Date().toISOString(),
       genesisHash: policy.genesisHash,
       ...publicSnapshot,
-      sourceCommit: REVISION_5_COMMIT,
+      sourceCommit: RELEASE_COMMIT,
       artifactSha256: sha256(payload),
       normalizedExecutableSha256: normalizedHash(payload),
       pmp,
@@ -754,7 +761,7 @@ export async function main(argv = process.argv.slice(2)) {
       );
       packet = {
         schemaVersion: 1,
-        kind: "revision-5-verification-pda",
+        kind: "revision-8-verification-pda",
         ...validateVerifierExport(stdout),
       };
     } finally {
