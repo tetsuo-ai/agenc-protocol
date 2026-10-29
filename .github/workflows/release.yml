@@ -585,22 +585,28 @@ jobs:
           test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
           npm publish "${PACK_FILENAME}" --access public --provenance --tag "${DIST_TAG}"
 
+      # npm can take several minutes to make a new version visible ("Your
+      # package is being processed and may take a few minutes to become
+      # available"). In the revision-8 train 4 of 8 packages took 3 to 7
+      # minutes, so wait up to 10 minutes (60 checks, 10 seconds apart).
       - name: Verify npm integrity and provenance after publication
         env:
           PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
           PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
           DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
           PACK_INTEGRITY: ${{ steps.state.outputs.pack_integrity }}
+          VERIFY_ATTEMPTS: "60"
+          VERIFY_INTERVAL_SECONDS: "10"
         run: |
-          for attempt in $(seq 1 12); do
+          for attempt in $(seq 1 "${VERIFY_ATTEMPTS}"); do
             if node scripts/release-state.mjs verify-npm; then
               exit 0
             fi
-            if [ "$attempt" -eq 12 ]; then
-              echo "npm provenance did not converge after 12 attempts" >&2
+            if [ "$attempt" -eq "${VERIFY_ATTEMPTS}" ]; then
+              echo "npm integrity and provenance did not converge after ${VERIFY_ATTEMPTS} attempts" >&2
               exit 1
             fi
-            sleep 10
+            sleep "${VERIFY_INTERVAL_SECONDS}"
           done
 
       - name: Verify final npm dist-tag still binds reviewed provenance

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1008,6 +1008,67 @@ test("a resumed version whose npm dist-tags need a change stops before any mutat
   assert.match(guard.run, /exit 1\s*$/);
   const syntax = spawnSync("bash", ["-n"], { input: guard.run, encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr);
+});
+
+test("post-publish npm verification waits long enough for npm processing", async () => {
+  const release = await loadWorkflow(RELEASE_WORKFLOW);
+  const verify = release.jobs.release.steps.find(
+    (step) =>
+      step.name === "Verify npm integrity and provenance after publication",
+  );
+  assert.ok(verify);
+  // npm can take several minutes to make a new version visible. Four of the
+  // eight revision-8 packages took 3 to 7 minutes, past the old 2-minute loop.
+  const attempts = Number(verify.env.VERIFY_ATTEMPTS);
+  const interval = Number(verify.env.VERIFY_INTERVAL_SECONDS);
+  assert.ok(Number.isInteger(attempts) && Number.isInteger(interval));
+  assert.ok(attempts * interval >= 600, "verify window must be at least 10 minutes");
+  assert.ok(attempts * interval <= 1800, "verify window must stay under 30 minutes");
+  assert.match(verify.run, /seq 1 "\$\{VERIFY_ATTEMPTS\}"/);
+  assert.match(verify.run, /sleep "\$\{VERIFY_INTERVAL_SECONDS\}"/);
+
+  // Run the step's script against a stub `node` that fails until a given
+  // call, with no sleep, to prove the loop exits 0 on the first success and
+  // exits 1 with a message after the last failed attempt.
+  const directory = await mkdtemp(join(tmpdir(), "agenc-verify-loop-"));
+  try {
+    const stub = join(directory, "node");
+    await writeFile(
+      stub,
+      [
+        "#!/bin/bash",
+        'count=$(( $(cat "$STUB_COUNT" 2>/dev/null || echo 0) + 1 ))',
+        'echo "$count" > "$STUB_COUNT"',
+        '[ "$count" -ge "$STUB_SUCCEED_AT" ]',
+        "",
+      ].join("\n"),
+    );
+    await chmod(stub, 0o755);
+    const run = (succeedAt, label) => {
+      const countFile = join(directory, `${label}.count`);
+      const result = spawnSync("bash", ["-c", verify.run], {
+        encoding: "utf8",
+        env: {
+          PATH: `${directory}:${process.env.PATH}`,
+          VERIFY_ATTEMPTS: "5",
+          VERIFY_INTERVAL_SECONDS: "0",
+          STUB_COUNT: countFile,
+          STUB_SUCCEED_AT: String(succeedAt),
+        },
+      });
+      return { result, countFile };
+    };
+    const converges = run(3, "converges");
+    assert.equal(converges.result.status, 0, converges.result.stderr);
+    assert.equal((await readFile(converges.countFile, "utf8")).trim(), "3");
+
+    const never = run(99, "never");
+    assert.equal(never.result.status, 1);
+    assert.equal((await readFile(never.countFile, "utf8")).trim(), "5");
+    assert.match(never.result.stderr, /did not converge after 5 attempts/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("inspect, prepare, and reinspect all see draft releases", async () => {
