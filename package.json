@@ -55,7 +55,7 @@
     "test:deployment-scripts": "node --test scripts/preflight-*.test.mjs scripts/anchor-idl-publication.test.mjs scripts/env-flags.test.mjs scripts/explorer-metadata.test.mjs scripts/mainnet-release-boundary.test.mjs scripts/mainnet-init-and-stamp-boundary.test.mjs scripts/mainnet-migrate-sweep-boundary.test.mjs scripts/program-extend-mainnet.test.mjs scripts/upgrade-watchdog.test.mjs scripts/admin-signing-policy.test.mjs scripts/protocol-config-monitor.test.mjs"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0",
+    "@changesets/cli": "^3.0.3",
     "@solana-program/program-metadata": "0.7.0",
     "@types/node": "^25.4.0",
     "tsup": "^8.5.1",
