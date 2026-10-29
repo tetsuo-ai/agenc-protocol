@@ -7,8 +7,8 @@
       "tagPrefix": "protocol-v",
       "name": "@tetsuo-ai/protocol",
       "directory": "packages/protocol",
-      "expectedVersion": "0.5.1",
-      "expectedIntegrity": "sha512-ufFv15D8nsXUPz/Uaz2c6y6Mtg9nbgXCUoJtqP05y1IsAMaHKERrOvdAtHYZKrOD4K0PsK3ftrKN/CX1qfWtUQ==",
+      "expectedVersion": "0.5.2",
+      "expectedIntegrity": "sha512-cEWgAu6QFJH7icjGXxB8f/VcuPGiEBUGtMz+Zs+9l73WzwoyKLyPcYiIAJD8FJoAGxJceE+rsppafnbNqd8JdA==",
       "requires": []
     },
     {

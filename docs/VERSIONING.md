@@ -33,7 +33,7 @@ deployment evidence; they do not describe the revision-8 IDL.
 The generated instruction/error references describe the revision-8 IDL
 committed at the release commit.
 
-The coordinated revision-8 client set is protocol 0.5.1, SDK 0.13.0,
+The coordinated revision-8 client set is protocol 0.5.2, SDK 0.13.0,
 React/tools/MCP 0.6.0, moderation/worker 0.3.0, and CLI plus its alias 0.4.0.
 The package manifests carry these versions and are released through the
 tag-driven release workflow (`.github/workflows/release.yml`), in dependency
