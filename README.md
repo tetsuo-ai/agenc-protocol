@@ -134,7 +134,7 @@ surface.
 | `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.13.0** | Codama-generated `@solana/kit` client for the **104-instruction revision-8 surface** + ergonomic facade. Older 0.12.0 is the superseded revision-5 wire. |
 | `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.6.0** | React hooks/components for embeddable marketplace UIs; requires the revision-8 SDK (`^0.13.0`) and buyer job-spec commitment. |
 | `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.6.0** | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
-| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.6.0** | MCP server exposing marketplace tools. |
+| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.6.1** | MCP server exposing marketplace tools. |
 | `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | **0.3.0** | Shared moderation canon / test vectors. |
 | `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | **0.4.0** | `init` / `dev` / `promote` developer CLI. |
 | `agenc-cli`                         | `packages/agenc-cli-alias`        | **0.4.0** | Thin unscoped alias for the scoped CLI. |

@@ -61,8 +61,8 @@
       "tagPrefix": "mcp-v",
       "name": "@tetsuo-ai/marketplace-mcp",
       "directory": "packages/marketplace-mcp",
-      "expectedVersion": "0.6.0",
-      "expectedIntegrity": "sha512-AE6NB/oYKsbwSxodPuXplzzsNKNfw/0o6IiKP5vM2BrmTH+s/TomzpfYjQkZcGWMX7LXnEkUtvfTGFytetz2Wg==",
+      "expectedVersion": "0.6.1",
+      "expectedIntegrity": "sha512-+o7G7zr7kbOQe/iQ6vVV/5qjqiEIOL66Ckrr1+dXMjOeqDiElxhtRDzZVYwh/UGLeQE2dhumM3b5xYdUJOK8sQ==",
       "requires": ["sdk", "tools"]
     },
     {

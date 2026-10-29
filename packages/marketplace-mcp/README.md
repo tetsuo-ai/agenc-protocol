@@ -60,6 +60,9 @@ There are two ways to run these tools:
 ```bash
 # readonly server over stdio (defaults to the mainnet cluster's public RPC)
 npx @tetsuo-ai/marketplace-mcp
+
+# print the usage and the environment variables it reads, then exit
+npx @tetsuo-ai/marketplace-mcp --help
 ```
 
 > **Set a read transport before you rely on discovery.** With no configuration the server
