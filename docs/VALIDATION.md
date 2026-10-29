@@ -391,12 +391,16 @@ The release regression suite also parses the workflows themselves. It requires a
 successful reusable verifiable-build job before protocol publication, immutable
 SHA-pinned external actions, validated executable hashes, and environment-based
 shell inputs for tag-derived package/hash values. The release stays a draft until
-the hash manifest is attached and npm publication succeeds. Every external
-release mutation re-resolves the remote tag to the triggering commit and exact
-fetched tag object, including annotated tags. An already-published npm version
-is resumed only after its registry integrity and provenance match the exact
-repository, workflow, ref, and commit; a mismatch or unverifiable provenance
-fails closed.
+the hash manifest is attached and npm publication succeeds. Release state
+lookups list the repository's releases and match the tag name, because GitHub's
+by-tag endpoint returns published releases only. A re-run therefore resumes a
+draft left by an earlier attempt instead of trying to create a second one, and
+the reinspection before finalization sees the draft that the same run created.
+Every external release mutation re-resolves the remote tag to the triggering
+commit and exact fetched tag object, including annotated tags. An
+already-published npm version is resumed only after its registry integrity and
+provenance match the exact repository, workflow, ref, and commit; a mismatch or
+unverifiable provenance fails closed.
 
 Release routing is bound to the package id produced by the validated resolver,
 not to a second interpretation of the raw tag prefix. The reusable protocol

@@ -57,6 +57,61 @@ async function getJson(fetchFn, url, options = {}) {
   return response;
 }
 
+const RELEASE_LIST_PAGE_SIZE = 100;
+const RELEASE_LIST_MAX_PAGES = 50;
+
+// GitHub's GET /repos/{owner}/{repo}/releases/tags/{tag} returns published
+// releases only. A draft is not bound to its tag until it is published, so that
+// endpoint answers 404 both for the draft this workflow creates before npm
+// publication and for a draft left behind by an earlier attempt. List the
+// releases and match tag_name instead. GitHub lists drafts only to tokens with
+// push access; the release job's GITHUB_TOKEN has it through `contents: write`.
+export async function findReleaseByTag({
+  repository,
+  releaseTag,
+  githubToken,
+  fetchFn = fetch,
+}) {
+  required(repository, "repository");
+  required(releaseTag, "release tag");
+  const matches = new Map();
+  for (let page = 1; page <= RELEASE_LIST_MAX_PAGES; page += 1) {
+    const response = await getJson(
+      fetchFn,
+      `https://api.github.com/repos/${repository}/releases?per_page=${RELEASE_LIST_PAGE_SIZE}&page=${page}`,
+      {
+        headers: {
+          authorization: `Bearer ${required(githubToken, "GitHub token")}`,
+          "x-github-api-version": "2022-11-28",
+        },
+      },
+    );
+    if (!response.ok) {
+      fail(`GitHub release listing failed with HTTP ${response.status}`);
+    }
+    const releases = await response.json();
+    if (!Array.isArray(releases)) fail("GitHub release listing is not an array");
+    for (const release of releases) {
+      if (release?.tag_name !== releaseTag) continue;
+      if (!Number.isSafeInteger(release.id) || release.id <= 0) {
+        fail("GitHub release listing returned a release without a numeric id");
+      }
+      // A release created while the pages are read shifts later entries down
+      // by one, so the same release can appear on two consecutive pages.
+      matches.set(release.id, release);
+    }
+    if (releases.length < RELEASE_LIST_PAGE_SIZE) {
+      if (matches.size > 1) {
+        fail(
+          `${matches.size} GitHub releases claim tag ${releaseTag}; resolve them before releasing`,
+        );
+      }
+      return matches.size === 1 ? [...matches.values()][0] : null;
+    }
+  }
+  fail(`GitHub release listing exceeded ${RELEASE_LIST_MAX_PAGES} pages`);
+}
+
 export async function inspectReleaseState({
   packageName,
   packageVersion,
@@ -77,6 +132,21 @@ export async function inspectReleaseState({
   const pack = canonicalPackRecord(packJson, packageName, packageVersion);
   if (pack.integrity !== required(expectedReviewedIntegrity, "reviewed pack integrity")) {
     fail("npm pack integrity differs from the immutable release-train artifact");
+  }
+  const assetsToCheck = requiredAssets ?? (requiredAsset
+    ? [{ name: requiredAsset, bytes: requiredAssetBytes }]
+    : []);
+  if (
+    !Array.isArray(assetsToCheck) ||
+    assetsToCheck.some(
+      (asset) =>
+        typeof asset?.name !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(asset.name) ||
+        (!Buffer.isBuffer(asset.bytes) && !(asset.bytes instanceof Uint8Array)),
+    ) ||
+    new Set(assetsToCheck.map(({ name }) => name)).size !== assetsToCheck.length
+  ) {
+    fail("required release assets must have unique names and byte content");
   }
   const registryResponse = await getJson(
     fetchFn,
@@ -126,47 +196,27 @@ export async function inspectReleaseState({
         ? "absent"
         : "other";
 
-  const releaseResponse = await getJson(
+  const release = await findReleaseByTag({
+    repository,
+    releaseTag,
+    githubToken,
     fetchFn,
-    `https://api.github.com/repos/${repository}/releases/tags/${encodeURIComponent(releaseTag)}`,
-    {
-      headers: {
-        authorization: `Bearer ${required(githubToken, "GitHub token")}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    },
-  );
-  const assetsToCheck = requiredAssets ?? (requiredAsset
-    ? [{ name: requiredAsset, bytes: requiredAssetBytes }]
-    : []);
-  if (
-    !Array.isArray(assetsToCheck) ||
-    assetsToCheck.some(
-      (asset) =>
-        typeof asset?.name !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(asset.name) ||
-        (!Buffer.isBuffer(asset.bytes) && !(asset.bytes instanceof Uint8Array)),
-    ) ||
-    new Set(assetsToCheck.map(({ name }) => name)).size !== assetsToCheck.length
-  ) {
-    fail("required release assets must have unique names and byte content");
-  }
+  });
   let releaseState;
   const perAssetState = Object.fromEntries(
     assetsToCheck.map(({ name }) => [name, "absent"]),
   );
-  if (releaseResponse.status === 404) {
+  if (release === null) {
     releaseState = "absent";
   } else {
-    if (!releaseResponse.ok) {
-      fail(`GitHub release lookup failed with HTTP ${releaseResponse.status}`);
-    }
-    const release = await releaseResponse.json();
     if (
       release.tag_name !== releaseTag ||
       release.prerelease !== isPrereleaseVersion(packageVersion)
     ) {
       fail("existing GitHub release metadata does not match the resolved tag/channel");
+    }
+    if (typeof release.draft !== "boolean") {
+      fail("existing GitHub release does not state whether it is a draft");
     }
     releaseState = release.draft ? "draft" : "public";
     for (const required of assetsToCheck) {
