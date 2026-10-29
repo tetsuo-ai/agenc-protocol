@@ -165,7 +165,7 @@ Every step after the pause ran while the protocol was paused:
 13. Unpause with `update_launch_controls` (13:08:08 UTC, tx
     `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`).
 
-The coordinated revision-8 client release train is `@tetsuo-ai/protocol` 0.5.1,
+The coordinated revision-8 client release train is `@tetsuo-ai/protocol` 0.5.2,
 `@tetsuo-ai/marketplace-sdk` 0.13.0, `@tetsuo-ai/marketplace-react`,
 `@tetsuo-ai/marketplace-tools` and `@tetsuo-ai/marketplace-mcp` 0.6.0,
 `@tetsuo-ai/marketplace-moderation` and `@tetsuo-ai/agenc-worker` 0.3.0, and

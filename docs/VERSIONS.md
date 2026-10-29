@@ -118,7 +118,7 @@ unpaused on that conservative surface.
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 
 The revision-8 program is live on mainnet since 2026-10-28. Its coordinated
-client set is protocol 0.5.1 and SDK 0.13.0 (regenerated 104-instruction
+client set is protocol 0.5.2 and SDK 0.13.0 (regenerated 104-instruction
 clients), released through the tag-driven release workflow. The revision-5 client set
 (protocol 0.4.0, SDK 0.12.0) spoke the live wire from 2026-07-22 to 2026-10-28.
 It is now the superseded wire for flows that changed; for example, legacy
