@@ -984,6 +984,32 @@ test("an existing npm version resumes only after exact integrity and provenance 
   assert.match(stateSource, /refusing to move npm \$\{distTag\} backwards/);
 });
 
+test("a resumed version whose npm dist-tags need a change stops before any mutation", async () => {
+  const release = await loadWorkflow(RELEASE_WORKFLOW);
+  const steps = release.jobs.release.steps;
+  const names = steps.map((step) => step.name);
+  const guard = steps.find(
+    (step) =>
+      step.name ===
+      "Stop before mutation when npm dist-tags need a manual change",
+  );
+  assert.ok(guard);
+  // Trusted publishing cannot move or remove dist-tags, so the guard runs
+  // after the read-only inspection and before the first GitHub or npm write.
+  const index = names.indexOf(guard.name);
+  assert.ok(
+    names.indexOf("Inspect resumable release state before mutation") < index,
+  );
+  assert.ok(index < names.indexOf("Prepare GitHub Release draft"));
+  assert.match(guard.if, /steps\.state\.outputs\.publish_npm != 'true'/);
+  assert.match(guard.if, /steps\.state\.outputs\.set_dist_tag == 'true'/);
+  assert.match(guard.if, /steps\.state\.outputs\.remove_staging_tag == 'true'/);
+  assert.doesNotMatch(guard.run, /\$\{\{/);
+  assert.match(guard.run, /exit 1\s*$/);
+  const syntax = spawnSync("bash", ["-n"], { input: guard.run, encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+});
+
 test("inspect, prepare, and reinspect all see draft releases", async () => {
   const [release, stateSource] = await Promise.all([
     loadWorkflow(RELEASE_WORKFLOW),

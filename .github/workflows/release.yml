@@ -506,6 +506,20 @@ jobs:
           SBOM_RELEASE_ASSET_PATH: ${{ steps.sbom.outputs.path }}
         run: node scripts/release-state.mjs inspect
 
+      # Trusted publishing puts a new version straight on its dist-tag, but no
+      # credential in this workflow can move or remove npm dist-tags. A resumed
+      # version that needs that stops here, before any GitHub or npm mutation.
+      - name: Stop before mutation when npm dist-tags need a manual change
+        if: steps.state.outputs.publish_npm != 'true' && (steps.state.outputs.set_dist_tag == 'true' || steps.state.outputs.remove_staging_tag == 'true')
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
+        run: |
+          echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is on npm, but ${DIST_TAG} does not point to it or agenc-staging still does." >&2
+          echo "Trusted publishing cannot move dist-tags. Fix them by hand on npm, then re-run." >&2
+          exit 1
+
       # Create a draft first. A failed hash attachment or npm publish therefore
       # cannot expose a half-formed public GitHub Release.
       - name: Prepare GitHub Release draft
