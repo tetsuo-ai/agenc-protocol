@@ -142,12 +142,14 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
     "Inspect resumable release state before mutation",
   );
   const npmPublish = names.indexOf(
-    "Publish reviewed tarball to npm staging tag",
+    "Publish reviewed tarball with npm trusted publishing",
   );
   const npmVerify = names.indexOf(
-    "Verify npm integrity and provenance before changing public dist-tags",
+    "Verify npm integrity and provenance after publication",
   );
-  const npmDistTag = names.indexOf("Advance reviewed npm dist-tag");
+  const npmFinalTag = names.indexOf(
+    "Verify final npm dist-tag still binds reviewed provenance",
+  );
   const releasePublish = names.indexOf("Publish GitHub Release");
   assert.ok(
     download >= 0 &&
@@ -161,8 +163,8 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
       attach < attachSbom &&
       attachSbom < npmPublish &&
       npmPublish < npmVerify &&
-      npmVerify < npmDistTag &&
-      npmDistTag < releasePublish,
+      npmVerify < npmFinalTag &&
+      npmFinalTag < releasePublish,
   );
 
   const draftStep = releaseJob.steps[draft];
@@ -843,7 +845,8 @@ test("release rechecks expiring npm license exceptions before publication", asyn
     (step) => step.name === "Enforce release-time npm license policy",
   );
   const publish = steps.find(
-    (step) => step.name === "Publish reviewed tarball to npm staging tag",
+    (step) =>
+      step.name === "Publish reviewed tarball with npm trusted publishing",
   );
   assert.ok(install && policy && publish);
   assert.match(
@@ -865,8 +868,7 @@ test("every release mutation re-resolves the remote tag to the event commit", as
     "Prepare GitHub Release draft",
     "Attach required verifiable-build hashes",
     "Attach required SPDX release SBOM",
-    "Publish reviewed tarball to npm staging tag",
-    "Advance reviewed npm dist-tag",
+    "Publish reviewed tarball with npm trusted publishing",
     "Publish GitHub Release",
   ];
 
@@ -920,15 +922,16 @@ test("an existing npm version resumes only after exact integrity and provenance 
     (step) => step.name === "Inspect resumable release state before mutation",
   );
   const publish = steps.find(
-    (step) => step.name === "Publish reviewed tarball to npm staging tag",
+    (step) =>
+      step.name === "Publish reviewed tarball with npm trusted publishing",
   );
   const verify = steps.find(
     (step) =>
-      step.name ===
-      "Verify npm integrity and provenance before changing public dist-tags",
+      step.name === "Verify npm integrity and provenance after publication",
   );
-  const distTag = steps.find(
-    (step) => step.name === "Advance reviewed npm dist-tag",
+  const finalTag = steps.find(
+    (step) =>
+      step.name === "Verify final npm dist-tag still binds reviewed provenance",
   );
   const finalize = steps.find(
     (step) =>
@@ -939,22 +942,30 @@ test("an existing npm version resumes only after exact integrity and provenance 
     (step) => step.name === "Publish GitHub Release",
   );
   assert.ok(
-    inspect && publish && verify && distTag && finalize && publishRelease,
+    inspect && publish && verify && finalTag && finalize && publishRelease,
   );
   assert.match(inspect.run, /release-state\.mjs inspect/);
   assert.match(publish.if, /publish_npm == 'true'/);
-  assert.match(publish.run, /--provenance --tag agenc-staging/);
-  assert.match(verify.run, /release-state\.mjs verify-npm/);
-  assert.match(distTag.run, /remove_staging_tag/);
-  assert.match(
-    distTag.run,
-    /npm dist-tag rm "\$\{PACKAGE_NAME\}" agenc-staging/,
+  // npm Trusted Publishing: OIDC is the only credential, so the reviewed
+  // tarball is published straight to its final dist-tag and nothing in the
+  // workflow can change npm dist-tags or use a long-lived npm token.
+  assert.match(publish.run, /--provenance --tag "\$\{DIST_TAG\}"/);
+  assert.equal(publish.env.NODE_AUTH_TOKEN, "");
+  assert.equal(publish.env.NPM_TOKEN, "");
+  assert.match(publish.env.NPM_CONFIG_USERCONFIG, /oidc-only\.npmrc$/);
+  assert.match(publish.run, /: > "\$\{NPM_CONFIG_USERCONFIG\}"/);
+  assert.match(publish.run, /ACTIONS_ID_TOKEN_REQUEST_URL/);
+  assert.doesNotMatch(JSON.stringify(release), /secrets\.NPM_TOKEN/);
+  assert.ok(
+    steps.every((step) => !/npm dist-tag/.test(step.run ?? "")),
+    "no release step may change npm dist-tags",
   );
-  assert.match(distTag.if, /remove_staging_tag == 'true'/);
+  assert.match(verify.run, /release-state\.mjs verify-npm/);
+  assert.equal(finalTag.env.REQUIRE_DIST_TAG, "1");
   assert.ok(steps.indexOf(inspect) < steps.indexOf(publish));
   assert.ok(steps.indexOf(publish) < steps.indexOf(verify));
-  assert.ok(steps.indexOf(verify) < steps.indexOf(distTag));
-  assert.ok(steps.indexOf(distTag) < steps.indexOf(finalize));
+  assert.ok(steps.indexOf(verify) < steps.indexOf(finalTag));
+  assert.ok(steps.indexOf(finalTag) < steps.indexOf(finalize));
   assert.ok(steps.indexOf(finalize) < steps.indexOf(publishRelease));
   assert.match(finalize.run, /release-state\.mjs finalize/);
   assert.ok(finalize.env.EXPECTED_REVIEWED_INTEGRITY);

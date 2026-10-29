@@ -15,8 +15,13 @@ name: Release
 # protocol -> sdk/moderation; sdk -> react/tools/worker; tools -> mcp;
 # sdk+worker -> cli; cli -> alias (dependency ranges point at published versions).
 #
-# Requires the NPM_TOKEN repo secret (npm automation token with publish rights
-# to the @tetsuo-ai scope). Provisioning that secret is a human-owned step.
+# Publishes with npm Trusted Publishing (OIDC). No npm token secret is used.
+# Each package's npmjs.com settings must trust repository
+# tetsuo-ai/agenc-protocol, workflow release.yml and environment
+# production-release. Trusted publishing covers `npm publish` only, so the
+# reviewed tarball goes straight to its final dist-tag and no step changes npm
+# dist-tags with a token. Configuring the trusted publishers is a human-owned
+# step on npmjs.com.
 #
 # npm provenance is mandatory for every publish. The repository is public and
 # this workflow has `id-token: write`, so npm can bind each tarball to this exact
@@ -545,19 +550,28 @@ jobs:
           node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
           gh release upload "${GITHUB_REF_NAME}" "${SBOM_PATH}"
 
-      - name: Publish reviewed tarball to npm staging tag
+      # npm Trusted Publishing: an empty user config and empty token variables
+      # leave OIDC (id-token: write) as the only credential npm can use.
+      - name: Publish reviewed tarball with npm trusted publishing
         if: steps.state.outputs.publish_npm == 'true'
         working-directory: ${{ steps.pkg.outputs.dir }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/oidc-only.npmrc
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
           PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
           PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
           PACK_FILENAME: ${{ steps.state.outputs.pack_filename }}
         run: |
           node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
-          npm publish "${PACK_FILENAME}" --access public --provenance --tag agenc-staging
+          umask 077
+          : > "${NPM_CONFIG_USERCONFIG}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          npm publish "${PACK_FILENAME}" --access public --provenance --tag "${DIST_TAG}"
 
-      - name: Verify npm integrity and provenance before changing public dist-tags
+      - name: Verify npm integrity and provenance after publication
         env:
           PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
           PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
@@ -574,21 +588,6 @@ jobs:
             fi
             sleep 10
           done
-
-      - name: Advance reviewed npm dist-tag
-        if: steps.state.outputs.set_dist_tag == 'true' || steps.state.outputs.publish_npm == 'true' || steps.state.outputs.remove_staging_tag == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
-          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
-          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
-        run: |
-          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
-          npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" "${DIST_TAG}"
-          if [ "${{ steps.state.outputs.publish_npm }}" = "true" ] || \
-             [ "${{ steps.state.outputs.remove_staging_tag }}" = "true" ]; then
-            npm dist-tag rm "${PACKAGE_NAME}" agenc-staging
-          fi
 
       - name: Verify final npm dist-tag still binds reviewed provenance
         env:
