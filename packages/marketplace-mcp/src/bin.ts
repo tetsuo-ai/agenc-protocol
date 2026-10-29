@@ -15,6 +15,7 @@ import { resolveMcpConfig } from "./config.js";
 import { buildToolContext } from "./context.js";
 import { createMarketplaceMcpServer } from "./server.js";
 import { redactUrl, sanitizeDiagnostic } from "./redact.js";
+import { informationalOutput } from "./cli.js";
 
 async function main(): Promise<void> {
   const config = resolveMcpConfig(process.env);
@@ -66,11 +67,18 @@ process.on("unhandledRejection", (reason: unknown) => {
   process.exit(1);
 });
 
-main().catch((error: unknown) => {
-  // Sanitized: provider/client errors can embed the full request URL (userinfo,
-  // query-string API keys) in their message/stack — never print those raw.
-  process.stderr.write(
-    `[agenc-marketplace-mcp] fatal: ${fatalText(error)}\n`,
-  );
-  process.exitCode = 1;
-});
+// `--help` and `--version` answer on stdout and exit 0 without starting the
+// server, so installers and release smoke checks can probe the bin safely.
+const informational = informationalOutput(process.argv.slice(2));
+if (informational !== undefined) {
+  process.stdout.write(informational);
+} else {
+  main().catch((error: unknown) => {
+    // Sanitized: provider/client errors can embed the full request URL (userinfo,
+    // query-string API keys) in their message/stack — never print those raw.
+    process.stderr.write(
+      `[agenc-marketplace-mcp] fatal: ${fatalText(error)}\n`,
+    );
+    process.exitCode = 1;
+  });
+}

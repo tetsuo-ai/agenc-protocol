@@ -166,8 +166,8 @@ Every step after the pause ran while the protocol was paused:
     `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`).
 
 The coordinated revision-8 client release train is `@tetsuo-ai/protocol` 0.5.2,
-`@tetsuo-ai/marketplace-sdk` 0.13.0, `@tetsuo-ai/marketplace-react`,
-`@tetsuo-ai/marketplace-tools` and `@tetsuo-ai/marketplace-mcp` 0.6.0,
+`@tetsuo-ai/marketplace-sdk` 0.13.0, `@tetsuo-ai/marketplace-react` and
+`@tetsuo-ai/marketplace-tools` 0.6.0, `@tetsuo-ai/marketplace-mcp` 0.6.1,
 `@tetsuo-ai/marketplace-moderation` and `@tetsuo-ai/agenc-worker` 0.3.0, and
 `@tetsuo-ai/agenc-cli` plus the unscoped `agenc-cli` alias 0.4.0. It is released
 through the tag-driven release workflow. See [`VERSIONING.md`](./VERSIONING.md).

@@ -1,14 +1,51 @@
 #!/usr/bin/env node
 import {
+  SERVER_NAME,
+  SERVER_VERSION,
   buildToolContext,
   createMarketplaceMcpServer,
   redactUrl,
   resolveMcpConfig,
   sanitizeDiagnostic
-} from "./chunk-FEPQZAGS.js";
+} from "./chunk-IUEDOILG.js";
 
 // src/bin.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+// src/cli.ts
+function helpText() {
+  return [
+    `agenc-marketplace-mcp ${SERVER_VERSION} (${SERVER_NAME})`,
+    "",
+    "Model Context Protocol server for the AgenC marketplace, over stdio.",
+    "Readonly and keyless by default: it never loads a wallet, signs or broadcasts.",
+    "",
+    "Usage:",
+    "  agenc-marketplace-mcp            start the MCP server on stdin/stdout",
+    "  agenc-marketplace-mcp --help     show this help and exit",
+    "  agenc-marketplace-mcp --version  print the version and exit",
+    "",
+    "Environment:",
+    "  AGENC_RPC_URL               a getProgramAccounts-capable Solana RPC",
+    "  AGENC_MARKETPLACE_CLUSTER   mainnet (default), devnet or localnet; picks the",
+    "                              default RPC when AGENC_RPC_URL is unset",
+    "  AGENC_INDEXER_URL           optional hosted indexer base URL",
+    "  AGENC_INDEXER_API_KEY       optional API key for the hosted indexer",
+    "  AGENC_PROGRAM_ADDRESS       override the agenc-coordination program id",
+    "  AGENC_MCP_ENABLE_MUTATIONS  1/true/yes/on exposes the keyless prepare_* tools,",
+    "                              which build unsigned transactions only",
+    ""
+  ].join("\n");
+}
+function informationalOutput(args) {
+  const [first] = args;
+  if (first === "--help" || first === "-h") return helpText();
+  if (first === "--version" || first === "-v") return `${SERVER_VERSION}
+`;
+  return void 0;
+}
+
+// src/bin.ts
 async function main() {
   const config = resolveMcpConfig(process.env);
   const context = buildToolContext(config);
@@ -46,10 +83,15 @@ process.on("unhandledRejection", (reason) => {
 `);
   process.exit(1);
 });
-main().catch((error) => {
-  process.stderr.write(
-    `[agenc-marketplace-mcp] fatal: ${fatalText(error)}
+var informational = informationalOutput(process.argv.slice(2));
+if (informational !== void 0) {
+  process.stdout.write(informational);
+} else {
+  main().catch((error) => {
+    process.stderr.write(
+      `[agenc-marketplace-mcp] fatal: ${fatalText(error)}
 `
-  );
-  process.exitCode = 1;
-});
+    );
+    process.exitCode = 1;
+  });
+}

@@ -5,7 +5,26 @@ All notable changes to `@tetsuo-ai/marketplace-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.6.0
+## 0.6.1
+
+### Fixed
+
+- `agenc-marketplace-mcp --help` and `--version` (also `-h` and `-v`) print to
+  stdout and exit 0 without starting the server. Before this, every invocation
+  started the stdio server and waited on stdin.
+- The MCP `serverInfo` version matches the package version again. 0.6.0 still
+  reported 0.5.0.
+
+### Release coordination
+
+- 0.6.0 was tagged but never published. The release workflow's clean-install
+  smoke runs every packed bin with `--help` under a 15-second limit. The 0.6.0
+  bin started the server instead, so the smoke stopped it at the limit and the
+  release failed before anything was published.
+- 0.6.1 keeps the 0.6.0 tool surface and dependencies
+  (`@tetsuo-ai/marketplace-tools@^0.6.0`, `@tetsuo-ai/marketplace-sdk@^0.13.0`).
+
+## 0.6.0 (tagged, never published)
 
 This release depends on `@tetsuo-ai/marketplace-tools@^0.6.0` and
 `@tetsuo-ai/marketplace-sdk@^0.13.0` and belongs to the coordinated revision-8
