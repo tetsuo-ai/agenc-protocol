@@ -9,7 +9,7 @@ changed writes, such as the legacy feed vote, fail on revision 8.
 ### Release coordination
 
 - Regenerated the client for the 104-instruction revision-8 IDL, including the
-  new instructions, accounts, events and errors listed in protocol 0.5.0.
+  new instructions, accounts, events and errors listed in protocol 0.5.1.
 - `SURFACE_REVISION_CURRENT` is 8 (`SURFACE_REVISION_FEE_QUALIFIED_RATINGS`).
   `capabilitiesForRevision(8)` and `getDeployedSurface` report the full surface
   with `feedAuthorityVotes`, `taskCreationQuotas` and `feeQualifiedRatings`.

@@ -80,7 +80,8 @@ authoritative deployed-state record is
   `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`,
   slot 462487575). It had been paused since 11:31:18 UTC (tx
   `2vHNFb5FCwuKn43XAnD9DevrKbc8yoAKK8Aw9q1jtE1bzkyqejcpMpgkWjpSfNcQ3WWcjEvT1pjMSTWHdsdgNeAG`).
-- **Client release train:** protocol 0.5.0, marketplace-sdk 0.13.0,
+- **Client release train:** protocol 0.5.1 (0.5.0 was tagged but never
+  published), marketplace-sdk 0.13.0,
   marketplace-react, marketplace-tools and marketplace-mcp 0.6.0,
   marketplace-moderation and agenc-worker 0.3.0, and agenc-cli plus the
   unscoped alias 0.4.0, released through the tag-driven release workflow

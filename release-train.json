@@ -7,8 +7,8 @@
       "tagPrefix": "protocol-v",
       "name": "@tetsuo-ai/protocol",
       "directory": "packages/protocol",
-      "expectedVersion": "0.5.0",
-      "expectedIntegrity": "sha512-kuD9a1zHTdwbjsAnvXbLrrGqOVvdldoeaMdRT541mkFrDJfBgisXPiPWtQD3kz94bK6E3nOe2B+PA6VzK1W+fg==",
+      "expectedVersion": "0.5.1",
+      "expectedIntegrity": "sha512-ufFv15D8nsXUPz/Uaz2c6y6Mtg9nbgXCUoJtqP05y1IsAMaHKERrOvdAtHYZKrOD4K0PsK3ftrKN/CX1qfWtUQ==",
       "requires": []
     },
     {
@@ -17,7 +17,7 @@
       "name": "@tetsuo-ai/marketplace-sdk",
       "directory": "packages/sdk-ts",
       "expectedVersion": "0.13.0",
-      "expectedIntegrity": "sha512-d2cTAsL6XaLf1nbnpm1nYzxybDqDJJJnruij/+D07l0GitXU1rmGbE07BJyeFN3+L/NIFykvSe8j6GEOFqVbNg==",
+      "expectedIntegrity": "sha512-nT0xea9E37jvCfT1j3CLaVVFVj9Hc9Xr9kIN2qBkMTej2DJd5oril8whUP78QzJeLXOkSyV7pqdOsriN5xXZ7g==",
       "requires": ["protocol"]
     },
     {
