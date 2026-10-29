@@ -1,9 +1,15 @@
 # @tetsuo-ai/protocol
 
-## 0.5.0
+## 0.5.1
 
 Released for the revision-8 mainnet program (release commit `f39b383`,
 deployed 2026-10-28). Protocol 0.4.0 is the superseded revision-5 wire.
+
+Version 0.5.0 was tagged but never published. Its release run stopped at the
+runtime dependency audit after GHSA-rmxm-3fg6-px4f (`@hono/node-server`, a
+dependency of the MCP package's SDK) was published on 2026-10-28. 0.5.1 has
+the same artifacts and only moves the repository lockfile to a patched
+`@hono/node-server`.
 
 ### Release coordination
 

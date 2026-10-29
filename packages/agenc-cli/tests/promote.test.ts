@@ -239,7 +239,7 @@ const REVISION_5_CLIENTS = {
 } as const;
 
 const REVISION_8_CLIENTS = {
-  "@tetsuo-ai/protocol": "0.5.0",
+  "@tetsuo-ai/protocol": "0.5.1",
   "@tetsuo-ai/marketplace-sdk": "0.13.0",
   "@tetsuo-ai/agenc-worker": "0.3.0",
   "@tetsuo-ai/marketplace-react": "0.6.0",
