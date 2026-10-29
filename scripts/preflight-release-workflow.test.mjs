@@ -973,6 +973,46 @@ test("an existing npm version resumes only after exact integrity and provenance 
   assert.match(stateSource, /refusing to move npm \$\{distTag\} backwards/);
 });
 
+test("inspect, prepare, and reinspect all see draft releases", async () => {
+  const [release, stateSource] = await Promise.all([
+    loadWorkflow(RELEASE_WORKFLOW),
+    readFile(RELEASE_STATE_SCRIPT, "utf8"),
+  ]);
+  const job = release.jobs.release;
+  // GitHub lists draft releases only to a token with push access.
+  assert.equal(job.permissions.contents, "write");
+  const step = (name) => job.steps.find((candidate) => candidate.name === name);
+  const inspect = step("Inspect resumable release state before mutation");
+  const prepare = step("Prepare GitHub Release draft");
+  const reinspect = step(
+    "Reinspect every immutable release surface before finalization",
+  );
+  assert.ok(inspect && prepare && reinspect);
+
+  // inspect and reinspect share release-state.mjs, which lists releases and
+  // matches tag_name. GET /releases/tags/{tag} returns published releases only.
+  assert.match(inspect.run, /release-state\.mjs inspect/);
+  assert.match(reinspect.run, /release-state\.mjs finalize/);
+  for (const lookup of [inspect, reinspect]) {
+    assert.equal(lookup.env.GH_TOKEN, "${{ github.token }}");
+  }
+  assert.match(
+    stateSource,
+    /\/releases\?per_page=\$\{RELEASE_LIST_PAGE_SIZE\}&page=\$\{page\}/,
+  );
+  assert.doesNotMatch(stateSource, /`https:\/\/api\.github\.com[^`]*\/releases\/tags\//);
+
+  // prepare runs only when inspect found no release. Its guard uses gh, which
+  // also resolves a draft by its tag name, before it creates the draft.
+  assert.equal(prepare.if, "steps.state.outputs.create_draft == 'true'");
+  const guard = prepare.run.indexOf('gh release view "${GITHUB_REF_NAME}"');
+  const create = prepare.run.indexOf('gh release create "${GITHUB_REF_NAME}"');
+  assert.ok(guard >= 0 && guard < create);
+  assert.match(prepare.run, /release state changed after inspection/);
+  assert.match(prepare.run, /--verify-tag/);
+  assert.match(prepare.run, /--draft/);
+});
+
 test("repair RPC rehearsal runs after validator cleanup with existing build prerequisites", async () => {
   const workflow = await loadWorkflow(
     new URL("../.github/workflows/protocol-rpc-e2e.yml", import.meta.url),
