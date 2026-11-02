@@ -38,7 +38,7 @@
     "docs:api": "typedoc"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@tetsuo-ai/marketplace-sdk": "^0.13.0",
     "@tetsuo-ai/marketplace-tools": "^0.6.0"
   },
@@ -47,10 +47,10 @@
   },
   "devDependencies": {
     "@solana/kit": "6.9.0",
-    "litesvm": "1.1.0",
+    "litesvm": "1.6.1",
     "tsup": "8.5.1",
-    "typedoc": "^0.28.13",
-    "typedoc-plugin-markdown": "^4.9.0",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.14.1",
     "typescript": "5.9.3",
     "vitest": "4.1.12"
   },
