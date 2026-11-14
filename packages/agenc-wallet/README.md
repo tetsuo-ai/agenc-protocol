@@ -1,0 +1,181 @@
+# @tetsuo-ai/agenc-wallet
+
+A wallet an agent can use but cannot drain.
+
+It is a small local service that holds the keys. An agent never sees a key, an
+address to pay, or a transaction. It sends plain requests ("find a service",
+"hire this one", "approve the delivery") and the wallet decides whether the
+agent's own allowance covers it or a person has to say yes. Then the wallet
+builds, signs and follows the AgenC marketplace transactions itself, with the
+public `@tetsuo-ai/marketplace-sdk`.
+
+Status: 0.1.0, not yet published. Every flow below is tested against the real
+compiled marketplace program in the SDK's in-process sandbox. The mainnet
+paths (public RPC, the price feed and the service catalog) have been read
+live; no mainnet hire has been made with this package yet.
+
+## How the money is bounded
+
+- There is one **main balance**. Money is added there.
+- Every **agent has its own wallet**. What is in it is the agent's allowance.
+  The chain enforces it: an agent cannot spend what its wallet does not hold.
+- A hire **above the agent's limit**, or one its allowance cannot cover,
+  waits for a person. On approval it is paid from the allowance if that
+  covers it, otherwise from the main balance.
+- A price is **held** until the delivery is approved. A job nobody starts is
+  cancelled automatically and the price returns.
+- An agent connection can find, hire, check and review **its own** jobs. It
+  cannot move money between wallets, change its limit, approve its own
+  request, turn down a delivery, or withdraw. Those belong to the owner.
+
+## What a job costs
+
+Measured against the program in the sandbox, and the same accounts exist on
+mainnet:
+
+- **The price**, held until you approve, paid to the provider on approval.
+- **A network fee that is not returned**, even when the job is cancelled: the
+  deposit behind the permanent job record plus four transaction fees. On
+  mainnet this was 3,037,520 lamports (about $0.22) on 2026-11-14.
+- **A one-time record** per paying wallet on its first hire (990,600 lamports
+  on mainnet at the documented rent rate).
+- **Deposits that come back** when the finished job is tidied. The wallet
+  tidies by itself.
+- **A rating is optional and costs** the deposit of its permanent record
+  (439 bytes, which is about 2.9 million lamports at mainnet's rent rate).
+  The wallet shows the cost before you rate.
+
+`market.find` returns the network fee, and an approval lists price, fee and
+returnable deposit separately.
+
+## Try it with practice money
+
+Practice mode is a complete marketplace inside the service process: the real
+program in litesvm, play money, house providers that take and deliver jobs.
+Nothing touches a network.
+
+The package is not on npm yet, so run it from this repository after
+`npm run build`:
+
+```bash
+node dist/cli.js init   --data-dir ./my-wallet
+node dist/cli.js serve  --data-dir ./my-wallet --network sandbox
+node dist/cli.js status --data-dir ./my-wallet   # in another terminal
+```
+
+Practice mode needs the optional `litesvm` module.
+
+## Run it for real
+
+```bash
+node dist/cli.js init  --data-dir ~/.local/share/agenc-wallet
+node dist/cli.js serve --data-dir ~/.local/share/agenc-wallet --rpc-url https://your-rpc
+```
+
+`status` prints the address to send SOL to. A dedicated RPC is recommended;
+the default public endpoint is rate limited.
+
+`init` writes `bootstrap.json` with a fresh unlock secret and owner
+credential. Whoever holds that file and the wallet folder holds the money.
+A desktop host should not use it: start `serve` as a child process, keep the
+unlock secret in the OS keychain, and write one JSON line to the child's
+stdin:
+
+```json
+{"unlockSecret":"<base64, 32+ random bytes>","ownerToken":"<32+ characters>"}
+```
+
+The service prints one line when ready (`{"ready":true,"socket":"..."}`) and
+stops when stdin closes, so it never outlives its host.
+
+## Talk to it
+
+`@tetsuo-ai/agenc-wallet/client` has no dependencies beyond `node:net`.
+
+```ts
+import { connectWallet, runMarketTool } from "@tetsuo-ai/agenc-wallet/client";
+
+// The owner: everything.
+const owner = await connectWallet({ socketPath, token: ownerToken });
+const agent = await owner.call("agents.create", { name: "My assistant" });
+await owner.call("agents.fund", { agentId: agent.id, amount: { usdCents: 500 } });
+
+// An agent: only its own find, hire, status and review.
+const lane = await connectWallet({ socketPath, token: ownerToken, actAs: agent.id });
+const found = await runMarketTool(lane, agent.id, "market_find", { query: "logo" });
+const hired = await runMarketTool(lane, agent.id, "market_hire", {
+  service: found.services[0].id,
+  request: "A simple logo for a bakery called Crumb.",
+});
+```
+
+`MARKET_TOOLS` holds the four tool definitions (`market_find`, `market_hire`,
+`market_status`, `market_review`) as JSON Schema, for any agent framework.
+A standalone agent credential is `agentToken(ownerToken, agentId)`.
+
+## Embed it
+
+```ts
+import {
+  AgencWallet, createHostedServices, createRpcChain, pythPrice, serveWallet,
+} from "@tetsuo-ai/agenc-wallet";
+
+const chain = createRpcChain({ network: "mainnet", rpcUrl });
+const wallet = await AgencWallet.open({
+  dataDir, unlockSecret, chain,
+  services: createHostedServices(),
+  prices: pythPrice(chain),
+});
+wallet.start(); // housekeeping: resume, refund, tidy, top up
+```
+
+## Crash safety
+
+A job's intent (service, price, task address) is written to the journal
+before any transaction is sent. A task address is fixed by the payer and a
+random id, and the program creates it at most once, so after a crash or a
+lost answer the chain says what happened: a hire that landed is carried on,
+one that never landed costs nothing, and nothing is paid twice.
+
+## Earning
+
+`earn.set` runs the stock `@tetsuo-ai/agenc-worker` loop for an agent, signing
+with that agent's own wallet. The host supplies the program that does the
+work (`earn.executor` in the start-up line): an argv with a `{prompt}`
+element, run in a throwaway folder with an empty environment. Registering to
+take jobs locks the marketplace's stake out of the agent's allowance; the
+wallet shows it as set aside.
+
+## What it talks to
+
+On a real network, and nothing else:
+
+- your Solana RPC, for balances, account reads and sending transactions;
+- `agenc.ag/api/listings`, read only, for the list of services;
+- `attest.agenc.ag`, the public attestation service, which publishes a
+  job's request and records that it passed the marketplace's content check;
+- the on-chain Pyth SOL/USD price account, through the same RPC, for dollar
+  figures. Without a trustworthy price the wallet shows SOL instead.
+
+## Not built yet
+
+- Deliveries are shown when the provider published them where they can be
+  fetched: an https link, or a content-addressed store given as
+  `hosted.artifactBaseUrl`. A provider that records only a fingerprint
+  delivers out of band.
+- Asking for changes needs a message host for the note. The sandbox has one;
+  the hosted services do not configure one, so it is refused there.
+- Token-priced services, disputes and contests are not handled.
+- An agent that stops earning stays registered; getting its stake back is a
+  manual marketplace step.
+
+## Develop
+
+```bash
+npm run typecheck
+npm run test:unit   # no chain
+npm run test:e2e    # the real program in litesvm
+npm run build
+```
+
+MIT.

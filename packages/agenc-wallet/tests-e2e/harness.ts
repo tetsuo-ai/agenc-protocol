@@ -1,0 +1,86 @@
+// Shared setup for the end-to-end suite: a sandbox marketplace (the real
+// compiled program in litesvm) plus a wallet opened on a throwaway folder.
+import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { Address } from "@solana/kit";
+import type { Chain } from "../src/chain.js";
+import type { EarnOptions } from "../src/earn.js";
+import { startSandbox, type HouseService, type Sandbox } from "../src/sandbox.js";
+import { AgencWallet, type WalletConfig } from "../src/wallet.js";
+
+/** Play money: one cent is exactly this many lamports in the sandbox. */
+export const CENT = 100_000n;
+export const SOL = 1_000_000_000n;
+
+export const HAIKU: HouseService = {
+  name: "Haiku Writer",
+  category: "writing",
+  summary: "A three-line poem about anything you name.",
+  priceLamports: 20n * CENT,
+  replyPrefix: "old pond / a frog jumps in / the sound of water",
+};
+
+export interface World {
+  sandbox: Sandbox;
+  wallet: AgencWallet;
+  dataDir: string;
+  secret: Uint8Array;
+  /** The wallet's clock, moved by hand. */
+  clock: { now: number };
+  listing: Address;
+  /** Reopen the wallet on the same folder (a restart). */
+  reopen(overrides?: Partial<WalletConfig>): Promise<AgencWallet>;
+  balance(account: string): Promise<bigint>;
+}
+
+export async function startWorld(options: {
+  mainLamports?: bigint;
+  earn?: EarnOptions;
+  chain?: (chain: Chain) => Chain;
+  config?: Partial<WalletConfig>;
+} = {}): Promise<World> {
+  const sandbox = await startSandbox({ followWallClock: false });
+  const listing = await sandbox.addService(HAIKU);
+  const dataDir = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-"));
+  const secret = randomBytes(32);
+  const clock = { now: 1_800_000_000_000 };
+  const chain = options.chain ? options.chain(sandbox.chain) : sandbox.chain;
+  const config: WalletConfig = {
+    dataDir,
+    unlockSecret: secret,
+    chain,
+    services: sandbox.services,
+    prices: sandbox.prices,
+    now: () => clock.now,
+    ...(options.earn ? { earn: options.earn } : {}),
+    ...options.config,
+  };
+  const wallet = await AgencWallet.open(config);
+  sandbox.fund(wallet.mainAddress, options.mainLamports ?? 5n * SOL);
+  return {
+    sandbox,
+    wallet,
+    dataDir,
+    secret,
+    clock,
+    listing,
+    reopen: (overrides = {}) => AgencWallet.open({ ...config, ...overrides }),
+    balance: (account) => sandbox.chain.getBalance(account as Address),
+  };
+}
+
+/** Poll `check` until it returns a value, or fail after `timeoutMs`. */
+export async function eventually<T>(
+  check: () => Promise<T | null | undefined | false>,
+  timeoutMs = 20_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error("condition was not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}

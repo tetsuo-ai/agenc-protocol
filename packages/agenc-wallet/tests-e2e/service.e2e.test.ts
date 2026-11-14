@@ -1,0 +1,193 @@
+// The wallet behind its socket, driven the way a desktop host drives it:
+// an owner connection for the panel and an agent-bound connection for the
+// four chat tools. Proves an agent connection cannot reach owner methods.
+import { randomBytes } from "node:crypto";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { connectWallet, type WalletClient } from "../src/client/socket-client.js";
+import { runMarketTool } from "../src/client/tools.js";
+import type { WalletEvent } from "../src/client/protocol.js";
+import { agentToken, serveWallet, type WalletServer } from "../src/server.js";
+import { eventually, startWorld, type World } from "./harness.js";
+
+let world: World | null = null;
+let server: WalletServer | null = null;
+const clients: WalletClient[] = [];
+
+afterEach(async () => {
+  for (const client of clients.splice(0)) client.close();
+  await server?.close();
+  server = null;
+  await world?.wallet.close();
+  world = null;
+});
+
+async function serve(current: World) {
+  const ownerToken = randomBytes(32).toString("hex");
+  const socketPath = path.join(current.dataDir, "sock", "wallet.sock");
+  server = await serveWallet({
+    wallet: current.wallet,
+    socketPath,
+    ownerToken,
+    agentExists: (agentId) => current.wallet.hasAgent(agentId),
+  });
+  const connect = async (options: { token?: string; actAs?: string; onEvent?: (event: WalletEvent) => void }) => {
+    const client = await connectWallet({
+      socketPath,
+      token: options.token ?? ownerToken,
+      ...(options.actAs !== undefined ? { actAs: options.actAs } : {}),
+      ...(options.onEvent ? { onEvent: options.onEvent } : {}),
+    });
+    clients.push(client);
+    return client;
+  };
+  return { ownerToken, socketPath, connect };
+}
+
+describe("the wallet service", () => {
+  it("rejects a wrong credential", async () => {
+    world = await startWorld();
+    const { socketPath } = await serve(world);
+    await expect(connectWallet({ socketPath, token: "x".repeat(64) })).rejects.toMatchObject({
+      code: "NOT_ALLOWED",
+    });
+  });
+
+  it("keeps an agent connection inside its own lane", async () => {
+    world = await startWorld();
+    const { connect, ownerToken } = await serve(world);
+    const owner = await connect({});
+    expect(owner.role).toBe("owner");
+    const mine = await owner.call("agents.create", { name: "My assistant" });
+    const other = await owner.call("agents.create", { name: "Research agent" });
+    await owner.call("agents.fund", { agentId: other.id, amount: { usdCents: 300 } });
+
+    // Both ways of getting an agent connection: the owner narrowing its own
+    // credential, and a standalone credential derived for that agent.
+    const narrowed = await connect({ actAs: mine.id });
+    const standalone = await connect({ token: agentToken(ownerToken, mine.id), actAs: mine.id });
+    for (const agent of [narrowed, standalone]) {
+      expect(agent.role).toBe("agent");
+      expect(agent.agentId).toBe(mine.id);
+      await expect(agent.call("overview", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(
+        agent.call("agents.fund", { agentId: mine.id, amount: { usdCents: 100 } }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(
+        agent.call("agents.setPolicy", {
+          agentId: mine.id,
+          policy: { askAboveCents: 99_999, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } },
+        }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(
+        agent.call("wallet.withdraw", { to: other.address, amount: "all" }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(agent.call("approvals.list", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    }
+    // A credential for one agent does not open another agent's lane.
+    await expect(
+      connect({ token: agentToken(ownerToken, mine.id), actAs: other.id }),
+    ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    // Naming another agent in a request changes nothing: the hire is made as
+    // the connection's own agent, which has no allowance, so it needs a yes.
+    const hired = await narrowed.call("market.hire", {
+      agentId: other.id,
+      listing: world.listing,
+      request: "A haiku.",
+    });
+    expect(hired.job.agentId).toBe(mine.id);
+    expect(hired.job.status).toBe("needs_approval");
+    await expect(
+      narrowed.call("approvals.decide", { approvalId: hired.approval!.id, approve: true }),
+    ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    // Another agent cannot watch that request either.
+    const otherLane = await connect({ actAs: other.id });
+    await expect(
+      otherLane.call("approvals.wait", { approvalId: hired.approval!.id, timeoutMs: 10 }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    // The same tool call delivered twice is one hire, not two.
+    const first = await runMarketTool(
+      otherLane,
+      other.id,
+      "market_hire",
+      { service: world.listing, request: "A haiku." },
+      { idempotencyKey: "call-1", approvalWaitMs: 10 },
+    );
+    const second = await runMarketTool(
+      otherLane,
+      other.id,
+      "market_hire",
+      { service: world.listing, request: "A haiku." },
+      { idempotencyKey: "call-1", approvalWaitMs: 10 },
+    );
+    expect(second.job!.job_id).toBe(first.job!.job_id);
+    const { jobs } = await otherLane.call("jobs.list", {});
+    expect(jobs).toHaveLength(1);
+  });
+
+  it("runs the four chat tools from find to paid, with one approval click", async () => {
+    world = await startWorld();
+    const { sandbox } = world;
+    const events: WalletEvent[] = [];
+    const { connect } = await serve(world);
+    const owner = await connect({ onEvent: (event) => events.push(event) });
+    const agentView = await owner.call("agents.create", { name: "My assistant" });
+    const agent = await connect({ actAs: agentView.id });
+
+    const found = await runMarketTool(agent, agentView.id, "market_find", { query: "poem haiku" });
+    expect(found.ok).toBe(true);
+    expect(found.services).toHaveLength(1);
+    expect(found.services![0]).toMatchObject({ name: "Haiku Writer", price: "$0.20" });
+    expect(found.message).toMatch(/network fees/);
+
+    // The tool call waits while the person decides in the panel.
+    const hiring = runMarketTool(agent, agentView.id, "market_hire", {
+      service: found.services![0]!.id,
+      request: "A haiku about a lighthouse.",
+      max_price_usd: 1,
+    });
+    const approval = await eventually(async () => {
+      const { approvals } = await owner.call("approvals.list", {});
+      return approvals[0];
+    });
+    expect(approval.agentName).toBe("My assistant");
+    expect(events.some((event) => event.type === "approval")).toBe(true);
+    await owner.call("approvals.decide", { approvalId: approval.id, approve: true });
+    const hired = await hiring;
+    expect(hired.ok).toBe(true);
+    expect(hired.job!.status).toBe("waiting");
+
+    const waiting = runMarketTool(agent, agentView.id, "market_status", {
+      job_id: hired.job!.job_id,
+      wait: true,
+    });
+    await sandbox.workOnce();
+    const delivered = await waiting;
+    expect(delivered.job!.status).toBe("delivered");
+    expect(delivered.job!.delivery?.untrusted_content).toContain("A haiku about a lighthouse.");
+    expect(delivered.job!.delivery?.matches_recorded_fingerprint).toBe(true);
+    expect(delivered.job!.can).toEqual(["approve", "ask_changes"]);
+
+    const refused = await runMarketTool(agent, agentView.id, "market_review", {
+      job_id: hired.job!.job_id,
+      action: "refund",
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/user's decision/);
+
+    const paid = await runMarketTool(agent, agentView.id, "market_review", {
+      job_id: hired.job!.job_id,
+      action: "approve",
+    });
+    expect(paid.ok).toBe(true);
+    expect(paid.job!.status).toBe("paid");
+
+    const list = await runMarketTool(agent, agentView.id, "market_status", {});
+    expect(list.jobs).toHaveLength(1);
+    const bad = await runMarketTool(agent, agentView.id, "market_hire", { service: "nope" });
+    expect(bad.ok).toBe(false);
+  });
+});

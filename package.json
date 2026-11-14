@@ -23,6 +23,7 @@
     "packages/marketplace-mcp",
     "packages/marketplace-moderation",
     "packages/agenc-worker",
+    "packages/agenc-wallet",
     "packages/agenc-cli",
     "packages/agenc-cli-alias"
   ],

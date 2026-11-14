@@ -107,6 +107,19 @@ jobs:
         run: npm run build
         working-directory: packages/agenc-worker
 
+      # The wallet consumes the workspace SDK and worker builds made above.
+      - name: Wallet typecheck
+        run: npm run typecheck
+        working-directory: packages/agenc-wallet
+
+      - name: Wallet unit tests
+        run: npm run test:unit
+        working-directory: packages/agenc-wallet
+
+      - name: Wallet build
+        run: npm run build
+        working-directory: packages/agenc-wallet
+
       - name: Examples compile
         run: npm run examples:check
 
@@ -204,6 +217,12 @@ jobs:
       - name: Worker on-chain e2e tests (litesvm)
         run: npm run test:e2e
         working-directory: packages/agenc-worker
+
+      # The wallet's whole purchase and earning lifecycle against the same
+      # freshly built production program, through the SDK's testing sandbox.
+      - name: Wallet on-chain e2e tests (litesvm)
+        run: npm run test:e2e
+        working-directory: packages/agenc-wallet
 
       # Exercise every package that consumes the generated SDK against the same
       # freshly built production program. This catches ABI additions that are
