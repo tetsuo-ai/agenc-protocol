@@ -1,0 +1,652 @@
+// A whole marketplace in this process, for practice and for tests: the REAL
+// compiled marketplace program running in litesvm, play money, a local
+// moderator, in-memory hosting, and house providers that actually take and
+// deliver jobs through the stock worker runtime.
+//
+// Nothing here touches a network or real funds. It needs the optional
+// `litesvm` native module (loaded only when a sandbox is started).
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  generateKeyPairSigner,
+  getCompiledTransactionMessageDecoder,
+  lamports,
+  type Address,
+  type KeyPairSigner,
+} from "@solana/kit";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  createMarketplaceClient,
+  facade,
+  findAgentPda,
+  findHireRecordPda,
+  findProtocolConfigPda,
+  findTaskPda,
+  getProtocolConfigDecoder,
+  getProtocolConfigEncoder,
+  getServiceListingDecoder,
+  taskThread,
+  values,
+  type GpaFilter,
+  type ProgramAccountsTransport,
+  type Transport,
+} from "@tetsuo-ai/marketplace-sdk";
+import type { LocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";
+import {
+  emptyState,
+  bytesToHex as workerHex,
+  runTickOnce,
+  saveState,
+  type WorkerContext,
+} from "@tetsuo-ai/agenc-worker";
+import { BASE_FEE_LAMPORTS, type Chain } from "./chain.js";
+import { WalletError } from "./errors.js";
+import { fixedPrice, type PriceSource } from "./pricing.js";
+import {
+  decodeResultPointer,
+  digestFromPointer,
+  sha256Hex,
+  type CatalogRow,
+  type MarketServices,
+} from "./services.js";
+
+/** Play-money exchange rate: one cent is exactly 100,000 lamports. */
+export const SANDBOX_USD_PER_SOL = 100;
+/** Marketplace fee stamped into the sandbox, matching the live network. */
+const SANDBOX_PROTOCOL_FEE_BPS = 500;
+/** Stake a provider posts to register, matching the live network. */
+const SANDBOX_MIN_AGENT_STAKE = 10_000_000n;
+/**
+ * House providers only deliver the services they list. They ignore any job
+ * paying less than this, which leaves the practice buyer's small public jobs
+ * for the person's own earning agent.
+ */
+const HOUSE_PROVIDER_MIN_REWARD = 1_500_000n;
+/** What a practice public job pays (12 cents of play money). */
+export const PRACTICE_OPEN_JOB_REWARD = 1_200_000n;
+
+const CLEAN = {
+  status: 0,
+  riskScore: 0,
+  categoryMask: 0n,
+  policyHash: new Uint8Array(32),
+  scannerHash: new Uint8Array(32),
+  expiresAt: 0n,
+} as const;
+
+export interface HouseService {
+  name: string;
+  category: string;
+  /** What the buyer gets, in a sentence. */
+  summary: string;
+  priceLamports: bigint;
+  /** Seconds the provider gets to deliver. Default one hour. */
+  deliverySecs?: number;
+  /** The first line of every delivery this house provider writes. */
+  replyPrefix: string;
+  /** Take jobs but never deliver them (for trying the refund path). */
+  noShow?: boolean;
+}
+
+export interface OpenJob {
+  task: Address;
+  /** The house buyer approves the delivery, paying whoever did the job. */
+  approve(): Promise<void>;
+  /** True once someone has delivered and the job waits for approval. */
+  delivered(): Promise<boolean>;
+}
+
+export interface Sandbox {
+  readonly chain: Chain;
+  readonly services: MarketServices;
+  readonly prices: PriceSource;
+  /** The underlying local marketplace (clock, raw accounts) for tests. */
+  readonly market: LocalMarketplace;
+  /** Add play money to any address. */
+  fund(account: Address, amount: bigint): void;
+  /** Register a house provider and list a service it will deliver. */
+  addService(service: HouseService): Promise<Address>;
+  /** Let every house provider take and deliver one waiting job. */
+  workOnce(): Promise<number>;
+  /** Post a public job any earning agent may take. */
+  postOpenJob(job: {
+    title: string;
+    instructions: string;
+    rewardLamports: bigint;
+  }): Promise<OpenJob>;
+  /** Move the sandbox clock forward. */
+  advanceClock(seconds: number): void;
+  /** Deliveries published so far, keyed by fingerprint (tests). */
+  readonly deliveries: ReadonlyMap<string, Uint8Array>;
+}
+
+function matchesFilter(filter: GpaFilter, data: Uint8Array): boolean {
+  if ("dataSize" in filter) return data.length === filter.dataSize;
+  const { offset, bytes } = filter.memcmp;
+  if (offset + bytes.length > data.length) return false;
+  for (let index = 0; index < bytes.length; index += 1) {
+    if (data[offset + index] !== bytes[index]) return false;
+  }
+  return true;
+}
+
+function envelopeBytes(payload: Record<string, unknown>, payloadHash: string): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      integrity: { algorithm: "sha256", canonicalization: "json-stable-v1", payloadHash },
+      payload,
+    }),
+  );
+}
+
+/** The script a house provider runs: echo a canned reply plus the request. */
+const HOUSE_EXECUTOR_SCRIPT = [
+  "const [prefix, prompt] = process.argv.slice(1);",
+  "let request = '';",
+  "const start = prompt.indexOf('--- BEGIN UNTRUSTED JOB SPEC ---');",
+  "const end = prompt.indexOf('--- END UNTRUSTED JOB SPEC ---');",
+  "if (start !== -1 && end > start) {",
+  "  try {",
+  "    const doc = JSON.parse(prompt.slice(start + 32, end));",
+  "    const spec = doc.payload ?? doc;",
+  "    request = String(spec.instructions ?? spec.summary ?? spec.title ?? '');",
+  "  } catch {}",
+  "}",
+  "process.stdout.write(prefix + (request ? '\\n\\nYou asked: ' + request : '') + '\\n');",
+].join("\n");
+
+interface HouseProvider {
+  signer: KeyPairSigner;
+  agent: Address;
+  stateDir: string;
+  replyPrefix: string;
+  noShow: boolean;
+}
+
+export interface StartSandboxOptions {
+  /** Keep the sandbox clock in step with the real clock. Default true. */
+  followWallClock?: boolean;
+  /** Folder for the house providers' ledgers. Default a fresh temp folder. */
+  workDir?: string;
+}
+
+/** Boot a sandbox marketplace. */
+export async function startSandbox(options: StartSandboxOptions = {}): Promise<Sandbox> {
+  let testing: typeof import("@tetsuo-ai/marketplace-sdk/testing");
+  try {
+    testing = await import("@tetsuo-ai/marketplace-sdk/testing");
+  } catch (error) {
+    throw new WalletError(
+      "NOT_AVAILABLE",
+      "Practice mode needs a component that is not installed on this computer.",
+      { cause: error },
+    );
+  }
+  const followWallClock = options.followWallClock ?? true;
+  // The sandbox clock starts at the real time either way: the worker runtime
+  // compares on-chain deadlines with the machine's clock, as it would live.
+  const market = await testing.startLocalMarketplace({
+    unixTimestamp: BigInt(Math.floor(Date.now() / 1000)),
+  });
+  const svm = market.svm;
+  // litesvm keeps one blockhash and refuses a byte-identical repeat, so the
+  // second "give $5" would be dropped as a duplicate. Expiring the blockhash
+  // after each send would fix that but break any sender who had already
+  // built its transaction. Turning the duplicate check off is the safe way:
+  // nothing here re-sends a transaction that was accepted.
+  svm.withTransactionHistory(0n);
+  const workDir = options.workDir ?? mkdtempSync(path.join(tmpdir(), "agenc-wallet-sandbox-"));
+
+  // Stamp the live network's fee and stake so practice numbers are honest.
+  {
+    const [pda] = await findProtocolConfigPda();
+    const account = svm.getAccount(pda);
+    if (!account || !account.exists) throw new Error("sandbox protocol config is missing");
+    const config = getProtocolConfigDecoder().decode(Uint8Array.from(account.data));
+    const data = getProtocolConfigEncoder().encode({
+      ...config,
+      protocolFeeBps: SANDBOX_PROTOCOL_FEE_BPS,
+      minAgentStake: SANDBOX_MIN_AGENT_STAKE,
+    });
+    svm.setAccount({
+      address: pda,
+      data: data as Uint8Array,
+      executable: false,
+      lamports: account.lamports,
+      programAddress: account.programAddress,
+      space: BigInt(data.length),
+    });
+  }
+
+  const syncClock = (): void => {
+    if (!followWallClock) return;
+    const clock = svm.getClock();
+    const wall = BigInt(Math.floor(Date.now() / 1000));
+    if (wall > clock.unixTimestamp) {
+      clock.unixTimestamp = wall;
+      svm.setClock(clock);
+    }
+  };
+
+  // litesvm cannot list accounts, so remember every address a transaction
+  // names and answer program-account scans from that set.
+  const known = new Set<Address>();
+  const gpa: ProgramAccountsTransport = {
+    async getProgramAccounts({ filters }) {
+      const out: Array<{ address: Address; data: Uint8Array }> = [];
+      for (const account of known) {
+        const found = svm.getAccount(account);
+        if (!found || !found.exists) continue;
+        if (found.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) continue;
+        const data = Uint8Array.from(found.data);
+        if (filters.every((filter) => matchesFilter(filter, data))) {
+          out.push({ address: account, data });
+        }
+      }
+      return out;
+    },
+  };
+  const base = market.transport;
+  const transport: Transport = {
+    ...base,
+    getLatestBlockhash: () => base.getLatestBlockhash(),
+    async sendAndConfirm(signedTx) {
+      syncClock();
+      const result = await base.sendAndConfirm(signedTx);
+      try {
+        const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
+        for (const account of message.staticAccounts) known.add(account);
+      } catch {
+        // Indexing is best effort; the transaction itself succeeded.
+      }
+      return result;
+    },
+  };
+
+  const readInfo = (account: Address) => {
+    const found = svm.getAccount(account);
+    if (!found || !found.exists) return null;
+    return {
+      data: Uint8Array.from(found.data),
+      owner: found.programAddress,
+      executable: found.executable,
+      lamports: BigInt(found.lamports),
+    };
+  };
+
+  const chain: Chain = {
+    network: "sandbox",
+    transferFeeLamports: BASE_FEE_LAMPORTS,
+    clientFor: (signer) => createMarketplaceClient({ transport, signer }),
+    readAccount: async (account) => readInfo(account)?.data ?? null,
+    readRawAccount: async (account) => {
+      const info = readInfo(account);
+      return info === null ? null : { data: info.data, owner: info.owner, lamports: info.lamports };
+    },
+    readAccountInfo: async (account) => {
+      const info = readInfo(account);
+      return info === null
+        ? null
+        : { data: info.data, owner: info.owner, executable: info.executable };
+    },
+    getBalance: async (account) => BigInt(svm.getBalance(account) ?? 0n),
+    getMinimumBalanceForRentExemption: async (space) =>
+      BigInt(svm.minimumBalanceForRentExemption(BigInt(space))),
+    clusterTime: async () => {
+      syncClock();
+      return Number(svm.getClock().unixTimestamp);
+    },
+    gpa,
+  };
+
+  const moderatorClient = chain.clientFor(market.moderator.signer);
+  const jobSpecs = new Map<string, Uint8Array>();
+  const deliveries = new Map<string, Uint8Array>();
+  const threads = new Map<string, taskThread.TaskThreadEnvelope[]>();
+  const listed: Array<{ listing: Address; summary: string; category: string }> = [];
+  const providers: HouseProvider[] = [];
+
+  const resolveAgencUri = async (uri: string): Promise<Uint8Array> => {
+    const match = /^agenc:\/\/job-spec\/sha256\/([0-9a-f]{64})$/.exec(uri);
+    const body = match ? jobSpecs.get(match[1]!) : undefined;
+    if (body === undefined) throw new Error(`unknown sandbox job spec: ${uri}`);
+    return body;
+  };
+
+  const uploadFetch: typeof fetch = async (_input, init) => {
+    const body = init?.body;
+    if (!(body instanceof Uint8Array)) return new Response(null, { status: 400 });
+    const digest = sha256Hex(body);
+    deliveries.set(digest, Uint8Array.from(body));
+    return new Response(JSON.stringify({ uri: `agenc://result/sha256/${digest}` }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const taskThreadTransport: NonNullable<MarketServices["taskThreadTransport"]> = {
+    baseUrl: "https://sandbox.invalid",
+    async get(route) {
+      const task = decodeURIComponent(route.split("/").pop() ?? "");
+      return { messages: threads.get(task) ?? [] };
+    },
+    async post() {
+      throw new Error("the sandbox thread is written by the wallet directly");
+    },
+  };
+
+  const services: MarketServices = {
+    async listServices() {
+      const rows: CatalogRow[] = [];
+      for (const entry of listed) {
+        const info = readInfo(entry.listing);
+        if (info === null) continue;
+        const account = getServiceListingDecoder().decode(info.data);
+        if (Number(account.state) !== 0) continue;
+        const average =
+          account.ratingCount > 0 ? Number(account.totalRating) / account.ratingCount : null;
+        rows.push({
+          listing: entry.listing,
+          providerAgent: account.providerAgent,
+          name: values.decodeListingName(new Uint8Array(account.name)),
+          category: entry.category,
+          summary: entry.summary,
+          priceLamports: account.price,
+          rating: average !== null && average >= 1 && average <= 5 ? average : null,
+          ratingCount: account.ratingCount,
+          jobsDone: Number(account.totalHires),
+          deliverySecs:
+            account.defaultDeadlineSecs > 0n ? Number(account.defaultDeadlineSecs) : null,
+        });
+      }
+      return rows;
+    },
+    async trustedModerators() {
+      return [];
+    },
+    async acquireListingAttestation() {
+      throw new WalletError("NOT_AVAILABLE", "That service cannot be hired in practice mode.");
+    },
+    async attestTask(input) {
+      const hash = await values.canonicalJobSpecHash(input.jobSpec);
+      if (hash.hex !== input.jobSpecHashHex) {
+        throw new WalletError("NOT_ALLOWED", "The request does not match what was paid for.");
+      }
+      jobSpecs.set(hash.hex, envelopeBytes(input.jobSpec, hash.hex));
+      await moderatorClient.send([
+        await facade.recordTaskModeration({
+          moderator: market.moderator.signer,
+          task: input.task,
+          jobSpecHash: hash.bytes,
+          ...CLEAN,
+        }),
+      ]);
+      return { jobSpecUri: `agenc://job-spec/sha256/${hash.hex}` };
+    },
+    async jobSpecUriFor(jobSpecHashHex) {
+      return jobSpecs.has(jobSpecHashHex) ? `agenc://job-spec/sha256/${jobSpecHashHex}` : null;
+    },
+    async fetchResult({ proofHashHex, resultData }) {
+      const pointed = digestFromPointer(decodeResultPointer(resultData));
+      if (pointed !== null && pointed !== proofHashHex) return null;
+      const bytes = deliveries.get(proofHashHex);
+      return bytes === undefined
+        ? null
+        : { bytes, uri: null };
+    },
+    resultUploader() {
+      return { url: "https://sandbox.invalid/results", fetch: uploadFetch };
+    },
+    resolveAgencUri,
+    async postChangeRequest(envelope) {
+      const list = threads.get(envelope.taskPda) ?? [];
+      list.push(envelope);
+      threads.set(envelope.taskPda, list);
+    },
+    taskThreadTransport,
+  };
+
+  function workerContext(provider: HouseProvider): WorkerContext {
+    return {
+      config: {
+        capabilities: 1n,
+        minRewardLamports: HOUSE_PROVIDER_MIN_REWARD,
+        maxRewardLamports: null,
+        allowUnboundedReward: true,
+        executor: provider.noShow
+          ? [process.execPath, "-e", "process.exit(1)", "{prompt}"]
+          : [process.execPath, "-e", HOUSE_EXECUTOR_SCRIPT, provider.replyPrefix, "{prompt}"],
+        executorMode: "unsafe",
+        executorEnvAllowlist: [],
+        resultUploader: "https://sandbox.invalid/results",
+        creatorAllowlist: null,
+        allowAnyCreator: true,
+        endpoint: "https://sandbox.invalid/house",
+        executorTimeoutMs: 60_000,
+        pollIntervalMs: 1_000,
+      },
+      client: chain.clientFor(provider.signer),
+      signer: provider.signer,
+      gpa,
+      readAccount: chain.readAccount,
+      readAccountInfo: chain.readAccountInfo,
+      stateDir: provider.stateDir,
+      log: (event) => {
+        if (process.env.AGENC_WALLET_SANDBOX_DEBUG === "1") {
+          process.stderr.write(`house provider: ${JSON.stringify(event)}\n`);
+        }
+      },
+      getBalance: chain.getBalance,
+      getMinimumBalanceForRentExemption: chain.getMinimumBalanceForRentExemption,
+      uploadFetch,
+      resolveAgencUri,
+      taskThreadTransport,
+    };
+  }
+
+  async function newProvider(replyPrefix: string, noShow: boolean): Promise<HouseProvider> {
+    const signer = await market.fundedSigner();
+    const agentId = values.randomId32();
+    await chain.clientFor(signer).registerAgent({
+      authority: signer,
+      agentId,
+      capabilities: 1n,
+      endpoint: "https://sandbox.invalid/house",
+      metadataUri: null,
+      stakeAmount: SANDBOX_MIN_AGENT_STAKE,
+    });
+    const [agent] = await findAgentPda({ agentId });
+    const stateDir = path.join(workDir, `house-${providers.length}`);
+    const state = emptyState();
+    state.agentIdHex = workerHex(agentId);
+    saveState(stateDir, state);
+    const provider = { signer, agent, stateDir, replyPrefix, noShow };
+    providers.push(provider);
+    return provider;
+  }
+
+  return {
+    chain,
+    services,
+    prices: fixedPrice(SANDBOX_USD_PER_SOL),
+    market,
+    deliveries,
+    fund(account, amount) {
+      svm.airdrop(account, lamports(amount));
+    },
+    advanceClock(seconds) {
+      const clock = svm.getClock();
+      clock.unixTimestamp += BigInt(seconds);
+      svm.setClock(clock);
+    },
+
+    async addService(service) {
+      const provider = await newProvider(service.replyPrefix, service.noShow === true);
+      const listingId = values.randomId32();
+      const metadata = { name: service.name, summary: service.summary };
+      const specHash = (await values.canonicalJobSpecHash(metadata)).bytes;
+      await chain.clientFor(provider.signer).createServiceListing({
+        providerAgent: provider.agent,
+        authority: provider.signer,
+        listingId,
+        name: service.name,
+        category: service.category as never,
+        tags: [],
+        specHash,
+        specUri: `agenc://job-spec/sha256/${values.bytesToHex(specHash)}`,
+        price: service.priceLamports,
+        priceMint: null,
+        requiredCapabilities: 1n,
+        defaultDeadlineSecs: BigInt(service.deliverySecs ?? 3_600),
+        maxOpenJobs: 0,
+        operator: null,
+        operatorFeeBps: 0,
+      });
+      const [listing] = await facade.findListingPda({
+        providerAgent: provider.agent,
+        listingId,
+      });
+      await moderatorClient.send([
+        await facade.recordListingModeration({
+          moderator: market.moderator.signer,
+          listing,
+          jobSpecHash: specHash,
+          ...CLEAN,
+        }),
+      ]);
+      listed.push({ listing, summary: service.summary, category: service.category });
+      return listing;
+    },
+
+    async workOnce() {
+      let delivered = 0;
+      for (const provider of providers) {
+        const tick = await runTickOnce(workerContext(provider));
+        if (tick.outcome?.status === "submitted") delivered += 1;
+      }
+      return delivered;
+    },
+
+    async postOpenJob(job) {
+      const buyer = await market.fundedSigner();
+      const client = chain.clientFor(buyer);
+      const agentId = values.randomId32();
+      await client.registerAgent({
+        authority: buyer,
+        agentId,
+        capabilities: 1n,
+        endpoint: "https://sandbox.invalid/buyer",
+        metadataUri: null,
+        stakeAmount: SANDBOX_MIN_AGENT_STAKE,
+      });
+      const [creatorAgent] = await findAgentPda({ agentId });
+      const payload = { title: job.title, instructions: job.instructions };
+      const hash = await values.canonicalJobSpecHash(payload);
+      const description = new Uint8Array(64);
+      description.set(hash.bytes, 0);
+      const taskId = values.randomId32();
+      syncClock();
+      const now = svm.getClock().unixTimestamp;
+      await client.send([
+        await facade.createTask({
+          authority: buyer,
+          creator: buyer,
+          creatorAgent,
+          taskId,
+          requiredCapabilities: 1n,
+          description,
+          rewardAmount: job.rewardLamports,
+          maxWorkers: 1,
+          deadline: now + 3_600n,
+          taskType: 0,
+          constraintHash: null,
+          minReputation: 0,
+          rewardMintArg: null,
+        }),
+      ]);
+      const [task] = await findTaskPda({ creator: buyer.address, taskId });
+      const [hireRecord] = await findHireRecordPda({ task });
+      await client.send([
+        await facade.configureTaskValidation({
+          task,
+          creator: buyer,
+          hireRecord,
+          mode: 1,
+          reviewWindowSecs: 3_600n,
+          validatorQuorum: 0,
+          attestor: null,
+        }),
+      ]);
+      jobSpecs.set(hash.hex, envelopeBytes(payload, hash.hex));
+      await moderatorClient.send([
+        await facade.recordTaskModeration({
+          moderator: market.moderator.signer,
+          task,
+          jobSpecHash: hash.bytes,
+          ...CLEAN,
+        }),
+      ]);
+      await client.setTaskJobSpec({
+        task,
+        creator: buyer,
+        jobSpecHash: hash.bytes,
+        jobSpecUri: `agenc://job-spec/sha256/${hash.hex}`,
+        moderator: market.moderator.address,
+      });
+      return {
+        task,
+        async delivered() {
+          const { readTask } = await import("./market.js");
+          const account = await readTask(chain, task);
+          // TaskStatus.PendingValidation
+          return account !== null && Number(account.status) === 2;
+        },
+        async approve() {
+          const { sendApproval, readTask } = await import("./market.js");
+          const account = await readTask(chain, task);
+          if (account === null) throw new Error("sandbox job vanished");
+          // Exactly one worker took the job; find its claim through the gPA set.
+          const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
+            "@tetsuo-ai/marketplace-sdk"
+          );
+          const claims = await gpa.getProgramAccounts({
+            filters: [
+              { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskClaimDiscriminatorBytes()) } },
+            ],
+          });
+          const claim = claims
+            .map((entry) => getTaskClaimDecoder().decode(entry.data))
+            .find((entry) => entry.task === task);
+          if (claim === undefined) throw new Error("nobody has taken the sandbox job");
+          await sendApproval(chain, buyer, task, claim.worker);
+        },
+      };
+    },
+  };
+}
+
+/** A small shelf of house services for practice mode. */
+export const PRACTICE_SERVICES: readonly HouseService[] = [
+  {
+    name: "Haiku Writer",
+    category: "writing",
+    summary: "A three-line poem about anything you name.",
+    priceLamports: 2_000_000n,
+    replyPrefix: "Quiet keys at dawn\na small job crosses the wire\npaid before the tea",
+  },
+  {
+    name: "Plain English Summary",
+    category: "writing",
+    summary: "A short, plain summary of the text you send.",
+    priceLamports: 5_000_000n,
+    replyPrefix: "Summary: this is a practice delivery. In practice mode the provider repeats your request so you can see the whole trip.",
+  },
+  {
+    name: "Name Ideas",
+    category: "marketing",
+    summary: "Ten name ideas for a product, pet or project.",
+    priceLamports: 8_000_000n,
+    replyPrefix: "Ten ideas: Northlight, Pebble, Juniper, Tandem, Lumen, Fable, Harbor, Quill, Ember, Atlas.",
+  },
+];

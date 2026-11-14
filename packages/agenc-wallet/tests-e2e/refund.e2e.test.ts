@@ -1,0 +1,125 @@
+// Getting money back: a job nobody starts refunds itself; a provider who
+// starts and never delivers is cancelled after the deadline; a person may
+// turn a delivery down, an agent may not.
+import { afterEach, describe, expect, it } from "vitest";
+import { CENT, startWorld, type World } from "./harness.js";
+
+let world: World | null = null;
+afterEach(async () => {
+  await world?.wallet.close();
+  world = null;
+});
+
+async function fundedAgent(current: World, cents = 300) {
+  const agent = await current.wallet.createAgent("My assistant");
+  await current.wallet.setPolicy(agent.id, {
+    askAboveCents: 100,
+    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+  });
+  await current.wallet.fundAgent(agent.id, { usdCents: cents });
+  return agent;
+}
+
+describe("refunds", () => {
+  it("refunds a job nobody starts, by itself", async () => {
+    world = await startWorld();
+    const { wallet, listing, clock } = world;
+    const agent = await fundedAgent(world);
+    const before = await world.balance(agent.address);
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+    expect(job.status).toBe("waiting");
+
+    clock.now += 9 * 60_000;
+    await wallet.tick();
+    expect((await wallet.getJob(job.id, true)).status).toBe("waiting");
+
+    clock.now += 2 * 60_000;
+    await wallet.tick();
+    await wallet.tick();
+    const refunded = await wallet.getJob(job.id, true);
+    expect(refunded.status).toBe("refunded");
+    expect(refunded.statusText).toMatch(/price returned/);
+    const after = await world.balance(agent.address);
+    // The whole price came back. What is gone is exactly what the network
+    // keeps: the job record's deposit, the buyer's one-time rate-limit
+    // record, and four transaction fees.
+    const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
+    expect(before - after).toBe((await rent(466)) + (await rent(67)) + 4n * 5_000n);
+    expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("0");
+  });
+
+  it("lets the buyer cancel a waiting job at once", async () => {
+    world = await startWorld();
+    const { wallet, listing } = world;
+    const agent = await fundedAgent(world);
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+    const refunded = await wallet.refundJob(job.id, false, agent.id);
+    expect(refunded.status).toBe("refunded");
+  });
+
+  it("cancels after the deadline when the provider started and never delivered", async () => {
+    world = await startWorld();
+    const { wallet, sandbox, clock } = world;
+    const listing = await sandbox.addService({
+      name: "Sleepy Provider",
+      category: "writing",
+      summary: "Takes the job and goes quiet.",
+      priceLamports: 30n * CENT,
+      deliverySecs: 600,
+      replyPrefix: "",
+      noShow: true,
+    });
+    const agent = await fundedAgent(world);
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "Anything." });
+    await sandbox.workOnce();
+    const working = await wallet.getJob(job.id, true);
+    expect(working.status).toBe("working");
+    // A started job cannot be cancelled before the provider's deadline.
+    await expect(wallet.refundJob(job.id, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    sandbox.advanceClock(600 + 180);
+    clock.now += 13 * 60_000;
+    await wallet.tick();
+    const refunded = await wallet.getJob(job.id, true);
+    expect(refunded.status).toBe("refunded");
+    expect(refunded.statusText).toMatch(/did not deliver in time/);
+  });
+
+  it("lets a person turn a delivery down but not an agent", async () => {
+    world = await startWorld();
+    const { wallet, sandbox, listing } = world;
+    const agent = await fundedAgent(world);
+    const before = await world.balance(agent.address);
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+    await sandbox.workOnce();
+    const delivered = await wallet.getJob(job.id, false, agent.id);
+    expect(delivered.status).toBe("delivered");
+    expect(delivered.canRefund).toBe(false);
+    await expect(wallet.refundJob(job.id, false, agent.id)).rejects.toMatchObject({
+      code: "NOT_ALLOWED",
+    });
+
+    expect((await wallet.getJob(job.id, true)).canRefund).toBe(true);
+    const refunded = await wallet.refundJob(job.id, true);
+    expect(refunded.status).toBe("refunded");
+    await wallet.tick();
+    // The price came back in full. Turning a delivery down also creates the
+    // provider's track-record entry the first time, which the buyer funds.
+    const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
+    expect(before - (await world.balance(agent.address))).toBe(
+      (await rent(466)) + (await rent(67)) + (await rent(121)) + 5n * 5_000n,
+    );
+  });
+
+  it("does not let one agent touch another agent's job", async () => {
+    world = await startWorld();
+    const { wallet, listing } = world;
+    const mine = await fundedAgent(world);
+    const other = await wallet.createAgent("Someone else");
+    const { job } = await wallet.hire({ agentId: mine.id, listing, request: "A haiku." });
+    await expect(wallet.getJob(job.id, false, other.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(wallet.refundJob(job.id, false, other.id)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+});
