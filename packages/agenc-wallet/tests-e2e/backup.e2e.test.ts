@@ -52,7 +52,7 @@ describe("backing the wallet up", () => {
     expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
     const before = await wallet.overview();
 
-    const { file } = await wallet.exportBackup("a long enough password");
+    const { file, createdAt } = await wallet.exportBackup("a long enough password");
     // The first computer is gone.
     await wallet.close();
 
@@ -73,6 +73,9 @@ describe("backing the wallet up", () => {
     expect(after.agents.map((entry) => [entry.id, entry.name, entry.address, entry.budgetCents])).toEqual(
       before.agents.map((entry) => [entry.id, entry.name, entry.address, entry.budgetCents]),
     );
+
+    // It knows the file it came from covers it: no nagging for a new backup.
+    expect(after.backup).toEqual({ at: createdAt, upToDate: true });
 
     // The job that was waiting for approval is still there, and the restored
     // wallet can pay for it: its keys work.

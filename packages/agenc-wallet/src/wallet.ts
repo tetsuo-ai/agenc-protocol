@@ -875,7 +875,7 @@ export class AgencWallet {
   async withdraw(to: string, amount: AmountInput | "all"): Promise<{ signature: string }> {
     const destination = toAddress(to, "address");
     if (this.#walletIds().some((wallet) => wallet.address === destination)) {
-      throw new WalletError("BAD_REQUEST", "That address is one of this wallet's own.");
+      throw new WalletError("BAD_REQUEST", "That address is already yours: your balance or one of your agents.");
     }
     return this.#lock(MAIN_KEY, async () => {
       const floor = await this.#floor();
@@ -897,7 +897,7 @@ export class AgencWallet {
       this.#store.update((draft) => {
         this.#note(draft, {
           kind: "withdrawn",
-          text: "Sent money out of the wallet.",
+          text: "Sent money out of your balance.",
           lamports,
           signature,
         });
@@ -1204,7 +1204,7 @@ export class AgencWallet {
     if (!accepted.includes(payment.moderator)) {
       throw new WalletError(
         "NETWORK",
-        "The marketplace's safety check sent back something this wallet will not sign. Nothing was paid.",
+        "The marketplace's safety check sent back something that cannot be trusted. Nothing was paid.",
       );
     }
     const ready = await signApproval(this.#chain, payer, payment, target);

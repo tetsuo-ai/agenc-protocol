@@ -312,7 +312,7 @@ function parsePayment(data: Record<string, unknown>): ApprovalPayment | null {
   }
   throw new WalletError(
     "NETWORK",
-    "The marketplace's safety check sent back something this wallet will not sign. Nothing was paid.",
+    "The marketplace's safety check sent back something that cannot be trusted. Nothing was paid.",
   );
 }
 

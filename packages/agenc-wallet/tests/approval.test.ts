@@ -146,7 +146,7 @@ async function refused(
   );
   expect(error, "the transaction was accepted").toMatchObject({
     code: "NETWORK",
-    message: expect.stringMatching(/will not sign\. Nothing was paid\.$/),
+    message: expect.stringMatching(/cannot be trusted\. Nothing was paid\.$/),
   });
   return String(((error as Error).cause as Error).message);
 }

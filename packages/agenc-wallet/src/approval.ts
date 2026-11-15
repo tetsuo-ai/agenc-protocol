@@ -66,7 +66,7 @@ export async function approvalCost(chain: Chain, kind: ApprovalTarget["kind"]): 
 function refuse(why: string): never {
   throw new WalletError(
     "NETWORK",
-    "The marketplace's safety check sent back something this wallet will not sign. Nothing was paid.",
+    "The marketplace's safety check sent back something that cannot be trusted. Nothing was paid.",
     { cause: new Error(`approval transaction refused: ${why}`) },
   );
 }
