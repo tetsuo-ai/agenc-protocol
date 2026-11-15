@@ -266,6 +266,8 @@ describe("offering a service", () => {
       status: "paused",
       statusText: "Off offer while taking jobs is switched off.",
     });
+    // Switched off, the agent is still registered and its deposit still locked.
+    expect(off.earn.setAside.lamports).toBe("10000000");
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(1);
     expect((await current.wallet.find({})).map((service) => service.listing)).not.toContain(listing);
     await expect(
@@ -336,6 +338,23 @@ describe("offering a service", () => {
     const back = await offerReaches(current, worker.id, "live");
     expect(back.earn.offer!.listing).toBe(listing);
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(0);
+  }, 120_000);
+
+  it("stays off offer on a computer that cannot run jobs", async () => {
+    const { current, worker } = await startOffering();
+    const listing = worker.earn.offer!.listing as Address;
+    await current.wallet.close();
+
+    // The same wallet, opened where there is no program to do the work.
+    current.wallet = await current.reopen({ earn: { executor: null } });
+    expect((await current.wallet.overview()).earning).toBe("off");
+    await current.wallet.tick();
+    await current.wallet.tick();
+    const view = await agentView(current, worker.id);
+    expect(view.earn.offer!.status).toBe("paused");
+    expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(1);
+    // The deposit behind its registration is still locked, and still shown.
+    expect(view.earn.setAside.lamports).toBe("10000000");
   }, 120_000);
 
   it("does not keep asking about a description the safety check refused", async () => {
