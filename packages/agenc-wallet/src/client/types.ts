@@ -138,6 +138,12 @@ export interface WalletOverview {
    * "open": anyone's.
    */
   earning: "off" | "own-jobs" | "open";
+  /**
+   * The person's last backup of this wallet's keys. `at` is null when there
+   * has never been one. `upToDate` is false when a wallet was made since (a
+   * new agent), which that backup does not hold.
+   */
+  backup: { at: number | null; upToDate: boolean };
 }
 
 /** A service someone offers on the marketplace. */

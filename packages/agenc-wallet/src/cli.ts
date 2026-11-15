@@ -17,7 +17,7 @@
  * @module cli
  */
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -37,6 +37,7 @@ import {
 } from "./sandbox.js";
 import { defaultSocketPath, serveWallet } from "./server.js";
 import { createHostedServices, type MarketServices } from "./services.js";
+import { restoreBackup } from "./backup.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 import { AgencWallet } from "./wallet.js";
 
@@ -46,6 +47,7 @@ USAGE
   agenc-wallet init   [--data-dir <dir>]
   agenc-wallet serve  [--data-dir <dir>] [--socket <path>] [--network <name>] [--rpc-url <url>]
   agenc-wallet status [--data-dir <dir>] [--socket <path>]
+  agenc-wallet restore --file <backup> [--data-dir <dir>] [--network <name>]
 
 NETWORKS
   mainnet (default), devnet, localnet, or sandbox. The sandbox is a complete
@@ -57,8 +59,17 @@ SECRETS
   The unlock secret decrypts the keys; whoever holds it and the wallet folder
   holds the money. Prefer an OS keychain over the bootstrap file.
 
+BACKUPS
+  A backup is made from the running service (the "backup.export" method) and
+  holds every key and the wallet's records, locked with a password. restore
+  puts one back. Stop the service first. It reads one JSON line from stdin:
+  {"unlockSecret":"<base64>","password":"<the backup's password>"}, or the
+  unlock secret from bootstrap.json and the password from AGENC_WALLET_BACKUP_PASSWORD.
+  The wallet that was in the folder is moved into replaced-<time>, never deleted.
+
 FLAGS
   --data-dir <dir>   wallet folder (default ~/.local/share/agenc-wallet)
+  --file <path>      the backup file to restore
   --socket <path>    socket path (default <data-dir>/wallet.sock, or a private
                      temp folder when that path is too long for a socket)
   --network <name>   mainnet | devnet | localnet | sandbox
@@ -364,6 +375,56 @@ async function status(values: Record<string, string | boolean | undefined>): Pro
   }
 }
 
+/** Put a backup back. The service must be stopped: it replaces the wallet. */
+async function restore(values: Record<string, string | boolean | undefined>): Promise<number> {
+  const network = (values.network as WalletNetwork | undefined) ?? "mainnet";
+  if (!["mainnet", "devnet", "localnet"].includes(network)) {
+    throw new WalletError("BAD_REQUEST", "A backup can be restored on mainnet, devnet or localnet.");
+  }
+  if (typeof values.file !== "string" || values.file.length === 0) {
+    throw new WalletError("BAD_REQUEST", "Say which backup to restore with --file <path>.");
+  }
+  const baseDir = path.resolve((values["data-dir"] as string | undefined) ?? defaultDataDir());
+  const dataDir = path.join(baseDir, network);
+  const piped = process.stdin.isTTY ? "" : (await readStdinLine()).trim();
+  let unlockSecret: string;
+  let password: string;
+  if (piped.length > 0) {
+    let line: { unlockSecret?: unknown; password?: unknown };
+    try {
+      line = JSON.parse(piped) as typeof line;
+    } catch {
+      throw new WalletError("BAD_REQUEST", "The start-up line is not valid JSON.");
+    }
+    if (typeof line.unlockSecret !== "string" || typeof line.password !== "string") {
+      throw new WalletError("BAD_REQUEST", "The start-up line needs an unlockSecret and a password.");
+    }
+    unlockSecret = line.unlockSecret;
+    password = line.password;
+  } else {
+    unlockSecret = parseBootstrap(
+      readPrivateFile(path.join(baseDir, "bootstrap.json"), 64 * 1024),
+    ).unlockSecret;
+    password = process.env.AGENC_WALLET_BACKUP_PASSWORD ?? "";
+  }
+  const secret = Buffer.from(unlockSecret, "base64");
+  if (secret.length < 32) {
+    throw new WalletError("BAD_REQUEST", "The unlock secret is too short.");
+  }
+  const { header, replaced } = await restoreBackup({
+    dataDir,
+    unlockSecret: secret,
+    text: readFileSync(path.resolve(values.file), "utf8"),
+    password,
+    network,
+    now: Date.now(),
+  });
+  process.stdout.write(
+    `${JSON.stringify({ ok: true, main: header.main, agents: header.agents, createdAt: header.createdAt, replaced })}\n`,
+  );
+  return 0;
+}
+
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
@@ -373,6 +434,7 @@ async function main(): Promise<number> {
       socket: { type: "string" },
       network: { type: "string" },
       "rpc-url": { type: "string" },
+      file: { type: "string" },
       help: { type: "boolean" },
     },
   });
@@ -384,6 +446,7 @@ async function main(): Promise<number> {
   if (command === "init") return init(values);
   if (command === "serve") return serve(values);
   if (command === "status") return status(values);
+  if (command === "restore") return restore(values);
   process.stderr.write(`unknown command: ${command}\n\n${USAGE}`);
   return 2;
 }

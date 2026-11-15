@@ -34,6 +34,7 @@ import {
   type ApprovalTarget,
 } from "./approval.js";
 import { EarnHost, type EarnNotice, type EarnOptions } from "./earn.js";
+import { createBackup } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import {
   acceptedApprovers,
@@ -645,7 +646,38 @@ export class AgencWallet {
       ).length,
       offline: balances.offline,
       earning: !this.#earn.available ? "off" : this.#earn.ownJobsOnly ? "own-jobs" : "open",
+      backup: this.#backupStatus(),
     };
+  }
+
+  // ------------------------------------------------------------- backup
+
+  #backupStatus(): WalletOverview["backup"] {
+    const last = this.#store.state.backup ?? null;
+    if (last === null) return { at: null, upToDate: false };
+    const held = new Set(last.keyIds);
+    return { at: last.at, upToDate: this.#vault.ids().every((id) => held.has(id)) };
+  }
+
+  /**
+   * Seal every key and the journal into one backup locked with `password`,
+   * and return the file's text. Owner only: this is the one place a key
+   * leaves the vault, and it leaves encrypted.
+   */
+  async exportBackup(password: string): Promise<{ file: string; createdAt: number; agents: number }> {
+    const { text, header } = await createBackup({
+      dataDir: this.#config.dataDir,
+      vault: this.#vault,
+      password,
+      network: this.#chain.network,
+      agents: Object.keys(this.#store.state.agents).length,
+      now: this.#now(),
+    });
+    this.#store.update((draft) => {
+      draft.backup = { at: header.createdAt, keyIds: this.#vault.ids() };
+    });
+    this.#emit({ type: "overview" });
+    return { file: text, createdAt: header.createdAt, agents: header.agents };
   }
 
   // ------------------------------------------------------------- agents
