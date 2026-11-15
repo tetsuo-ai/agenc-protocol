@@ -71,6 +71,12 @@ export interface OfferRecord {
 export interface AgentRecord {
   id: string;
   name: string;
+  /**
+   * Where the host uses this agent, in the host's own words: a project
+   * folder, say. The wallet stores it and gives it back, nothing more. At
+   * most one agent has a given scope.
+   */
+  scope?: string | null;
   /** Vault key id holding this agent's wallet. */
   keyId: string;
   address: string;

@@ -17,8 +17,15 @@ live; no mainnet hire has been made with this package yet.
 ## How the money is bounded
 
 - There is one **main balance**. Money is added there.
-- Every **agent has its own wallet**. What is in it is the agent's allowance.
+- Every **agent has its own wallet**, made with one call that needs nothing,
+  not even a name (`agents.create`). What is in it is the agent's allowance.
   The chain enforces it: an agent cannot spend what its wallet does not hold.
+- **One number** says what an agent may spend on its own each day
+  (`agents.setBudget`). The wallet keeps that much in the agent's wallet from
+  the main balance and hands over no more than that in a day. Zero, which is
+  how every agent starts, means it asks every time; a hire the person
+  approves is then paid from the main balance, so a new agent is usable
+  before it holds anything.
 - A hire **above the agent's limit**, or one its allowance cannot cover,
   waits for a person. On approval it is paid from the allowance if that
   covers it, otherwise from the main balance.

@@ -19,7 +19,18 @@ export interface WalletMethods {
   /** Balances, agents and counts: everything the panel's first screen needs. */
   overview: { params: Record<string, never>; result: WalletOverview };
 
-  "agents.create": { params: { name: string }; result: AgentView };
+  /**
+   * Make an agent, with its own wallet. Without a name it is called
+   * "Agent 2", "Agent 3" and so on. `scope` ties it to a place the host
+   * knows (one agent per scope).
+   */
+  "agents.create": { params: { name?: string; scope?: string | null }; result: AgentView };
+  /**
+   * The one spending setting: what the agent may spend on its own each day.
+   * The wallet keeps that much in the agent's wallet, from the main balance,
+   * and anything beyond it waits for the person. Zero: it asks every time.
+   */
+  "agents.setBudget": { params: { agentId: string; perDayCents: number }; result: AgentView };
   "agents.rename": { params: { agentId: string; name: string }; result: AgentView };
   "agents.setPolicy": {
     params: { agentId: string; policy: AgentPolicy };

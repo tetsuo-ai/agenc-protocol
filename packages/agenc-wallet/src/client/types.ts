@@ -94,6 +94,16 @@ export interface EarnView {
 export interface AgentView {
   id: string;
   name: string;
+  /**
+   * Where the host uses this agent (a project folder, say), or null for one
+   * that is not tied to a place. Set by the host when the agent is made.
+   */
+  scope: string | null;
+  /**
+   * What the agent may spend on its own each day, in US cents. Zero means it
+   * asks the person every time. Set with `agents.setBudget`.
+   */
+  budgetCents: number;
   /** The agent's own wallet address. Its balance IS the agent's allowance. */
   address: string;
   /** What the agent can still spend. */

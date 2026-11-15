@@ -25,6 +25,9 @@ First version. Not published.
   the approval and hands it back; the buyer's wallet (for a job's request) or
   the agent's wallet (for a service it offers) checks that transaction, pays
   the deposit behind the approval's record and the fee, and sends it.
+- An agent is made with one call that needs no name, and one number sets what
+  it may spend on its own each day (`agents.create`, `agents.setBudget`). A
+  host can tie an agent to a place of its own, such as a project.
 - A job's request and a service's description are published through the
   marketplace site before anything is committed on-chain, so the safety
   check and every provider can read exactly what the hash says.
