@@ -527,6 +527,8 @@ export class AgencWallet {
     return {
       id: agent.id,
       name: agent.name,
+      scope: agent.scope ?? null,
+      budgetCents: agent.policy.refill.enabled ? agent.policy.refill.perDayCents : 0,
       address: agent.address,
       balance: money(balance, rate),
       held: money(this.#heldBy(agent.id), rate),
@@ -636,8 +638,27 @@ export class AgencWallet {
 
   // ------------------------------------------------------------- agents
 
-  async createAgent(name: string): Promise<AgentView> {
-    const clean = clampName(name);
+  /**
+   * Make an agent with its own wallet. Nothing else is needed before it can
+   * be used: it starts by asking the person every time, and a hire they
+   * approve is paid from the main balance.
+   */
+  async createAgent(name?: string, scope: string | null = null): Promise<AgentView> {
+    const agents = Object.values(this.#store.state.agents);
+    const place = scope === null ? null : tidyText(scope, 512);
+    if (place !== null && agents.some((agent) => (agent.scope ?? null) === place)) {
+      throw new WalletError("BAD_REQUEST", "That already has an agent of its own.");
+    }
+    let clean: string;
+    if (name !== undefined && name.trim().length > 0) {
+      clean = clampName(name);
+    } else {
+      // "Agent 2", "Agent 3": the first number no agent is called yet.
+      const taken = new Set(agents.map((agent) => agent.name));
+      let number = agents.length + 1;
+      while (taken.has(`Agent ${number}`)) number += 1;
+      clean = `Agent ${number}`;
+    }
     const id = newId("agent").toLowerCase().replace(/[^a-z0-9_]/g, "x");
     const keyId = `agent:${id}`;
     const agentAddress = await this.#vault.create(keyId);
@@ -645,6 +666,7 @@ export class AgencWallet {
       draft.agents[id] = {
         id,
         name: clean,
+        scope: place,
         keyId,
         address: agentAddress,
         createdAt: this.#now(),
@@ -678,6 +700,30 @@ export class AgencWallet {
     this.#agentRecord(agentId);
     this.#store.update((draft) => {
       draft.agents[agentId]!.policy = clean;
+    });
+    this.#emit({ type: "overview" });
+    return this.#oneAgentView(agentId);
+  }
+
+  /**
+   * The one spending setting a person needs: what an agent may spend on its
+   * own each day. The agent's wallet is kept at that amount from the main
+   * balance, never given more than that in a day, and a hire it cannot cover
+   * waits for the person. Zero switches it off: the agent asks every time.
+   * Money the agent already holds stays where it is.
+   */
+  async setBudget(agentId: string, perDayCents: number): Promise<AgentView> {
+    const budget = assertPolicy({
+      askAboveCents: perDayCents,
+      refill: { enabled: perDayCents > 0, topUpToCents: perDayCents, perDayCents },
+    });
+    this.#agentRecord(agentId);
+    this.#store.update((draft) => {
+      draft.agents[agentId]!.policy = budget;
+    });
+    // Hand it over now, not at the next housekeeping pass.
+    await this.#refill().catch((error) => {
+      this.#log(`refill: ${describeError(error)}`);
     });
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);

@@ -79,6 +79,11 @@ describe("the wallet service", () => {
           policy: { askAboveCents: 99_999, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } },
         }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      // Its own budget, and making more agents, are the owner's to decide.
+      await expect(
+        agent.call("agents.setBudget", { agentId: mine.id, perDayCents: 99_999 }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(agent.call("agents.create", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(
         agent.call("wallet.withdraw", { to: other.address, amount: "all" }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
@@ -94,6 +99,16 @@ describe("the wallet service", () => {
         }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
     }
+    // The owner makes an agent with one empty call, tied to a place or not,
+    // and sets what it may spend with one number.
+    const third = await owner.call("agents.create", {});
+    expect(third.name).toBe("Agent 3");
+    const tied = await owner.call("agents.create", { scope: "/home/me/project" });
+    expect(tied).toMatchObject({ name: "Agent 4", scope: "/home/me/project", budgetCents: 0 });
+    const budgeted = await owner.call("agents.setBudget", { agentId: third.id, perDayCents: 200 });
+    expect(budgeted).toMatchObject({ budgetCents: 200 });
+    expect(budgeted.balance.usdCents).toBe(200);
+
     // A credential for one agent does not open another agent's lane.
     await expect(
       connect({ token: agentToken(ownerToken, mine.id), actAs: other.id }),

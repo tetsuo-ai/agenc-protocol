@@ -107,7 +107,13 @@ function handlers(wallet: AgencWallet): Handlers {
   const scope = (session: Session): string | undefined => session.agentId ?? undefined;
   return {
     overview: () => wallet.overview(),
-    "agents.create": (params) => wallet.createAgent(text(params.name, "name")),
+    "agents.create": (params) =>
+      wallet.createAgent(
+        typeof params.name === "string" ? params.name : undefined,
+        typeof params.scope === "string" ? params.scope : null,
+      ),
+    "agents.setBudget": (params) =>
+      wallet.setBudget(text(params.agentId, "agent"), params.perDayCents),
     "agents.rename": (params) =>
       wallet.renameAgent(text(params.agentId, "agent"), text(params.name, "name")),
     "agents.setPolicy": (params) =>
