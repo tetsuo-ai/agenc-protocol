@@ -901,7 +901,8 @@ export class AgencWallet {
     maxPriceCents?: number;
     limit?: number;
   }): Promise<ServiceView[]> {
-    const [rows, rate] = await Promise.all([this.#services.listServices(), this.#displayRate()]);
+    const [listed, rate] = await Promise.all([this.#services.listServices(), this.#displayRate()]);
+    const rows = [...listed, ...(await this.#ownServices(listed))];
     const words = (params.query ?? "")
       .toLowerCase()
       .split(/[^a-z0-9]+/)
@@ -933,6 +934,39 @@ export class AgencWallet {
         (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
     );
     return scored.slice(0, limit).map((entry) => this.#serviceView(entry.row, rate));
+  }
+
+  /**
+   * The services this wallet's own agents have on offer right now that the
+   * marketplace's list does not show yet. That list is put together by the
+   * marketplace's site and runs minutes behind: a service that just went on
+   * offer, or came back when the app was opened, is missing from it for a
+   * while, and one of the person's agents could not find another's. The
+   * wallet knows its own, so it adds them.
+   */
+  async #ownServices(listed: readonly CatalogRow[]): Promise<CatalogRow[]> {
+    const known = new Set(listed.map((row) => row.listing));
+    const own: CatalogRow[] = [];
+    for (const agent of Object.values(this.#store.state.agents)) {
+      const offer = agent.earn.offer ?? null;
+      if (offer === null || offer.status !== "live" || offer.listing === null) continue;
+      if (known.has(offer.listing as Address)) continue;
+      const providerAgent = await this.#earn.marketplaceAgent(agent.id).catch(() => null);
+      if (providerAgent === null) continue;
+      own.push({
+        listing: offer.listing as Address,
+        providerAgent,
+        name: offer.name,
+        category: offer.category,
+        summary: offer.summary,
+        priceLamports: BigInt(offer.priceLamports),
+        rating: null,
+        ratingCount: 0,
+        jobsDone: agent.earn.jobsDone,
+        deliverySecs: offer.deliverySecs,
+      });
+    }
+    return own;
   }
 
   // --------------------------------------------------------------- hire

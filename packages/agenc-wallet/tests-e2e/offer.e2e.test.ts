@@ -342,6 +342,48 @@ describe("offering a service", () => {
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(0);
   }, 120_000);
 
+  it("is found by the person's other agents before the marketplace's list catches up", async () => {
+    // The list of services is put together by the marketplace's site and runs
+    // minutes behind. Here it never shows the new service at all.
+    world = await startWorld({
+      earn: EARN,
+      services: (base) => ({
+        ...base,
+        async listServices() {
+          return (await base.listServices()).filter((row) => row.name !== "Line Writer");
+        },
+      }),
+    });
+    const { wallet } = world;
+    const worker = await wallet.createAgent("Worker");
+    const buyer = await wallet.createAgent("Buyer");
+    await wallet.setBudget(buyer.id, 500);
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINE_WRITER);
+
+    // Not on offer yet: nobody can find it.
+    expect((await wallet.find({ query: "friendly line" })).map((service) => service.name)).not.toContain("Line Writer");
+
+    const live = await offerReaches(world, worker.id, "live");
+    const listing = live.earn.offer!.listing as Address;
+    const found = (await wallet.find({ query: "friendly line" })).filter((service) => service.name === "Line Writer");
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ listing, summary: LINE_WRITER.summary });
+    expect(found[0]!.price.usdCents).toBe(30);
+    // The marketplace's own services are still there, once each.
+    const all = await wallet.find({});
+    expect(all.filter((service) => service.name === "Haiku Writer")).toHaveLength(1);
+
+    // And it can be hired from what was found.
+    const { job, approval } = await wallet.hire({ agentId: buyer.id, listing: found[0]!.listing, request: "A line about tea." });
+    expect(approval).toBeNull();
+    expect(job.status).toBe("waiting");
+
+    // Off offer again, it is not offered to anyone.
+    await wallet.setOffer(worker.id, null);
+    expect((await wallet.find({ query: "friendly line" })).map((service) => service.name)).not.toContain("Line Writer");
+  }, 120_000);
+
   it("points an old listing at where its description is really published", async () => {
     // A listing made before descriptions were published first names an
     // address nobody can read. The safety check and buyers read the listing's
