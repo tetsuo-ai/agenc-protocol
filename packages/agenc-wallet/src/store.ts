@@ -58,7 +58,12 @@ export interface OfferRecord {
    * not asked again until the description changes.
    */
   refused: string | null;
-  signatures: { create?: string; update?: string; state?: string };
+  /**
+   * When this wallet last signed and sent a payment for the safety check. A
+   * payment that may still be on its way is not made a second time.
+   */
+  approvalAttemptAt?: number | null;
+  signatures: { create?: string; update?: string; state?: string; approval?: string };
 }
 
 export interface AgentRecord {
@@ -151,6 +156,12 @@ export interface JobRecord {
   hireAttemptAt: number | null;
   /** When the task was confirmed to exist (start of the posting clock). */
   hiredAt: number | null;
+  /**
+   * When this wallet last signed and sent a payment for the safety check of
+   * the job's request. A payment that may still be on its way is not made a
+   * second time.
+   */
+  approvalAttemptAt?: number | null;
 
   chainStatus: ChainTaskStatus | null;
   /** Unix seconds: the provider's deadline. */
@@ -167,6 +178,8 @@ export interface JobRecord {
   tidied: boolean;
   signatures: {
     hire?: string;
+    /** The buyer's payment for the safety check of the request. */
+    approval?: string;
     activate?: string;
     accept?: string;
     cancel?: string;

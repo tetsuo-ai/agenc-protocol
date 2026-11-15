@@ -5,14 +5,20 @@ import {
   AccountRole,
   address,
   createSolanaRpc,
+  getCompiledTransactionMessageDecoder,
   type Address,
+  type Blockhash,
   type Instruction,
+  type Transaction,
   type TransactionSigner,
 } from "@solana/kit";
 import {
   createMarketplaceClient,
+  createRpcTransport,
   type MarketplaceClient,
   type ProgramAccountsSource,
+  type SignedTransaction,
+  type Transport,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   createSolanaAccountReaders,
@@ -38,6 +44,12 @@ export interface Chain {
   readonly network: WalletNetwork;
   /** A client that signs and pays fees with `signer`. */
   clientFor(signer: TransactionSigner): MarketplaceClient;
+  /**
+   * Send a transaction that was built somewhere else, once it carries every
+   * signature it needs. Returns its signature when it is confirmed. The
+   * caller has already checked what it does (see approval.ts).
+   */
+  sendSigned(transaction: Transaction): Promise<string>;
   /** Account bytes, or null when the account does not exist. */
   readAccount(account: Address): Promise<Uint8Array | null>;
   /** Bytes plus owner, for accounts whose owner matters. */
@@ -82,6 +94,28 @@ export function transferInstruction(
   };
 }
 
+/**
+ * Hand a transport a fully signed transaction it did not build. The transport
+ * needs to know when to stop waiting for it. The newest blockhash never
+ * expires before the one the transaction was built on, so its last valid
+ * height is a safe place to stop.
+ */
+export async function sendThroughTransport(
+  transport: Transport,
+  transaction: Transaction,
+): Promise<string> {
+  const latest = await transport.getLatestBlockhash();
+  const message = getCompiledTransactionMessageDecoder().decode(transaction.messageBytes);
+  const signed = {
+    ...transaction,
+    lifetimeConstraint: {
+      blockhash: message.lifetimeToken as Blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    },
+  } as SignedTransaction;
+  return (await transport.sendAndConfirm(signed)).signature;
+}
+
 export interface RpcChainOptions {
   network: Exclude<WalletNetwork, "sandbox">;
   /** HTTP RPC endpoint. */
@@ -121,6 +155,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     return value;
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
+  const transport = createRpcTransport({ rpc });
 
   const priorityFee =
     options.computeUnitPrice === undefined
@@ -141,6 +176,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
           : {}),
       });
     },
+    sendSigned: (transaction) => sendThroughTransport(transport, transaction),
     readAccount: (account) => network(() => readAccount(account)),
     readAccountInfo: (account) => network(() => readAccountInfo(account)),
     async readRawAccount(account) {

@@ -26,9 +26,17 @@ import type {
   ServiceView,
   WalletOverview,
 } from "./client/types.js";
+import {
+  APPROVAL_FEE_LAMPORTS,
+  approvalCost,
+  approvalDeposit,
+  signApproval,
+  type ApprovalTarget,
+} from "./approval.js";
 import { EarnHost, type EarnNotice, type EarnOptions } from "./earn.js";
 import { describeError, WalletError } from "./errors.js";
 import {
+  acceptedApprovers,
   alreadyRated,
   DEFAULT_REVIEW_WINDOW_SECS,
   FEE_HEADROOM_LAMPORTS,
@@ -68,6 +76,7 @@ import {
   tidyText,
   type CatalogRow,
   type MarketServices,
+  type ApprovalPayment,
 } from "./services.js";
 import {
   acquireServiceLock,
@@ -81,8 +90,16 @@ import { KeyVault } from "./vault.js";
 import { activityView, approvalView, jobStatus, jobView, money } from "./views.js";
 
 const MAIN_KEY = "main";
-/** Base fees of the four transactions of a plain job (hire, post, pay, tidy). */
-const JOB_TRANSACTION_FEES_LAMPORTS = 20_000n;
+/**
+ * Base fees of the transactions of a plain job: hire, post, pay and tidy,
+ * plus the payment for the safety check of the request.
+ */
+const JOB_TRANSACTION_FEES_LAMPORTS = 20_000n + APPROVAL_FEE_LAMPORTS;
+/**
+ * A payment for a safety check that was sent is given this long to show up
+ * before another one is asked for. Longer than a transaction can stay alive.
+ */
+const APPROVAL_SETTLE_MS = 120_000;
 /** A hire that may have been sent is given this long to show up on-chain. */
 const HIRE_RECONCILE_GRACE_MS = 150_000;
 /** A hired job that cannot be posted is refunded after this long. */
@@ -525,14 +542,17 @@ export class AgencWallet {
   #offerCostLamports: bigint | null = null;
 
   /**
-   * What putting a service on offer costs once: the deposit behind its
-   * permanent marketplace record (never returned) plus a fee. Read once.
+   * What putting a service on offer costs once: the deposits behind its
+   * permanent marketplace record and behind the safety check of its
+   * description (neither is returned) plus the fees. Read once.
    */
   async #offerCost(): Promise<bigint | null> {
     if (this.#offerCostLamports === null) {
-      this.#offerCostLamports = await this.#chain
-        .getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)
-        .then((rent) => rent + this.#chain.transferFeeLamports)
+      this.#offerCostLamports = await Promise.all([
+        this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE),
+        approvalCost(this.#chain, "listing"),
+      ])
+        .then(([rent, check]) => rent + this.#chain.transferFeeLamports + check)
         .catch(() => null);
     }
     return this.#offerCostLamports;
@@ -796,14 +816,16 @@ export class AgencWallet {
 
   /**
    * What every job costs on top of its price and never comes back: the
-   * permanent job record's deposit plus the fees of its transactions.
+   * deposits behind the permanent job record and behind the safety check of
+   * the request, plus the fees of its transactions.
    */
   async networkFee(): Promise<Money> {
-    const [record, rate] = await Promise.all([
+    const [record, approval, rate] = await Promise.all([
       this.#chain.getMinimumBalanceForRentExemption(TASK_ACCOUNT_SPACE),
+      approvalDeposit(this.#chain, "task"),
       this.#displayRate(),
     ]);
-    return money(record + JOB_TRANSACTION_FEES_LAMPORTS, rate);
+    return money(record + approval + JOB_TRANSACTION_FEES_LAMPORTS, rate);
   }
 
   async find(params: {
@@ -1015,6 +1037,36 @@ export class AgencWallet {
       job: await this.#jobView(this.#jobRecord(jobId), false),
       approval: approvalView(this.#store.state.approvals[approvalId]!, agent.name, rate),
     };
+  }
+
+  /**
+   * Pay for a safety check the marketplace handed back. The transaction was
+   * built by the approver: it is checked against what was asked for, signed
+   * with the paying wallet's key, and sent. `sending` runs once it is signed,
+   * just before it goes out, so the caller can note that a payment may be on
+   * its way.
+   */
+  async #payApproval(
+    payer: KeyPairSigner,
+    payment: ApprovalPayment,
+    target: ApprovalTarget,
+    sending: () => void,
+  ): Promise<string> {
+    // A record by anyone else would not be accepted afterwards, so paying for
+    // one would be money for nothing.
+    const accepted = await acceptedApprovers(this.#chain, this.#services);
+    if (!accepted.includes(payment.moderator)) {
+      throw new WalletError(
+        "NETWORK",
+        "The marketplace's safety check sent back something this wallet will not sign. Nothing was paid.",
+      );
+    }
+    const ready = await signApproval(this.#chain, payer, payment, target);
+    sending();
+    const signature = await this.#chain.sendSigned(ready.transaction);
+    this.#dropBalances();
+    this.#emit({ type: "overview" });
+    return signature;
   }
 
   /** Make sure an accepted attestation exists for the listing, or refuse. */
@@ -1335,16 +1387,36 @@ export class AgencWallet {
     });
     let jobSpecUri = job.jobSpecUri;
     if (gate === null) {
+      // A payment for the check that was already sent may still be landing.
+      const sentAt = job.approvalAttemptAt ?? null;
+      if (sentAt !== null && this.#now() - sentAt < APPROVAL_SETTLE_MS) return;
       try {
         const attested = await this.#services.attestTask({
           task,
           jobSpecHashHex: job.jobSpecHashHex,
           jobSpec: job.jobSpec,
+          payer: payer.address,
         });
         jobSpecUri = attested.jobSpecUri;
         this.#patchJob(job.id, (entry) => {
           entry.jobSpecUri = attested.jobSpecUri;
         });
+        if (attested.payment !== null) {
+          // The buyer pays for the check of its own request.
+          const signature = await this.#payApproval(
+            payer,
+            attested.payment,
+            { kind: "task", task, hash },
+            () => {
+              this.#patchJob(job.id, (entry) => {
+                entry.approvalAttemptAt = this.#now();
+              });
+            },
+          );
+          this.#patchJob(job.id, (entry) => {
+            entry.signatures.approval = signature;
+          });
+        }
       } catch (error) {
         const refused = error instanceof WalletError && error.code === "NOT_ALLOWED";
         const stuck =
@@ -2111,7 +2183,9 @@ export class AgencWallet {
 
   /**
    * Keep what the worker needs for a job in the agent's wallet and add the
-   * listing's deposit on top, from the main balance when the wallet is short.
+   * deposits of the listing and of its safety check on top, from the main
+   * balance when the wallet is short. `listed` leaves the listing's own
+   * deposit out, for a service that is already on the marketplace.
    *
    * A job's deposits stay out until its buyer pays, which can take a day.
    * Without spare money the agent could not take the next hire meanwhile, and
@@ -2119,9 +2193,13 @@ export class AgencWallet {
    * enough for a few jobs to be out at once. That part is the agent's own
    * allowance: it is not spent, and it can be taken back.
    */
-  async #fundOffer(agent: AgentRecord): Promise<void> {
+  async #fundOffer(agent: AgentRecord, listed = false): Promise<void> {
+    // The agent pays for its listing and for the safety check of its words.
     const cost =
-      (await this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)) +
+      (listed
+        ? 0n
+        : await this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)) +
+      (await approvalCost(this.#chain, "listing")) +
       FEE_HEADROOM_LAMPORTS;
     const keep =
       (await this.#earn.jobReserve()) +
@@ -2331,7 +2409,12 @@ export class AgencWallet {
     if (gate !== null) return settle("live");
     if (offer.refused !== null) return settle("problem", offer.refused);
     const now = this.#now();
-    if (offer.lastCheckAt !== null && now - offer.lastCheckAt < OFFER_CHECK_RETRY_MS) {
+    const paidAt = offer.approvalAttemptAt ?? null;
+    if (
+      (offer.lastCheckAt !== null && now - offer.lastCheckAt < OFFER_CHECK_RETRY_MS) ||
+      // A payment for the check that was already sent may still be landing.
+      (paidAt !== null && now - paidAt < APPROVAL_SETTLE_MS)
+    ) {
       return settle("being_checked");
     }
     this.#patchOffer(agentId, (entry) => {
@@ -2340,12 +2423,34 @@ export class AgencWallet {
       entry.error = null;
     });
     this.#emit({ type: "overview" });
+    // The agent pays for the check of its own description. Its wallet was
+    // funded for that when the listing was made; top it up if that is gone.
+    const due = (await approvalCost(this.#chain, "listing")) + (await this.#floor());
+    if ((await this.#chain.getBalance(agent.address as Address)) < due) {
+      await this.#fundOffer(agent, true);
+    }
     try {
-      await this.#services.attestListing({
+      const payment = await this.#services.attestListing({
         listing,
         specHashHex: offer.specHashHex,
         spec: offer.spec,
+        payer: agent.address as Address,
       });
+      if (payment !== null) {
+        const signature = await this.#payApproval(
+          await this.#vault.signer(agent.keyId),
+          payment,
+          { kind: "listing", listing, hash: values.hexToBytes(offer.specHashHex) },
+          () => {
+            this.#patchOffer(agentId, (entry) => {
+              entry.approvalAttemptAt = this.#now();
+            });
+          },
+        );
+        this.#patchOffer(agentId, (entry) => {
+          entry.signatures.approval = signature;
+        });
+      }
     } catch (error) {
       if (error instanceof WalletError && error.code === "NOT_ALLOWED") {
         const sentence = error.message;

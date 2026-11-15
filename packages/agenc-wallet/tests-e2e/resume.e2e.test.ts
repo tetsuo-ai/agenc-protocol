@@ -4,7 +4,7 @@
 // is ever paid twice.
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
-import { startWorld, type World } from "./harness.js";
+import { checkCost, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -108,7 +108,7 @@ describe("crash safety", () => {
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("2000000");
     const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(before - (await world.balance(agent.address))).toBe(
-      2_000_000n + (await rent(466)) + (await rent(67)) + 4n * 5_000n,
+      2_000_000n + (await rent(466)) + (await rent(67)) + 4n * 5_000n + (await checkCost(world)),
     );
   });
 

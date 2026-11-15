@@ -31,6 +31,8 @@ export interface AttestTaskInput {
   task: Address;
   jobSpecHashHex: string;
   jobSpec: Record<string, unknown>;
+  /** The wallet that pays for the approval: the one that posted the job. */
+  payer: Address;
 }
 
 export interface AttestListingInput {
@@ -39,6 +41,20 @@ export interface AttestListingInput {
   specHashHex: string;
   /** The listing's advertised description (see {@link buildListingSpec}). */
   spec: Record<string, unknown>;
+  /** The wallet that pays for the approval: the one that offers the service. */
+  payer: Address;
+}
+
+/**
+ * An approval that passed and is waiting to be paid for: the approver's
+ * transaction, which the wallet checks, signs and sends (see approval.ts).
+ * It comes from outside and is not trusted until checked.
+ */
+export interface ApprovalPayment {
+  /** The transaction as the approver sent it: signed by it, not yet by the payer. */
+  transaction: Uint8Array;
+  /** The approver the service says signed it. */
+  moderator: Address;
 }
 
 /** How the earn side publishes a delivery so the buyer can fetch it. */
@@ -67,15 +83,19 @@ export interface MarketServices {
   listingSpecUri(specHashHex: string): Promise<string | null>;
   /**
    * Publish the description of a service this wallet offers and have the
-   * listing attested for exactly that description, so buyers can hire it.
-   * The listing must already exist on-chain with this hash.
+   * listing approved for exactly that description, so buyers can hire it.
+   * The listing must already exist on-chain with this hash. Returns the
+   * approval to pay for, or null when it is already recorded.
    */
-  attestListing(input: AttestListingInput): Promise<void>;
+  attestListing(input: AttestListingInput): Promise<ApprovalPayment | null>;
   /**
-   * Publish the job spec where providers can read it and have it attested
-   * for exactly `(task, jobSpecHashHex)`. Returns where it was published.
+   * Publish the job spec where providers can read it and have it approved
+   * for exactly `(task, jobSpecHashHex)`. Returns where it was published and
+   * the approval to pay for, or a null payment when it is already recorded.
    */
-  attestTask(input: AttestTaskInput): Promise<{ jobSpecUri: string }>;
+  attestTask(
+    input: AttestTaskInput,
+  ): Promise<{ jobSpecUri: string; payment: ApprovalPayment | null }>;
   /** Where an already-attested spec lives, for resuming after a restart. */
   jobSpecUriFor(jobSpecHashHex: string): Promise<string | null>;
   /**
@@ -212,6 +232,37 @@ function safeBigInt(value: unknown): bigint | null {
 
 function finite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** The largest transaction the network carries, in bytes. */
+const MAX_TRANSACTION_BYTES = 1232;
+
+/**
+ * The approval a service hands back for the wallet to pay for, or null when
+ * its answer holds none. Only the shape is checked here; what the transaction
+ * does is checked before anything is signed (approval.ts).
+ */
+function parsePayment(data: Record<string, unknown>): ApprovalPayment | null {
+  const payment = record(data.payment);
+  if (payment === null) return null;
+  const moderator = safeAddress(data.moderator);
+  const text = payment.transaction;
+  if (
+    moderator !== null &&
+    typeof text === "string" &&
+    text.length > 0 &&
+    text.length <= Math.ceil(MAX_TRANSACTION_BYTES / 3) * 4 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(text)
+  ) {
+    const transaction = new Uint8Array(Buffer.from(text, "base64"));
+    if (transaction.length > 0 && transaction.length <= MAX_TRANSACTION_BYTES) {
+      return { transaction, moderator };
+    }
+  }
+  throw new WalletError(
+    "NETWORK",
+    "The marketplace's safety check sent back something this wallet will not sign. Nothing was paid.",
+  );
 }
 
 /** Clip untrusted display text to one tidy line. */
@@ -397,6 +448,13 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
           "This service did not pass the marketplace's safety check, so it cannot be hired.",
         );
       }
+      // The check is paid for by whoever offers the service, not by a buyer.
+      if (status === 402) {
+        throw new WalletError(
+          "NOT_AVAILABLE",
+          "That service has not been through the marketplace's safety check yet, so it cannot be hired.",
+        );
+      }
       if (status === 429 || status >= 500) {
         throw new WalletError(
           "NETWORK",
@@ -414,12 +472,16 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       const { status, body } = await requestJson(
         fetchImpl,
         `${attestUrl}/v1/moderation/listings`,
-        { method: "POST", body: { listing: input.listing, spec: input.spec } },
+        {
+          method: "POST",
+          body: { listing: input.listing, spec: input.spec, payer: input.payer },
+        },
         { timeoutMs: 120_000, maxBytes: 64 * 1024 },
       );
       const data = record(body);
       if (status === 200 && data?.ok === true) {
-        if (data.attested !== true) {
+        const payment = data.attested === true ? null : parsePayment(data);
+        if (data.attested !== true && payment === null) {
           throw new WalletError(
             "NOT_ALLOWED",
             "The service's description did not pass the marketplace's safety check. Change the wording and try again.",
@@ -431,7 +493,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
             "The marketplace answered about a different description. The service is not on offer yet.",
           );
         }
-        return;
+        return payment;
       }
       // 404 is the checker not seeing a listing created seconds ago; it is
       // retried like any other temporary answer.
@@ -453,13 +515,19 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         `${attestUrl}/v1/moderation/tasks`,
         {
           method: "POST",
-          body: { task: input.task, jobSpecHash: input.jobSpecHashHex, spec: input.jobSpec },
+          body: {
+            task: input.task,
+            jobSpecHash: input.jobSpecHashHex,
+            spec: input.jobSpec,
+            payer: input.payer,
+          },
         },
         { timeoutMs: 120_000, maxBytes: 64 * 1024 },
       );
       const data = record(body);
       if (status === 200 && data?.ok === true) {
-        if (data.attested !== true) {
+        const payment = data.attested === true ? null : parsePayment(data);
+        if (data.attested !== true && payment === null) {
           throw new WalletError(
             "NOT_ALLOWED",
             "The request did not pass the marketplace's safety check, so the job was not posted.",
@@ -472,9 +540,9 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
           );
         }
         const uri = typeof data.specRegistryUri === "string" ? data.specRegistryUri : null;
-        if (uri !== null && /^https:\/\/[^\s]{1,240}$/.test(uri)) return { jobSpecUri: uri };
+        if (uri !== null && /^https:\/\/[^\s]{1,240}$/.test(uri)) return { jobSpecUri: uri, payment };
         const derived = await this.jobSpecUriFor(input.jobSpecHashHex);
-        if (derived !== null) return { jobSpecUri: derived };
+        if (derived !== null) return { jobSpecUri: derived, payment };
         throw new WalletError(
           "NETWORK",
           "The marketplace checked the request but did not say where it was published.",

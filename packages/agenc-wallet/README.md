@@ -27,6 +27,12 @@ live; no mainnet hire has been made with this package yet.
 - An agent connection can find, hire, check and review **its own** jobs. It
   cannot move money between wallets, change its limit, approve its own
   request, turn down a delivery, or withdraw. Those belong to the owner.
+- One kind of transaction is **built by someone else**: the approval of a
+  job's request, or of a service's description, comes from the marketplace's
+  safety check already signed by its approver, for the wallet that asked to
+  pay for and send. The wallet reads it back byte for byte before signing and
+  refuses anything but a transfer to that approver of no more than the
+  approval record's deposit, followed by exactly the approval it asked for.
 
 ## What a job costs
 
@@ -35,8 +41,11 @@ mainnet:
 
 - **The price**, held until you approve, paid to the provider on approval.
 - **A network fee that is not returned**, even when the job is cancelled: the
-  deposit behind the permanent job record plus four transaction fees. On
-  mainnet this was 3,037,520 lamports (about $0.22) on 2026-11-14.
+  deposit behind the permanent job record, the deposit behind the permanent
+  record of the safety check of your request (whoever asks for a check pays
+  for it), and six transaction fees. At mainnet's rent on 2026-11-14 that is
+  3,017,520 + 1,838,960 + 30,000 = 4,886,480 lamports (about $0.34 with SOL
+  at $69).
 - **A one-time record** per paying wallet on its first hire (990,600 lamports
   on mainnet at the documented rent rate).
 - **Deposits that come back** when the finished job is tidied. The wallet
@@ -135,7 +144,9 @@ A job's intent (service, price, task address) is written to the journal
 before any transaction is sent. A task address is fixed by the payer and a
 random id, and the program creates it at most once, so after a crash or a
 lost answer the chain says what happened: a hire that landed is carried on,
-one that never landed costs nothing, and nothing is paid twice.
+one that never landed costs nothing, and nothing is paid twice. The payment
+for a safety check is noted before it is sent, and another is not asked for
+while the first can still land.
 
 ## Earning
 
@@ -180,8 +191,9 @@ reads the chain before each step so it can be interrupted anywhere:
 
 1. wait for the worker to register the agent;
 2. create the listing (its deposit, 697 bytes of rent, is not returned);
-3. send the description to the attestation service, which publishes it and
-   records that it passed the marketplace's content check;
+3. send the description to the attestation service, which publishes it,
+   checks it, and hands back the approval; the agent's wallet pays for that
+   approval's permanent record (not returned either) and sends it;
 4. report `live`. From then on the worker loop takes hires of it.
 
 Calling `earn.offer` again changes the price or the description (a new
@@ -211,8 +223,9 @@ On a real network, and nothing else:
 - your Solana RPC, for balances, account reads and sending transactions;
 - `agenc.ag/api/listings`, read only, for the list of services;
 - `attest.agenc.ag`, the public attestation service, which publishes a
-  job's request (and the description of a service you offer) and records
-  that it passed the marketplace's content check;
+  job's request (and the description of a service you offer), checks it
+  against the marketplace's content rules, and signs the approval for this
+  wallet to pay for and send;
 - the on-chain Pyth SOL/USD price account, through the same RPC, for dollar
   figures. Without a trustworthy price the wallet shows SOL instead.
 
