@@ -14,9 +14,11 @@ import path from "node:path";
 import type { Address, KeyPairSigner } from "@solana/kit";
 import { findAgentPda, getAgentRegistrationDecoder } from "@tetsuo-ai/marketplace-sdk";
 import {
+  claimFundingRequirement,
   DEFAULT_ENDPOINT,
   hexToBytes,
   loadState,
+  readClaimAccountRentMinimums,
   readMinAgentStake,
   registrationFundingRequirement,
   runUp,
@@ -56,6 +58,14 @@ export interface EarnOptions {
   pollIntervalMs?: number;
   /** Endpoint recorded with the agent's registration. */
   endpoint?: string;
+  /**
+   * How often the watch for jobs starts afresh while the agent offers a
+   * service. The stock watcher reports a job once. A hire of the agent's own
+   * service that could not be taken at that moment (its wallet was short
+   * while another job's deposits were out, the network hiccuped) would never
+   * be looked at again, and nobody else can take it. Default one minute.
+   */
+  serviceRefreshMs?: number;
 }
 
 export interface EarnAgent {
@@ -82,6 +92,7 @@ export type EarnNotice =
 
 const DEFAULT_MAX_REWARD_LAMPORTS = 1_000_000_000n;
 const RESTART_DELAY_MS = 20_000;
+const DEFAULT_SERVICE_REFRESH_MS = 60_000;
 
 interface Running {
   controller: AbortController;
@@ -97,6 +108,7 @@ export class EarnHost {
   readonly #dataDir: string;
   readonly #log: (line: string) => void;
   readonly #notify: (agentId: string, notice: EarnNotice) => void;
+  readonly #serves: (agentId: string) => boolean;
   readonly #running = new Map<string, Running>();
 
   constructor(deps: {
@@ -107,6 +119,8 @@ export class EarnHost {
     dataDir: string;
     log: (line: string) => void;
     notify: (agentId: string, notice: EarnNotice) => void;
+    /** Whether the agent has a service on offer right now. Default: never. */
+    serves?: (agentId: string) => boolean;
   }) {
     this.#chain = deps.chain;
     this.#services = deps.services;
@@ -114,6 +128,7 @@ export class EarnHost {
     this.#dataDir = deps.dataDir;
     this.#log = deps.log;
     this.#notify = deps.notify;
+    this.#serves = deps.serves ?? (() => false);
   }
 
   /** Whether this host can run jobs at all. */
@@ -145,18 +160,52 @@ export class EarnHost {
   }
 
   /**
-   * Lamports locked as this agent's marketplace deposit (its stake), or 0
-   * when it has never registered.
+   * Lamports the worker wants in the agent's wallet before it takes a job:
+   * the deposits behind the job's records (they come back) and fee headroom.
    */
-  async setAside(agentId: string): Promise<bigint> {
+  async jobReserve(): Promise<bigint> {
+    return claimFundingRequirement(
+      await readClaimAccountRentMinimums((space) =>
+        this.#chain.getMinimumBalanceForRentExemption(space),
+      ),
+    );
+  }
+
+  /**
+   * Lamports one job in progress ties up in its records until it is paid.
+   * A service that should take a new hire while earlier jobs still wait for
+   * their buyers needs this much spare per job that is out.
+   */
+  async jobDeposits(): Promise<bigint> {
+    const rents = await readClaimAccountRentMinimums((space) =>
+      this.#chain.getMinimumBalanceForRentExemption(space),
+    );
+    return rents.claim + rents.submission;
+  }
+
+  /**
+   * The agent's address on the marketplace, once the worker has chosen its
+   * id (it does on its first pass, just before registering). Null before.
+   */
+  async marketplaceAgent(agentId: string): Promise<Address | null> {
     let agentIdHex: string | null;
     try {
       agentIdHex = loadState(this.stateDir(agentId)).agentIdHex;
     } catch {
-      return 0n;
+      return null;
     }
-    if (agentIdHex === null) return 0n;
+    if (agentIdHex === null) return null;
     const [agent] = await findAgentPda({ agentId: hexToBytes(agentIdHex) });
+    return agent;
+  }
+
+  /**
+   * Lamports locked as this agent's marketplace deposit (its stake), or 0
+   * when it has never registered.
+   */
+  async setAside(agentId: string): Promise<bigint> {
+    const agent = await this.marketplaceAgent(agentId);
+    if (agent === null) return 0n;
     const data = await this.#chain.readAccount(agent);
     if (data === null) return 0n;
     try {
@@ -283,8 +332,19 @@ export class EarnHost {
         case "sweep.candidates":
           if (entry.state === "starting") setState("watching");
           break;
+        case "task.processing-error":
+        case "task.job-spec-rejected":
+        case "task.prompt-rejected":
+          // A job it could not take. Said once, so the log explains a hire
+          // that sat unstarted.
+          this.#log(`earn ${agent.agentId}: ${event.event} ${String(event.reason ?? "").slice(0, 300)}`);
+          break;
         default:
           break;
+      }
+      // Everything the worker decides, for diagnosing why a job was not taken.
+      if (process.env.AGENC_WALLET_EARN_DEBUG === "1") {
+        this.#log(`earn ${agent.agentId}: ${JSON.stringify(event)}`);
       }
     };
 
@@ -326,15 +386,30 @@ export class EarnHost {
         : {}),
     };
 
+    const refreshMs = this.#options.serviceRefreshMs ?? DEFAULT_SERVICE_REFRESH_MS;
     while (!signal.aborted) {
+      // One run of the stock watcher. It ends when earning stops, or early
+      // when an agent that offers a service is due a fresh look at what is
+      // waiting. Ending a run lets a job in progress finish first.
+      const run = new AbortController();
+      const endRun = (): void => run.abort();
+      signal.addEventListener("abort", endRun, { once: true });
+      const startedAt = Date.now();
+      const refresh = setInterval(
+        () => {
+          if (this.#serves(agent.agentId) && Date.now() - startedAt >= refreshMs) run.abort();
+        },
+        Math.max(250, Math.min(refreshMs, 5_000)),
+      );
+      refresh.unref?.();
       try {
-        // `runUp` returns only when the signal aborts; anything else is a
+        // `runUp` returns only when its signal aborts; anything else is a
         // failure worth surfacing and retrying after a pause.
         const watching = setTimeout(() => {
           if (entry.state === "starting") setState("watching");
         }, 3_000);
         try {
-          await runUp(ctx, { signal });
+          await runUp(ctx, { signal: run.signal });
         } finally {
           clearTimeout(watching);
         }
@@ -354,6 +429,9 @@ export class EarnHost {
           );
         });
         if (!signal.aborted) setState("starting");
+      } finally {
+        clearInterval(refresh);
+        signal.removeEventListener("abort", endRun);
       }
     }
   }

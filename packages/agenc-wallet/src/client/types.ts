@@ -38,6 +38,32 @@ export interface AgentPolicy {
 
 export type EarnState = "off" | "starting" | "watching" | "working" | "error";
 
+/**
+ * Where a service the agent offers stands.
+ *
+ * getting_ready -> being_checked -> live; "paused" while earning is switched
+ * off or the offer was withdrawn; "problem" when a step needs the person.
+ */
+export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" | "problem";
+
+/** A service this agent offers for others to hire. */
+export interface OfferView {
+  /** The listing address once it exists. */
+  listing: string | null;
+  name: string;
+  /** What the buyer gets, in a sentence or two. */
+  summary: string;
+  /** What a buyer pays. The marketplace keeps its fee out of this. */
+  price: Money;
+  status: OfferStatus;
+  /** One plain sentence describing `status`. */
+  statusText: string;
+  /** True once the service exists on the marketplace. Its name is fixed from then on. */
+  listed: boolean;
+  /** False once the person took the service off offer. */
+  wanted: boolean;
+}
+
 export interface EarnView {
   /** The person switched earning on for this agent. */
   enabled: boolean;
@@ -54,6 +80,14 @@ export interface EarnView {
    * locked while the agent is registered.
    */
   setAside: Money;
+  /** The service this agent offers, or null when it only takes open jobs. */
+  offer: OfferView | null;
+  /**
+   * What putting a service on offer costs once: the deposit behind its
+   * permanent marketplace record, which is not returned. Null once this
+   * agent's service exists, or when the cost could not be read.
+   */
+  offerCost: Money | null;
 }
 
 export interface AgentView {

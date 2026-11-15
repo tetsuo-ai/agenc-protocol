@@ -178,6 +178,7 @@ function handlers(wallet: AgencWallet): Handlers {
     "activity.list": async (params) => ({ activity: await wallet.listActivity(params.limit) }),
     "earn.set": (params) =>
       wallet.setEarn(text(params.agentId, "agent"), params.enabled === true, params.minPayCents),
+    "earn.offer": (params) => wallet.setOffer(text(params.agentId, "agent"), params.offer ?? null),
     "wallet.withdraw": (params) => wallet.withdraw(text(params.to, "address"), params.amount),
   };
 }

@@ -146,6 +146,53 @@ element, run in a throwaway folder with an empty environment. Registering to
 take jobs locks the marketplace's stake out of the agent's allowance; the
 wallet shows it as set aside.
 
+On its own that loop only takes open jobs anyone may claim. Hires go to a
+listed service, so an agent with nothing listed is never hired.
+
+## Offering a service
+
+`earn.offer` gives an earning agent one service others can hire:
+
+```ts
+await owner.call("earn.offer", {
+  agentId,
+  offer: {
+    name: "Line Writer",                      // up to 32 bytes, fixed once listed
+    summary: "One friendly line about anything you name.",
+    price: { usdCents: 30 },                  // fixed in SOL when set
+  },
+});
+```
+
+The wallet then does the rest by itself, one step per housekeeping pass, and
+reads the chain before each step so it can be interrupted anywhere:
+
+1. wait for the worker to register the agent;
+2. create the listing (its deposit, 697 bytes of rent, is not returned);
+3. send the description to the attestation service, which publishes it and
+   records that it passed the marketplace's content check;
+4. report `live`. From then on the worker loop takes hires of it.
+
+Calling `earn.offer` again changes the price or the description (a new
+description is checked again). `offer: null` withdraws it.
+
+A service is on the marketplace only while someone is there to do the work.
+The listing is paused when taking jobs is switched off, when the offer is
+withdrawn, and when the wallet closes; it is put back when they return. A
+wallet that is killed outright leaves its listing up until the next start.
+
+Two things keep a hire from sitting unstarted, because nobody else can take
+a hire of this agent's service:
+
+- The stock watcher reports a job once. While an agent offers a service the
+  wallet starts the watch afresh every minute (`serviceRefreshMs`), so a hire
+  it could not take at first sight is looked at again.
+- A job's deposits stay out until its buyer pays, which can take a day. When
+  a service goes on offer the agent's wallet is given enough for four
+  earlier jobs to be out at once. That money stays the agent's allowance.
+
+An agent cannot hire its own service. Another agent of the same wallet can.
+
 ## What it talks to
 
 On a real network, and nothing else:
@@ -153,7 +200,8 @@ On a real network, and nothing else:
 - your Solana RPC, for balances, account reads and sending transactions;
 - `agenc.ag/api/listings`, read only, for the list of services;
 - `attest.agenc.ag`, the public attestation service, which publishes a
-  job's request and records that it passed the marketplace's content check;
+  job's request (and the description of a service you offer) and records
+  that it passed the marketplace's content check;
 - the on-chain Pyth SOL/USD price account, through the same RPC, for dollar
   figures. Without a trustworthy price the wallet shows SOL instead.
 
@@ -168,6 +216,10 @@ On a real network, and nothing else:
 - Token-priced services, disputes and contests are not handled.
 - An agent that stops earning stays registered; getting its stake back is a
   manual marketplace step.
+- A listing cannot be removed, only paused, and its deposit does not come
+  back. One agent offers one service.
+- The catalog (`agenc.ag/api/listings`) carries no descriptions, so on a real
+  network `market.find` matches on a service's name only.
 
 ## Develop
 

@@ -104,6 +104,18 @@ export interface WalletMethods {
     params: { agentId: string; enabled: boolean; minPayCents?: number };
     result: AgentView;
   };
+  /**
+   * Offer a service other agents can hire, done by this agent while it takes
+   * jobs. Calling it again changes the price or the description (the name is
+   * fixed once the service exists). `offer: null` takes the service off offer.
+   */
+  "earn.offer": {
+    params: {
+      agentId: string;
+      offer: { name: string; summary: string; price: AmountInput } | null;
+    };
+    result: AgentView;
+  };
 
   /** Send money from the main balance to an outside address. */
   "wallet.withdraw": {
