@@ -198,9 +198,18 @@ export interface JobRecord {
     accept?: string;
     cancel?: string;
     changes?: string;
+    /** The buyer turned the delivery down and the price went on hold. */
+    reject?: string;
+    /** This wallet settled a turned-down job once its review time ran out. */
+    settle?: string;
     rate?: string;
     close?: string;
   };
+  /**
+   * When this wallet last sent the settlement of a turned-down job. A
+   * settlement that may still be on its way is not sent a second time.
+   */
+  settleAttemptAt?: number | null;
   changes: { note: string; hashHex: string; ts: number }[];
   error: string | null;
 }

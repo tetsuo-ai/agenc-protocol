@@ -43,8 +43,9 @@ export function jobStatus(job: JobRecord): JobStatus {
       return "paid";
     case "cancelled":
       return "refunded";
-    case "disputed":
     case "reject_frozen":
+      return "in_review";
+    case "disputed":
       return "problem";
     case "open":
     case null:
@@ -65,6 +66,10 @@ function statusText(
         return "Your agent is working on this job.";
       case "delivered":
         return "Delivered. Waiting for the buyer to approve it.";
+      case "in_review":
+        return job.reviewDeadlineAt !== null
+          ? `The buyer turned this down, so the price is on hold while it is reviewed. If nobody rules, your agent is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
+          : "The buyer turned this down, so the price is on hold while it is reviewed.";
       case "paid":
         return `Done. Your agent earned ${amount}.`;
       case "refunded":
@@ -92,6 +97,10 @@ function statusText(
       return job.reviewDeadlineAt !== null
         ? `Delivered. Approve it to pay the provider. If nobody reviews it, it is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
         : "Delivered. Approve it to pay the provider.";
+    case "in_review":
+      return job.reviewDeadlineAt !== null
+        ? `You turned this down, so the price is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, the provider is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
+        : "You turned this down, so the price is on hold while it is reviewed.";
     case "paid":
       return `Done. ${amount} was paid to the provider.`;
     case "refunded":
@@ -142,6 +151,8 @@ export function jobView(
     autoApproveAt:
       status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     autoRefundAt: status === "waiting" ? job.autoRefundAt : null,
+    reviewEndsAt:
+      status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     canApprove: buying && status === "delivered",
     canAskChanges: buying && status === "delivered",
     canRefund:

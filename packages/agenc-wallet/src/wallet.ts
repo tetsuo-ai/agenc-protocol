@@ -57,11 +57,12 @@ import {
   sendApproval,
   sendCancel,
   sendChangesRequest,
+  sendFrozenExpiry,
   sendCreateListing,
   sendHire,
   sendListingState,
   sendRating,
-  sendReject,
+  sendRejectAndFreeze,
   sendTidy,
   sendUpdateListing,
   TASK_ACCOUNT_SPACE,
@@ -109,6 +110,11 @@ const HIRE_BUSY_RETRIES = 8;
 const POSTING_GIVE_UP_MS = 30 * 60_000;
 /** A provider who started is given this long past the deadline to deliver. */
 const NO_SHOW_GRACE_SECS = 120;
+/**
+ * How long to wait before sending the settlement of a turned-down job again.
+ * The first one may still be on its way, or the other side may have sent it.
+ */
+const FROZEN_SETTLE_RETRY_MS = 120_000;
 const MAX_RESULT_TEXT = 20_000;
 const BALANCE_CACHE_MS = 4_000;
 const STALE_PRICE_MS = 6 * 60 * 60_000;
@@ -238,6 +244,12 @@ export class AgencWallet {
   readonly #now: () => number;
   readonly #log: (line: string) => void;
   #balances: BalanceSnapshot | null = null;
+  /**
+   * Deliveries of this wallet's agents that a buyer turned down, by task:
+   * when their review time ends, and when collecting was last tried. Rebuilt
+   * from the chain on every tick, so it is not journaled.
+   */
+  readonly #frozenWork = new Map<string, { reviewDeadlineAt: number; attemptAt: number | null }>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #ticking: Promise<void> | null = null;
   #closed = false;
@@ -1709,6 +1721,34 @@ export class AgencWallet {
       }
     }
 
+    if (seen.status === "reject_frozen" && seen.submission !== null) {
+      // Turned down and on hold. With no ruling by the end of the review time
+      // the provider is paid; either side may send that, and so that no job
+      // is left hanging this wallet does. One attempt at a time.
+      const clock = await this.#chain.clusterTime();
+      const due = seen.submission.reviewDeadlineAt > 0 && clock > seen.submission.reviewDeadlineAt;
+      const recently =
+        job.settleAttemptAt != null && this.#now() - job.settleAttemptAt < FROZEN_SETTLE_RETRY_MS;
+      if (due && !recently) {
+        this.#patchJob(job.id, (entry) => {
+          entry.settleAttemptAt = this.#now();
+        });
+        try {
+          const payer = await this.#payerSigner(job);
+          const signature = await sendFrozenExpiry(this.#chain, payer, task, provider);
+          this.#patchJob(job.id, (entry) => {
+            entry.signatures.settle = signature;
+          });
+          this.#recordPaid(job.id, signature);
+          return;
+        } catch (error) {
+          // The provider's own wallet may have settled it first; the next
+          // look shows the job completed either way.
+          this.#log(`job ${job.id} settle after review: ${describeError(error)}`);
+        }
+      }
+    }
+
     let result = job.result;
     if (seen.status === "pending_validation" && seen.submission !== null) {
       if (result === null || result.hash !== seen.submission.proofHashHex) {
@@ -1716,7 +1756,8 @@ export class AgencWallet {
       }
     }
     const reviewDeadlineAt =
-      seen.status === "pending_validation" && seen.submission !== null
+      (seen.status === "pending_validation" || seen.status === "reject_frozen") &&
+      seen.submission !== null
         ? seen.submission.reviewDeadlineAt
         : null;
     const changed =
@@ -1793,6 +1834,55 @@ export class AgencWallet {
 
   // --------------------------------------------------------------- jobs
 
+  /**
+   * Look at the deliveries this wallet's agents are waiting to be paid for.
+   * One that the buyer turned down is on hold: remember until when, and once
+   * the review time has run out with no ruling, collect the pay. A provider
+   * should not depend on the buyer's software to be paid.
+   */
+  async #watchFrozenWork(): Promise<void> {
+    const seenNow = new Set<string>();
+    for (const agent of Object.values(this.#store.state.agents)) {
+      const waiting = this.#earn.jobs(agent.id).filter((entry) => entry.state === "delivered");
+      if (waiting.length === 0) continue;
+      const provider = await this.#earn.marketplaceAgent(agent.id);
+      if (provider === null) continue;
+      for (const entry of waiting) {
+        const seen = await inspectJob(this.#chain, entry.task as Address, provider);
+        if (seen === null || seen.status !== "reject_frozen" || seen.submission === null) continue;
+        seenNow.add(entry.task);
+        const previous = this.#frozenWork.get(entry.task);
+        const deadline = seen.submission.reviewDeadlineAt;
+        if (previous?.reviewDeadlineAt !== deadline) {
+          this.#frozenWork.set(entry.task, { reviewDeadlineAt: deadline, attemptAt: null });
+          this.#emit({ type: "job", jobId: `earn_${agent.id}_${entry.task}` });
+        }
+        const state = this.#frozenWork.get(entry.task)!;
+        const clock = await this.#chain.clusterTime();
+        const recently =
+          state.attemptAt !== null && this.#now() - state.attemptAt < FROZEN_SETTLE_RETRY_MS;
+        if (deadline > 0 && clock > deadline && !recently) {
+          state.attemptAt = this.#now();
+          try {
+            await sendFrozenExpiry(
+              this.#chain,
+              await this.#vault.signer(agent.keyId),
+              entry.task as Address,
+              provider,
+            );
+            this.#dropBalances();
+            this.#emit({ type: "overview" });
+          } catch (error) {
+            this.#log(`collecting a turned-down job: ${describeError(error)}`);
+          }
+        }
+      }
+    }
+    for (const task of [...this.#frozenWork.keys()]) {
+      if (!seenNow.has(task)) this.#frozenWork.delete(task);
+    }
+  }
+
   #earnJobs(agentId: string): JobRecord[] {
     return this.#earn.jobs(agentId).map((entry) => ({
       id: `earn_${agentId}_${entry.task}`,
@@ -1822,12 +1912,17 @@ export class AgencWallet {
         entry.state === "working"
           ? "in_progress"
           : entry.state === "delivered"
-            ? "pending_validation"
+            ? this.#frozenWork.has(entry.task)
+              ? "reject_frozen"
+              : "pending_validation"
             : entry.state === "paid"
               ? "completed"
               : "cancelled",
       deadline: null,
-      reviewDeadlineAt: null,
+      reviewDeadlineAt:
+        entry.state === "delivered"
+          ? (this.#frozenWork.get(entry.task)?.reviewDeadlineAt ?? null)
+          : null,
       autoRefundAt: null,
       outcome: entry.state === "paid" ? "paid" : entry.state === "not_paid" ? "refunded" : null,
       changesRequested: false,
@@ -2035,8 +2130,13 @@ export class AgencWallet {
   }
 
   /**
-   * Cancel and take the money back where the job allows it. A person may
-   * also turn down a delivery; an agent may not.
+   * Cancel and take the money back where the job allows it.
+   *
+   * A person may also turn down a delivery; an agent may not. Turning a
+   * delivery down does NOT bring the price back by itself, because the buyer
+   * has already read the work: the price goes on hold, a reviewer decides who
+   * gets it, and if nobody rules before the review time runs out the provider
+   * is paid. Asking for changes is the way to get the work fixed.
    */
   async refundJob(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
@@ -2062,20 +2162,52 @@ export class AgencWallet {
       if (job.phase !== "active" && job.phase !== "hired") {
         throw new WalletError("NOT_ALLOWED", "This job can no longer be cancelled.");
       }
+      if (job.chainStatus === "reject_frozen") {
+        throw new WalletError(
+          "NOT_ALLOWED",
+          "This delivery was already turned down. Its price is on hold until it is reviewed.",
+        );
+      }
       const payer = await this.#payerSigner(job);
       const task = job.task as Address;
       const provider = job.providerAgent as Address;
-      try {
-        if (job.chainStatus === "pending_validation") {
-          if (!isOwner) {
-            throw new WalletError(
-              "NOT_ALLOWED",
-              "The provider has delivered. Turning a delivery down is the user's decision: they can do it from the Market panel.",
-            );
-          }
-          const reason = await values.sha256(`declined:${job.id}:${this.#now()}`);
-          await sendReject(this.#chain, payer, task, provider, reason);
+      if (job.chainStatus === "pending_validation") {
+        if (!isOwner) {
+          throw new WalletError(
+            "NOT_ALLOWED",
+            "The provider has delivered. Turning a delivery down is the user's decision: they can do it from the Market panel.",
+          );
         }
+        let signature: string;
+        try {
+          const reason = await values.sha256(`declined:${job.id}:${this.#now()}`);
+          signature = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason);
+        } catch (error) {
+          throw new WalletError(
+            isNetworkTrouble(error) ? "NETWORK" : "NOT_ALLOWED",
+            isNetworkTrouble(error)
+              ? "The network was too busy to turn this down. Nothing changed. Try again in a moment."
+              : "This delivery cannot be turned down right now. You can still approve it or ask for changes.",
+            { cause: error },
+          );
+        }
+        this.#patchJob(jobId, (entry, draft) => {
+          entry.chainStatus = "reject_frozen";
+          entry.signatures.reject = signature;
+          // The review clock is read back from the chain on the next look.
+          entry.reviewDeadlineAt = null;
+          this.#note(draft, {
+            kind: "note",
+            text: `You turned down ${entry.title}. Its price is on hold while it is reviewed.`,
+            agentId: entry.agentId,
+            jobId: entry.id,
+            signature,
+          });
+        });
+        this.#emit({ type: "activity" });
+        return;
+      }
+      try {
         const signature = await sendCancel(this.#chain, payer, task, provider);
         this.#recordRefund(jobId, signature, null);
       } catch (error) {
@@ -2680,6 +2812,9 @@ export class AgencWallet {
     );
     await Promise.all(open.map((job) => this.#advance(job.id)));
 
+    await this.#watchFrozenWork().catch((error) => {
+      this.#log(`turned-down work check: ${describeError(error)}`);
+    });
     await this.#noticeDeposits().catch((error) => {
       this.#log(`deposit check: ${describeError(error)}`);
     });
