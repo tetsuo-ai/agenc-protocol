@@ -257,6 +257,11 @@ export interface WalletState {
    * by id. Only for showing something true when the network cannot be reached.
    */
   lastSeenLamports?: Record<string, string>;
+  /**
+   * The last backup the person made: when, and which keys it holds. A key
+   * made since (a new agent) is not in it, and the person is told.
+   */
+  backup?: { at: number; keyIds: string[] } | null;
 }
 
 function emptyState(now: number): WalletState {

@@ -54,3 +54,11 @@ export {
   type ServeWalletOptions,
   type WalletServer,
 } from "./server.js";
+export {
+  BACKUP_FORMAT,
+  createBackup,
+  MIN_BACKUP_PASSWORD,
+  readBackupHeader,
+  restoreBackup,
+  type BackupHeader,
+} from "./backup.js";

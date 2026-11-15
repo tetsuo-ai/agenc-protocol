@@ -128,6 +128,17 @@ export interface WalletMethods {
     result: AgentView;
   };
 
+  /**
+   * Seal every key and the wallet's records into one backup, locked with a
+   * password the person chooses. Returns the backup file's text: the host
+   * writes it wherever the person says. Restoring is not a method here: it
+   * replaces the wallet, so the host does it with the service stopped.
+   */
+  "backup.export": {
+    params: { password: string };
+    result: { file: string; createdAt: number; agents: number };
+  };
+
   /** Send money from the main balance to an outside address. */
   "wallet.withdraw": {
     params: { to: string; amount: AmountInput | "all" };
