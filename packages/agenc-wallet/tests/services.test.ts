@@ -18,6 +18,7 @@ import {
   digestFromPointer,
   jobSpecHash,
   sha256Hex,
+  specUploadMessage,
   tidyText,
 } from "../src/services.js";
 
@@ -127,6 +128,235 @@ describe("the catalog", () => {
   });
 });
 
+/**
+ * A stand-in for the marketplace site's publishing route with the same checks
+ * the real one makes: JSON only, a fresh wallet-signed message binding the
+ * exact bytes, a listing's stated hash re-derived, a job's plain fields
+ * turned into the marketplace's own request shape.
+ */
+function specStore(seen: { uploads: unknown[] } = { uploads: [] }): Route {
+  return async ({ init }) => {
+    const headers = new Headers(init?.headers);
+    if (!/^application\/json\b/i.test(headers.get("content-type") ?? "")) {
+      return json({ error: "Content-Type must be application/json" }, 415);
+    }
+    const wallet = headers.get("x-agenc-wallet") ?? "";
+    const ts = Number(headers.get("x-agenc-ts"));
+    const received = init?.body as Uint8Array;
+    const uploadSha256 = createHash("sha256").update(received).digest("hex");
+    const publicKey = createPublicKey({
+      key: Buffer.concat([
+        Buffer.from("302a300506032b6570032100", "hex"),
+        Buffer.from(getAddressEncoder().encode(wallet as Address)),
+      ]),
+      format: "der",
+      type: "spki",
+    });
+    const signed = verify(
+      null,
+      Buffer.from(specUploadMessage(uploadSha256, wallet, ts)),
+      publicKey,
+      Buffer.from(headers.get("x-agenc-signature") ?? "", "base64"),
+    );
+    if (Math.abs(Date.now() - ts) > 600_000) return json({ error: "Upload signature expired. Retry." }, 400);
+    if (!signed) return json({ error: "Signature verification failed" }, 401);
+
+    const parsed = JSON.parse(Buffer.from(received).toString("utf8")) as Record<string, any>;
+    seen.uploads.push(parsed);
+    let payload: Record<string, unknown>;
+    if (parsed.payload?.custom?.listingMetadata) {
+      payload = parsed.payload;
+      const stated = parsed.integrity?.payloadHash;
+      if ((await jobSpecHash(payload)).hex !== stated) {
+        return json({ error: "Listing job spec payload hash does not match envelope integrity." }, 400);
+      }
+    } else {
+      const description = String(parsed.summary ?? parsed.description ?? parsed.title ?? "").trim();
+      if (!description) {
+        return json({ error: "Job spec needs a non-empty title, summary, or description string." }, 400);
+      }
+      payload = {
+        schemaVersion: 1,
+        kind: "agenc.marketplace.jobSpec",
+        title: String(parsed.title ?? description.slice(0, 96)),
+        shortDescription: description.slice(0, 240),
+        fullDescription: parsed.details ?? null,
+        acceptanceCriteria: parsed.acceptance ?? [],
+        deliverables: parsed.deliverables ?? [],
+        constraints: null,
+        attachments: [],
+        execution: { sandbox: "default" },
+        custom: null,
+        context: {},
+      };
+    }
+    const payloadSha256 = (await jobSpecHash(payload)).hex;
+    return json({
+      uri: `https://blob.example/job-specs/${payloadSha256}.json`,
+      sha256: payloadSha256,
+      payloadSha256,
+      uploadSha256,
+      bytes: received.length,
+      payload,
+      envelopeSha256: "00".repeat(32),
+    });
+  };
+}
+
+describe("publishing", () => {
+  it("publishes a job's request through the marketplace, in the marketplace's own shape", async () => {
+    const signer = await generateKeyPairSigner();
+    const seen = { uploads: [] as unknown[] };
+    const { fetch } = fakeFetch({ "POST https://agenc.ag/api/jobspecs": specStore(seen) });
+    const services = createHostedServices({ fetchImpl: fetch });
+    const long = "Summarise this. ".repeat(40).trim();
+
+    const published = await services.publishJobSpec({
+      title: "Plain Summary",
+      request: long,
+      acceptance: ["Two sentences."],
+      listing: LISTING as Address,
+      signer,
+    });
+
+    // Plain fields went up. The marketplace keeps 240 characters as the
+    // summary, so a longer request also goes in whole as the details.
+    expect(seen.uploads).toEqual([
+      {
+        title: "Hire: Plain Summary",
+        summary: long,
+        details: long,
+        acceptance: ["Two sentences."],
+        deliverables: [
+          "Put the complete result in your submission. The buyer reads exactly what you submit.",
+        ],
+      },
+    ]);
+    // What comes back is what a worker will read, and its hash is its own.
+    expect(published.spec).toMatchObject({
+      schemaVersion: 1,
+      kind: "agenc.marketplace.jobSpec",
+      title: "Hire: Plain Summary",
+      shortDescription: long.slice(0, 240),
+      fullDescription: long,
+      acceptanceCriteria: ["Two sentences."],
+    });
+    expect(published.hashHex).toBe((await jobSpecHash(published.spec)).hex);
+    expect(published.uri).toBe(`https://blob.example/job-specs/${published.hashHex}.json`);
+
+    // The same request again is the same published request.
+    const again = await services.publishJobSpec({
+      title: "Plain Summary",
+      request: long,
+      acceptance: ["Two sentences."],
+      listing: LISTING as Address,
+      signer,
+    });
+    expect(again).toEqual(published);
+
+    // A short request needs no separate details.
+    const short = await services.publishJobSpec({
+      title: "Plain Summary",
+      request: "A haiku.",
+      acceptance: [],
+      listing: LISTING as Address,
+      signer,
+    });
+    expect(seen.uploads.at(-1)).toEqual({
+      title: "Hire: Plain Summary",
+      summary: "A haiku.",
+      deliverables: [
+        "Put the complete result in your submission. The buyer reads exactly what you submit.",
+      ],
+    });
+    expect(short.hashHex).not.toBe(published.hashHex);
+  });
+
+  it("publishes the description of a service and returns where the listing should point", async () => {
+    const signer = await generateKeyPairSigner();
+    const spec = buildListingSpec({
+      name: "Line Writer",
+      summary: "One friendly line about anything you name.",
+      category: "other",
+    });
+    // The shape the marketplace publishes for every listing.
+    expect(spec).toEqual({
+      category: "other",
+      custom: {
+        listingMetadata: {
+          displayName: "Line Writer",
+          longDescription: "One friendly line about anything you name.",
+        },
+      },
+    });
+    const hash = await jobSpecHash(spec);
+    const seen = { uploads: [] as unknown[] };
+    const { fetch } = fakeFetch({ "POST https://agenc.ag/api/jobspecs": specStore(seen) });
+
+    const uri = await createHostedServices({ fetchImpl: fetch }).publishListing({
+      spec,
+      specHashHex: hash.hex,
+      signer,
+    });
+
+    expect(uri).toBe(`https://blob.example/job-specs/${hash.hex}.json`);
+    expect(seen.uploads).toEqual([
+      {
+        integrity: { algorithm: "sha256", canonicalization: "json-stable-v1", payloadHash: hash.hex },
+        payload: spec,
+      },
+    ]);
+  });
+
+  it("believes nothing the publisher says that it cannot re-derive", async () => {
+    const signer = await generateKeyPairSigner();
+    const spec = buildListingSpec({ name: "Line Writer", summary: "A line.", category: "other" });
+    const hash = await jobSpecHash(spec);
+    const job = { title: "X", request: "Y", acceptance: [], listing: LISTING as Address, signer };
+    const using = (route: Route) =>
+      createHostedServices({ fetchImpl: fakeFetch({ "POST https://agenc.ag/api/jobspecs": route }).fetch });
+    const good = {
+      uri: "https://blob.example/job-specs/x.json",
+      payloadSha256: hash.hex,
+      payload: spec,
+    };
+
+    // A payload that does not hash to what the answer claims.
+    await expect(
+      using(() => json({ ...good, payloadSha256: "cd".repeat(32) })).publishJobSpec(job),
+    ).rejects.toMatchObject({ code: "NETWORK" });
+    // An address that is not a plain https one.
+    for (const uri of ["http://blob.example/x", "javascript:alert(1)", "", 7]) {
+      await expect(using(() => json({ ...good, uri })).publishJobSpec(job)).rejects.toMatchObject({
+        code: "NETWORK",
+      });
+    }
+    // A description other than the one this wallet committed to.
+    await expect(
+      using(() => json(good)).publishListing({ spec, specHashHex: "ab".repeat(32), signer }),
+    ).rejects.toMatchObject({ code: "NETWORK" });
+    // Refused outright, or down.
+    await expect(using(() => json({ error: "no" }, 400)).publishJobSpec(job)).rejects.toMatchObject({
+      code: "NOT_ALLOWED",
+      message: "The marketplace would not publish this request.",
+    });
+    for (const status of [401, 429, 503]) {
+      await expect(using(() => json({ error: "x" }, status)).publishJobSpec(job)).rejects.toMatchObject({
+        code: "NETWORK",
+      });
+    }
+  });
+
+  it("says so when a network has nowhere to publish", async () => {
+    const signer = await generateKeyPairSigner();
+    const services = createHostedServices({ fetchImpl: fakeFetch({}).fetch, specUploadUrl: null });
+    expect(await services.publishListing({ spec: {}, specHashHex: "ab".repeat(32), signer })).toBeNull();
+    await expect(
+      services.publishJobSpec({ title: "X", request: "Y", acceptance: [], listing: LISTING as Address, signer }),
+    ).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+  });
+});
+
 describe("the safety check", () => {
   it("names the attestation service's signer as trusted", async () => {
     const { fetch } = fakeFetch({ "GET https://attest.agenc.ag/v1/info": INFO });
@@ -135,26 +365,16 @@ describe("the safety check", () => {
     ]);
   });
 
-  it("publishes and attests a job spec for exactly the committed hash", async () => {
-    const spec = buildJobSpec({
-      title: "Haiku Writer",
-      request: "A haiku.",
-      acceptance: ["three lines"],
-      listing: LISTING as Address,
-    });
+  it("has a published request approved for exactly the committed hash", async () => {
+    const spec = { kind: "agenc.marketplace.jobSpec", title: "Hire: Haiku Writer", shortDescription: "A haiku." };
     const hash = await jobSpecHash(spec);
+    const uri = `https://blob.example/job-specs/${hash.hex}.json`;
     const { fetch } = fakeFetch({
       "POST https://attest.agenc.ag/v1/moderation/tasks": ({ init }) => {
         const body = JSON.parse(String(init?.body));
-        // The wallet says who pays for the check.
-        expect(body).toEqual({ task: TASK, jobSpecHash: hash.hex, spec, payer: PAYER });
-        return json({
-          ok: true,
-          attested: true,
-          verdict: "clean",
-          specHash: hash.hex,
-          specRegistryUri: `https://marketplace.agenc.tech/api/job-specs/${hash.hex}`,
-        });
+        // The wallet says where the request can be read and who pays for the check.
+        expect(body).toEqual({ task: TASK, jobSpecHash: hash.hex, spec, specUri: uri, payer: PAYER });
+        return json({ ok: true, attested: true, verdict: "clean", specHash: hash.hex });
       },
     });
     const services = createHostedServices({ fetchImpl: fetch });
@@ -164,12 +384,10 @@ describe("the safety check", () => {
         task: TASK as Address,
         jobSpecHashHex: hash.hex,
         jobSpec: spec,
+        jobSpecUri: uri,
         payer: PAYER,
       }),
-    ).toEqual({
-      jobSpecUri: `https://marketplace.agenc.tech/api/job-specs/${hash.hex}`,
-      payment: null,
-    });
+    ).toBeNull();
   });
 
   it("hands back the approval to pay for when the service does not pay for it", async () => {
@@ -183,22 +401,24 @@ describe("the safety check", () => {
         specHash: hashHex,
         moderator: MODERATOR,
         attestation: null,
-        specRegistryUri: `https://marketplace.agenc.tech/api/job-specs/${hashHex}`,
         payment,
         ...extra,
       });
     const ask = (route: Route) =>
       createHostedServices({
         fetchImpl: fakeFetch({ "POST https://attest.agenc.ag/v1/moderation/tasks": route }).fetch,
-      }).attestTask({ task: TASK as Address, jobSpecHashHex: hashHex, jobSpec: {}, payer: PAYER });
+      }).attestTask({
+        task: TASK as Address,
+        jobSpecHashHex: hashHex,
+        jobSpec: {},
+        jobSpecUri: "https://blob.example/job-specs/x.json",
+        payer: PAYER,
+      });
 
     // The transaction comes through untouched, for the wallet to check.
     expect(
       await ask(answer({ transaction: Buffer.from(wire).toString("base64"), payer: PAYER })),
-    ).toEqual({
-      jobSpecUri: `https://marketplace.agenc.tech/api/job-specs/${hashHex}`,
-      payment: { transaction: wire, moderator: MODERATOR },
-    });
+    ).toEqual({ transaction: wire, moderator: MODERATOR });
 
     // Anything that is not plainly a transaction from a named approver is
     // refused as a fault of the service, never as a refusal of the request.
@@ -224,6 +444,7 @@ describe("the safety check", () => {
       task: TASK as Address,
       jobSpecHashHex: "ab".repeat(32),
       jobSpec: {},
+      jobSpecUri: "https://blob.example/job-specs/x.json",
       payer: PAYER,
     };
     const held = fakeFetch({
@@ -234,16 +455,19 @@ describe("the safety check", () => {
       createHostedServices({ fetchImpl: held.fetch }).attestTask(input),
     ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
 
-    const busy = fakeFetch({
-      "POST https://attest.agenc.ag/v1/moderation/tasks": () => json({ ok: false }, 429),
-    });
-    await expect(
-      createHostedServices({ fetchImpl: busy.fetch }).attestTask(input),
-    ).rejects.toMatchObject({ code: "NETWORK" });
+    // Busy, or the published request is not readable yet.
+    for (const status of [409, 429, 502]) {
+      const busy = fakeFetch({
+        "POST https://attest.agenc.ag/v1/moderation/tasks": () => json({ ok: false }, status),
+      });
+      await expect(
+        createHostedServices({ fetchImpl: busy.fetch }).attestTask(input),
+      ).rejects.toMatchObject({ code: "NETWORK" });
+    }
 
     const wrong = fakeFetch({
       "POST https://attest.agenc.ag/v1/moderation/tasks": () =>
-        json({ ok: true, attested: true, specHash: "cd".repeat(32), specRegistryUri: "https://x.test/a" }),
+        json({ ok: true, attested: true, specHash: "cd".repeat(32) }),
     });
     await expect(
       createHostedServices({ fetchImpl: wrong.fetch }).attestTask(input),
@@ -277,40 +501,31 @@ describe("the safety check", () => {
     });
   });
 
-  it("publishes and attests the description of a service this wallet offers", async () => {
+  it("has the published description of a service approved", async () => {
     const spec = buildListingSpec({
       name: "Line Writer",
       summary: "One friendly line about anything you name.",
       category: "other",
     });
-    // The shape the marketplace publishes for every listing.
-    expect(spec).toEqual({
-      category: "other",
-      custom: {
-        listingMetadata: {
-          displayName: "Line Writer",
-          longDescription: "One friendly line about anything you name.",
-        },
-      },
-    });
     const hash = await jobSpecHash(spec);
+    const uri = `https://blob.example/job-specs/${hash.hex}.json`;
     const { fetch, calls } = fakeFetch({
-      "GET https://attest.agenc.ag/v1/info": INFO,
       "POST https://attest.agenc.ag/v1/moderation/listings": ({ init }) => {
-        expect(JSON.parse(String(init?.body))).toEqual({ listing: LISTING, spec, payer: PAYER });
-        return json({ ok: true, attested: true, verdict: "clean", specHash: hash.hex, pinned: true });
+        expect(JSON.parse(String(init?.body))).toEqual({
+          listing: LISTING,
+          spec,
+          specUri: uri,
+          payer: PAYER,
+        });
+        return json({ ok: true, attested: true, verdict: "clean", specHash: hash.hex });
       },
     });
-    const services = createHostedServices({ fetchImpl: fetch });
-    // The address written into the listing is an https one the catalog accepts.
-    expect(await services.listingSpecUri(hash.hex)).toBe(
-      `https://marketplace.agenc.tech/api/job-specs/${hash.hex}`,
-    );
     expect(
-      await services.attestListing({
+      await createHostedServices({ fetchImpl: fetch }).attestListing({
         listing: LISTING as Address,
         specHashHex: hash.hex,
         spec,
+        specUri: uri,
         payer: PAYER,
       }),
     ).toBeNull();
@@ -337,6 +552,7 @@ describe("the safety check", () => {
         listing: LISTING as Address,
         specHashHex: hashHex,
         spec: {},
+        specUri: "https://blob.example/job-specs/x.json",
         payer: PAYER,
       }),
     ).toEqual({ transaction: wire, moderator: MODERATOR });
@@ -347,6 +563,7 @@ describe("the safety check", () => {
       listing: LISTING as Address,
       specHashHex: "ab".repeat(32),
       spec: {},
+      specUri: "https://blob.example/job-specs/x.json",
       payer: PAYER,
     };
     const offer = (route: Route): Promise<unknown> =>
@@ -365,13 +582,6 @@ describe("the safety check", () => {
     await expect(
       offer(() => json({ ok: true, attested: true, specHash: "cd".repeat(32) })),
     ).rejects.toMatchObject({ code: "NETWORK" });
-  });
-
-  it("derives where an attested spec lives from the registry", async () => {
-    const { fetch } = fakeFetch({ "GET https://attest.agenc.ag/v1/info": INFO });
-    expect(await createHostedServices({ fetchImpl: fetch }).jobSpecUriFor("ab".repeat(32))).toBe(
-      `https://marketplace.agenc.tech/api/job-specs/${"ab".repeat(32)}`,
-    );
   });
 });
 

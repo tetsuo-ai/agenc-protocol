@@ -25,6 +25,13 @@ First version. Not published.
   the approval and hands it back; the buyer's wallet (for a job's request) or
   the agent's wallet (for a service it offers) checks that transaction, pays
   the deposit behind the approval's record and the fee, and sends it.
+- A job's request and a service's description are published through the
+  marketplace site before anything is committed on-chain, so the safety
+  check and every provider can read exactly what the hash says.
+- On the free public Solana endpoint the wallet paces its requests and waits
+  out a "too many requests"; a hire the network was too busy to take is sent
+  again instead of failing, and balances stay on screen when they cannot be
+  read.
 - A socket server with owner and agent-bound connections, a dependency-free
   client, and four agent tools (`market_find`, `market_hire`,
   `market_status`, `market_review`).

@@ -63,6 +63,7 @@ import {
 import { WalletError } from "./errors.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
 import {
+  buildJobSpec,
   decodeResultPointer,
   digestFromPointer,
   sha256Hex,
@@ -312,6 +313,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         : { data: info.data, owner: info.owner, executable: info.executable };
     },
     getBalance: async (account) => BigInt(svm.getBalance(account) ?? 0n),
+    getBalances: async (accounts) => accounts.map((account) => BigInt(svm.getBalance(account) ?? 0n)),
     getMinimumBalanceForRentExemption: async (space) =>
       BigInt(svm.minimumBalanceForRentExemption(BigInt(space))),
     clusterTime: async () => {
@@ -441,8 +443,19 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     async acquireListingAttestation() {
       throw new WalletError("NOT_AVAILABLE", "That service cannot be hired in practice mode.");
     },
-    async listingSpecUri(specHashHex) {
-      return `agenc://job-spec/sha256/${specHashHex}`;
+    async publishListing(input) {
+      const hash = await values.canonicalJobSpecHash(input.spec);
+      if (hash.hex !== input.specHashHex) {
+        throw new WalletError("NOT_ALLOWED", "The description does not match the service on offer.");
+      }
+      jobSpecs.set(hash.hex, envelopeBytes(input.spec, hash.hex));
+      return `agenc://job-spec/sha256/${hash.hex}`;
+    },
+    async publishJobSpec(input) {
+      const spec = buildJobSpec(input);
+      const hash = await values.canonicalJobSpecHash(spec);
+      jobSpecs.set(hash.hex, envelopeBytes(spec, hash.hex));
+      return { spec, hashHex: hash.hex, uri: `agenc://job-spec/sha256/${hash.hex}` };
     },
     async attestListing(input) {
       const hash = await values.canonicalJobSpecHash(input.spec);
@@ -451,7 +464,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       }
       const info = readInfo(input.listing);
       if (info === null) throw new WalletError("NETWORK", "The marketplace has not seen that service yet.");
-      jobSpecs.set(hash.hex, envelopeBytes(input.spec, hash.hex));
+      // Nothing is approved that nobody can read.
+      if (!jobSpecs.has(hash.hex)) {
+        throw new WalletError("NETWORK", "The description has not been published yet.");
+      }
       // The practice catalog lists it like any house service once the
       // approval below has been paid for and recorded.
       const metadata = (input.spec.custom as { listingMetadata?: { longDescription?: unknown } } | undefined)
@@ -486,29 +502,26 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       if (hash.hex !== input.jobSpecHashHex) {
         throw new WalletError("NOT_ALLOWED", "The request does not match what was paid for.");
       }
-      jobSpecs.set(hash.hex, envelopeBytes(input.jobSpec, hash.hex));
+      // Nothing is approved that nobody can read.
+      if (!jobSpecs.has(hash.hex)) {
+        throw new WalletError("NETWORK", "The request has not been published yet.");
+      }
       const [record] = await findTaskModerationPda({
         task: input.task,
         jobSpecHash: hash.bytes,
         moderator: market.moderator.address,
       });
-      return {
-        jobSpecUri: `agenc://job-spec/sha256/${hash.hex}`,
-        payment: await approvalFor(
-          input.payer,
-          record,
-          getTaskModerationSize(),
-          (await facade.recordTaskModeration({
-            moderator: market.moderator.signer,
-            task: input.task,
-            jobSpecHash: hash.bytes,
-            ...CLEAN,
-          })) as Instruction,
-        ),
-      };
-    },
-    async jobSpecUriFor(jobSpecHashHex) {
-      return jobSpecs.has(jobSpecHashHex) ? `agenc://job-spec/sha256/${jobSpecHashHex}` : null;
+      return approvalFor(
+        input.payer,
+        record,
+        getTaskModerationSize(),
+        (await facade.recordTaskModeration({
+          moderator: market.moderator.signer,
+          task: input.task,
+          jobSpecHash: hash.bytes,
+          ...CLEAN,
+        })) as Instruction,
+      );
     },
     async fetchResult({ proofHashHex, resultData }) {
       const pointed = digestFromPointer(decodeResultPointer(resultData));
