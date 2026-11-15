@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
 import { AgencError, taskThread, values } from "@tetsuo-ai/marketplace-sdk";
-import { transferInstruction, type Chain } from "./chain.js";
+import { isNetworkTrouble, transferInstruction, type Chain } from "./chain.js";
 import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
 import type {
@@ -77,6 +77,7 @@ import {
   type CatalogRow,
   type MarketServices,
   type ApprovalPayment,
+  type PublishedJob,
 } from "./services.js";
 import {
   acquireServiceLock,
@@ -102,6 +103,8 @@ const JOB_TRANSACTION_FEES_LAMPORTS = 20_000n + APPROVAL_FEE_LAMPORTS;
 const APPROVAL_SETTLE_MS = 120_000;
 /** A hire that may have been sent is given this long to show up on-chain. */
 const HIRE_RECONCILE_GRACE_MS = 150_000;
+/** A hire the network was too busy to take is sent again this many times, one pass apart. */
+const HIRE_BUSY_RETRIES = 8;
 /** A hired job that cannot be posted is refunded after this long. */
 const POSTING_GIVE_UP_MS = 30 * 60_000;
 /** A provider who started is given this long past the deadline to deliver. */
@@ -196,6 +199,12 @@ function sendDefinitelyFailed(error: unknown): boolean {
 }
 
 function hireFailureText(error: unknown): { code: "PRICE_CHANGED" | "NOT_ENOUGH_MONEY" | "NOT_AVAILABLE"; message: string } {
+  if (isNetworkTrouble(error)) {
+    return {
+      code: "NOT_AVAILABLE",
+      message: "The network was too busy to place the order. Nothing was spent.",
+    };
+  }
   const name = error instanceof AgencError ? (error.errorName ?? "") : "";
   const text = error instanceof Error ? error.message : String(error);
   if (/Price|Version|ListingChanged|Mismatch/i.test(name)) {
@@ -393,15 +402,27 @@ export class AgencWallet {
     }
     const wallets = this.#walletIds();
     try {
-      const amounts = await Promise.all(
-        wallets.map((wallet) => this.#chain.getBalance(wallet.address)),
-      );
+      const amounts = await this.#chain.getBalances(wallets.map((wallet) => wallet.address));
       const values = new Map<string, bigint>();
       wallets.forEach((wallet, index) => values.set(wallet.id, amounts[index]!));
       this.#balances = { at: this.#now(), values, offline: false };
+      // Remembered across restarts, so a busy network never shows an agent
+      // with nothing when it has money.
+      const known = this.#store.state.lastSeenLamports ?? {};
+      if (wallets.some((wallet) => known[wallet.id] !== values.get(wallet.id)!.toString())) {
+        this.#store.update((draft) => {
+          draft.lastSeenLamports = Object.fromEntries(
+            wallets.map((wallet) => [wallet.id, values.get(wallet.id)!.toString()]),
+          );
+        });
+      }
     } catch (error) {
       this.#log(`balances unavailable: ${describeError(error)}`);
-      const values = this.#balances?.values ?? new Map<string, bigint>();
+      // The last figures seen: from this run, else from the journal.
+      const values = new Map(this.#balances?.values ?? []);
+      for (const [id, lamports] of Object.entries(this.#store.state.lastSeenLamports ?? {})) {
+        if (!values.has(id)) values.set(id, BigInt(lamports));
+      }
       const last = this.#store.state.lastMainLamports;
       if (!values.has(MAIN_KEY) && last !== null) values.set(MAIN_KEY, BigInt(last));
       this.#balances = { at: this.#now(), values, offline: true };
@@ -409,8 +430,9 @@ export class AgencWallet {
     return this.#balances;
   }
 
+  /** The balances have changed: read them again next time, but keep the last ones to fall back on. */
   #dropBalances(): void {
-    this.#balances = null;
+    if (this.#balances !== null) this.#balances = { ...this.#balances, at: 0 };
   }
 
   /** The smallest balance a wallet may hold without the network closing it. */
@@ -1265,8 +1287,29 @@ export class AgencWallet {
       );
       return;
     }
+    // The request is published now: after the person's OK, before any money
+    // moves. The hire commits to the hash of exactly what was published.
+    let published: PublishedJob;
+    try {
+      published = await this.#services.publishJobSpec({
+        title: job.title,
+        request: job.request,
+        acceptance: job.acceptance,
+        listing: job.listing as Address,
+        signer: payer,
+      });
+    } catch (error) {
+      if (error instanceof WalletError && error.code !== "NETWORK") {
+        this.#failJob(job.id, `${error.message} Nothing was spent.`);
+        return;
+      }
+      throw error;
+    }
     const task = await taskAddressFor(payer.address, values.hexToBytes(job.taskIdHex));
     this.#patchJob(job.id, (entry) => {
+      entry.jobSpec = published.spec;
+      entry.jobSpecHashHex = published.hashHex;
+      entry.jobSpecUri = published.uri;
       entry.task = task;
       entry.phase = "hiring";
     });
@@ -1343,7 +1386,17 @@ export class AgencWallet {
         if (await landed().catch(() => false)) {
           markHired();
         } else if (sendDefinitelyFailed(error)) {
-          this.#failJob(job.id, hireFailureText(error).message);
+          if (isNetworkTrouble(error) && (job.hireRetries ?? 0) < HIRE_BUSY_RETRIES) {
+            // The network turned the order away before taking it. Nothing
+            // moved, and the task address admits one hire only, so the next
+            // pass simply sends it again.
+            this.#patchJob(job.id, (entry) => {
+              entry.hireAttemptAt = null;
+              entry.hireRetries = (entry.hireRetries ?? 0) + 1;
+            });
+          } else {
+            this.#failJob(job.id, hireFailureText(error).message);
+          }
         }
         // Otherwise the outcome is unknown: the next pass reconciles it.
       }
@@ -1386,26 +1439,46 @@ export class AgencWallet {
       jobSpecHash: hash,
     });
     let jobSpecUri = job.jobSpecUri;
+    if (jobSpecUri === null) {
+      // A job hired before requests were published first. Publishing it now
+      // only helps if that gives the very request the hire committed to.
+      const published = await this.#services.publishJobSpec({
+        title: job.title,
+        request: job.request,
+        acceptance: job.acceptance,
+        listing: job.listing as Address,
+        signer: payer,
+      });
+      if (published.hashHex !== job.jobSpecHashHex) {
+        await this.#cancelUnposted(
+          job,
+          "The job could not be posted, so it was cancelled and the price returned.",
+        );
+        return;
+      }
+      const found = published.uri;
+      jobSpecUri = found;
+      this.#patchJob(job.id, (entry) => {
+        entry.jobSpecUri = found;
+      });
+    }
     if (gate === null) {
       // A payment for the check that was already sent may still be landing.
       const sentAt = job.approvalAttemptAt ?? null;
       if (sentAt !== null && this.#now() - sentAt < APPROVAL_SETTLE_MS) return;
       try {
-        const attested = await this.#services.attestTask({
+        const payment = await this.#services.attestTask({
           task,
           jobSpecHashHex: job.jobSpecHashHex,
           jobSpec: job.jobSpec,
+          jobSpecUri,
           payer: payer.address,
         });
-        jobSpecUri = attested.jobSpecUri;
-        this.#patchJob(job.id, (entry) => {
-          entry.jobSpecUri = attested.jobSpecUri;
-        });
-        if (attested.payment !== null) {
+        if (payment !== null) {
           // The buyer pays for the check of its own request.
           const signature = await this.#payApproval(
             payer,
-            attested.payment,
+            payment,
             { kind: "task", task, hash },
             () => {
               this.#patchJob(job.id, (entry) => {
@@ -1444,14 +1517,6 @@ export class AgencWallet {
         if (gate === null) await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
       if (gate === null) return; // Not visible yet; the next pass picks it up.
-    }
-    if (jobSpecUri === null) {
-      jobSpecUri = await this.#services.jobSpecUriFor(job.jobSpecHashHex);
-      if (jobSpecUri === null) return;
-      const found = jobSpecUri;
-      this.#patchJob(job.id, (entry) => {
-        entry.jobSpecUri = found;
-      });
     }
     try {
       activate(await sendActivation(this.#chain, payer, { task, jobSpecHash: hash, jobSpecUri }, gate));
@@ -2156,6 +2221,7 @@ export class AgencWallet {
         deliverySecs: previous?.deliverySecs ?? OFFER_DELIVERY_SECS,
         spec,
         specHashHex: hash.hex,
+        specUri: sameWords ? (previous.specUri ?? null) : null,
         wanted: true,
         status:
           previous !== null && previous.status === "live" && sameWords && previous.priceLamports === price
@@ -2212,6 +2278,27 @@ export class AgencWallet {
       keep + cost - balance,
       `Set money aside so ${agent.name} can offer a service.`,
     );
+  }
+
+  /**
+   * Where this service's description is published, publishing it first when
+   * that has not happened for these exact words. Null when the network has
+   * nowhere to publish it.
+   */
+  async #publishedOffer(agent: AgentRecord, offer: OfferRecord): Promise<string | null> {
+    const known = offer.specUri ?? null;
+    if (known !== null) return known;
+    const uri = await this.#services.publishListing({
+      spec: offer.spec,
+      specHashHex: offer.specHashHex,
+      signer: await this.#vault.signer(agent.keyId),
+    });
+    if (uri !== null) {
+      this.#patchOffer(agent.id, (entry) => {
+        if (entry.specHashHex === offer.specHashHex) entry.specUri = uri;
+      });
+    }
+    return uri;
   }
 
   /**
@@ -2293,7 +2380,7 @@ export class AgencWallet {
         });
       }
       if (!wantLive) return settle("paused");
-      const specUri = await this.#services.listingSpecUri(offer.specHashHex);
+      const specUri = await this.#publishedOffer(agent, offer);
       if (specUri === null) {
         return settle("problem", "This network has nowhere to publish a service's description yet.");
       }
@@ -2366,15 +2453,18 @@ export class AgencWallet {
 
     const priceChanged = account.price !== BigInt(offer.priceLamports);
     const wordsChanged = values.bytesToHex(new Uint8Array(account.specHash)) !== offer.specHashHex;
-    if (priceChanged || wordsChanged) {
-      let spec: { hash: Uint8Array; uri: string } | null = null;
-      if (wordsChanged) {
-        const uri = await this.#services.listingSpecUri(offer.specHashHex);
-        if (uri === null) {
-          return settle("problem", "This network has nowhere to publish a service's description yet.");
-        }
-        spec = { hash: values.hexToBytes(offer.specHashHex), uri };
-      }
+    // The listing has to point at where its description really is, or
+    // neither the safety check nor a buyer can read it.
+    const specUri = await this.#publishedOffer(agent, offer);
+    if (specUri === null) {
+      return settle("problem", "This network has nowhere to publish a service's description yet.");
+    }
+    const movedDescription = account.specUri !== specUri;
+    if (priceChanged || wordsChanged || movedDescription) {
+      const spec =
+        wordsChanged || movedDescription
+          ? { hash: values.hexToBytes(offer.specHashHex), uri: specUri }
+          : null;
       const signature = await sendUpdateListing(
         this.#chain,
         await this.#vault.signer(agent.keyId),
@@ -2434,6 +2524,7 @@ export class AgencWallet {
         listing,
         specHashHex: offer.specHashHex,
         spec: offer.spec,
+        specUri,
         payer: agent.address as Address,
       });
       if (payment !== null) {

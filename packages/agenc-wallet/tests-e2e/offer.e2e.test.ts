@@ -1,6 +1,8 @@
 // Offering a service: an earning agent lists one thing it does, another
 // agent hires it, the stock worker loop does the job, and the pay shows up.
 // The service is only on the marketplace while someone is there to do it.
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Address } from "@solana/kit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentView } from "../src/client/types.js";
@@ -338,6 +340,54 @@ describe("offering a service", () => {
     const back = await offerReaches(current, worker.id, "live");
     expect(back.earn.offer!.listing).toBe(listing);
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(0);
+  }, 120_000);
+
+  it("points an old listing at where its description is really published", async () => {
+    // A listing made before descriptions were published first names an
+    // address nobody can read. The safety check and buyers read the listing's
+    // address, so it is moved, with the same words, before anything else.
+    const store = { base: null as string | null };
+    world = await startWorld({
+      earn: EARN,
+      services: (base) => ({
+        ...base,
+        async publishListing(input) {
+          const uri = await base.publishListing(input);
+          return store.base === null || uri === null ? uri : `${store.base}/${input.specHashHex}.json`;
+        },
+      }),
+    });
+    const current = world;
+    const created = await current.wallet.createAgent("Worker");
+    await current.wallet.setEarn(created.id, true, 10);
+    await current.wallet.setOffer(created.id, LINE_WRITER);
+    const worker = await offerReaches(current, created.id, "live");
+    const listing = worker.earn.offer!.listing as Address;
+    const before = (await readListing(current.sandbox.chain, listing))!;
+    expect(before.specUri).toMatch(/^agenc:\/\/job-spec\/sha256\/[0-9a-f]{64}$/);
+
+    // The journal of an older wallet: it does not say where the description is.
+    await current.wallet.close();
+    const file = path.join(current.dataDir, "state.json");
+    const journal = JSON.parse(readFileSync(file, "utf8"));
+    delete journal.agents[created.id].earn.offer.specUri;
+    writeFileSync(file, JSON.stringify(journal));
+    store.base = "https://descriptions.example/job-specs";
+
+    current.wallet = await current.reopen();
+    const back = await offerReaches(current, created.id, "live");
+    expect(back.earn.offer!.listing).toBe(listing);
+    const after = (await readListing(current.sandbox.chain, listing))!;
+    const hash = Buffer.from(after.specHash as Uint8Array).toString("hex");
+    expect(after.specUri).toBe(`https://descriptions.example/job-specs/${hash}.json`);
+    // Same words, same price: only the address moved.
+    expect(Buffer.from(after.specHash as Uint8Array)).toEqual(Buffer.from(before.specHash as Uint8Array));
+    expect(after.price).toBe(before.price);
+    // And it is not moved a second time.
+    const version = after.version;
+    await current.wallet.tick();
+    await current.wallet.tick();
+    expect((await readListing(current.sandbox.chain, listing))!.version).toBe(version);
   }, 120_000);
 
   it("stays off offer on a computer that cannot run jobs", async () => {

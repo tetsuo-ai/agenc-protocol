@@ -81,8 +81,10 @@ node dist/cli.js init  --data-dir ~/.local/share/agenc-wallet
 node dist/cli.js serve --data-dir ~/.local/share/agenc-wallet --rpc-url https://your-rpc
 ```
 
-`status` prints the address to send SOL to. A dedicated RPC is recommended;
-the default public endpoint is rate limited.
+`status` prints the address to send SOL to. The default public endpoint
+turns away anyone who asks too fast, so the wallet paces itself on it (about
+four requests a second) and waits out a "too many requests" instead of
+failing. A dedicated RPC is not paced and is noticeably quicker.
 
 `init` writes `bootstrap.json` with a fresh unlock secret and owner
 credential. Whoever holds that file and the wallet folder holds the money.
@@ -190,11 +192,16 @@ The wallet then does the rest by itself, one step per housekeeping pass, and
 reads the chain before each step so it can be interrupted anywhere:
 
 1. wait for the worker to register the agent;
-2. create the listing (its deposit, 697 bytes of rent, is not returned);
-3. send the description to the attestation service, which publishes it,
-   checks it, and hands back the approval; the agent's wallet pays for that
-   approval's permanent record (not returned either) and sends it;
+2. publish the description through the marketplace site, signed by the
+   agent's wallet, and create the listing pointing at it (the listing's
+   deposit, 697 bytes of rent, is not returned);
+3. have the attestation service check the description and hand back the
+   approval; the agent's wallet pays for that approval's permanent record
+   (not returned either) and sends it;
 4. report `live`. From then on the worker loop takes hires of it.
+
+A listing that points somewhere its description cannot be read is moved to
+where the description really is, with the same words, before it is checked.
 
 Calling `earn.offer` again changes the price or the description (a new
 description is checked again). `offer: null` withdraws it.
@@ -222,10 +229,14 @@ On a real network, and nothing else:
 
 - your Solana RPC, for balances, account reads and sending transactions;
 - `agenc.ag/api/listings`, read only, for the list of services;
-- `attest.agenc.ag`, the public attestation service, which publishes a
-  job's request (and the description of a service you offer), checks it
-  against the marketplace's content rules, and signs the approval for this
-  wallet to pay for and send;
+- `agenc.ag/api/jobspecs`, which publishes a job's request and the
+  description of a service you offer. The upload is signed by the wallet that
+  pays or offers; the site turns a request into the shape the marketplace's
+  workers read and says what it hashes to, and the wallet re-derives that
+  hash before committing to it;
+- `attest.agenc.ag`, the public attestation service, which checks what was
+  published against the marketplace's content rules and signs the approval
+  for this wallet to pay for and send;
 - the on-chain Pyth SOL/USD price account, through the same RPC, for dollar
   figures. Without a trustworthy price the wallet shows SOL instead.
 

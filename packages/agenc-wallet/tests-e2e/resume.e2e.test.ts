@@ -2,6 +2,8 @@
 // so after a restart or a lost answer the chain decides what happened: a hire
 // that landed is carried on, one that never landed costs nothing, and nothing
 // is ever paid twice.
+import { SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, SolanaError } from "@solana/kit";
+import { AgencError } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
 import { checkCost, startWorld, type World } from "./harness.js";
@@ -47,6 +49,130 @@ function flakyChain(mode: { hire: "ok" | "land-then-lose" | "drop"; blindReads: 
     },
   });
 }
+
+/** What the client throws when the endpoint was too busy to even start on an order. */
+function tooBusy(): AgencError {
+  return new AgencError("Transaction failed: HTTP error (429): Too Many Requests", {
+    code: null,
+    errorName: null,
+    logs: [],
+    signature: null,
+    cause: new SolanaError(SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, {
+      statusCode: 429,
+      message: "Too Many Requests",
+      headers: new Headers(),
+    } as never),
+  });
+}
+
+/** A chain that is too busy to take the first `mode.busy` hires. */
+function busyChain(mode: { busy: number; tried: number }) {
+  return (base: Chain): Chain => ({
+    ...base,
+    clientFor(signer) {
+      const client = base.clientFor(signer);
+      return Object.create(client, {
+        hireFromListingHumanless: {
+          value: async (input: Parameters<typeof client.hireFromListingHumanless>[0]) => {
+            mode.tried += 1;
+            if (mode.tried <= mode.busy) throw tooBusy();
+            return client.hireFromListingHumanless(input);
+          },
+        },
+      }) as typeof client;
+    },
+  });
+}
+
+describe("a busy network", () => {
+  it("is sent the order again, and nothing is paid twice", async () => {
+    const mode = { busy: 3, tried: 0 };
+    world = await startWorld({ chain: busyChain(mode) });
+    const { wallet, listing } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setPolicy(agent.id, POLICY);
+    await wallet.fundAgent(agent.id, { usdCents: 300 });
+    const before = await world.balance(agent.address);
+
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+
+    // Turned away, not failed: nothing moved, and it is still on its way.
+    expect(job.status).toBe("starting");
+    expect(mode.tried).toBe(1);
+    expect(await world.balance(agent.address)).toBe(before);
+    // One more try per look, and still nothing has moved.
+    await wallet.tick();
+    await wallet.tick();
+    expect(mode.tried).toBe(3);
+    expect(await world.balance(agent.address)).toBe(before);
+
+    // The fourth try gets through, and it is not sent a fifth time.
+    await wallet.tick();
+    expect(mode.tried).toBe(4);
+    expect((await wallet.getJob(job.id, true)).status).toBe("waiting");
+    await wallet.tick();
+    expect(mode.tried).toBe(4);
+    expect(await wallet.listJobs({ role: "buying" }, true)).toHaveLength(1);
+  });
+
+  it("never shows an agent with nothing when the balances cannot be read", async () => {
+    const mode = { down: false };
+    const flaky = (base: Chain): Chain => ({
+      ...base,
+      getBalances: async (accounts) => {
+        if (mode.down) throw new Error("fetch failed");
+        return base.getBalances(accounts);
+      },
+    });
+    world = await startWorld({ chain: flaky });
+    const { wallet, clock } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.fundAgent(agent.id, { usdCents: 300 });
+    const seen = await wallet.overview();
+    expect(seen.offline).toBe(false);
+    expect(seen.agents[0]!.balance.usdCents).toBe(300);
+
+    // The network goes away. The figures stay, marked as possibly out of date.
+    mode.down = true;
+    clock.now += 60_000;
+    const blind = await wallet.overview();
+    expect(blind.offline).toBe(true);
+    expect(blind.agents[0]!.balance.lamports).toBe(seen.agents[0]!.balance.lamports);
+    expect(blind.main.balance.lamports).toBe(seen.main.balance.lamports);
+
+    // Also after a restart, when nothing has been read yet in this run.
+    await wallet.close();
+    world.wallet = await world.reopen();
+    const restarted = await world.wallet.overview();
+    expect(restarted.offline).toBe(true);
+    expect(restarted.agents[0]!.balance.lamports).toBe(seen.agents[0]!.balance.lamports);
+    expect(restarted.main.balance.lamports).toBe(seen.main.balance.lamports);
+
+    mode.down = false;
+    clock.now += 60_000;
+    expect((await world.wallet.overview()).offline).toBe(false);
+  });
+
+  it("is given up on after a while, in words that say what happened", async () => {
+    const mode = { busy: 1_000, tried: 0 };
+    world = await startWorld({ chain: busyChain(mode) });
+    const { wallet, listing } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setPolicy(agent.id, POLICY);
+    await wallet.fundAgent(agent.id, { usdCents: 300 });
+    const before = await world.balance(agent.address);
+
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+    for (let pass = 0; pass < 12; pass += 1) await wallet.tick();
+
+    const failed = await wallet.getJob(job.id, true);
+    expect(failed.status).toBe("failed");
+    expect(failed.statusText).toBe("The network was too busy to place the order. Nothing was spent.");
+    // The first try and eight more.
+    expect(mode.tried).toBe(9);
+    expect(await world.balance(agent.address)).toBe(before);
+  });
+});
 
 describe("crash safety", () => {
   it("carries a job on after the service restarts", async () => {

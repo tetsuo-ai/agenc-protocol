@@ -242,9 +242,9 @@ function watchedServices(
     ...base,
     async attestTask(input) {
       seen.asked += 1;
-      const answer = await base.attestTask(input);
-      if (swap === undefined || answer.payment === null) return answer;
-      return { ...answer, payment: await swap(answer.payment, input.payer, sandbox) };
+      const payment = await base.attestTask(input);
+      if (swap === undefined || payment === null) return payment;
+      return swap(payment, input.payer, sandbox);
     },
   });
 }

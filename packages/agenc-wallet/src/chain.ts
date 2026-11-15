@@ -4,11 +4,15 @@
 import {
   AccountRole,
   address,
-  createSolanaRpc,
+  createDefaultRpcTransport,
+  createSolanaRpcFromTransport,
   getCompiledTransactionMessageDecoder,
+  isSolanaError,
+  SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   type Address,
   type Blockhash,
   type Instruction,
+  type RpcTransport,
   type Transaction,
   type TransactionSigner,
 } from "@solana/kit";
@@ -57,6 +61,8 @@ export interface Chain {
   /** Owner/executable-aware reader in the shape the worker runtime expects. */
   readAccountInfo: AccountInfoReader;
   getBalance(account: Address): Promise<bigint>;
+  /** Several balances in one request, in the order asked. */
+  getBalances(accounts: readonly Address[]): Promise<bigint[]>;
   getMinimumBalanceForRentExemption(space: number): Promise<bigint>;
   /** The cluster's clock, unix seconds. */
   clusterTime(): Promise<number>;
@@ -116,10 +122,124 @@ export async function sendThroughTransport(
   return (await transport.sendAndConfirm(signed)).signature;
 }
 
+/**
+ * The free public endpoints. They answer anyone, and turn away anyone who
+ * asks too fast: 40 calls of one kind per 10 seconds per address.
+ */
+const PUBLIC_RPC_HOSTS = new Set([
+  "api.mainnet-beta.solana.com",
+  "api.devnet.solana.com",
+  "api.testnet.solana.com",
+]);
+/** Time between two requests to a public endpoint, to stay under its limit. */
+const PUBLIC_RPC_MIN_GAP_MS = 280;
+/** How many times a request the endpoint was too busy for is asked again. */
+const BUSY_RETRIES = 6;
+
+/** The HTTP status an endpoint refused a request with, when that is what happened. */
+function refusedStatus(error: unknown): { status: number; retryAfterMs: number | null } | null {
+  if (!isSolanaError(error, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)) return null;
+  const context = error.context as { statusCode?: number; headers?: Headers };
+  const seconds = Number(context.headers?.get?.("retry-after") ?? "");
+  return {
+    status: context.statusCode ?? 0,
+    retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null,
+  };
+}
+
+/**
+ * True when a request failed because the network was busy, down or out of
+ * reach, as opposed to being answered with a no.
+ */
+export function isNetworkTrouble(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current instanceof Error && depth < 6; depth += 1) {
+    const refused = refusedStatus(current);
+    if (refused !== null && (refused.status === 429 || refused.status >= 500)) return true;
+    if (
+      current.name !== "WalletError" &&
+      /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up/i.test(
+        current.message,
+      )
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
+ * Wrap an RPC transport so it keeps to an endpoint's pace and waits out a
+ * "too many requests" instead of failing.
+ *
+ *  - Requests start at least `minGapMs` apart, in the order they were made.
+ *  - A request the endpoint was too busy for (429 or 503) is asked again, up
+ *    to `retries` times, after the wait the endpoint names or a growing one.
+ *    Every other request waits that out too, so a busy endpoint is not asked
+ *    again by ten callers at once.
+ *
+ * Asking again is safe for everything this wallet sends: a refused request
+ * was never looked at, and a signed transaction sent twice lands once.
+ */
+export function politeTransport(
+  base: RpcTransport,
+  options: {
+    minGapMs: number;
+    retries?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    jitter?: () => number;
+  },
+): RpcTransport {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const jitter = options.jitter ?? Math.random;
+  const retries = options.retries ?? BUSY_RETRIES;
+  let nextStart = 0;
+  let quietUntil = 0;
+
+  async function turn(): Promise<void> {
+    for (;;) {
+      const at = Math.max(now(), nextStart, quietUntil);
+      nextStart = at + options.minGapMs;
+      const wait = at - now();
+      if (wait > 0) await sleep(wait);
+      // Somebody else may have been told to back off while this one waited.
+      if (now() >= quietUntil) return;
+    }
+  }
+
+  return (async (config: Parameters<RpcTransport>[0]) => {
+    for (let attempt = 0; ; attempt += 1) {
+      await turn();
+      try {
+        return await base(config);
+      } catch (error) {
+        const refused = refusedStatus(error);
+        const busy = refused !== null && (refused.status === 429 || refused.status === 503);
+        if (!busy || attempt >= retries) throw error;
+        const wait =
+          refused.retryAfterMs !== null
+            ? Math.min(refused.retryAfterMs, 30_000)
+            : Math.min(8_000, 500 * 2 ** attempt) + Math.floor(jitter() * 250);
+        quietUntil = Math.max(quietUntil, now() + wait);
+      }
+    }
+  }) as RpcTransport;
+}
+
 export interface RpcChainOptions {
   network: Exclude<WalletNetwork, "sandbox">;
   /** HTTP RPC endpoint. */
   rpcUrl: string;
+  /**
+   * Least time between two requests, in milliseconds. Unset: paced for the
+   * free public endpoints, unpaced for any other.
+   */
+  minRequestGapMs?: number;
+  /** The transport to wrap (tests). Default: plain HTTP to `rpcUrl`. */
+  transport?: RpcTransport;
   /**
    * Priority fee in micro-lamports per compute unit. Unset sends without one.
    * When set, transactions also carry an explicit compute-unit limit.
@@ -147,7 +267,17 @@ async function network<T>(work: () => Promise<T>): Promise<T> {
 
 /** A {@link Chain} over a Solana JSON-RPC endpoint. */
 export function createRpcChain(options: RpcChainOptions): Chain {
-  const rpc = createSolanaRpc(options.rpcUrl);
+  let host = "";
+  try {
+    host = new URL(options.rpcUrl).hostname;
+  } catch {
+    throw new WalletError("BAD_REQUEST", "The network address is not a valid URL.");
+  }
+  const rpc = createSolanaRpcFromTransport(
+    politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
+      minGapMs: options.minRequestGapMs ?? (PUBLIC_RPC_HOSTS.has(host) ? PUBLIC_RPC_MIN_GAP_MS : 0),
+    }),
+  );
   const fetchInfo = async (account: Address) => {
     const { value } = await rpc
       .getAccountInfo(account, { commitment: "confirmed", encoding: "base64" })
@@ -194,6 +324,22 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       network(async () =>
         BigInt((await rpc.getBalance(account, { commitment: "confirmed" }).send()).value),
       ),
+    getBalances: (accounts) =>
+      network(async () => {
+        const out: bigint[] = [];
+        // The endpoint takes at most 100 addresses at a time.
+        for (let start = 0; start < accounts.length; start += 100) {
+          const { value } = await rpc
+            .getMultipleAccounts(accounts.slice(start, start + 100), {
+              commitment: "confirmed",
+              encoding: "base64",
+              dataSlice: { offset: 0, length: 0 },
+            })
+            .send();
+          for (const account of value) out.push(account === null ? 0n : BigInt(account.lamports));
+        }
+        return out;
+      }),
     getMinimumBalanceForRentExemption: (space) =>
       network(async () =>
         BigInt(

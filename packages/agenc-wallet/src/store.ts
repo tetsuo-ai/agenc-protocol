@@ -45,6 +45,8 @@ export interface OfferRecord {
   /** The advertised description, and the hash of it the listing commits to. */
   spec: Record<string, unknown>;
   specHashHex: string;
+  /** Where that description was published, once it has been. The listing points here. */
+  specUri?: string | null;
   /** False once the person withdrew the offer; the listing is then kept paused. */
   wanted: boolean;
   /** What the last housekeeping pass found. */
@@ -146,7 +148,11 @@ export interface JobRecord {
   taskIdHex: string;
   /** The task address, known once the payer is. */
   task: string | null;
-  /** The job spec committed at hire time and pinned at activation. */
+  /**
+   * The job's request as providers read it, its hash and where it is
+   * published. A draft until the job is cleared: the request is published
+   * then, before any money moves, and the hire commits to that hash.
+   */
   jobSpec: Record<string, unknown>;
   jobSpecHashHex: string;
   jobSpecUri: string | null;
@@ -154,6 +160,8 @@ export interface JobRecord {
   phase: JobPhase;
   /** When the hire transaction was first handed to the network. */
   hireAttemptAt: number | null;
+  /** Times the network was too busy to take the hire at all. It is sent again a few times. */
+  hireRetries?: number;
   /** When the task was confirmed to exist (start of the posting clock). */
   hiredAt: number | null;
   /**
@@ -229,6 +237,11 @@ export interface WalletState {
   lastSolUsd: { value: number; ts: number } | null;
   /** Main-balance lamports last seen, to notice money arriving. */
   lastMainLamports: string | null;
+  /**
+   * The last balance read for each wallet (the main one and every agent's),
+   * by id. Only for showing something true when the network cannot be reached.
+   */
+  lastSeenLamports?: Record<string, string>;
 }
 
 function emptyState(now: number): WalletState {

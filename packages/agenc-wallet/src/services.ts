@@ -31,6 +31,8 @@ export interface AttestTaskInput {
   task: Address;
   jobSpecHashHex: string;
   jobSpec: Record<string, unknown>;
+  /** Where the request was published (see {@link MarketServices.publishJobSpec}). */
+  jobSpecUri: string;
   /** The wallet that pays for the approval: the one that posted the job. */
   payer: Address;
 }
@@ -41,8 +43,41 @@ export interface AttestListingInput {
   specHashHex: string;
   /** The listing's advertised description (see {@link buildListingSpec}). */
   spec: Record<string, unknown>;
+  /** Where the description was published (see {@link MarketServices.publishListing}). */
+  specUri: string;
   /** The wallet that pays for the approval: the one that offers the service. */
   payer: Address;
+}
+
+export interface PublishListingInput {
+  /** The listing's advertised description (see {@link buildListingSpec}). */
+  spec: Record<string, unknown>;
+  /** The canonical hash of `spec`: what the listing commits to on-chain. */
+  specHashHex: string;
+  /** The wallet that offers the service. It signs the upload. */
+  signer: KeyPairSigner;
+}
+
+export interface PublishJobInput {
+  /** The name of the service being hired. */
+  title: string;
+  /** What the buyer wants done, in their words. */
+  request: string;
+  /** Checks the delivery has to pass. */
+  acceptance: readonly string[];
+  listing: Address;
+  /** The wallet that pays for the job. It signs the upload. */
+  signer: KeyPairSigner;
+}
+
+/** A job's request as it was published: what a provider will read. */
+export interface PublishedJob {
+  /** The request in the marketplace's own shape. The hash commits to exactly this. */
+  spec: Record<string, unknown>;
+  /** Canonical hash of `spec`: the value the hire commits to on-chain. */
+  hashHex: string;
+  /** Where it can be read. */
+  uri: string;
 }
 
 /**
@@ -76,28 +111,32 @@ export interface MarketServices {
   /** Ask for a listing to be attested when no accepted attestation exists. */
   acquireListingAttestation(listing: Address): Promise<void>;
   /**
-   * Where the description of a service this wallet offers will be readable
-   * once published: the address written into the listing. Null when this
-   * network has nowhere to publish it, and a service cannot be offered then.
+   * Publish the description of a service this wallet offers where anyone can
+   * read it, and return that address: it is what the listing points at. Null
+   * when this network has nowhere to publish it, and a service cannot be
+   * offered then. Publishing the same description again gives the same
+   * address.
    */
-  listingSpecUri(specHashHex: string): Promise<string | null>;
+  publishListing(input: PublishListingInput): Promise<string | null>;
   /**
-   * Publish the description of a service this wallet offers and have the
-   * listing approved for exactly that description, so buyers can hire it.
-   * The listing must already exist on-chain with this hash. Returns the
-   * approval to pay for, or null when it is already recorded.
+   * Publish a job's request where providers can read it, in the shape the
+   * marketplace's workers expect. Nothing is paid and nothing is on-chain
+   * yet: the hire then commits to the hash returned here. Publishing the same
+   * request again gives the same result.
+   */
+  publishJobSpec(input: PublishJobInput): Promise<PublishedJob>;
+  /**
+   * Have a listing approved for exactly its published description, so buyers
+   * can hire it. The listing must already exist on-chain with this hash.
+   * Returns the approval to pay for, or null when it is already recorded.
    */
   attestListing(input: AttestListingInput): Promise<ApprovalPayment | null>;
   /**
-   * Publish the job spec where providers can read it and have it approved
-   * for exactly `(task, jobSpecHashHex)`. Returns where it was published and
-   * the approval to pay for, or a null payment when it is already recorded.
+   * Have a job's published request approved for exactly
+   * `(task, jobSpecHashHex)`. Returns the approval to pay for, or null when
+   * it is already recorded.
    */
-  attestTask(
-    input: AttestTaskInput,
-  ): Promise<{ jobSpecUri: string; payment: ApprovalPayment | null }>;
-  /** Where an already-attested spec lives, for resuming after a restart. */
-  jobSpecUriFor(jobSpecHashHex: string): Promise<string | null>;
+  attestTask(input: AttestTaskInput): Promise<ApprovalPayment | null>;
   /**
    * Fetch a delivery. `resultData` is the 64-byte pointer the provider
    * recorded with the job. Returns bytes only when they hash to
@@ -161,9 +200,21 @@ interface JsonResponse {
 async function requestJson(
   fetchImpl: typeof fetch,
   url: string,
-  init: { method: "GET" | "POST"; body?: unknown; headers?: Record<string, string> },
+  init: {
+    method: "GET" | "POST";
+    body?: unknown;
+    /** JSON that was already serialised, sent byte for byte (a signed upload). */
+    bytes?: Uint8Array;
+    headers?: Record<string, string>;
+  },
   limits: { timeoutMs: number; maxBytes: number },
 ): Promise<JsonResponse> {
+  const payload =
+    init.bytes !== undefined
+      ? (init.bytes as unknown as NonNullable<RequestInit["body"]>)
+      : init.body !== undefined
+        ? JSON.stringify(init.body)
+        : undefined;
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -171,10 +222,10 @@ async function requestJson(
       redirect: "error",
       headers: {
         accept: "application/json",
-        ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(payload !== undefined ? { "content-type": "application/json" } : {}),
         ...init.headers,
       },
-      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      ...(payload !== undefined ? { body: payload } : {}),
       signal: AbortSignal.timeout(limits.timeoutMs),
     });
   } catch (error) {
@@ -289,6 +340,12 @@ export interface HostedServicesOptions {
    * Leave unset to deliver by fingerprint only.
    */
   artifactUploadUrl?: string | null;
+  /**
+   * Endpoint that publishes a service's description or a job's request
+   * (signed upload). Defaults to the marketplace site's own. Null means
+   * there is nowhere to publish, and nothing can be offered or hired.
+   */
+  specUploadUrl?: string | null;
   fetchImpl?: typeof fetch;
   /** Fetcher for provider-controlled URLs. Defaults to the SSRF-guarded one. */
   publicFetcher?: UriFetcher;
@@ -316,6 +373,11 @@ function trimBase(url: string, label: string): string {
   return parsed.href.replace(/\/+$/, "");
 }
 
+/** The message a wallet signs so the marketplace publishes a description or a request. */
+export function specUploadMessage(sha256: string, wallet: string, ts: number): string {
+  return `agenc.ag job-spec upload\nsha256: ${sha256}\nwallet: ${wallet}\nts: ${ts}`;
+}
+
 /** The message a wallet signs so the artifact store accepts an upload. */
 export function artifactUploadMessage(sha256: string, wallet: string, ts: number): string {
   return `agenc.ag artifact upload\nsha256: ${sha256}\nwallet: ${wallet}\nts: ${ts}`;
@@ -333,11 +395,85 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     options.artifactUploadUrl == null
       ? null
       : trimBase(options.artifactUploadUrl, "delivery upload");
+  const specUploadUrl =
+    options.specUploadUrl === null
+      ? null
+      : trimBase(options.specUploadUrl ?? `${siteUrl}/api/jobspecs`, "description store");
   const publicFetcher =
     options.publicFetcher ?? createPublicUriFetcher({ maxBytes: MAX_RESULT_BYTES });
 
   let catalog: { at: number; rows: CatalogRow[] } | null = null;
-  let info: { at: number; moderator: Address; registryUrl: string | null } | null = null;
+  let info: { at: number; moderator: Address } | null = null;
+
+  /**
+   * Hand the marketplace a document to publish, signed by `signer`. It
+   * answers with the address, the payload it stored and that payload's hash,
+   * and the hash is re-derived here before any of it is believed.
+   */
+  async function publish(
+    signer: KeyPairSigner,
+    document: unknown,
+    refused: string,
+  ): Promise<{ uri: string; hashHex: string; payload: Record<string, unknown> }> {
+    if (specUploadUrl === null) {
+      throw new WalletError("NOT_AVAILABLE", "This network has nowhere to publish that yet.");
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(document));
+    const ts = now();
+    const message = new TextEncoder().encode(
+      specUploadMessage(sha256Hex(bytes), signer.address, ts),
+    );
+    const [signed] = await signer.signMessages([{ content: message, signatures: {} }]);
+    const signature = signed?.[signer.address];
+    if (signature === undefined) {
+      throw new WalletError("INTERNAL", "The upload could not be signed.");
+    }
+    const { status, body } = await requestJson(
+      fetchImpl,
+      specUploadUrl,
+      {
+        method: "POST",
+        bytes,
+        headers: {
+          "x-agenc-wallet": signer.address,
+          "x-agenc-ts": String(ts),
+          "x-agenc-signature": Buffer.from(signature).toString("base64"),
+        },
+      },
+      { timeoutMs: 60_000, maxBytes: 512 * 1024 },
+    );
+    const data = record(body);
+    if (status === 400 || status === 413 || status === 415) {
+      throw new WalletError("NOT_ALLOWED", refused);
+    }
+    const uri = typeof data?.uri === "string" ? data.uri : "";
+    const hashHex = typeof data?.payloadSha256 === "string" ? data.payloadSha256 : "";
+    const payload = record(data?.payload);
+    if (
+      status !== 200 ||
+      payload === null ||
+      !HEX64.test(hashHex) ||
+      !/^https:\/\/[^\s]{1,240}$/.test(uri)
+    ) {
+      throw new WalletError(
+        "NETWORK",
+        "The marketplace could not publish that right now. Try again in a moment.",
+      );
+    }
+    let derived: string;
+    try {
+      derived = (await values.canonicalJobSpecHash(payload)).hex;
+    } catch {
+      derived = "";
+    }
+    if (derived !== hashHex) {
+      throw new WalletError(
+        "NETWORK",
+        "The marketplace published something other than what was sent. Nothing was posted.",
+      );
+    }
+    return { uri, hashHex, payload };
+  }
 
   async function attestorInfo(): Promise<NonNullable<typeof info>> {
     if (info !== null && now() - info.at < INFO_TTL_MS) return info;
@@ -355,16 +491,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         "The marketplace's safety check is not available right now. Try again in a moment.",
       );
     }
-    const registry = record(data.jobSpecRegistry);
-    let registryUrl: string | null = null;
-    if (typeof registry?.url === "string") {
-      try {
-        registryUrl = trimBase(registry.url, "job registry");
-      } catch {
-        registryUrl = null;
-      }
-    }
-    info = { at: now(), moderator, registryUrl };
+    info = { at: now(), moderator };
     return info;
   }
 
@@ -464,8 +591,46 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       throw new WalletError("NOT_AVAILABLE", "This service cannot be hired right now.");
     },
 
-    async listingSpecUri(specHashHex) {
-      return this.jobSpecUriFor(specHashHex);
+    async publishListing(input) {
+      if (specUploadUrl === null) return null;
+      // The shape the marketplace keeps for every listing: the description
+      // with the hash it commits to.
+      const published = await publish(
+        input.signer,
+        {
+          integrity: {
+            algorithm: "sha256",
+            canonicalization: "json-stable-v1",
+            payloadHash: input.specHashHex,
+          },
+          payload: input.spec,
+        },
+        "The marketplace would not publish this service's description.",
+      );
+      if (published.hashHex !== input.specHashHex) {
+        throw new WalletError(
+          "NETWORK",
+          "The marketplace published a different description. The service is not on offer yet.",
+        );
+      }
+      return published.uri;
+    },
+
+    async publishJobSpec(input) {
+      // Plain fields. The marketplace turns them into the full request a
+      // worker reads, and says what that request hashes to.
+      const published = await publish(
+        input.signer,
+        {
+          title: `Hire: ${input.title}`,
+          summary: input.request,
+          ...(input.request.length > JOB_SUMMARY_MAX ? { details: input.request } : {}),
+          ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
+          deliverables: [JOB_DELIVERABLE],
+        },
+        "The marketplace would not publish this request.",
+      );
+      return { spec: published.payload, hashHex: published.hashHex, uri: published.uri };
     },
 
     async attestListing(input) {
@@ -474,7 +639,12 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         `${attestUrl}/v1/moderation/listings`,
         {
           method: "POST",
-          body: { listing: input.listing, spec: input.spec, payer: input.payer },
+          body: {
+            listing: input.listing,
+            spec: input.spec,
+            specUri: input.specUri,
+            payer: input.payer,
+          },
         },
         { timeoutMs: 120_000, maxBytes: 64 * 1024 },
       );
@@ -519,6 +689,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
             task: input.task,
             jobSpecHash: input.jobSpecHashHex,
             spec: input.jobSpec,
+            specUri: input.jobSpecUri,
             payer: input.payer,
           },
         },
@@ -539,14 +710,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
             "The marketplace answered about a different request. Nothing was posted.",
           );
         }
-        const uri = typeof data.specRegistryUri === "string" ? data.specRegistryUri : null;
-        if (uri !== null && /^https:\/\/[^\s]{1,240}$/.test(uri)) return { jobSpecUri: uri, payment };
-        const derived = await this.jobSpecUriFor(input.jobSpecHashHex);
-        if (derived !== null) return { jobSpecUri: derived, payment };
-        throw new WalletError(
-          "NETWORK",
-          "The marketplace checked the request but did not say where it was published.",
-        );
+        return payment;
       }
       if (status === 422 || status === 400) {
         throw new WalletError(
@@ -558,12 +722,6 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         "NETWORK",
         "The marketplace's safety check is busy. The job will be posted as soon as it answers.",
       );
-    },
-
-    async jobSpecUriFor(jobSpecHashHex) {
-      if (!HEX64.test(jobSpecHashHex)) return null;
-      const { registryUrl } = await attestorInfo();
-      return registryUrl === null ? null : `${registryUrl}/api/job-specs/${jobSpecHashHex}`;
     },
 
     async fetchResult({ proofHashHex, resultData }) {
@@ -637,9 +795,17 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
   };
 }
 
+/** What every job asks the provider to hand in. */
+const JOB_DELIVERABLE =
+  "Put the complete result in your submission. The buyer reads exactly what you submit.";
+/** The marketplace keeps this much of a request as its summary; the rest goes in the details. */
+const JOB_SUMMARY_MAX = 240;
+
 /**
- * Build the job spec a provider reads. Deterministic for the same inputs, so
- * the hash committed at hire time can be reproduced when resuming.
+ * A job's request in a plain shape, for a marketplace that has no publisher
+ * of its own (the practice one). Deterministic for the same inputs. On a real
+ * network the request is published through {@link MarketServices.publishJobSpec}
+ * and the marketplace's own shape is used instead.
  */
 export function buildJobSpec(input: {
   title: string;
@@ -652,8 +818,7 @@ export function buildJobSpec(input: {
     title: `Hire: ${input.title}`,
     instructions: input.request,
     ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
-    deliverable:
-      "Put the complete result in your submission. The buyer reads exactly what you submit.",
+    deliverable: JOB_DELIVERABLE,
     sourceListing: input.listing,
   };
 }
