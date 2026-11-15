@@ -5,9 +5,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Address } from "@solana/kit";
+import { approvalCost } from "../src/approval.js";
 import type { Chain } from "../src/chain.js";
 import type { EarnOptions } from "../src/earn.js";
 import { startSandbox, type HouseService, type Sandbox } from "../src/sandbox.js";
+import type { MarketServices } from "../src/services.js";
 import { AgencWallet, type WalletConfig } from "../src/wallet.js";
 
 /** Play money: one cent is exactly this many lamports in the sandbox. */
@@ -39,6 +41,8 @@ export async function startWorld(options: {
   mainLamports?: bigint;
   earn?: EarnOptions;
   chain?: (chain: Chain) => Chain;
+  /** Stand between the wallet and the marketplace's services (a faulty or dishonest one). */
+  services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
   config?: Partial<WalletConfig>;
 } = {}): Promise<World> {
   const sandbox = await startSandbox({ followWallClock: false });
@@ -51,7 +55,7 @@ export async function startWorld(options: {
     dataDir,
     unlockSecret: secret,
     chain,
-    services: sandbox.services,
+    services: options.services ? options.services(sandbox.services, sandbox) : sandbox.services,
     prices: sandbox.prices,
     now: () => clock.now,
     ...(options.earn ? { earn: options.earn } : {}),
@@ -69,6 +73,15 @@ export async function startWorld(options: {
     reopen: (overrides = {}) => AgencWallet.open({ ...config, ...overrides }),
     balance: (account) => sandbox.chain.getBalance(account as Address),
   };
+}
+
+/**
+ * What the safety check of one job's request costs the buyer who asked for
+ * it: the deposit behind its permanent record and the fee of the two
+ * signatures on its transaction. None of it comes back.
+ */
+export function checkCost(world: World): Promise<bigint> {
+  return approvalCost(world.sandbox.chain, "task");
 }
 
 /** Poll `check` until it returns a value, or fail after `timeoutMs`. */

@@ -3,7 +3,12 @@
 // and artifact routes). Nothing here touches the network.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { generateKeyPairSigner, getAddressEncoder, type Address } from "@solana/kit";
+import {
+  generateKeyPairSigner,
+  getAddressDecoder,
+  getAddressEncoder,
+  type Address,
+} from "@solana/kit";
 import {
   artifactUploadMessage,
   buildJobSpec,
@@ -20,6 +25,8 @@ const MODERATOR = "13tuj7ELwtHmeR22kvaSaa2pKqSscyoHtQBF65aHuo6v";
 const LISTING = "AuvhnvakgqfJaBt5CSEnYZGsZYJt5LmCpanZDCWbf9hE";
 const PROVIDER = "3PgS4jwwpquqxVotTKkvR8wxNUZrExqtZckHehiABKAg";
 const TASK = "HxYCVTLbhbA75KrxMQ7NDQJHnXL81xeTp76z1UeS3s23";
+/** The wallet that pays for a safety check (a made-up address). */
+const PAYER = getAddressDecoder().decode(new Uint8Array(32).fill(9));
 
 // One item exactly as GET https://agenc.ag/api/listings?hireable=1 returned
 // it on 2026-11-14.
@@ -139,7 +146,8 @@ describe("the safety check", () => {
     const { fetch } = fakeFetch({
       "POST https://attest.agenc.ag/v1/moderation/tasks": ({ init }) => {
         const body = JSON.parse(String(init?.body));
-        expect(body).toEqual({ task: TASK, jobSpecHash: hash.hex, spec });
+        // The wallet says who pays for the check.
+        expect(body).toEqual({ task: TASK, jobSpecHash: hash.hex, spec, payer: PAYER });
         return json({
           ok: true,
           attested: true,
@@ -150,13 +158,74 @@ describe("the safety check", () => {
       },
     });
     const services = createHostedServices({ fetchImpl: fetch });
+    // A service that recorded the approval itself leaves nothing to pay.
     expect(
-      await services.attestTask({ task: TASK as Address, jobSpecHashHex: hash.hex, jobSpec: spec }),
-    ).toEqual({ jobSpecUri: `https://marketplace.agenc.tech/api/job-specs/${hash.hex}` });
+      await services.attestTask({
+        task: TASK as Address,
+        jobSpecHashHex: hash.hex,
+        jobSpec: spec,
+        payer: PAYER,
+      }),
+    ).toEqual({
+      jobSpecUri: `https://marketplace.agenc.tech/api/job-specs/${hash.hex}`,
+      payment: null,
+    });
+  });
+
+  it("hands back the approval to pay for when the service does not pay for it", async () => {
+    const hashHex = "ab".repeat(32);
+    const wire = Uint8Array.from({ length: 300 }, (_, index) => index % 251);
+    const answer = (payment: unknown, extra: Record<string, unknown> = {}): Route => () =>
+      json({
+        ok: true,
+        attested: false,
+        verdict: "clean",
+        specHash: hashHex,
+        moderator: MODERATOR,
+        attestation: null,
+        specRegistryUri: `https://marketplace.agenc.tech/api/job-specs/${hashHex}`,
+        payment,
+        ...extra,
+      });
+    const ask = (route: Route) =>
+      createHostedServices({
+        fetchImpl: fakeFetch({ "POST https://attest.agenc.ag/v1/moderation/tasks": route }).fetch,
+      }).attestTask({ task: TASK as Address, jobSpecHashHex: hashHex, jobSpec: {}, payer: PAYER });
+
+    // The transaction comes through untouched, for the wallet to check.
+    expect(
+      await ask(answer({ transaction: Buffer.from(wire).toString("base64"), payer: PAYER })),
+    ).toEqual({
+      jobSpecUri: `https://marketplace.agenc.tech/api/job-specs/${hashHex}`,
+      payment: { transaction: wire, moderator: MODERATOR },
+    });
+
+    // Anything that is not plainly a transaction from a named approver is
+    // refused as a fault of the service, never as a refusal of the request.
+    for (const bad of [
+      answer({ transaction: "" }),
+      answer({ transaction: "not base64!" }),
+      answer({ transaction: 7 }),
+      answer({}),
+      answer({ transaction: Buffer.alloc(1233).toString("base64") }),
+      answer({ transaction: Buffer.from(wire).toString("base64") }, { moderator: "nobody" }),
+      answer({ transaction: Buffer.from(wire).toString("base64") }, { moderator: null }),
+    ]) {
+      await expect(ask(bad)).rejects.toMatchObject({ code: "NETWORK" });
+    }
+    // An approval for other words is refused even when it comes with a payment.
+    await expect(
+      ask(answer({ transaction: Buffer.from(wire).toString("base64") }, { specHash: "cd".repeat(32) })),
+    ).rejects.toMatchObject({ code: "NETWORK" });
   });
 
   it("separates a refusal, a busy service and an answer about the wrong request", async () => {
-    const input = { task: TASK as Address, jobSpecHashHex: "ab".repeat(32), jobSpec: {} };
+    const input = {
+      task: TASK as Address,
+      jobSpecHashHex: "ab".repeat(32),
+      jobSpec: {},
+      payer: PAYER,
+    };
     const held = fakeFetch({
       "POST https://attest.agenc.ag/v1/moderation/tasks": () =>
         json({ ok: true, attested: false, verdict: "blocked", specHash: input.jobSpecHashHex }),
@@ -191,6 +260,23 @@ describe("the safety check", () => {
     ).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
   });
 
+  it("does not pay for the check of somebody else's service", async () => {
+    // A buyer names no payer. A service that does not pay for approvals turns
+    // the request away, and the buyer is told the service cannot be hired yet.
+    const { fetch } = fakeFetch({
+      "POST https://attest.agenc.ag/v1/moderation/listings": ({ init }) => {
+        expect(JSON.parse(String(init?.body))).toEqual({ listing: LISTING });
+        return json({ ok: false, error: "This service does not pay for approvals." }, 402);
+      },
+    });
+    await expect(
+      createHostedServices({ fetchImpl: fetch }).acquireListingAttestation(LISTING as Address),
+    ).rejects.toMatchObject({
+      code: "NOT_AVAILABLE",
+      message: expect.stringMatching(/has not been through the marketplace's safety check/),
+    });
+  });
+
   it("publishes and attests the description of a service this wallet offers", async () => {
     const spec = buildListingSpec({
       name: "Line Writer",
@@ -211,7 +297,7 @@ describe("the safety check", () => {
     const { fetch, calls } = fakeFetch({
       "GET https://attest.agenc.ag/v1/info": INFO,
       "POST https://attest.agenc.ag/v1/moderation/listings": ({ init }) => {
-        expect(JSON.parse(String(init?.body))).toEqual({ listing: LISTING, spec });
+        expect(JSON.parse(String(init?.body))).toEqual({ listing: LISTING, spec, payer: PAYER });
         return json({ ok: true, attested: true, verdict: "clean", specHash: hash.hex, pinned: true });
       },
     });
@@ -220,13 +306,50 @@ describe("the safety check", () => {
     expect(await services.listingSpecUri(hash.hex)).toBe(
       `https://marketplace.agenc.tech/api/job-specs/${hash.hex}`,
     );
-    await services.attestListing({ listing: LISTING as Address, specHashHex: hash.hex, spec });
+    expect(
+      await services.attestListing({
+        listing: LISTING as Address,
+        specHashHex: hash.hex,
+        spec,
+        payer: PAYER,
+      }),
+    ).toBeNull();
     expect(calls).toContain("POST https://attest.agenc.ag/v1/moderation/listings");
   });
 
+  it("hands back a listing's approval to pay for", async () => {
+    const hashHex = "ab".repeat(32);
+    const wire = Uint8Array.from({ length: 280 }, (_, index) => (index * 7) % 256);
+    const { fetch } = fakeFetch({
+      "POST https://attest.agenc.ag/v1/moderation/listings": () =>
+        json({
+          ok: true,
+          attested: false,
+          verdict: "clean",
+          specHash: hashHex,
+          moderator: MODERATOR,
+          attestation: null,
+          payment: { transaction: Buffer.from(wire).toString("base64"), payer: PAYER },
+        }),
+    });
+    expect(
+      await createHostedServices({ fetchImpl: fetch }).attestListing({
+        listing: LISTING as Address,
+        specHashHex: hashHex,
+        spec: {},
+        payer: PAYER,
+      }),
+    ).toEqual({ transaction: wire, moderator: MODERATOR });
+  });
+
   it("tells a refused description apart from a check that should be retried", async () => {
-    const input = { listing: LISTING as Address, specHashHex: "ab".repeat(32), spec: {} };
-    const offer = (route: Route): Promise<void> =>
+    const input = {
+      listing: LISTING as Address,
+      specHashHex: "ab".repeat(32),
+      spec: {},
+      payer: PAYER,
+    };
+    const offer = (route: Route): Promise<unknown> =>
       createHostedServices({
         fetchImpl: fakeFetch({ "POST https://attest.agenc.ag/v1/moderation/listings": route }).fetch,
       }).attestListing(input);

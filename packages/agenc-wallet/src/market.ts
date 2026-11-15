@@ -50,6 +50,7 @@ import {
   getTaskJobSpecDiscriminatorBytes,
   getTaskModerationDecoder,
   getTaskModerationDiscriminatorBytes,
+  getTaskModerationSize,
   getTaskSubmissionDecoder,
   getTaskSubmissionDiscriminatorBytes,
   getTaskValidationConfigDiscriminatorBytes,
@@ -279,6 +280,17 @@ async function candidateModerators(
 }
 
 /**
+ * The approvers whose records this wallet's gated steps can use: the
+ * marketplace's own authority, then the ones its services name.
+ */
+export async function acceptedApprovers(
+  chain: Chain,
+  services: MarketServices,
+): Promise<Address[]> {
+  return (await candidateModerators(chain, services)).candidates;
+}
+
+/**
  * Find an attestation for `(listing, specHash)` signed by someone this wallet
  * accepts, mirroring the checks the hire instruction makes. Returns null when
  * there is none.
@@ -384,22 +396,32 @@ export async function findTaskGate(
 /**
  * Lamports a purchase sets aside on top of the price: the deposits behind the
  * accounts it creates, plus fee headroom. Most deposits return when the
- * finished job is tidied; the task record's own deposit does not.
+ * finished job is tidied. Two never do: the task record's own, and the one
+ * behind the safety check of the job's request, which the buyer pays for.
  */
 export async function purchaseDeposits(
   chain: Chain,
   buyer: Address,
 ): Promise<{ total: bigint; kept: bigint }> {
   const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
-  const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent] = await Promise.all([
-    rent(TASK_ACCOUNT_SPACE),
-    rent(getTaskEscrowSize()),
-    rent(getHireRecordSize()),
-    rent(getTaskValidationConfigSize()),
-    rent(TASK_JOB_SPEC_SPACE),
-  ]);
-  let total = taskRent + escrowRent + hireRent + validationRent + jobSpecRent + FEE_HEADROOM_LAMPORTS;
-  let kept = taskRent;
+  const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent] =
+    await Promise.all([
+      rent(TASK_ACCOUNT_SPACE),
+      rent(getTaskEscrowSize()),
+      rent(getHireRecordSize()),
+      rent(getTaskValidationConfigSize()),
+      rent(TASK_JOB_SPEC_SPACE),
+      rent(getTaskModerationSize()),
+    ]);
+  let total =
+    taskRent +
+    escrowRent +
+    hireRent +
+    validationRent +
+    jobSpecRent +
+    approvalRent +
+    FEE_HEADROOM_LAMPORTS;
+  let kept = taskRent + approvalRent;
   const [rateLimit] = await findCreateTaskHumanlessAuthorityRateLimitPda({ creator: buyer });
   if ((await chain.readAccountInfo(rateLimit)) === null) {
     const once = await rent(getAuthorityRateLimitSize());

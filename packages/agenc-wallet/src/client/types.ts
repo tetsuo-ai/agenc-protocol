@@ -83,9 +83,10 @@ export interface EarnView {
   /** The service this agent offers, or null when it only takes open jobs. */
   offer: OfferView | null;
   /**
-   * What putting a service on offer costs once: the deposit behind its
-   * permanent marketplace record, which is not returned. Null once this
-   * agent's service exists, or when the cost could not be read.
+   * What putting a service on offer costs once: the deposits behind its
+   * permanent marketplace record and behind the safety check of its
+   * description, which are not returned. Null once this agent's service
+   * exists, or when the cost could not be read.
    */
   offerCost: Money | null;
 }

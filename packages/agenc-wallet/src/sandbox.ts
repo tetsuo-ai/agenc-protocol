@@ -9,10 +9,19 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  appendTransactionMessageInstructions,
+  createNoopSigner,
+  createTransactionMessage,
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
+  getTransactionEncoder,
   lamports,
+  partiallySignTransactionMessageWithSigners,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
   type Address,
+  type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
 import {
@@ -21,11 +30,15 @@ import {
   facade,
   findAgentPda,
   findHireRecordPda,
+  findListingModerationPda,
   findProtocolConfigPda,
+  findTaskModerationPda,
   findTaskPda,
+  getListingModerationSize,
   getProtocolConfigDecoder,
   getProtocolConfigEncoder,
   getServiceListingDecoder,
+  getTaskModerationSize,
   taskThread,
   values,
   type GpaFilter,
@@ -40,13 +53,20 @@ import {
   saveState,
   type WorkerContext,
 } from "@tetsuo-ai/agenc-worker";
-import { BASE_FEE_LAMPORTS, type Chain } from "./chain.js";
+import {
+  BASE_FEE_LAMPORTS,
+  sendThroughTransport,
+  SYSTEM_PROGRAM_ADDRESS,
+  transferInstruction,
+  type Chain,
+} from "./chain.js";
 import { WalletError } from "./errors.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
 import {
   decodeResultPointer,
   digestFromPointer,
   sha256Hex,
+  type ApprovalPayment,
   type CatalogRow,
   type MarketServices,
 } from "./services.js";
@@ -279,6 +299,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
     clientFor: (signer) => createMarketplaceClient({ transport, signer }),
+    sendSigned: (transaction) => sendThroughTransport(transport, transaction),
     readAccount: async (account) => readInfo(account)?.data ?? null,
     readRawAccount: async (account) => {
       const info = readInfo(account);
@@ -336,6 +357,51 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
   };
 
+  /**
+   * The practice marketplace's approver works the way the real one does: it
+   * signs the approval and hands the transaction to whoever asked, who pays
+   * the deposit behind the record and the fee, and sends it. (The house pays
+   * for the house's own services and jobs.)
+   */
+  async function approvalFor(
+    payer: Address,
+    record: Address,
+    recordSpace: number,
+    instruction: Instruction,
+  ): Promise<ApprovalPayment> {
+    const moderator = market.moderator.signer;
+    const full = BigInt(svm.minimumBalanceForRentExemption(BigInt(recordSpace)));
+    const held = readInfo(record);
+    // A record that exists is reused; an address somebody already sent money
+    // to is topped up to the full deposit; a new record takes all of it.
+    const deposit =
+      held === null
+        ? full
+        : held.owner !== SYSTEM_PROGRAM_ADDRESS || held.lamports >= full
+          ? 0n
+          : full - held.lamports;
+    const payerSigner = createNoopSigner(payer);
+    const latest = await transport.getLatestBlockhash();
+    const message = pipe(
+      createTransactionMessage({ version: 0 }),
+      (m) => setTransactionMessageFeePayerSigner(payerSigner, m),
+      (m) => setTransactionMessageLifetimeUsingBlockhash(latest, m),
+      (m) =>
+        appendTransactionMessageInstructions(
+          deposit > 0n
+            ? [transferInstruction(payerSigner, moderator.address, deposit), instruction]
+            : [instruction],
+          m,
+        ),
+    );
+    // Signed by the approver only: the payer's place is left for the payer.
+    const partial = await partiallySignTransactionMessageWithSigners(message);
+    return {
+      transaction: new Uint8Array(getTransactionEncoder().encode(partial)),
+      moderator: moderator.address,
+    };
+  }
+
   const services: MarketServices = {
     async listServices() {
       const rows: CatalogRow[] = [];
@@ -344,6 +410,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         if (info === null) continue;
         const account = getServiceListingDecoder().decode(info.data);
         if (Number(account.state) !== 0) continue;
+        // Like the real catalog, only a service that passed the check is shown.
+        const [approval] = await findListingModerationPda({
+          listing: entry.listing,
+          jobSpecHash: new Uint8Array(account.specHash),
+          moderator: market.moderator.address,
+        });
+        if (readInfo(approval)?.owner !== AGENC_COORDINATION_PROGRAM_ADDRESS) continue;
         const average =
           account.ratingCount > 0 ? Number(account.totalRating) / account.ratingCount : null;
         rows.push({
@@ -379,15 +452,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const info = readInfo(input.listing);
       if (info === null) throw new WalletError("NETWORK", "The marketplace has not seen that service yet.");
       jobSpecs.set(hash.hex, envelopeBytes(input.spec, hash.hex));
-      await moderatorClient.send([
-        await facade.recordListingModeration({
-          moderator: market.moderator.signer,
-          listing: input.listing,
-          jobSpecHash: hash.bytes,
-          ...CLEAN,
-        }),
-      ]);
-      // The practice catalog lists it like any house service from now on.
+      // The practice catalog lists it like any house service once the
+      // approval below has been paid for and recorded.
       const metadata = (input.spec.custom as { listingMetadata?: { longDescription?: unknown } } | undefined)
         ?.listingMetadata;
       const entry = {
@@ -398,6 +464,22 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const at = listed.findIndex((item) => item.listing === input.listing);
       if (at === -1) listed.push(entry);
       else listed[at] = entry;
+      const [record] = await findListingModerationPda({
+        listing: input.listing,
+        jobSpecHash: hash.bytes,
+        moderator: market.moderator.address,
+      });
+      return approvalFor(
+        input.payer,
+        record,
+        getListingModerationSize(),
+        (await facade.recordListingModeration({
+          moderator: market.moderator.signer,
+          listing: input.listing,
+          jobSpecHash: hash.bytes,
+          ...CLEAN,
+        })) as Instruction,
+      );
     },
     async attestTask(input) {
       const hash = await values.canonicalJobSpecHash(input.jobSpec);
@@ -405,15 +487,25 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         throw new WalletError("NOT_ALLOWED", "The request does not match what was paid for.");
       }
       jobSpecs.set(hash.hex, envelopeBytes(input.jobSpec, hash.hex));
-      await moderatorClient.send([
-        await facade.recordTaskModeration({
-          moderator: market.moderator.signer,
-          task: input.task,
-          jobSpecHash: hash.bytes,
-          ...CLEAN,
-        }),
-      ]);
-      return { jobSpecUri: `agenc://job-spec/sha256/${hash.hex}` };
+      const [record] = await findTaskModerationPda({
+        task: input.task,
+        jobSpecHash: hash.bytes,
+        moderator: market.moderator.address,
+      });
+      return {
+        jobSpecUri: `agenc://job-spec/sha256/${hash.hex}`,
+        payment: await approvalFor(
+          input.payer,
+          record,
+          getTaskModerationSize(),
+          (await facade.recordTaskModeration({
+            moderator: market.moderator.signer,
+            task: input.task,
+            jobSpecHash: hash.bytes,
+            ...CLEAN,
+          })) as Instruction,
+        ),
+      };
     },
     async jobSpecUriFor(jobSpecHashHex) {
       return jobSpecs.has(jobSpecHashHex) ? `agenc://job-spec/sha256/${jobSpecHashHex}` : null;

@@ -21,6 +21,10 @@ First version. Not published.
   worker loop takes the hires. The listing is on the marketplace only while
   someone is there to do the work: it is paused when taking jobs is switched
   off, when the offer is withdrawn, and when the wallet closes.
+- Whoever asks for a safety check pays for it. The attestation service signs
+  the approval and hands it back; the buyer's wallet (for a job's request) or
+  the agent's wallet (for a service it offers) checks that transaction, pays
+  the deposit behind the approval's record and the fee, and sends it.
 - A socket server with owner and agent-bound connections, a dependency-free
   client, and four agent tools (`market_find`, `market_hire`,
   `market_status`, `market_review`).
