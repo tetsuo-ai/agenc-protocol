@@ -56,9 +56,12 @@ export {
 } from "./server.js";
 export {
   BACKUP_FORMAT,
+  checkBackup,
   createBackup,
   MIN_BACKUP_PASSWORD,
+  readBackupFile,
   readBackupHeader,
   restoreBackup,
+  writeBackupFile,
   type BackupHeader,
 } from "./backup.js";

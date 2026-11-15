@@ -2,11 +2,14 @@
 // an owner connection for the panel and an agent-bound connection for the
 // four chat tools. Proves an agent connection cannot reach owner methods.
 import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Chain } from "../src/chain.js";
 import { connectWallet, type WalletClient } from "../src/client/socket-client.js";
 import { runMarketTool } from "../src/client/tools.js";
-import type { WalletEvent } from "../src/client/protocol.js";
+import { MAX_FRAME_BYTES, type WalletEvent } from "../src/client/protocol.js";
 import { agentToken, serveWallet, type WalletServer } from "../src/server.js";
 import { eventually, startWorld, type World } from "./harness.js";
 
@@ -44,7 +47,36 @@ async function serve(current: World) {
   return { ownerToken, socketPath, connect };
 }
 
+/** The practice chain, presented as a network whose money is worth backing up. */
+const asLocalnet = (chain: Chain): Chain =>
+  Object.create(chain, { network: { value: "localnet", enumerable: true } }) as Chain;
+
 describe("the wallet service", () => {
+  it("backs up a wallet far bigger than one message can carry", async () => {
+    world = await startWorld({ chain: asLocalnet });
+    const { connect } = await serve(world);
+    const owner = await connect({});
+    const agent = await owner.call("agents.create", { name: "My assistant" });
+    // Years of work ledgers: more than the longest frame either side accepts.
+    const ledgers = path.join(world.dataDir, "earn", agent.id);
+    mkdirSync(ledgers, { recursive: true });
+    for (let index = 0; index < 3; index += 1) {
+      writeFileSync(path.join(ledgers, `ledger-${index}.json`), randomBytes(700_000).toString("hex"));
+    }
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-big-")), "backup.agencbackup");
+
+    const made = await owner.call("backup.export", { password: "a long enough password", file });
+    expect(made.agents).toBe(1);
+    expect(statSync(file).size).toBeGreaterThan(4 * MAX_FRAME_BYTES);
+    // The answer is a few numbers: the backup itself never crosses the socket.
+    expect(JSON.stringify(made).length).toBeLessThan(200);
+    expect(await owner.call("backup.check", { password: "a long enough password", file })).toEqual(made);
+    await expect(owner.call("backup.check", { password: "not the password", file })).rejects.toMatchObject({
+      message: "That password does not open this backup.",
+    });
+    expect((await owner.call("overview", {})).backup).toEqual({ at: made.createdAt, upToDate: true });
+  });
+
   it("rejects a wrong credential", async () => {
     world = await startWorld();
     const { socketPath } = await serve(world);
@@ -84,6 +116,13 @@ describe("the wallet service", () => {
         agent.call("agents.setBudget", { agentId: mine.id, perDayCents: 99_999 }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(agent.call("agents.create", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      // An agent can neither take a copy of the keys nor try passwords on one.
+      await expect(
+        agent.call("backup.export", { password: "a long enough password", file: path.join(world.dataDir, "x") }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(
+        agent.call("backup.check", { password: "a long enough password", file: path.join(world.dataDir, "x") }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(
         agent.call("wallet.withdraw", { to: other.address, amount: "all" }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
