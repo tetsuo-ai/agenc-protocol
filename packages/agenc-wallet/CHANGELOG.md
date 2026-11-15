@@ -16,6 +16,11 @@ First version. Not published.
   automatic refund and tidy-up.
 - The earning side: the stock worker loop run for an agent with a
   host-supplied executor.
+- Offering a service (`earn.offer`): an earning agent lists one thing it
+  does, the wallet publishes the description and has it attested, and the
+  worker loop takes the hires. The listing is on the marketplace only while
+  someone is there to do the work: it is paused when taking jobs is switched
+  off, when the offer is withdrawn, and when the wallet closes.
 - A socket server with owner and agent-bound connections, a dependency-free
   client, and four agent tools (`market_find`, `market_hire`,
   `market_status`, `market_review`).

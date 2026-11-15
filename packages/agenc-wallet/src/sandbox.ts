@@ -368,6 +368,37 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     async acquireListingAttestation() {
       throw new WalletError("NOT_AVAILABLE", "That service cannot be hired in practice mode.");
     },
+    async listingSpecUri(specHashHex) {
+      return `agenc://job-spec/sha256/${specHashHex}`;
+    },
+    async attestListing(input) {
+      const hash = await values.canonicalJobSpecHash(input.spec);
+      if (hash.hex !== input.specHashHex) {
+        throw new WalletError("NOT_ALLOWED", "The description does not match the service on offer.");
+      }
+      const info = readInfo(input.listing);
+      if (info === null) throw new WalletError("NETWORK", "The marketplace has not seen that service yet.");
+      jobSpecs.set(hash.hex, envelopeBytes(input.spec, hash.hex));
+      await moderatorClient.send([
+        await facade.recordListingModeration({
+          moderator: market.moderator.signer,
+          listing: input.listing,
+          jobSpecHash: hash.bytes,
+          ...CLEAN,
+        }),
+      ]);
+      // The practice catalog lists it like any house service from now on.
+      const metadata = (input.spec.custom as { listingMetadata?: { longDescription?: unknown } } | undefined)
+        ?.listingMetadata;
+      const entry = {
+        listing: input.listing,
+        summary: typeof metadata?.longDescription === "string" ? metadata.longDescription : "",
+        category: typeof input.spec.category === "string" ? input.spec.category : "other",
+      };
+      const at = listed.findIndex((item) => item.listing === input.listing);
+      if (at === -1) listed.push(entry);
+      else listed[at] = entry;
+    },
     async attestTask(input) {
       const hash = await values.canonicalJobSpecHash(input.jobSpec);
       if (hash.hex !== input.jobSpecHashHex) {

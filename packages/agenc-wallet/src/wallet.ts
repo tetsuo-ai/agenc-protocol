@@ -22,6 +22,7 @@ import type {
   JobStatus,
   JobView,
   Money,
+  OfferView,
   ServiceView,
   WalletOverview,
 } from "./client/types.js";
@@ -30,22 +31,31 @@ import { describeError, WalletError } from "./errors.js";
 import {
   alreadyRated,
   DEFAULT_REVIEW_WINDOW_SECS,
+  FEE_HEADROOM_LAMPORTS,
   findListingGate,
   findTaskGate,
   hireLanded,
   inspectJob,
   isActivated,
+  LISTING_ACCOUNT_SPACE,
+  LISTING_NAME_MAX_BYTES,
+  listingAddressFor,
   purchaseDeposits,
   ratingCost,
+  readAgent,
   readHireableListing,
+  readListing,
   sendActivation,
   sendApproval,
   sendCancel,
   sendChangesRequest,
+  sendCreateListing,
   sendHire,
+  sendListingState,
   sendRating,
   sendReject,
   sendTidy,
+  sendUpdateListing,
   TASK_ACCOUNT_SPACE,
   taskAddressFor,
   type ListingTerms,
@@ -53,6 +63,7 @@ import {
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
 import {
   buildJobSpec,
+  buildListingSpec,
   jobSpecHash,
   tidyText,
   type CatalogRow,
@@ -63,6 +74,7 @@ import {
   StateStore,
   type AgentRecord,
   type JobRecord,
+  type OfferRecord,
   type WalletState,
 } from "./store.js";
 import { KeyVault } from "./vault.js";
@@ -80,6 +92,20 @@ const NO_SHOW_GRACE_SECS = 120;
 const MAX_RESULT_TEXT = 20_000;
 const BALANCE_CACHE_MS = 4_000;
 const STALE_PRICE_MS = 6 * 60 * 60_000;
+/** The marketplace's catalog hides a service priced below this. */
+const MIN_OFFER_PRICE_LAMPORTS = 1_000n;
+/** How long an agent gets to deliver a job hired from its own service. */
+const OFFER_DELIVERY_SECS = 60 * 60;
+/** The marketplace's safety check is asked at most this often per service. */
+const OFFER_CHECK_RETRY_MS = 60_000;
+/** Steps one housekeeping pass may take for one offer (create, update, switch, check). */
+const OFFER_STEPS_PER_PASS = 4;
+/** How many earlier jobs may still wait for payment while a new hire is taken. */
+const OFFER_SPARE_JOBS = 4n;
+/** How long closing waits for services to be taken off offer. */
+const CLOSE_PAUSE_BUDGET_MS = 4_000;
+const LISTING_STATE_ACTIVE = 0;
+const LISTING_STATE_PAUSED = 1;
 
 export interface WalletConfig {
   /** Absolute folder for the vault, the journal and the earn ledgers. */
@@ -189,6 +215,10 @@ export class AgencWallet {
   #timer: ReturnType<typeof setInterval> | null = null;
   #ticking: Promise<void> | null = null;
   #closed = false;
+  /** Set while closing: every service comes off offer, since nobody will do the work. */
+  #closing = false;
+  /** The smallest pay each running earn loop was started with. */
+  readonly #earnFloor = new Map<string, bigint>();
 
   private constructor(
     config: WalletConfig,
@@ -211,6 +241,10 @@ export class AgencWallet {
       dataDir: path.join(config.dataDir, "earn"),
       log: this.#log,
       notify: (agentId, notice) => this.#onEarnNotice(agentId, notice),
+      serves: (agentId) => {
+        const offer = this.#store.state.agents[agentId]?.earn.offer ?? null;
+        return offer !== null && offer.wanted && offer.listed;
+      },
     });
   }
 
@@ -417,13 +451,39 @@ export class AgencWallet {
     return held;
   }
 
+  #offerView(agent: AgentRecord, rate: number | null): OfferView | null {
+    const offer = agent.earn.offer ?? null;
+    if (offer === null) return null;
+    const statusText: Record<OfferRecord["status"], string> = {
+      getting_ready: agent.earn.enabled
+        ? "Getting ready to go on offer."
+        : "Switch on taking jobs to put this on offer.",
+      being_checked: "Waiting for the marketplace's safety check.",
+      live: "On offer. Other agents can hire it.",
+      paused: offer.wanted ? "Off offer while taking jobs is switched off." : "Off offer.",
+      problem: offer.error ?? "This could not be put on offer.",
+    };
+    return {
+      listing: offer.listing,
+      name: offer.name,
+      summary: offer.summary,
+      price: money(offer.priceLamports, rate),
+      status: offer.status,
+      statusText: statusText[offer.status],
+      listed: offer.listed,
+      wanted: offer.wanted,
+    };
+  }
+
   #agentView(
     agent: AgentRecord,
     balance: bigint,
     rate: number | null,
     setAside: bigint,
+    offerCost: bigint | null,
   ): AgentView {
     const earn = this.#earn.state(agent.id);
+    const offer = agent.earn.offer ?? null;
     return {
       id: agent.id,
       name: agent.name,
@@ -440,6 +500,10 @@ export class AgencWallet {
         jobsDone: agent.earn.jobsDone,
         minPayCents: agent.earn.minPayCents,
         setAside: money(setAside, rate),
+        offer: this.#offerView(agent, rate),
+        // Once the service exists its record is paid for.
+        offerCost:
+          offerCost === null || (offer !== null && offer.listed) ? null : money(offerCost, rate),
       },
       createdAt: agent.createdAt,
     };
@@ -453,7 +517,24 @@ export class AgencWallet {
       balances.values.get(agentId) ?? 0n,
       rate,
       await this.#setAside(agent),
+      await this.#offerCost(),
     );
+  }
+
+  #offerCostLamports: bigint | null = null;
+
+  /**
+   * What putting a service on offer costs once: the deposit behind its
+   * permanent marketplace record (never returned) plus a fee. Read once.
+   */
+  async #offerCost(): Promise<bigint | null> {
+    if (this.#offerCostLamports === null) {
+      this.#offerCostLamports = await this.#chain
+        .getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)
+        .then((rent) => rent + this.#chain.transferFeeLamports)
+        .catch(() => null);
+    }
+    return this.#offerCostLamports;
   }
 
   /** The agent's marketplace deposit; only read for agents that ever earned. */
@@ -487,6 +568,7 @@ export class AgencWallet {
     const state = this.#store.state;
     const ordered = Object.values(state.agents).sort((a, b) => a.createdAt - b.createdAt);
     const setAside = await Promise.all(ordered.map((agent) => this.#setAside(agent)));
+    const offerCost = await this.#offerCost();
     return {
       network: this.#chain.network,
       main: {
@@ -495,7 +577,7 @@ export class AgencWallet {
       },
       held: money(this.#heldBy(null), rate),
       agents: ordered.map((agent, index) =>
-        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, setAside[index]!),
+        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, setAside[index]!, offerCost),
       ),
       solUsd: rate,
       pendingApprovals: Object.values(state.approvals).filter(
@@ -526,7 +608,7 @@ export class AgencWallet {
         spentLamports: "0",
         earnedLamports: "0",
         refills: [],
-        earn: { enabled: false, minPayCents: 0, jobsDone: 0, lastError: null },
+        earn: { enabled: false, minPayCents: 0, jobsDone: 0, lastError: null, offer: null },
       };
     });
     this.#dropBalances();
@@ -803,6 +885,9 @@ export class AgencWallet {
     }
 
     const listing = toAddress(params.listing, "service");
+    if ((agent.earn.offer ?? null)?.listing === listing) {
+      throw new WalletError("NOT_ALLOWED", "An agent cannot hire its own service.");
+    }
     const terms = await readHireableListing(this.#chain, listing);
     const rate = await this.#freshRate();
     if (params.maxPriceCents !== undefined) {
@@ -1841,8 +1926,15 @@ export class AgencWallet {
     try {
       const signer = await this.#vault.signer(agent.keyId);
       const rate = await this.#freshRate().catch(() => null);
-      const minRewardLamports =
+      let minRewardLamports =
         rate === null ? 0n : centsToLamports(agent.earn.minPayCents, rate);
+      // A hire of the agent's own service pays its price, whatever the floor
+      // for open jobs says; the worker must not skip it.
+      const offer = agent.earn.offer ?? null;
+      if (offer !== null && offer.wanted && BigInt(offer.priceLamports) < minRewardLamports) {
+        minRewardLamports = BigInt(offer.priceLamports);
+      }
+      this.#earnFloor.set(agent.id, minRewardLamports);
       this.#earn.start({ agentId: agent.id, signer, minRewardLamports });
     } catch (error) {
       this.#log(`earn ${agent.id}: ${describeError(error)}`);
@@ -1902,8 +1994,360 @@ export class AgencWallet {
     });
     if (enabled) await this.#startEarning(this.#agentRecord(agentId));
     else await this.#earn.stop(agentId);
+    // A service on offer follows the switch: it leaves the marketplace while
+    // nobody is taking jobs, and comes back when someone is.
+    await this.#advanceOffer(agentId);
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);
+  }
+
+  // -------------------------------------------------------------- offer
+
+  #patchOffer(agentId: string, patch: (offer: OfferRecord) => void): void {
+    this.#store.update((draft) => {
+      const offer = draft.agents[agentId]?.earn.offer;
+      if (offer) patch(offer);
+    });
+  }
+
+  /**
+   * Offer a service others can hire, done by this agent while it takes jobs.
+   * Calling it again changes the price or the description; `null` takes the
+   * service off offer. Owner only.
+   */
+  async setOffer(
+    agentId: string,
+    input: { name: string; summary: string; price: AmountInput } | null,
+  ): Promise<AgentView> {
+    const agent = this.#agentRecord(agentId);
+    const current = agent.earn.offer ?? null;
+    if (input === null) {
+      if (current !== null) {
+        this.#patchOffer(agentId, (offer) => {
+          offer.wanted = false;
+          offer.error = null;
+        });
+        await this.#advanceOffer(agentId);
+        this.#emit({ type: "overview" });
+      }
+      return this.#oneAgentView(agentId);
+    }
+    if (typeof input !== "object") {
+      throw new WalletError("BAD_REQUEST", "That service is not valid.");
+    }
+    if (!this.#earn.available) {
+      throw new WalletError("NOT_AVAILABLE", "This computer is not set up to do jobs yet.");
+    }
+    const name = tidyText(input.name, 60);
+    if (name === null) throw new WalletError("BAD_REQUEST", "Give the service a name.");
+    if (Buffer.byteLength(name, "utf8") > LISTING_NAME_MAX_BYTES) {
+      throw new WalletError(
+        "BAD_REQUEST",
+        `Use a shorter name: up to ${LISTING_NAME_MAX_BYTES} letters.`,
+      );
+    }
+    const summary = tidyText(input.summary, 280);
+    if (summary === null) {
+      throw new WalletError("BAD_REQUEST", "Say what the buyer gets, in a sentence.");
+    }
+    if (current !== null && current.listed && current.name !== name) {
+      throw new WalletError(
+        "BAD_REQUEST",
+        "A service's name cannot be changed once it exists. Its price and description can.",
+      );
+    }
+    const priceLamports = await this.#toLamports(input.price);
+    if (priceLamports < MIN_OFFER_PRICE_LAMPORTS) {
+      throw new WalletError("BAD_REQUEST", "That price is too low to offer.");
+    }
+    const category = "other";
+    const spec = buildListingSpec({ name, summary, category });
+    const hash = await jobSpecHash(spec);
+    const price = priceLamports.toString();
+    this.#store.update((draft) => {
+      const entry = draft.agents[agentId]!;
+      const previous = entry.earn.offer ?? null;
+      const sameWords = previous !== null && previous.specHashHex === hash.hex;
+      entry.earn.offer = {
+        listingIdHex: previous?.listingIdHex ?? values.bytesToHex(values.randomId32()),
+        listing: previous?.listing ?? null,
+        listed: previous?.listed ?? false,
+        name,
+        summary,
+        category,
+        priceLamports: price,
+        deliverySecs: previous?.deliverySecs ?? OFFER_DELIVERY_SECS,
+        spec,
+        specHashHex: hash.hex,
+        wanted: true,
+        status:
+          previous !== null && previous.status === "live" && sameWords && previous.priceLamports === price
+            ? "live"
+            : "getting_ready",
+        error: null,
+        // A changed description is checked straight away; the same words are
+        // not asked about again sooner than before.
+        lastCheckAt: sameWords ? previous.lastCheckAt : null,
+        refused: sameWords ? previous.refused : null,
+        signatures: previous?.signatures ?? {},
+      };
+    });
+    // A running loop that would skip this service's hires is restarted with
+    // the lower floor.
+    const startedFloor = this.#earnFloor.get(agentId);
+    if (agent.earn.enabled && startedFloor !== undefined && priceLamports < startedFloor) {
+      await this.#earn.stop(agentId);
+      if (!this.#closed) await this.#startEarning(this.#agentRecord(agentId));
+    }
+    await this.#advanceOffer(agentId);
+    this.#emit({ type: "overview" });
+    return this.#oneAgentView(agentId);
+  }
+
+  /**
+   * Keep what the worker needs for a job in the agent's wallet and add the
+   * listing's deposit on top, from the main balance when the wallet is short.
+   *
+   * A job's deposits stay out until its buyer pays, which can take a day.
+   * Without spare money the agent could not take the next hire meanwhile, and
+   * nobody else can take a hire of its service. So the wallet also holds
+   * enough for a few jobs to be out at once. That part is the agent's own
+   * allowance: it is not spent, and it can be taken back.
+   */
+  async #fundOffer(agent: AgentRecord): Promise<void> {
+    const cost =
+      (await this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)) +
+      FEE_HEADROOM_LAMPORTS;
+    const keep =
+      (await this.#earn.jobReserve()) +
+      (await this.#floor()) +
+      OFFER_SPARE_JOBS * (await this.#earn.jobDeposits());
+    const balance = await this.#chain.getBalance(agent.address as Address);
+    if (balance >= keep + cost) return;
+    await this.#mainToAgent(
+      agent,
+      keep + cost - balance,
+      `Set money aside so ${agent.name} can offer a service.`,
+    );
+  }
+
+  /**
+   * Bring what is on the marketplace in line with what the person wants on
+   * offer. Each step reads the chain first and sends at most one transaction,
+   * so it can be repeated or interrupted anywhere. Never throws.
+   */
+  #advanceOffer(agentId: string): Promise<void> {
+    return this.#lock(`offer:${agentId}`, async () => {
+      for (let step = 0; step < OFFER_STEPS_PER_PASS; step += 1) {
+        let again: boolean;
+        try {
+          again = await this.#offerStep(agentId);
+        } catch (error) {
+          this.#offerFailed(agentId, error);
+          return;
+        }
+        if (!again) return;
+      }
+    });
+  }
+
+  /** A failed step: say so when a person has to act, otherwise try again later. */
+  #offerFailed(agentId: string, error: unknown): void {
+    this.#log(`offer ${agentId}: ${describeError(error)}`);
+    const text = error instanceof Error ? error.message : String(error);
+    let message: string | null = null;
+    if (
+      error instanceof WalletError &&
+      (error.code === "NOT_ALLOWED" || error.code === "NOT_ENOUGH_MONEY" || error.code === "BAD_REQUEST")
+    ) {
+      message = error.message;
+    } else if (/insufficient (funds|lamports)|InsufficientFunds/i.test(text)) {
+      message = "This agent's wallet does not hold enough to put the service on offer.";
+    }
+    if (message === null) return;
+    const sentence = message;
+    this.#patchOffer(agentId, (offer) => {
+      offer.status = "problem";
+      offer.error = sentence;
+    });
+    this.#emit({ type: "overview" });
+  }
+
+  /** One step. Returns true when it changed something and another look is worth it. */
+  async #offerStep(agentId: string): Promise<boolean> {
+    const agent = this.#store.state.agents[agentId];
+    const offer = agent?.earn.offer ?? null;
+    if (agent === undefined || offer === null) return false;
+    const wantLive = offer.wanted && agent.earn.enabled && !this.#closing;
+    const settle = (status: OfferRecord["status"], error: string | null = null): false => {
+      if (offer.status !== status || offer.error !== error) {
+        this.#patchOffer(agentId, (entry) => {
+          entry.status = status;
+          entry.error = error;
+        });
+        this.#emit({ type: "overview" });
+      }
+      return false;
+    };
+
+    // The worker registers the agent on the marketplace on its first pass.
+    // Nothing can be listed before that, and nothing is on offer either.
+    const providerAgent = await this.#earn.marketplaceAgent(agentId);
+    if (providerAgent === null || (await readAgent(this.#chain, providerAgent)) === null) {
+      return settle(wantLive ? "getting_ready" : "paused");
+    }
+    const listingId = values.hexToBytes(offer.listingIdHex);
+    const listing = await listingAddressFor(providerAgent, listingId);
+    const account = await readListing(this.#chain, listing);
+
+    if (account === null) {
+      if (offer.listing !== listing) {
+        this.#patchOffer(agentId, (entry) => {
+          entry.listing = listing;
+        });
+      }
+      if (!wantLive) return settle("paused");
+      const specUri = await this.#services.listingSpecUri(offer.specHashHex);
+      if (specUri === null) {
+        return settle("problem", "This network has nowhere to publish a service's description yet.");
+      }
+      await this.#fundOffer(agent);
+      const signature = await sendCreateListing(this.#chain, await this.#vault.signer(agent.keyId), {
+        providerAgent,
+        listingId,
+        name: offer.name,
+        category: offer.category,
+        specHash: values.hexToBytes(offer.specHashHex),
+        specUri,
+        priceLamports: BigInt(offer.priceLamports),
+        deliverySecs: offer.deliverySecs,
+      });
+      this.#store.update((draft) => {
+        const entry = draft.agents[agentId]?.earn.offer;
+        if (!entry) return;
+        entry.listing = listing;
+        entry.listed = true;
+        entry.signatures.create = signature;
+        entry.status = "being_checked";
+        entry.error = null;
+        this.#note(draft, {
+          kind: "note",
+          text: `${agent.name} now offers “${offer.name}”.`,
+          agentId,
+          signature,
+        });
+      });
+      this.#dropBalances();
+      this.#emit({ type: "overview" });
+      this.#emit({ type: "activity" });
+      return true;
+    }
+
+    if (!offer.listed || offer.listing !== listing) {
+      this.#patchOffer(agentId, (entry) => {
+        entry.listing = listing;
+        entry.listed = true;
+      });
+    }
+    const state = Number(account.state);
+    if (state !== LISTING_STATE_ACTIVE && state !== LISTING_STATE_PAUSED) {
+      // Retired on the marketplace, which cannot be undone. An offer the
+      // person still wants starts over as a new listing.
+      if (!offer.wanted) return settle("paused");
+      this.#patchOffer(agentId, (entry) => {
+        entry.listingIdHex = values.bytesToHex(values.randomId32());
+        entry.listing = null;
+        entry.listed = false;
+        entry.lastCheckAt = null;
+        entry.signatures = {};
+      });
+      return true;
+    }
+    if (!wantLive) {
+      if (state === LISTING_STATE_ACTIVE) {
+        const signature = await sendListingState(
+          this.#chain,
+          await this.#vault.signer(agent.keyId),
+          { listing, providerAgent, active: false },
+        );
+        this.#patchOffer(agentId, (entry) => {
+          entry.signatures.state = signature;
+        });
+        this.#dropBalances();
+      }
+      return settle("paused");
+    }
+
+    const priceChanged = account.price !== BigInt(offer.priceLamports);
+    const wordsChanged = values.bytesToHex(new Uint8Array(account.specHash)) !== offer.specHashHex;
+    if (priceChanged || wordsChanged) {
+      let spec: { hash: Uint8Array; uri: string } | null = null;
+      if (wordsChanged) {
+        const uri = await this.#services.listingSpecUri(offer.specHashHex);
+        if (uri === null) {
+          return settle("problem", "This network has nowhere to publish a service's description yet.");
+        }
+        spec = { hash: values.hexToBytes(offer.specHashHex), uri };
+      }
+      const signature = await sendUpdateListing(
+        this.#chain,
+        await this.#vault.signer(agent.keyId),
+        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec },
+      );
+      this.#patchOffer(agentId, (entry) => {
+        entry.signatures.update = signature;
+      });
+      this.#dropBalances();
+      return true;
+    }
+    if (state === LISTING_STATE_PAUSED) {
+      const signature = await sendListingState(
+        this.#chain,
+        await this.#vault.signer(agent.keyId),
+        { listing, providerAgent, active: true },
+      );
+      this.#patchOffer(agentId, (entry) => {
+        entry.signatures.state = signature;
+      });
+      this.#dropBalances();
+      return true;
+    }
+
+    // On the marketplace with the right price and words. Buyers can hire it
+    // once it carries the safety check for exactly these words.
+    const gate = await findListingGate(this.#chain, this.#services, {
+      listing,
+      specHash: new Uint8Array(account.specHash),
+      providerAgent,
+    });
+    if (gate !== null) return settle("live");
+    if (offer.refused !== null) return settle("problem", offer.refused);
+    const now = this.#now();
+    if (offer.lastCheckAt !== null && now - offer.lastCheckAt < OFFER_CHECK_RETRY_MS) {
+      return settle("being_checked");
+    }
+    this.#patchOffer(agentId, (entry) => {
+      entry.lastCheckAt = now;
+      entry.status = "being_checked";
+      entry.error = null;
+    });
+    this.#emit({ type: "overview" });
+    try {
+      await this.#services.attestListing({
+        listing,
+        specHashHex: offer.specHashHex,
+        spec: offer.spec,
+      });
+    } catch (error) {
+      if (error instanceof WalletError && error.code === "NOT_ALLOWED") {
+        const sentence = error.message;
+        this.#patchOffer(agentId, (entry) => {
+          entry.refused = sentence;
+        });
+      }
+      throw error;
+    }
+    return true;
   }
 
   // ------------------------------------------------------------ janitor
@@ -1958,6 +2402,9 @@ export class AgencWallet {
     await this.#refill().catch((error) => {
       this.#log(`refill: ${describeError(error)}`);
     });
+    for (const agent of Object.values(this.#store.state.agents)) {
+      if ((agent.earn.offer ?? null) !== null) await this.#advanceOffer(agent.id);
+    }
   }
 
   /** Notice money that arrived in the main balance from outside. */
@@ -2055,6 +2502,23 @@ export class AgencWallet {
     this.#timer = null;
     await this.#earn.stopAll();
     if (this.#ticking !== null) await this.#ticking.catch(() => undefined);
+    // Nobody will be here to do the work, so services come off offer. Best
+    // effort within a short budget: the next start reads the chain and puts
+    // them back, wherever this got to.
+    this.#closing = true;
+    const offering = Object.values(this.#store.state.agents).filter(
+      (agent) => (agent.earn.offer ?? null)?.listed === true,
+    );
+    if (offering.length > 0) {
+      let budget: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.all(offering.map((agent) => this.#advanceOffer(agent.id))),
+        new Promise<void>((resolve) => {
+          budget = setTimeout(resolve, CLOSE_PAUSE_BUDGET_MS);
+        }),
+      ]);
+      clearTimeout(budget);
+    }
     this.#releaseLock();
   }
 }

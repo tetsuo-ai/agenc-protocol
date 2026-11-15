@@ -21,6 +21,46 @@ const MAX_STATE_BYTES = 32 * 1024 * 1024;
 const MAX_ACTIVITY = 1_000;
 const MAX_FINISHED_JOBS = 500;
 
+/**
+ * A service an earning agent offers for others to hire.
+ *
+ * The record says what the person WANTS on offer. What is actually on the
+ * marketplace is read from the chain on every housekeeping pass and brought
+ * in line one step at a time, so a crash between steps loses nothing.
+ */
+export interface OfferRecord {
+  /** Random per offer; with the agent's marketplace address it fixes the listing address. */
+  listingIdHex: string;
+  /** The listing address, known once the agent is registered on the marketplace. */
+  listing: string | null;
+  /** True once the listing was seen on-chain. Its deposit is paid from then on. */
+  listed: boolean;
+  /** Fixed once the listing exists (the marketplace does not rename listings). */
+  name: string;
+  summary: string;
+  category: string;
+  priceLamports: string;
+  /** Seconds the agent gets to deliver a hired job. */
+  deliverySecs: number;
+  /** The advertised description, and the hash of it the listing commits to. */
+  spec: Record<string, unknown>;
+  specHashHex: string;
+  /** False once the person withdrew the offer; the listing is then kept paused. */
+  wanted: boolean;
+  /** What the last housekeeping pass found. */
+  status: "getting_ready" | "being_checked" | "live" | "paused" | "problem";
+  /** A plain sentence when `status` is "problem". */
+  error: string | null;
+  /** When the marketplace's safety check was last asked, to space out retries. */
+  lastCheckAt: number | null;
+  /**
+   * The sentence the safety check refused this exact description with. It is
+   * not asked again until the description changes.
+   */
+  refused: string | null;
+  signatures: { create?: string; update?: string; state?: string };
+}
+
 export interface AgentRecord {
   id: string;
   name: string;
@@ -40,6 +80,8 @@ export interface AgentRecord {
     minPayCents: number;
     jobsDone: number;
     lastError: string | null;
+    /** Absent in journals written before offers existed; treat as null. */
+    offer?: OfferRecord | null;
   };
 }
 

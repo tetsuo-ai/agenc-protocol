@@ -83,6 +83,16 @@ describe("the wallet service", () => {
         agent.call("wallet.withdraw", { to: other.address, amount: "all" }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(agent.call("approvals.list", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      // Earning and what is put on offer are the owner's decisions too.
+      await expect(
+        agent.call("earn.set", { agentId: mine.id, enabled: true }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(
+        agent.call("earn.offer", {
+          agentId: mine.id,
+          offer: { name: "Anything", summary: "Anything at all.", price: { usdCents: 1 } },
+        }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
     }
     // A credential for one agent does not open another agent's lane.
     await expect(

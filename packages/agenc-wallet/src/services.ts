@@ -33,6 +33,14 @@ export interface AttestTaskInput {
   jobSpec: Record<string, unknown>;
 }
 
+export interface AttestListingInput {
+  listing: Address;
+  /** The canonical hash of `spec`, as committed in the listing on-chain. */
+  specHashHex: string;
+  /** The listing's advertised description (see {@link buildListingSpec}). */
+  spec: Record<string, unknown>;
+}
+
 /** How the earn side publishes a delivery so the buyer can fetch it. */
 export interface ResultUploader {
   /** Passed to the worker runtime as `resultUploader`. */
@@ -51,6 +59,18 @@ export interface MarketServices {
   trustedModerators(): Promise<Address[]>;
   /** Ask for a listing to be attested when no accepted attestation exists. */
   acquireListingAttestation(listing: Address): Promise<void>;
+  /**
+   * Where the description of a service this wallet offers will be readable
+   * once published: the address written into the listing. Null when this
+   * network has nowhere to publish it, and a service cannot be offered then.
+   */
+  listingSpecUri(specHashHex: string): Promise<string | null>;
+  /**
+   * Publish the description of a service this wallet offers and have the
+   * listing attested for exactly that description, so buyers can hire it.
+   * The listing must already exist on-chain with this hash.
+   */
+  attestListing(input: AttestListingInput): Promise<void>;
   /**
    * Publish the job spec where providers can read it and have it attested
    * for exactly `(task, jobSpecHashHex)`. Returns where it was published.
@@ -386,6 +406,47 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       throw new WalletError("NOT_AVAILABLE", "This service cannot be hired right now.");
     },
 
+    async listingSpecUri(specHashHex) {
+      return this.jobSpecUriFor(specHashHex);
+    },
+
+    async attestListing(input) {
+      const { status, body } = await requestJson(
+        fetchImpl,
+        `${attestUrl}/v1/moderation/listings`,
+        { method: "POST", body: { listing: input.listing, spec: input.spec } },
+        { timeoutMs: 120_000, maxBytes: 64 * 1024 },
+      );
+      const data = record(body);
+      if (status === 200 && data?.ok === true) {
+        if (data.attested !== true) {
+          throw new WalletError(
+            "NOT_ALLOWED",
+            "The service's description did not pass the marketplace's safety check. Change the wording and try again.",
+          );
+        }
+        if (data.specHash !== input.specHashHex) {
+          throw new WalletError(
+            "NETWORK",
+            "The marketplace answered about a different description. The service is not on offer yet.",
+          );
+        }
+        return;
+      }
+      // 404 is the checker not seeing a listing created seconds ago; it is
+      // retried like any other temporary answer.
+      if (status === 422 || status === 400) {
+        throw new WalletError(
+          "NOT_ALLOWED",
+          "The marketplace refused this service's description, so it is not on offer.",
+        );
+      }
+      throw new WalletError(
+        "NETWORK",
+        "The marketplace's safety check is busy. The service goes on offer as soon as it answers.",
+      );
+    },
+
     async attestTask(input) {
       const { status, body } = await requestJson(
         fetchImpl,
@@ -526,6 +587,28 @@ export function buildJobSpec(input: {
     deliverable:
       "Put the complete result in your submission. The buyer reads exactly what you submit.",
     sourceListing: input.listing,
+  };
+}
+
+/**
+ * Build the advertised description of a service this wallet offers, in the
+ * shape the marketplace publishes for every listing: the display document
+ * lives under `custom.listingMetadata`. Deterministic for the same inputs, so
+ * the hash committed in the listing can be reproduced later.
+ */
+export function buildListingSpec(input: {
+  name: string;
+  summary: string;
+  category: string;
+}): Record<string, unknown> {
+  return {
+    category: input.category,
+    custom: {
+      listingMetadata: {
+        displayName: input.name,
+        longDescription: input.summary,
+      },
+    },
   };
 }
 

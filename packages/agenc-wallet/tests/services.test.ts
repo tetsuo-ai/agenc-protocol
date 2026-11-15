@@ -7,6 +7,7 @@ import { generateKeyPairSigner, getAddressEncoder, type Address } from "@solana/
 import {
   artifactUploadMessage,
   buildJobSpec,
+  buildListingSpec,
   createHostedServices,
   decodeResultPointer,
   digestFromPointer,
@@ -188,6 +189,59 @@ describe("the safety check", () => {
     await expect(
       createHostedServices({ fetchImpl: fetch }).acquireListingAttestation(LISTING as Address),
     ).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+  });
+
+  it("publishes and attests the description of a service this wallet offers", async () => {
+    const spec = buildListingSpec({
+      name: "Line Writer",
+      summary: "One friendly line about anything you name.",
+      category: "other",
+    });
+    // The shape the marketplace publishes for every listing.
+    expect(spec).toEqual({
+      category: "other",
+      custom: {
+        listingMetadata: {
+          displayName: "Line Writer",
+          longDescription: "One friendly line about anything you name.",
+        },
+      },
+    });
+    const hash = await jobSpecHash(spec);
+    const { fetch, calls } = fakeFetch({
+      "GET https://attest.agenc.ag/v1/info": INFO,
+      "POST https://attest.agenc.ag/v1/moderation/listings": ({ init }) => {
+        expect(JSON.parse(String(init?.body))).toEqual({ listing: LISTING, spec });
+        return json({ ok: true, attested: true, verdict: "clean", specHash: hash.hex, pinned: true });
+      },
+    });
+    const services = createHostedServices({ fetchImpl: fetch });
+    // The address written into the listing is an https one the catalog accepts.
+    expect(await services.listingSpecUri(hash.hex)).toBe(
+      `https://marketplace.agenc.tech/api/job-specs/${hash.hex}`,
+    );
+    await services.attestListing({ listing: LISTING as Address, specHashHex: hash.hex, spec });
+    expect(calls).toContain("POST https://attest.agenc.ag/v1/moderation/listings");
+  });
+
+  it("tells a refused description apart from a check that should be retried", async () => {
+    const input = { listing: LISTING as Address, specHashHex: "ab".repeat(32), spec: {} };
+    const offer = (route: Route): Promise<void> =>
+      createHostedServices({
+        fetchImpl: fakeFetch({ "POST https://attest.agenc.ag/v1/moderation/listings": route }).fetch,
+      }).attestListing(input);
+
+    await expect(
+      offer(() => json({ ok: true, attested: false, verdict: "blocked", specHash: input.specHashHex })),
+    ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    await expect(offer(() => json({ ok: false }, 422))).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    // Busy, not yet readable, or a listing the checker has not seen yet.
+    for (const status of [404, 409, 429, 503]) {
+      await expect(offer(() => json({ ok: false }, status))).rejects.toMatchObject({ code: "NETWORK" });
+    }
+    await expect(
+      offer(() => json({ ok: true, attested: true, specHash: "cd".repeat(32) })),
+    ).rejects.toMatchObject({ code: "NETWORK" });
   });
 
   it("derives where an attested spec lives from the registry", async () => {

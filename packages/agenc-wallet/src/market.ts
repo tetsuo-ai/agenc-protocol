@@ -841,3 +841,115 @@ export async function agentAddressFor(agentId: Uint8Array): Promise<Address> {
   const [agent] = await findAgentPda({ agentId });
   return agent;
 }
+
+// ------------------------------------------------- offering a service
+//
+// The provider side of a listing: an earning agent advertises one service,
+// and the stock worker loop then takes the hires made against it.
+
+/** Size of a service listing account (measured on mainnet: 697 bytes). */
+export const LISTING_ACCOUNT_SPACE = 697;
+
+/** The on-chain name of a listing holds this many bytes of UTF-8. */
+export const LISTING_NAME_MAX_BYTES = values.LISTING_NAME_BYTES;
+
+/** The address of the listing a provider agent creates with this listing id. */
+export async function listingAddressFor(
+  providerAgent: Address,
+  listingId: Uint8Array,
+): Promise<Address> {
+  const [listing] = await facade.findListingPda({ providerAgent, listingId });
+  return listing;
+}
+
+export interface ListingOffer {
+  providerAgent: Address;
+  listingId: Uint8Array;
+  name: string;
+  category: string;
+  /** Canonical hash of the advertised description, and where it is published. */
+  specHash: Uint8Array;
+  specUri: string;
+  priceLamports: bigint;
+  /** Seconds the provider gets to deliver a hired job. */
+  deliverySecs: number;
+}
+
+/**
+ * Create the listing. Hires are not capped: the marketplace only lowers a
+ * listing's open-job count when a buyer tidies the finished job, so a cap
+ * would let one buyer who never tidies block every later hire. The worker
+ * still takes one job at a time.
+ */
+export async function sendCreateListing(
+  chain: Chain,
+  provider: KeyPairSigner,
+  offer: ListingOffer,
+): Promise<string> {
+  const result = await chain.clientFor(provider).createServiceListing({
+    providerAgent: offer.providerAgent,
+    authority: provider,
+    listingId: offer.listingId,
+    name: offer.name,
+    category: offer.category as never,
+    tags: [],
+    specHash: offer.specHash,
+    specUri: offer.specUri,
+    price: offer.priceLamports,
+    priceMint: null,
+    requiredCapabilities: 1n,
+    defaultDeadlineSecs: BigInt(offer.deliverySecs),
+    maxOpenJobs: 0,
+    operator: null,
+    operatorFeeBps: 0,
+  });
+  return result.signature;
+}
+
+/** Change a listing's price, and its description when one is given. */
+export async function sendUpdateListing(
+  chain: Chain,
+  provider: KeyPairSigner,
+  input: {
+    listing: Address;
+    providerAgent: Address;
+    priceLamports: bigint;
+    spec: { hash: Uint8Array; uri: string } | null;
+  },
+): Promise<string> {
+  const result = await chain.clientFor(provider).send([
+    await facade.updateServiceListing({
+      listing: input.listing,
+      providerAgent: input.providerAgent,
+      authority: provider,
+      price: input.priceLamports,
+      ...(input.spec === null
+        ? { specHash: null, specUri: null }
+        : { specHash: input.spec.hash, specUri: input.spec.uri }),
+      tags: null,
+      requiredCapabilities: null,
+      defaultDeadlineSecs: null,
+      maxOpenJobs: null,
+      operator: null,
+      operatorFeeBps: null,
+    }),
+  ]);
+  return result.signature;
+}
+
+/** Take a listing off offer (paused) or put it back (active). */
+export async function sendListingState(
+  chain: Chain,
+  provider: KeyPairSigner,
+  input: { listing: Address; providerAgent: Address; active: boolean },
+): Promise<string> {
+  const result = await chain.clientFor(provider).send([
+    await facade.setServiceListingState({
+      listing: input.listing,
+      authority: provider,
+      providerAgent: input.providerAgent,
+      state: input.active ? "Active" : "Paused",
+    }),
+  ]);
+  return result.signature;
+}
