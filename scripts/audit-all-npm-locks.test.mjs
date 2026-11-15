@@ -24,7 +24,10 @@ const policy = JSON.parse(
   ),
 );
 const review = policy.reviews[0];
-const now = Date.parse(review.reviewedAt) + 1_000;
+// A moment at which every review on file is in force: just after the newest began.
+const now =
+  Math.max(...policy.reviews.map((entry) => Date.parse(entry.reviewedAt))) +
+  1_000;
 function inputs() {
   return {
     root: ".",
