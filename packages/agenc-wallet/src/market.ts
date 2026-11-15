@@ -726,6 +726,103 @@ export async function sendReject(
 }
 
 /**
+ * Turn a delivery down and hold the price for review. Unlike a plain
+ * rejection, this does not hand the money back: the job stays with the
+ * provider, a reviewer decides who gets the price, and if nobody rules before
+ * the review time runs out the provider is paid. A buyer cannot read the work
+ * and then walk away with both it and the price.
+ */
+export async function sendRejectAndFreeze(
+  chain: Chain,
+  buyer: KeyPairSigner,
+  task: Address,
+  providerAgent: Address,
+  rejectionHash: Uint8Array,
+): Promise<string> {
+  const [claim] = await findClaimPda({ task, bidder: providerAgent });
+  const client = chain.clientFor(buyer);
+  const result = await client.send([
+    await facade.rejectAndFreeze({ task, claim, creator: buyer, rejectionHash }),
+  ]);
+  return result.signature;
+}
+
+/**
+ * Settle a turned-down job whose review time ran out with no ruling: the
+ * provider is paid. Anyone may send it, so either side's wallet does.
+ */
+export async function sendFrozenExpiry(
+  chain: Chain,
+  sender: KeyPairSigner,
+  task: Address,
+  providerAgent: Address,
+): Promise<string> {
+  const account = await readTask(chain, task);
+  if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  const payees = await settlementPayees(chain, account, providerAgent);
+  const [claim] = await findClaimPda({ task, bidder: providerAgent });
+  const [hireRecord] = await findHireRecordPda({ task });
+  const client = chain.clientFor(sender);
+  const result = await client.send([
+    await facade.expireRejectFrozen({
+      task,
+      claim,
+      worker: providerAgent,
+      treasury: payees.treasury,
+      creator: account.creator,
+      workerAuthority: payees.workerAuthority,
+      authority: sender,
+      hireRecord,
+      ...(payees.operator !== null ? { operator: payees.operator } : {}),
+      ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
+    }),
+  ]);
+  return result.signature;
+}
+
+/**
+ * Rule on a turned-down job as the marketplace's reviewer. `payProvider`
+ * true overturns the buyer's rejection and pays the provider; false upholds
+ * it and the price goes back to the buyer. Only the marketplace's own
+ * approvers can send this, and the program wants at least two of them to
+ * agree. A wallet never does: it is here for the practice marketplace, which
+ * has reviewers of its own, and for tests.
+ */
+export async function sendFrozenRuling(
+  chain: Chain,
+  reviewers: readonly KeyPairSigner[],
+  task: Address,
+  providerAgent: Address,
+  payProvider: boolean,
+): Promise<string> {
+  const account = await readTask(chain, task);
+  if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  const payees = await settlementPayees(chain, account, providerAgent);
+  const [claim] = await findClaimPda({ task, bidder: providerAgent });
+  const [hireRecord] = await findHireRecordPda({ task });
+  const reviewer = reviewers[0];
+  if (reviewer === undefined) throw new WalletError("BAD_REQUEST", "A ruling needs a reviewer.");
+  const client = chain.clientFor(reviewer);
+  const result = await client.send([
+    await facade.resolveRejectFrozen({
+      task,
+      claim,
+      worker: providerAgent,
+      treasury: payees.treasury,
+      creator: account.creator,
+      workerAuthority: payees.workerAuthority,
+      authority: reviewer,
+      hireRecord,
+      approveCompletion: payProvider,
+      multisigSigners: [...reviewers],
+      ...(payees.operator !== null ? { operator: payees.operator } : {}),
+      ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
+    }),
+  ]);
+  return result.signature;
+}
+
+/**
  * Cancel and refund. Allowed while nobody has started, or after the deadline
  * passed with a provider who started and never delivered.
  */

@@ -166,6 +166,10 @@ export interface ServiceView {
  * buying:  needs_approval -> starting -> waiting -> working -> delivered
  *          -> paid | refunded | problem
  * working: working -> delivered -> paid | problem
+ *
+ * A delivery the buyer turns down goes to "in_review": the price stays held,
+ * a reviewer decides who gets it, and if nobody rules by `reviewEndsAt` the
+ * provider is paid.
  */
 export type JobStatus =
   | "needs_approval"
@@ -175,6 +179,7 @@ export type JobStatus =
   | "working"
   | "delivered"
   | "changes_requested"
+  | "in_review"
   | "paid"
   | "refunded"
   | "problem"
@@ -214,6 +219,11 @@ export interface JobView {
   autoApproveAt: number | null;
   /** When a job nobody has started is refunded by itself. */
   autoRefundAt: number | null;
+  /**
+   * While "in_review": when the provider is paid if no reviewer has ruled.
+   * Null otherwise.
+   */
+  reviewEndsAt: number | null;
   canApprove: boolean;
   canAskChanges: boolean;
   canRefund: boolean;

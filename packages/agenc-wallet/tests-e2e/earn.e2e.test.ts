@@ -70,4 +70,63 @@ describe("earning", () => {
     expect(off.earn.enabled).toBe(false);
     expect(off.earn.state).toBe("off");
   }, 90_000);
+
+  it("collects the pay itself when a buyer turns the work down and nobody rules", async () => {
+    world = await startWorld({
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('Here is the finished work.')", "{prompt}"],
+          mode: "sandboxed",
+          envAllowlist: [],
+          timeoutMs: 30_000,
+        },
+        pollIntervalMs: 150,
+      },
+    });
+    const { wallet, sandbox, clock } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    const open = await sandbox.postOpenJob({
+      title: "Write a line",
+      instructions: "Write one friendly line.",
+      rewardLamports: 50n * CENT,
+    });
+    await eventually(async () => {
+      const jobs = await wallet.listJobs({ role: "working" }, true);
+      return jobs.find((job) => job.status === "delivered");
+    }, 30_000);
+
+    // The buyer reads the work and turns it down. The price goes on hold; it
+    // does not go back to the buyer, and the provider can see where it stands.
+    await open.turnDown();
+    await wallet.tick();
+    const held = (await wallet.listJobs({ role: "working" }, true)).find(
+      (job) => job.task === open.task,
+    );
+    expect(held?.status).toBe("in_review");
+    expect(held?.reviewEndsAt).not.toBeNull();
+    expect(held?.statusText).toMatch(/turned this down.*your agent is paid/);
+    expect((await wallet.overview()).agents[0]!.earned.lamports).toBe("0");
+
+    // Before the review time is up, nothing is collected.
+    sandbox.advanceClock(3_000);
+    clock.now += 3_000_000;
+    await wallet.tick();
+    expect((await wallet.overview()).agents[0]!.earned.lamports).toBe("0");
+
+    // Nobody ruled. The provider's own wallet settles the job and is paid:
+    // it does not depend on the buyer's software.
+    sandbox.advanceClock(720);
+    clock.now += 720_000;
+    await wallet.tick();
+    const paid = await eventually(async () => {
+      const overview = await wallet.overview();
+      return BigInt(overview.agents[0]!.earned.lamports) > 0n ? overview.agents[0]! : null;
+    }, 30_000);
+    expect(paid.earned.lamports).toBe(((50n * CENT * 95n) / 100n).toString());
+    const done = (await wallet.listJobs({ role: "working" }, true)).find(
+      (job) => job.task === open.task,
+    );
+    expect(done?.status).toBe("paid");
+  }, 120_000);
 });

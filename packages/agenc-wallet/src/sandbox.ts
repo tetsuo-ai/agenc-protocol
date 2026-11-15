@@ -61,6 +61,7 @@ import {
   type Chain,
 } from "./chain.js";
 import { WalletError } from "./errors.js";
+import { sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
 import {
   buildJobSpec,
@@ -114,6 +115,8 @@ export interface OpenJob {
   task: Address;
   /** The house buyer approves the delivery, paying whoever did the job. */
   approve(): Promise<void>;
+  /** The house buyer turns the delivery down, which puts the price on hold for review. */
+  turnDown(): Promise<void>;
   /** True once someone has delivered and the job waits for approval. */
   delivered(): Promise<boolean>;
 }
@@ -138,6 +141,15 @@ export interface Sandbox {
   }): Promise<OpenJob>;
   /** Move the sandbox clock forward. */
   advanceClock(seconds: number): void;
+  /**
+   * Rule on a delivery its buyer turned down, as the practice marketplace's
+   * reviewer. `payProvider` false sends the price back to the buyer.
+   */
+  ruleOnTurnedDown(input: {
+    task: Address;
+    providerAgent: Address;
+    payProvider: boolean;
+  }): Promise<void>;
   /** Deliveries published so far, keyed by fingerprint (tests). */
   readonly deliveries: ReadonlyMap<string, Uint8Array>;
 }
@@ -219,6 +231,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   svm.withTransactionHistory(0n);
   const workDir = options.workDir ?? mkdtempSync(path.join(tmpdir(), "agenc-wallet-sandbox-"));
 
+  // The practice marketplace's reviewers. The program wants two approvals
+  // for a ruling, so there are two.
+  const reviewers = [await generateKeyPairSigner(), await generateKeyPairSigner()];
+  for (const reviewer of reviewers) svm.airdrop(reviewer.address, lamports(1_000_000_000n));
+
   // Stamp the live network's fee and stake so practice numbers are honest.
   {
     const [pda] = await findProtocolConfigPda();
@@ -229,6 +246,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       ...config,
       protocolFeeBps: SANDBOX_PROTOCOL_FEE_BPS,
       minAgentStake: SANDBOX_MIN_AGENT_STAKE,
+      // The practice marketplace's own reviewers: the keys that may rule on a
+      // delivery its buyer turned down.
+      multisigThreshold: reviewers.length,
+      multisigOwnersLen: reviewers.length,
+      multisigOwners: config.multisigOwners.map(
+        (owner, index) => reviewers[index]?.address ?? owner,
+      ),
     });
     svm.setAccount({
       address: pda,
@@ -616,6 +640,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       clock.unixTimestamp += BigInt(seconds);
       svm.setClock(clock);
     },
+    async ruleOnTurnedDown({ task, providerAgent, payProvider }) {
+      await sendFrozenRuling(chain, reviewers, task, providerAgent, payProvider);
+    },
 
     async addService(service) {
       const provider = await newProvider(service.replyPrefix, service.noShow === true);
@@ -756,6 +783,28 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           await sendApproval(chain, buyer, task, claim.worker);
+        },
+        async turnDown() {
+          const { sendRejectAndFreeze } = await import("./market.js");
+          const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
+            "@tetsuo-ai/marketplace-sdk"
+          );
+          const claims = await gpa.getProgramAccounts({
+            filters: [
+              { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskClaimDiscriminatorBytes()) } },
+            ],
+          });
+          const claim = claims
+            .map((entry) => getTaskClaimDecoder().decode(entry.data))
+            .find((entry) => entry.task === task);
+          if (claim === undefined) throw new Error("nobody has taken the sandbox job");
+          await sendRejectAndFreeze(
+            chain,
+            buyer,
+            task,
+            claim.worker,
+            (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array,
+          );
         },
       };
     },
