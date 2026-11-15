@@ -129,14 +129,24 @@ export interface WalletMethods {
   };
 
   /**
-   * Seal every key and the wallet's records into one backup, locked with a
-   * password the person chooses. Returns the backup file's text: the host
-   * writes it wherever the person says. Restoring is not a method here: it
+   * Seal every key and the wallet's records into one backup at `file` (a
+   * full path the host chose with the person), locked with a password the
+   * person chooses. The service writes the file itself, so a backup of any
+   * size never has to fit in one message. Restoring is not a method here: it
    * replaces the wallet, so the host does it with the service stopped.
    */
   "backup.export": {
-    params: { password: string };
-    result: { file: string; createdAt: number; agents: number };
+    params: { password: string; file: string };
+    result: { createdAt: number; agents: number; main: string };
+  };
+  /**
+   * Try a password on the backup at `file` without changing anything, and
+   * say what the backup holds. A host asks this before it stops the service
+   * to restore, so a mistyped password costs the person nothing.
+   */
+  "backup.check": {
+    params: { password: string; file: string };
+    result: { createdAt: number; agents: number; main: string };
   };
 
   /** Send money from the main balance to an outside address. */

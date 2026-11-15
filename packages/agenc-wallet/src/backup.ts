@@ -22,14 +22,20 @@ import {
 } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
 import { WalletError } from "./errors.js";
@@ -206,6 +212,92 @@ function moneyKind(network: string): string {
   return network === "mainnet" ? "real money" : network === "sandbox" ? "practice money" : "test money";
 }
 
+/** A backup only goes back where its kind of money lives. */
+function assertSameMoney(header: BackupHeader, network: string): void {
+  if (header.network !== network) {
+    throw new WalletError(
+      "BAD_REQUEST",
+      `That backup holds ${moneyKind(header.network)}, and this is ${moneyKind(network)}. It cannot be restored here.`,
+    );
+  }
+}
+
+const NOT_SAVED = "The backup could not be saved there. Choose another folder.";
+
+/**
+ * Put a backup's text where the person chose to keep it: whole or not at
+ * all, and readable by its owner only. The folder is theirs (a documents
+ * folder, a USB stick), so it is neither made nor made private here.
+ */
+export function writeBackupFile(file: string, text: string): void {
+  if (!path.isAbsolute(file)) {
+    throw new WalletError("BAD_REQUEST", "A backup needs a full path to be saved to.");
+  }
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  let fd: number;
+  try {
+    fd = openSync(temporary, "wx", 0o600);
+  } catch {
+    throw new WalletError("BAD_REQUEST", NOT_SAVED);
+  }
+  try {
+    try {
+      writeSync(fd, text);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temporary, file);
+  } catch {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // The temporary file is already gone.
+    }
+    throw new WalletError("BAD_REQUEST", NOT_SAVED);
+  }
+}
+
+/** Read a backup file a person chose. Anything too big to be one is refused unread. */
+export function readBackupFile(file: string): string {
+  if (!path.isAbsolute(file)) {
+    throw new WalletError("BAD_REQUEST", "Say where the backup is with a full path.");
+  }
+  let size: number;
+  try {
+    const info = statSync(file);
+    if (!info.isFile()) throw new Error("not a file");
+    size = info.size;
+  } catch {
+    throw new WalletError("NOT_FOUND", "That backup file could not be read.");
+  }
+  if (size > MAX_BACKUP_BYTES) {
+    throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
+  }
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    throw new WalletError("NOT_FOUND", "That backup file could not be read.");
+  }
+}
+
+/**
+ * Try a password on a backup without changing anything: what it holds when
+ * the password opens it, a sentence to show when it does not.
+ */
+export function checkBackup(input: { text: string; password: string; network: string }): BackupHeader {
+  const { header, content } = openBackup(input.text, input.password);
+  assertSameMoney(header, input.network);
+  const ids = Object.keys(content.keys);
+  if (!ids.includes(MAIN_KEY) || !ids.every((id) => KEY_ID.test(id))) {
+    throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
+  }
+  return header;
+}
+
 function parseBackup(text: unknown): BackupFile {
   const notABackup = (): never => {
     throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
@@ -331,12 +423,7 @@ export async function restoreBackup(input: {
     throw new WalletError("INTERNAL", "The wallet needs an absolute folder to keep its files in.");
   }
   const { header, content } = openBackup(input.text, input.password);
-  if (header.network !== input.network) {
-    throw new WalletError(
-      "BAD_REQUEST",
-      `That backup holds ${moneyKind(header.network)}, and this is ${moneyKind(input.network)}. It cannot be restored here.`,
-    );
-  }
+  assertSameMoney(header, input.network);
   const ids = Object.keys(content.keys);
   if (!ids.includes(MAIN_KEY) || !ids.every((id) => KEY_ID.test(id))) {
     throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");

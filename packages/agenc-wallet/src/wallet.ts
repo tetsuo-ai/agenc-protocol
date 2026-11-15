@@ -34,7 +34,7 @@ import {
   type ApprovalTarget,
 } from "./approval.js";
 import { EarnHost, type EarnNotice, type EarnOptions } from "./earn.js";
-import { createBackup } from "./backup.js";
+import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import {
   acceptedApprovers,
@@ -661,10 +661,14 @@ export class AgencWallet {
 
   /**
    * Seal every key and the journal into one backup locked with `password`,
-   * and return the file's text. Owner only: this is the one place a key
-   * leaves the vault, and it leaves encrypted.
+   * written to `file`. Owner only: this is the one place a key leaves the
+   * vault, and it leaves encrypted. The wallet counts itself backed up only
+   * once the file is in place.
    */
-  async exportBackup(password: string): Promise<{ file: string; createdAt: number; agents: number }> {
+  async exportBackup(
+    password: string,
+    file: string,
+  ): Promise<{ createdAt: number; agents: number; main: string }> {
     const { text, header } = await createBackup({
       dataDir: this.#config.dataDir,
       vault: this.#vault,
@@ -673,11 +677,29 @@ export class AgencWallet {
       agents: Object.keys(this.#store.state.agents).length,
       now: this.#now(),
     });
+    writeBackupFile(file, text);
     this.#store.update((draft) => {
       draft.backup = { at: header.createdAt, keyIds: this.#vault.ids() };
     });
     this.#emit({ type: "overview" });
-    return { file: text, createdAt: header.createdAt, agents: header.agents };
+    return { createdAt: header.createdAt, agents: header.agents, main: header.main };
+  }
+
+  /**
+   * Try a password on the backup at `file` without changing anything. A host
+   * asks this before it stops the service to restore, so a mistyped password
+   * costs the person nothing.
+   */
+  async checkBackup(
+    password: string,
+    file: string,
+  ): Promise<{ createdAt: number; agents: number; main: string }> {
+    const header = checkBackup({
+      text: readBackupFile(file),
+      password,
+      network: this.#chain.network,
+    });
+    return { createdAt: header.createdAt, agents: header.agents, main: header.main };
   }
 
   // ------------------------------------------------------------- agents

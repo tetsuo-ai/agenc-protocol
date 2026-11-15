@@ -1,7 +1,7 @@
 // Backing the wallet up from the running service and bringing it back on
 // another computer: the same addresses, the same agents, the same jobs.
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,16 +30,45 @@ describe("backing the wallet up", () => {
     await wallet.createAgent("My assistant");
     expect((await wallet.overview()).backup).toEqual({ at: null, upToDate: false });
 
-    await expect(wallet.exportBackup("short")).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    const made = await wallet.exportBackup("a long enough password");
+    const folder = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-backup-"));
+    const file = path.join(folder, "backup.agencbackup");
+    await expect(wallet.exportBackup("short", file)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    // A backup that could not be put where the person said is not a backup:
+    // the wallet does not count itself backed up, and leaves nothing behind.
+    await expect(
+      wallet.exportBackup("a long enough password", path.join(folder, "no-such-folder", "backup.agencbackup")),
+    ).rejects.toMatchObject({ message: "The backup could not be saved there. Choose another folder." });
+    await expect(wallet.exportBackup("a long enough password", "backup.agencbackup")).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect((await wallet.overview()).backup).toEqual({ at: null, upToDate: false });
+    expect(readdirSync(folder)).toEqual([]);
+
+    const made = await wallet.exportBackup("a long enough password", file);
     expect(made.agents).toBe(1);
+    expect(made.main).toBe((await wallet.overview()).main.address);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readdirSync(folder)).toEqual(["backup.agencbackup"]);
     expect((await wallet.overview()).backup).toEqual({ at: made.createdAt, upToDate: true });
+
+    // The password can be tried without changing anything.
+    await expect(wallet.checkBackup("not the password", file)).rejects.toMatchObject({
+      message: "That password does not open this backup.",
+    });
+    expect(await wallet.checkBackup("a long enough password", file)).toEqual(made);
+    await expect(wallet.checkBackup("a long enough password", path.join(folder, "gone"))).rejects.toMatchObject({
+      message: "That backup file could not be read.",
+    });
 
     // A wallet made after the backup is not in it.
     await wallet.createAgent("Helper");
     expect((await wallet.overview()).backup).toEqual({ at: made.createdAt, upToDate: false });
-    await wallet.exportBackup("a long enough password");
+    // Saving over the old file replaces it whole.
+    const again = await wallet.exportBackup("a long enough password", file);
+    expect(again.agents).toBe(2);
+    expect((await wallet.checkBackup("a long enough password", file)).agents).toBe(2);
     expect((await wallet.overview()).backup.upToDate).toBe(true);
+    expect(existsSync(file)).toBe(true);
   });
 
   it("comes back whole on another computer", async () => {
@@ -52,7 +81,9 @@ describe("backing the wallet up", () => {
     expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
     const before = await wallet.overview();
 
-    const { file, createdAt } = await wallet.exportBackup("a long enough password");
+    const saved = path.join(mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-backup-")), "backup.agencbackup");
+    const { createdAt } = await wallet.exportBackup("a long enough password", saved);
+    const file = readFileSync(saved, "utf8");
     // The first computer is gone.
     await wallet.close();
 
