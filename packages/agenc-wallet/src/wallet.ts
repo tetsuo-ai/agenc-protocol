@@ -538,9 +538,12 @@ export class AgencWallet {
     return this.#offerCostLamports;
   }
 
-  /** The agent's marketplace deposit; only read for agents that ever earned. */
+  /**
+   * The agent's marketplace deposit. It stays locked while the agent is
+   * registered, whether or not taking jobs is switched on, so it is shown
+   * either way. An agent that never registered costs no network read.
+   */
   async #setAside(agent: AgentRecord): Promise<bigint> {
-    if (!agent.earn.enabled && agent.earn.jobsDone === 0) return 0n;
     return this.#earn.setAside(agent.id).catch(() => 0n);
   }
 
@@ -2180,7 +2183,10 @@ export class AgencWallet {
     const agent = this.#store.state.agents[agentId];
     const offer = agent?.earn.offer ?? null;
     if (agent === undefined || offer === null) return false;
-    const wantLive = offer.wanted && agent.earn.enabled && !this.#closing;
+    // On offer only while someone is here to do the work: wanted, taking
+    // jobs switched on, a host that can run jobs at all, and not closing.
+    const wantLive =
+      offer.wanted && agent.earn.enabled && this.#earn.available && !this.#closing;
     const settle = (status: OfferRecord["status"], error: string | null = null): false => {
       if (offer.status !== status || offer.error !== error) {
         this.#patchOffer(agentId, (entry) => {
