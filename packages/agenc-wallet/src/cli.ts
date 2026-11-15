@@ -95,6 +95,12 @@ interface Bootstrap {
   };
   /** Priority fee in micro-lamports per compute unit. */
   computeUnitPrice?: string;
+  /**
+   * The person's own Solana RPC endpoint. It often carries an API key, so a
+   * host hands it over here, on stdin, and never as a flag another process
+   * could read. `--rpc-url` wins when both are given.
+   */
+  rpcUrl?: string;
   /** Play money given to an empty main balance in the sandbox. */
   practiceLamports?: string;
 }
@@ -186,6 +192,22 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
   };
 }
 
+/** The endpoint a host named at start-up, when it is one this service can use. */
+function ownRpcUrl(bootstrap: Bootstrap): string | undefined {
+  if (bootstrap.rpcUrl === undefined) return undefined;
+  let url: URL;
+  try {
+    url = new URL(bootstrap.rpcUrl);
+  } catch {
+    throw new WalletError("BAD_REQUEST", "The Solana connection address is not a web address.");
+  }
+  const local = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new WalletError("BAD_REQUEST", "The Solana connection address must start with https://.");
+  }
+  return bootstrap.rpcUrl;
+}
+
 function log(line: string): void {
   process.stderr.write(`${new Date().toISOString()} ${line}\n`);
 }
@@ -234,7 +256,7 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
   } else {
     chain = createRpcChain({
       network,
-      rpcUrl: (values["rpc-url"] as string | undefined) ?? DEFAULT_RPC_URLS[network],
+      rpcUrl: (values["rpc-url"] as string | undefined) ?? ownRpcUrl(bootstrap) ?? DEFAULT_RPC_URLS[network],
       ...(bootstrap.computeUnitPrice !== undefined
         ? { computeUnitPrice: BigInt(bootstrap.computeUnitPrice) }
         : {}),
