@@ -100,9 +100,11 @@ describe("a wallet backup", () => {
       expect(vault.address(id)).toBe(folder.addresses[id]);
       expect((await vault.signer(id)).address).toBe(folder.addresses[id]);
     }
-    expect(readFileSync(path.join(elsewhere, "state.json"), "utf8")).toBe(
-      readFileSync(path.join(folder.dataDir, "state.json"), "utf8"),
-    );
+    // The journal comes back as it was, with one note added: this backup covers it.
+    expect(JSON.parse(readFileSync(path.join(elsewhere, "state.json"), "utf8"))).toEqual({
+      ...(JSON.parse(readFileSync(path.join(folder.dataDir, "state.json"), "utf8")) as object),
+      backup: { at: 1_800_000_000_000, keyIds: ["main", "agent:a1", "agent:a2"] },
+    });
     expect(readFileSync(path.join(elsewhere, "earn", "a1", "state.json"), "utf8")).toBe(
       '{"agentIdHex":"ab"}',
     );
@@ -155,11 +157,11 @@ describe("a wallet backup", () => {
       });
     }
     await expect(restore(text, PASSWORD, "devnet")).rejects.toMatchObject({
-      message: "That backup is for mainnet, and this wallet is on devnet.",
+      message: "That backup holds real money, and this is test money. It cannot be restored here.",
     });
     for (const body of ["", "hello", "{}", JSON.stringify({ format: "something-else" })]) {
       await expect(restore(body)).rejects.toMatchObject({
-        message: "That file is not an AgenC wallet backup.",
+        message: "That file is not an AgenC backup.",
       });
     }
     await expect(restore(JSON.stringify({ ...file, version: 2 }))).rejects.toMatchObject({
@@ -168,7 +170,7 @@ describe("a wallet backup", () => {
     // A backup may not make this program do unbounded work.
     await expect(
       restore(JSON.stringify({ ...file, kdf: { ...(file.kdf as object), N: 2 ** 30 } })),
-    ).rejects.toMatchObject({ message: "That file is not an AgenC wallet backup." });
+    ).rejects.toMatchObject({ message: "That file is not an AgenC backup." });
   });
 
   it("needs a real password and has nothing to back up in practice mode", async () => {

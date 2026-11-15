@@ -201,9 +201,14 @@ export async function createBackup(input: {
   }
 }
 
+/** A network the way a person knows it. */
+function moneyKind(network: string): string {
+  return network === "mainnet" ? "real money" : network === "sandbox" ? "practice money" : "test money";
+}
+
 function parseBackup(text: unknown): BackupFile {
   const notABackup = (): never => {
-    throw new WalletError("BAD_REQUEST", "That file is not an AgenC wallet backup.");
+    throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
   };
   if (typeof text !== "string" || text.length === 0 || text.length > MAX_BACKUP_BYTES) notABackup();
   let value: unknown;
@@ -329,7 +334,7 @@ export async function restoreBackup(input: {
   if (header.network !== input.network) {
     throw new WalletError(
       "BAD_REQUEST",
-      `That backup is for ${header.network}, and this wallet is on ${input.network}.`,
+      `That backup holds ${moneyKind(header.network)}, and this is ${moneyKind(input.network)}. It cannot be restored here.`,
     );
   }
   const ids = Object.keys(content.keys);
@@ -342,7 +347,20 @@ export async function restoreBackup(input: {
     if (safe === null || typeof body !== "string") {
       throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
     }
-    writes.push({ file: path.join(input.dataDir, safe), bytes: Buffer.from(body, "base64") });
+    let bytes = Buffer.from(body, "base64");
+    if (safe === "state.json") {
+      // The records were sealed a moment before the backup was noted in them.
+      // What comes back is exactly what this file holds, so it says so:
+      // otherwise a wallet just restored would ask to be backed up.
+      try {
+        const state = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+        state.backup = { at: header.createdAt, keyIds: ids };
+        bytes = Buffer.from(JSON.stringify(state), "utf8");
+      } catch {
+        throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
+      }
+    }
+    writes.push({ file: path.join(input.dataDir, safe), bytes });
   }
 
   mkdirSync(input.dataDir, { recursive: true, mode: 0o700 });

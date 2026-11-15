@@ -335,7 +335,7 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
           respond({
             id: request.id,
             ok: false,
-            error: { code: "BUSY", message: "The wallet is busy. Try again in a moment." },
+            error: { code: "BUSY", message: "Busy for a moment. Try again." },
           });
           return;
         }
