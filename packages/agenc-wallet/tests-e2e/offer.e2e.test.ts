@@ -128,6 +128,63 @@ describe("offering a service", () => {
     expect((await agentView(world, buyer.id)).spent.lamports).toBe((30n * CENT).toString());
   }, 120_000);
 
+  it("can be limited to jobs from the wallet's own agents", async () => {
+    // For a host that cannot yet keep a stranger's job away from the
+    // person's files: nothing a stranger wrote is ever run.
+    const lines: string[] = [];
+    world = await startWorld({
+      earn: {
+        ...EARN,
+        executor: {
+          ...EARN.executor,
+          // The job program is told which agent it works for.
+          argv: [process.execPath, "-e", "process.stdout.write('done by ' + process.argv[1])", "{agent}", "{prompt}"],
+        },
+        ownJobsOnly: true,
+        serviceRefreshMs: 400,
+      },
+      config: { log: (line) => lines.push(line) },
+    });
+    const { wallet, sandbox } = world;
+    expect((await wallet.overview()).earning).toBe("own-jobs");
+    const worker = await wallet.createAgent("Worker");
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINE_WRITER);
+    const live = await offerReaches(world, worker.id, "live");
+
+    // A stranger's public job is left alone, however long it waits.
+    const strangers = await sandbox.postOpenJob({
+      title: "Write a line",
+      instructions: "Write one friendly line.",
+      rewardLamports: 50n * CENT,
+    });
+
+    // An agent added after earning started is one of the wallet's own too.
+    const buyer = await wallet.createAgent("Buyer");
+    await wallet.fundAgent(buyer.id, { usdCents: 500 });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    const { job } = await wallet.hire({
+      agentId: buyer.id,
+      listing: live.earn.offer!.listing!,
+      request: "Write one friendly line about tea.",
+    });
+    const delivered = await eventually(async () => {
+      const view = await wallet.getJob(job.id, true);
+      return view.status === "delivered" ? view : null;
+    }, 60_000);
+    expect(delivered.result?.text).toBe(`done by ${worker.id}`);
+    expect(await strangers.delivered()).toBe(false);
+    expect(sandbox.deliveries.size).toBe(1);
+  }, 120_000);
+
+  it("says whose jobs can be taken", async () => {
+    world = await startWorld();
+    expect((await world.wallet.overview()).earning).toBe("off");
+    await world.wallet.close();
+    world = await startWorld({ earn: EARN });
+    expect((await world.wallet.overview()).earning).toBe("open");
+  });
+
   it("takes a hire straight away while an earlier job still waits to be paid", async () => {
     // No fresh look in this test: the spare money alone has to carry it.
     world = await startWorld({ earn: { ...EARN, serviceRefreshMs: 100_000_000 } });
