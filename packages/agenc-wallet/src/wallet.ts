@@ -245,6 +245,7 @@ export class AgencWallet {
         const offer = this.#store.state.agents[agentId]?.earn.offer ?? null;
         return offer !== null && offer.wanted && offer.listed;
       },
+      ownAddresses: () => this.#walletIds().map((entry) => entry.address),
     });
   }
 
@@ -584,6 +585,7 @@ export class AgencWallet {
         (approval) => approval.status === "pending",
       ).length,
       offline: balances.offline,
+      earning: !this.#earn.available ? "off" : this.#earn.ownJobsOnly ? "own-jobs" : "open",
     };
   }
 

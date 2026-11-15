@@ -73,6 +73,8 @@ interface Bootstrap {
   earn?: {
     executor: { argv: string[]; mode: string; envAllowlist?: string[]; timeoutMs?: number } | null;
     maxRewardLamports?: string | null;
+    /** Take jobs only from this wallet's own addresses. */
+    ownJobsOnly?: boolean;
   } | null;
   hosted?: {
     siteUrl?: string;
@@ -169,6 +171,7 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
     ...(maxReward === undefined
       ? {}
       : { maxRewardLamports: maxReward === null ? null : BigInt(maxReward) }),
+    ...(bootstrap.earn?.ownJobsOnly === true ? { ownJobsOnly: true } : {}),
   };
 }
 

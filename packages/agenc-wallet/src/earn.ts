@@ -33,7 +33,11 @@ import type { MarketServices } from "./services.js";
 
 /** The program the worker hands each job to. */
 export interface EarnExecutor {
-  /** Command and arguments; one element must be exactly "{prompt}". */
+  /**
+   * Command and arguments; one element must be exactly "{prompt}". Wherever
+   * "{agent}" appears it is replaced with the id of the agent doing the job,
+   * so a host can give each agent its own working folder.
+   */
   argv: string[];
   /**
    * "sandboxed": the command confines itself (the worker still gives it a
@@ -58,6 +62,12 @@ export interface EarnOptions {
   pollIntervalMs?: number;
   /** Endpoint recorded with the agent's registration. */
   endpoint?: string;
+  /**
+   * Take jobs only from this wallet's own addresses: its main balance and its
+   * agents. For a host whose executor cannot yet keep a stranger's job away
+   * from the person's files. Nothing a stranger wrote is then ever run.
+   */
+  ownJobsOnly?: boolean;
   /**
    * How often the watch for jobs starts afresh while the agent offers a
    * service. The stock watcher reports a job once. A hire of the agent's own
@@ -109,6 +119,7 @@ export class EarnHost {
   readonly #log: (line: string) => void;
   readonly #notify: (agentId: string, notice: EarnNotice) => void;
   readonly #serves: (agentId: string) => boolean;
+  readonly #ownAddresses: () => Address[];
   readonly #running = new Map<string, Running>();
 
   constructor(deps: {
@@ -121,6 +132,8 @@ export class EarnHost {
     notify: (agentId: string, notice: EarnNotice) => void;
     /** Whether the agent has a service on offer right now. Default: never. */
     serves?: (agentId: string) => boolean;
+    /** Every address of this wallet, for {@link EarnOptions.ownJobsOnly}. */
+    ownAddresses?: () => Address[];
   }) {
     this.#chain = deps.chain;
     this.#services = deps.services;
@@ -129,11 +142,17 @@ export class EarnHost {
     this.#log = deps.log;
     this.#notify = deps.notify;
     this.#serves = deps.serves ?? (() => false);
+    this.#ownAddresses = deps.ownAddresses ?? (() => []);
   }
 
   /** Whether this host can run jobs at all. */
   get available(): boolean {
     return this.#options.executor !== null;
+  }
+
+  /** Whether only jobs from this wallet's own addresses are taken. */
+  get ownJobsOnly(): boolean {
+    return this.#options.ownJobsOnly === true;
   }
 
   stateDir(agentId: string): string {
@@ -354,7 +373,7 @@ export class EarnHost {
         minRewardLamports: agent.minRewardLamports,
         maxRewardLamports: maxReward,
         allowUnboundedReward: maxReward === null,
-        executor: executor.argv,
+        executor: executor.argv.map((part) => part.replaceAll("{agent}", agent.agentId)),
         executorMode: executor.mode,
         executorEnvAllowlist: executor.envAllowlist,
         resultUploader: uploader?.url ?? null,
@@ -397,11 +416,24 @@ export class EarnHost {
       const startedAt = Date.now();
       const refresh = setInterval(
         () => {
-          if (this.#serves(agent.agentId) && Date.now() - startedAt >= refreshMs) run.abort();
+          // An own-jobs loop also starts afresh, to learn of agents added since.
+          const due = this.#serves(agent.agentId) || this.ownJobsOnly;
+          if (due && Date.now() - startedAt >= refreshMs) run.abort();
         },
         Math.max(250, Math.min(refreshMs, 5_000)),
       );
       refresh.unref?.();
+      // Whose jobs this run takes. Decided per run, so an own-jobs loop knows
+      // every agent the wallet has by now.
+      const own = this.ownJobsOnly ? this.#ownAddresses() : null;
+      const runCtx: WorkerContext = {
+        ...ctx,
+        config: {
+          ...ctx.config,
+          creatorAllowlist: own,
+          allowAnyCreator: own === null,
+        },
+      };
       try {
         // `runUp` returns only when its signal aborts; anything else is a
         // failure worth surfacing and retrying after a pause.
@@ -409,7 +441,7 @@ export class EarnHost {
           if (entry.state === "starting") setState("watching");
         }, 3_000);
         try {
-          await runUp(ctx, { signal: run.signal });
+          await runUp(runCtx, { signal: run.signal });
         } finally {
           clearTimeout(watching);
         }

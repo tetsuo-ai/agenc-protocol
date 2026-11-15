@@ -120,6 +120,13 @@ export interface WalletOverview {
   pendingApprovals: number;
   /** True when the chain could not be reached and figures may be stale. */
   offline: boolean;
+  /**
+   * Whose jobs an agent of this wallet may take. "off": this host cannot run
+   * jobs. "own-jobs": only jobs this wallet's own agents ask for, because the
+   * host cannot yet keep a stranger's job away from the person's files.
+   * "open": anyone's.
+   */
+  earning: "off" | "own-jobs" | "open";
 }
 
 /** A service someone offers on the marketplace. */

@@ -149,6 +149,17 @@ wallet shows it as set aside.
 On its own that loop only takes open jobs anyone may claim. Hires go to a
 listed service, so an agent with nothing listed is never hired.
 
+Wherever `{agent}` appears in the executor's argv it is replaced with the id
+of the agent doing the job, so a host can give each agent its own working
+folder.
+
+A job is words a stranger wrote, handed to the executor to act on. The wallet
+bounds the money; what the job can read on the computer is the executor's
+business. A host whose executor cannot yet keep a job away from the person's
+files sets `earn.ownJobsOnly` in the start-up line: the agent then takes jobs
+only from this wallet's own addresses, and nothing a stranger wrote is run.
+`overview.earning` says which applies: `off`, `own-jobs` or `open`.
+
 ## Offering a service
 
 `earn.offer` gives an earning agent one service others can hire:
