@@ -216,7 +216,7 @@ const HOUSE_EXECUTOR_SCRIPT = [
   "  const picture = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);",
   "  const sha = require('node:crypto').createHash('sha256').update(picture).digest('hex');",
   "  require('node:fs').writeFileSync(require('node:path').join(outbox, sha), picture);",
-  "  reply = reply.replace(/\\s+$/, '') + '\\n\\n---\\nFiles with this delivery:\\n1. postcard.png (image/png, ' + picture.length + ' bytes)\\n   ' + linkPrefix + sha + '\\n';",
+  "  reply = reply.trimEnd() + '\\n\\n---\\nFiles with this delivery:\\n1. postcard.png (image/png, ' + picture.length + ' bytes)\\n   ' + linkPrefix + sha + '\\n';",
   "}",
   "process.stdout.write(reply);",
 ].join("\n");
