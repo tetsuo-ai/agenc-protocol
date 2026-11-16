@@ -6,6 +6,8 @@
 // to the wallet (never hold keys or build transactions) can vendor it as-is.
 
 /** A lamport amount as a decimal string (u64-safe). */
+
+import type { DeliveryFile } from "./delivery-files.js";
 export type Lamports = string;
 
 /**
@@ -220,6 +222,11 @@ export interface JobResult {
   hash: string | null;
   /** True when the fetched delivery matched `hash`. */
   verified: boolean;
+  /**
+   * Files that came with the delivery, as its text lists them. A file is
+   * fetched and checked against its fingerprint when asked for (`jobs.file`).
+   */
+  files: DeliveryFile[];
 }
 
 export interface JobView {

@@ -177,6 +177,19 @@ export interface MarketServices {
   }): Promise<{ bytes: Uint8Array; uri: string | null } | null>;
   /** Delivery publishing for an agent that earns, or null when unavailable. */
   resultUploader(signer: KeyPairSigner): ResultUploader | null;
+  /**
+   * What a file's sha-256 is added to, to make its address in the delivery
+   * store. Null when this network has nowhere to keep a delivery's files:
+   * a delivery is then text only.
+   */
+  fileLinkPrefix: string | null;
+  /**
+   * A file that came with a delivery, by its sha-256. The bytes are checked
+   * against it; anything else, and a file that cannot be had, is null. The
+   * file is always fetched from this network's own delivery store, never
+   * from an address a delivery names.
+   */
+  fetchFile(sha256Hex: string): Promise<Uint8Array | null>;
   /** Resolver for `agenc://` job-spec addresses the earn side may meet. */
   resolveAgencUri?: UriFetcher;
   /**
@@ -942,6 +955,21 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         }
       }
       return null;
+    },
+
+    fileLinkPrefix:
+      artifactBaseUrl === null || artifactUploadUrl === null ? null : `${artifactBaseUrl}/artifacts/`,
+
+    async fetchFile(sha256Hex) {
+      if (artifactBaseUrl === null || !HEX64.test(sha256Hex)) return null;
+      try {
+        const bytes = await publicFetcher(`${artifactBaseUrl}/artifacts/${sha256Hex}`);
+        return bytes.length <= MAX_RESULT_BYTES && sha256Hex === createHash("sha256").update(bytes).digest("hex")
+          ? bytes
+          : null;
+      } catch {
+        return null;
+      }
     },
 
     resultUploader(signer) {

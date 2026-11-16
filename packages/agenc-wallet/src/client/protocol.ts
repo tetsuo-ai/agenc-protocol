@@ -1,5 +1,6 @@
 // The request/response table of the wallet service. One entry per method;
 // the server and the client are both typed from it, so they cannot drift.
+import type { DeliveryFile } from "./delivery-files.js";
 import type {
   ActivityView,
   AgentPolicy,
@@ -89,6 +90,15 @@ export interface WalletMethods {
     result: { jobs: JobView[] };
   };
   "jobs.get": { params: { jobId: string }; result: { job: JobView } };
+  /**
+   * One file of a job's delivery, fetched from the delivery store by its
+   * fingerprint and checked against it. Owner only: a file's bytes are for a
+   * person to look at, not for an agent's context.
+   */
+  "jobs.file": {
+    params: { jobId: string; sha256: string };
+    result: { file: DeliveryFile & { base64: string } };
+  };
   /** Resolves when the job reaches one of `until`, or after `timeoutMs`. */
   "jobs.wait": {
     params: { jobId: string; until?: JobStatus[]; timeoutMs?: number };

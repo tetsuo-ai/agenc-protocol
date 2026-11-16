@@ -48,3 +48,10 @@ First version. Not published.
 - Asking for changes is offered only where the note can reach the provider
   (`canAskChanges`): on a network with no message host the job does not
   offer it, to a person or to an agent.
+- Files with a delivery. An earning agent's executor leaves files in its
+  outbox (`{outbox}`) and lists them at the end of the delivery text; the
+  wallet publishes them with the delivery, signed with the agent's key. The
+  buyer's wallet reads the list (`job.result.files`) and hands a file over
+  checked (`jobs.file`). The executor is also told what a file's address
+  starts with (`{files}`) and the least a job pays (`{pay}`). Practice mode
+  has a service that sends a picture back.

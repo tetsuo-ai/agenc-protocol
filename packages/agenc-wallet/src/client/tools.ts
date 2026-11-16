@@ -250,6 +250,13 @@ function describeJob(job: JobView, now: number) {
             untrusted_content: job.result.text,
             link: job.result.uri,
             matches_recorded_fingerprint: job.result.verified,
+            // A service from before files could come with a delivery sends no list.
+            ...((job.result.files ?? []).length > 0
+              ? {
+                  files: (job.result.files ?? []).map((file) => `${file.name} (${file.type})`),
+                  files_note: "The user can open these files in the Market panel.",
+                }
+              : {}),
           },
         }
       : {}),

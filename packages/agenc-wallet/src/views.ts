@@ -153,7 +153,8 @@ export function jobView(
     task: job.task,
     listing: job.listing || null,
     provider: job.providerAgent || null,
-    result: job.result,
+    // A delivery saved before files could come with one has no list.
+    result: job.result === null ? null : { ...job.result, files: job.result.files ?? [] },
     autoApproveAt:
       status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     autoRefundAt: status === "waiting" ? job.autoRefundAt : null,

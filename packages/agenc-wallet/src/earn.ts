@@ -29,14 +29,26 @@ import {
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { describeError } from "./errors.js";
+import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import type { MarketServices } from "./services.js";
 
 /** The program the worker hands each job to. */
 export interface EarnExecutor {
   /**
    * Command and arguments; one element must be exactly "{prompt}". Wherever
-   * "{agent}" appears it is replaced with the id of the agent doing the job,
-   * so a host can give each agent its own working folder.
+   * these appear they are replaced:
+   *
+   * - "{agent}": the id of the agent doing the job, so a host can give each
+   *   agent its own working folder.
+   * - "{outbox}": the folder where the command leaves files to go with its
+   *   delivery, each named by its sha-256 and listed at the end of the
+   *   delivery text (see `client/delivery-files.ts`). Empty when this
+   *   network cannot keep files: the delivery is then text only.
+   * - "{files}": what a file's sha-256 is added to, to make its address in
+   *   the delivery store. Empty with "{outbox}".
+   * - "{pay}": the least a job this agent takes pays, in US cents, so the
+   *   command can keep what it spends on a job under what the job earns.
+   *   Empty when the going rate is not known.
    */
   argv: string[];
   /**
@@ -83,6 +95,8 @@ export interface EarnAgent {
   signer: KeyPairSigner;
   /** Skip jobs that pay less than this. */
   minRewardLamports: bigint;
+  /** The same floor in US cents, or null when the going rate is not known. */
+  minPayCents?: number | null;
 }
 
 /** One job the agent took, as the worker's own ledger records it. */
@@ -307,6 +321,17 @@ export class EarnHost {
     const stateDir = this.stateDir(agent.agentId);
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const uploader = this.#services.resultUploader(agent.signer);
+    // Files can go with a delivery only where there is somewhere to keep them.
+    const fileLinkPrefix = uploader === null ? null : this.#services.fileLinkPrefix;
+    const outboxDir = path.join(stateDir, "outbox");
+    if (fileLinkPrefix !== null) prepareOutbox(outboxDir);
+    const pay = agent.minPayCents ?? null;
+    const fill = (part: string): string =>
+      part
+        .replaceAll("{agent}", agent.agentId)
+        .replaceAll("{outbox}", fileLinkPrefix === null ? "" : outboxDir)
+        .replaceAll("{files}", fileLinkPrefix ?? "")
+        .replaceAll("{pay}", pay === null ? "" : String(Math.max(0, Math.trunc(pay))));
     const maxReward =
       this.#options.maxRewardLamports === undefined
         ? DEFAULT_MAX_REWARD_LAMPORTS
@@ -373,7 +398,7 @@ export class EarnHost {
         minRewardLamports: agent.minRewardLamports,
         maxRewardLamports: maxReward,
         allowUnboundedReward: maxReward === null,
-        executor: executor.argv.map((part) => part.replaceAll("{agent}", agent.agentId)),
+        executor: executor.argv.map(fill),
         executorMode: executor.mode,
         executorEnvAllowlist: executor.envAllowlist,
         resultUploader: uploader?.url ?? null,
@@ -393,7 +418,9 @@ export class EarnHost {
       getBalance: (account) => this.#chain.getBalance(account),
       getMinimumBalanceForRentExemption: (space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),
-      ...(uploader !== null ? { uploadFetch: uploader.fetch } : {}),
+      ...(uploader !== null
+        ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
+        : {}),
       ...(this.#services.resolveAgencUri !== undefined
         ? { resolveAgencUri: this.#services.resolveAgencUri }
         : {}),

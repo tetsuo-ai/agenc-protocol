@@ -61,6 +61,7 @@ import {
   type Chain,
 } from "./chain.js";
 import { WalletError } from "./errors.js";
+import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
 import {
@@ -113,6 +114,8 @@ export interface HouseService {
   replyPrefix: string;
   /** Take jobs but never deliver them (for trying the refund path). */
   noShow?: boolean;
+  /** Send a small picture back with the delivery (for trying a file delivery). */
+  picture?: boolean;
 }
 
 export interface OpenJob {
@@ -190,7 +193,32 @@ const HOUSE_EXECUTOR_SCRIPT = [
   "    request = String(spec.instructions ?? spec.summary ?? spec.title ?? '');",
   "  } catch {}",
   "}",
-  "process.stdout.write(prefix + (request ? '\\n\\nYou asked: ' + request : '') + '\\n');",
+  "let reply = prefix + (request ? '\\n\\nYou asked: ' + request : '') + '\\n';",
+  // With an outbox, send a small picture along: a file named by its sha-256
+  // in the outbox, and listed at the end of the delivery exactly as
+  // client/delivery-files.ts writes the list.
+  "const [outbox, linkPrefix] = process.argv.slice(3);",
+  "if (outbox) {",
+  "  const zlib = require('node:zlib');",
+  "  const w = 160, h = 100, row = w * 3 + 1;",
+  "  const raw = Buffer.alloc(row * h);",
+  "  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {",
+  "    const at = y * row + 1 + x * 3, sun = Math.hypot(x - 118, y - 30) < 16, hill = y > 62 + 10 * Math.sin(x / 17);",
+  "    raw[at] = sun ? 250 : hill ? 60 : 110 + y; raw[at + 1] = sun ? 210 : hill ? 140 - y / 3 : 170 + y / 3; raw[at + 2] = sun ? 90 : hill ? 80 : 235;",
+  "  }",
+  "  const chunk = (type, data) => {",
+  "    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);",
+  "    const out = Buffer.alloc(12 + data.length);",
+  "    out.writeUInt32BE(data.length, 0); body.copy(out, 4); out.writeUInt32BE(zlib.crc32(body) >>> 0, 8 + data.length);",
+  "    return out;",
+  "  };",
+  "  const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 2;",
+  "  const picture = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);",
+  "  const sha = require('node:crypto').createHash('sha256').update(picture).digest('hex');",
+  "  require('node:fs').writeFileSync(require('node:path').join(outbox, sha), picture);",
+  "  reply = reply.replace(/\\s+$/, '') + '\\n\\n---\\nFiles with this delivery:\\n1. postcard.png (image/png, ' + picture.length + ' bytes)\\n   ' + linkPrefix + sha + '\\n';",
+  "}",
+  "process.stdout.write(reply);",
 ].join("\n");
 
 interface HouseProvider {
@@ -199,6 +227,7 @@ interface HouseProvider {
   stateDir: string;
   replyPrefix: string;
   noShow: boolean;
+  picture: boolean;
 }
 
 export interface StartSandboxOptions {
@@ -577,6 +606,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     resultUploader() {
       return { url: "https://sandbox.invalid/results", fetch: uploadFetch };
     },
+    // Practice deliveries and their files never leave this process.
+    fileLinkPrefix: "agenc://artifact/sha256/",
+    async fetchFile(sha256Hex) {
+      return deliveries.get(sha256Hex) ?? null;
+    },
     resolveAgencUri,
     async postChangeRequest(envelope) {
       const list = threads.get(envelope.taskPda) ?? [];
@@ -587,6 +621,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
 
   function workerContext(provider: HouseProvider): WorkerContext {
+    const outboxDir = path.join(provider.stateDir, "outbox");
+    if (provider.picture) prepareOutbox(outboxDir);
     return {
       config: {
         capabilities: 1n,
@@ -595,7 +631,14 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         allowUnboundedReward: true,
         executor: provider.noShow
           ? [process.execPath, "-e", "process.exit(1)", "{prompt}"]
-          : [process.execPath, "-e", HOUSE_EXECUTOR_SCRIPT, provider.replyPrefix, "{prompt}"],
+          : [
+              process.execPath,
+              "-e",
+              HOUSE_EXECUTOR_SCRIPT,
+              provider.replyPrefix,
+              "{prompt}",
+              ...(provider.picture ? [outboxDir, services.fileLinkPrefix ?? ""] : []),
+            ],
         executorMode: "unsafe",
         executorEnvAllowlist: [],
         resultUploader: "https://sandbox.invalid/results",
@@ -618,13 +661,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       },
       getBalance: chain.getBalance,
       getMinimumBalanceForRentExemption: chain.getMinimumBalanceForRentExemption,
-      uploadFetch,
+      uploadFetch: provider.picture ? publishingOutbox(uploadFetch, outboxDir) : uploadFetch,
       resolveAgencUri,
       taskThreadTransport,
     };
   }
 
-  async function newProvider(replyPrefix: string, noShow: boolean): Promise<HouseProvider> {
+  async function newProvider(replyPrefix: string, noShow: boolean, picture = false): Promise<HouseProvider> {
     const signer = await market.fundedSigner();
     const agentId = values.randomId32();
     await chain.clientFor(signer).registerAgent({
@@ -640,7 +683,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     const state = emptyState();
     state.agentIdHex = workerHex(agentId);
     saveState(stateDir, state);
-    const provider = { signer, agent, stateDir, replyPrefix, noShow };
+    const provider = { signer, agent, stateDir, replyPrefix, noShow, picture };
     providers.push(provider);
     return provider;
   }
@@ -664,7 +707,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
 
     async addService(service) {
-      const provider = await newProvider(service.replyPrefix, service.noShow === true);
+      const provider = await newProvider(service.replyPrefix, service.noShow === true, service.picture === true);
       const listingId = values.randomId32();
       const metadata = { name: service.name, summary: service.summary };
       const specHash = (await values.canonicalJobSpecHash(metadata)).bytes;
@@ -864,5 +907,15 @@ export const PRACTICE_SERVICES: readonly HouseService[] = [
     outputs: ["Ten name ideas"],
     priceLamports: 8_000_000n,
     replyPrefix: "Ten ideas: Northlight, Pebble, Juniper, Tandem, Lumen, Fable, Harbor, Quill, Ember, Atlas.",
+  },
+  {
+    name: "Postcard Picture",
+    category: "image-gen",
+    summary: "A small picture sent back as a file, so you can see how a picture delivery looks.",
+    inputs: ["What the postcard is for"],
+    outputs: ["One picture"],
+    priceLamports: 6_000_000n,
+    replyPrefix: "Here is your postcard. It is a practice picture: every practice order gets the same one.",
+    picture: true,
   },
 ];
