@@ -116,7 +116,9 @@ export function withFiles(text: string, files: readonly DeliveryFile[], linkPref
   if (files.length === 0) return text;
   if (files.length > MAX_DELIVERY_FILES) throw new RangeError("too many files for one delivery");
   if (/\s/.test(linkPrefix) || linkPrefix.length > 300) throw new RangeError("the file address is not usable");
-  const lines = [text.replace(/\s+$/, ""), "", RULE, HEADING];
+  // `trimEnd`, not a pattern: a pattern that strips trailing spaces can be
+  // made to take minutes by a text that is mostly spaces.
+  const lines = [text.trimEnd(), "", RULE, HEADING];
   files.forEach((file, index) => {
     if (deliveryFileType(file.name) !== file.type || !SHA256_HEX.test(file.sha256)) {
       throw new RangeError(`"${file.name}" cannot be listed`);
@@ -159,5 +161,5 @@ export function splitDelivery(body: string): { text: string; files: DeliveryFile
     if (deliveryFileType(name!) !== type || bytes > MAX_DELIVERY_FILE_BYTES) return whole;
     files.push({ name: name!, type: type!, bytes, sha256: address[1]! });
   }
-  return { text: body.slice(0, at).replace(/\s+$/, ""), files };
+  return { text: body.slice(0, at).trimEnd(), files };
 }

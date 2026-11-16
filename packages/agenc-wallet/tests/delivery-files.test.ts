@@ -126,6 +126,27 @@ describe("the list of files at the end of a delivery", () => {
     expect(read.text).toBe(inner.replace(/\s+$/, ""));
   });
 
+  it("reads the worst a seller can send in no time at all", () => {
+    // A delivery as large as the store keeps, built to make a careless
+    // pattern crawl: a quarter of a megabyte of spaces before the list, and
+    // lines that almost look like entries.
+    const spaces = `x${" ".repeat(250_000)}y${" ".repeat(250_000)}`;
+    const almost = Array.from({ length: 2_000 }, (_, index) => `${index % 9 + 1}. ${"a".repeat(60)}.png (image/png, 1 bytes`).join("\n");
+    for (const body of [
+      withFiles(spaces, files, PREFIX),
+      `${spaces}\n---\nFiles with this delivery:\n${almost}\n`,
+      `${"\n---\nFiles with this delivery:\n".repeat(5_000)}${spaces}`,
+      `${spaces}\n---\nFiles with this delivery:\n1. a.png (image/png, 5 bytes)\n   ${"x".repeat(300)}${"0".repeat(63)}\n`,
+    ]) {
+      const started = performance.now();
+      splitDelivery(body);
+      expect(performance.now() - started).toBeLessThan(250);
+    }
+    const started = performance.now();
+    expect(splitDelivery(withFiles(spaces, files, PREFIX)).files).toEqual(files);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
   it("carries at most eight files and refuses to list what could not be carried", () => {
     const many = Array.from({ length: MAX_DELIVERY_FILES + 1 }, (_, index) => file(`f${index}.txt`, text(`file ${index}`)));
     expect(() => withFiles("x", many, PREFIX)).toThrow(/too many/);
