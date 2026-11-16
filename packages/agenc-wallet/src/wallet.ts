@@ -6,11 +6,12 @@
 // An agent can never name a destination, an amount to send, or a transaction.
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
 import { AgencError, taskThread, values } from "@tetsuo-ai/marketplace-sdk";
 import { isNetworkTrouble, transferInstruction, type Chain } from "./chain.js";
+import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
 import type {
@@ -1963,24 +1964,32 @@ export class AgencWallet {
       const fetched = await this.#services.fetchResult({ proofHashHex, resultData });
       if (fetched !== null) {
         let text: string | null = null;
+        let files: DeliveryFile[] = [];
         try {
-          text = new TextDecoder("utf-8", { fatal: true }).decode(fetched.bytes);
+          const whole = new TextDecoder("utf-8", { fatal: true }).decode(fetched.bytes);
           // A drawing is a picture that happens to be written as text. Shown
           // as words it is a page of code; it is handed on as a file instead.
-          if (isDrawing(text)) text = null;
-          else if (text.length > MAX_RESULT_TEXT) text = `${text.slice(0, MAX_RESULT_TEXT)}\n[cut here]`;
+          if (!isDrawing(whole)) {
+            // Files that came with it are listed at the end of the text.
+            const parts = splitDelivery(whole);
+            files = parts.files;
+            text =
+              parts.text.length > MAX_RESULT_TEXT
+                ? `${parts.text.slice(0, MAX_RESULT_TEXT)}\n[cut here]`
+                : parts.text;
+          }
         } catch {
           text = null;
         }
         // A host opens this address for a person. Whatever a source of
         // deliveries hands back, only a web address ever leaves here.
         const uri = fetched.uri !== null && /^https:\/\/[^\s]+$/.test(fetched.uri) ? fetched.uri : null;
-        return { text, uri, hash: proofHashHex, verified: true };
+        return { text, uri, hash: proofHashHex, verified: true, files };
       }
     } catch (error) {
       this.#log(`delivery fetch: ${describeError(error)}`);
     }
-    return { text: null, uri: null, hash: proofHashHex, verified: false };
+    return { text: null, uri: null, hash: proofHashHex, verified: false, files: [] };
   }
 
   /** done: collect what can come back and free the provider's slot. */
@@ -2114,7 +2123,7 @@ export class AgencWallet {
       result:
         entry.resultHashHex === null
           ? null
-          : { text: null, uri: null, hash: entry.resultHashHex, verified: false },
+          : { text: null, uri: null, hash: entry.resultHashHex, verified: false, files: [] },
       rating: null,
       tidied: true,
       signatures: entry.settlementSignature === null ? {} : { accept: entry.settlementSignature },
@@ -2170,6 +2179,32 @@ export class AgencWallet {
       await this.#advance(jobId);
     }
     return this.#jobView(this.#jobRecord(jobId), isOwner);
+  }
+
+  /**
+   * One file of a job's delivery. It is fetched from the delivery store by
+   * the fingerprint the delivery lists for it, and handed over only when it
+   * is that size, matches that fingerprint and really is the kind of file
+   * its name says.
+   */
+  async jobFile(jobId: string, sha256: string): Promise<DeliveryFile & { base64: string }> {
+    const job = this.#jobRecord(jobId);
+    const listed = (job.result?.files ?? []).find((file) => file.sha256 === sha256);
+    if (listed === undefined) {
+      throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
+    }
+    const bytes = await this.#services.fetchFile(listed.sha256).catch(() => null);
+    if (bytes === null) {
+      throw new WalletError("NETWORK", "The file could not be fetched right now. Try again in a moment.");
+    }
+    if (
+      bytes.length !== listed.bytes ||
+      createHash("sha256").update(bytes).digest("hex") !== listed.sha256 ||
+      deliveryFileProblem(listed.name, bytes) !== null
+    ) {
+      throw new WalletError("NOT_ALLOWED", "The file is not what the delivery says it is, so it was not opened.");
+    }
+    return { ...listed, base64: Buffer.from(bytes).toString("base64") };
   }
 
   async waitJob(
@@ -2475,7 +2510,13 @@ export class AgencWallet {
         minRewardLamports = BigInt(offer.priceLamports);
       }
       this.#earnFloor.set(agent.id, minRewardLamports);
-      this.#earn.start({ agentId: agent.id, signer, minRewardLamports });
+      this.#earn.start({
+        agentId: agent.id,
+        signer,
+        minRewardLamports,
+        // What the least job pays, for the program that does the job to keep its spending under.
+        minPayCents: rate === null ? null : lamportsToCents(minRewardLamports, rate),
+      });
     } catch (error) {
       this.#log(`earn ${agent.id}: ${describeError(error)}`);
     }
