@@ -22,7 +22,9 @@ describe("asking for changes", () => {
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     await sandbox.workOnce();
-    expect((await wallet.getJob(job.id, false, agent.id)).status).toBe("delivered");
+    const delivered = await wallet.getJob(job.id, false, agent.id);
+    expect(delivered.status).toBe("delivered");
+    expect(delivered.canAskChanges).toBe(true);
 
     const sentBack = await wallet.askChanges(job.id, "Make it about the sea.", false, agent.id);
     expect(sentBack.status).toBe("changes_requested");
@@ -39,5 +41,36 @@ describe("asking for changes", () => {
     expect(again.status).toBe("delivered");
     expect(again.result?.verified).toBe(true);
     expect((await wallet.approveJob(job.id, undefined, false, agent.id)).status).toBe("paid");
+  });
+
+  it("is not offered where the note could never reach the provider", async () => {
+    // A network with no message host: the note's fingerprint could be
+    // recorded, but nobody could read the words.
+    world = await startWorld({
+      services: ({ postChangeRequest: _noMessageHost, ...rest }) => rest,
+    });
+    const { wallet, sandbox, listing } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setPolicy(agent.id, {
+      askAboveCents: 100,
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    });
+    await wallet.fundAgent(agent.id, { usdCents: 300 });
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+    await sandbox.workOnce();
+
+    for (const isOwner of [true, false]) {
+      const delivered = await wallet.getJob(job.id, isOwner, isOwner ? undefined : agent.id);
+      expect(delivered.status).toBe("delivered");
+      expect(delivered.canAskChanges).toBe(false);
+      // Everything else a buyer can do with a delivery is still there.
+      expect(delivered.canApprove).toBe(true);
+    }
+    expect((await wallet.listJobs({ role: "buying" }, true))[0]!.canAskChanges).toBe(false);
+    await expect(wallet.askChanges(job.id, "Make it about the sea.", true)).rejects.toMatchObject({
+      code: "NOT_AVAILABLE",
+    });
+    // Nothing was sent back: the delivery is still there to approve.
+    expect((await wallet.approveJob(job.id, undefined, true)).status).toBe("paid");
   });
 });

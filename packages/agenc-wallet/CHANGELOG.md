@@ -39,3 +39,12 @@ First version. Not published.
   client, and four agent tools (`market_find`, `market_hire`,
   `market_status`, `market_review`).
 - A practice mode: the real marketplace program in-process with play money.
+- A service says what it is. The marketplace's list carries names and prices
+  only, so the wallet reads each listing's own description from the address
+  the listing records, shows it only when it is the text the listing
+  committed to, tidies it to plain text (what it is, what to send, what comes
+  back, the provider's terms) and remembers it. `market.find` searches all of
+  that, and answers one page with the total.
+- Asking for changes is offered only where the note can reach the provider
+  (`canAskChanges`): on a network with no message host the job does not
+  offer it, to a person or to an agent.

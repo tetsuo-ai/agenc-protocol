@@ -127,6 +127,12 @@ export function jobView(
     isOwner: boolean;
     /** Lamports a rating costs, when known. */
     ratingCostLamports?: bigint | null;
+    /**
+     * Whether a note saying what to change can reach the provider. Sending a
+     * delivery back records only the note's fingerprint; the words travel
+     * through a message host, and not every network has one.
+     */
+    changesCanBeSent: boolean;
   },
 ): JobView {
   const status = jobStatus(job);
@@ -154,7 +160,9 @@ export function jobView(
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     canApprove: buying && status === "delivered",
-    canAskChanges: buying && status === "delivered",
+    // Without a way to deliver the words, asking for changes would send a
+    // delivery back with a request the provider can never read.
+    canAskChanges: buying && status === "delivered" && context.changesCanBeSent,
     canRefund:
       buying &&
       (status === "needs_approval" ||
@@ -177,12 +185,23 @@ export function approvalView(
   agentName: string,
   usdPerSol: number | null,
 ): ApprovalView {
+  // A request saved by an older version knows less about the service than
+  // the type says: those records are still on disk.
+  const saved: Partial<ApprovalRecord["service"]> = approval.service;
   return {
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,
     agentName,
-    service: approval.service,
+    service: {
+      ...approval.service,
+      description: saved.description ?? null,
+      tags: saved.tags ?? [],
+      inputs: saved.inputs ?? [],
+      outputs: saved.outputs ?? [],
+      terms: saved.terms ?? [],
+      details: saved.details ?? (approval.service.summary === null ? "unavailable" : "ready"),
+    },
     request: approval.request,
     price: money(approval.priceLamports, usdPerSol),
     deposits: money(approval.depositsLamports, usdPerSol),

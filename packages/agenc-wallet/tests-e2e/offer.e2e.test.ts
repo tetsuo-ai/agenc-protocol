@@ -90,7 +90,7 @@ describe("offering a service", () => {
     );
 
     // It is in the catalog like any other service.
-    const found = (await wallet.find({ query: "friendly line" })).find(
+    const found = (await wallet.find({ query: "friendly line" })).services.find(
       (service) => service.listing === listing,
     )!;
     expect(found).toMatchObject({ name: "Line Writer", summary: LINE_WRITER.summary });
@@ -271,7 +271,7 @@ describe("offering a service", () => {
     // Switched off, the agent is still registered and its deposit still locked.
     expect(off.earn.setAside.lamports).toBe("10000000");
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(1);
-    expect((await current.wallet.find({})).map((service) => service.listing)).not.toContain(listing);
+    expect((await current.wallet.find({})).services.map((service) => service.listing)).not.toContain(listing);
     await expect(
       current.wallet.hire({ agentId: buyer.id, listing, request: "Write a line." }),
     ).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
@@ -279,7 +279,7 @@ describe("offering a service", () => {
     await current.wallet.setEarn(worker.id, true);
     await offerReaches(current, worker.id, "live");
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(0);
-    expect((await current.wallet.find({})).map((service) => service.listing)).toContain(listing);
+    expect((await current.wallet.find({})).services.map((service) => service.listing)).toContain(listing);
   }, 120_000);
 
   it("can change its price and description, but not its name", async () => {
@@ -302,7 +302,7 @@ describe("offering a service", () => {
     });
     expect(reworded.earn.offer!.status).not.toBe("problem");
     await offerReaches(current, worker.id, "live");
-    const found = (await current.wallet.find({})).find((service) => service.listing === listing)!;
+    const found = (await current.wallet.find({})).services.find((service) => service.listing === listing)!;
     expect(found.summary).toBe("Two friendly lines about anything you name.");
     expect(found.price.usdCents).toBe(45);
 
@@ -362,16 +362,16 @@ describe("offering a service", () => {
     await wallet.setOffer(worker.id, LINE_WRITER);
 
     // Not on offer yet: nobody can find it.
-    expect((await wallet.find({ query: "friendly line" })).map((service) => service.name)).not.toContain("Line Writer");
+    expect((await wallet.find({ query: "friendly line" })).services.map((service) => service.name)).not.toContain("Line Writer");
 
     const live = await offerReaches(world, worker.id, "live");
     const listing = live.earn.offer!.listing as Address;
-    const found = (await wallet.find({ query: "friendly line" })).filter((service) => service.name === "Line Writer");
+    const found = (await wallet.find({ query: "friendly line" })).services.filter((service) => service.name === "Line Writer");
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ listing, summary: LINE_WRITER.summary });
     expect(found[0]!.price.usdCents).toBe(30);
     // The marketplace's own services are still there, once each.
-    const all = await wallet.find({});
+    const all = (await wallet.find({})).services;
     expect(all.filter((service) => service.name === "Haiku Writer")).toHaveLength(1);
 
     // And it can be hired from what was found.
@@ -381,7 +381,7 @@ describe("offering a service", () => {
 
     // Off offer again, it is not offered to anyone.
     await wallet.setOffer(worker.id, null);
-    expect((await wallet.find({ query: "friendly line" })).map((service) => service.name)).not.toContain("Line Writer");
+    expect((await wallet.find({ query: "friendly line" })).services.map((service) => service.name)).not.toContain("Line Writer");
   }, 120_000);
 
   it("points an old listing at where its description is really published", async () => {

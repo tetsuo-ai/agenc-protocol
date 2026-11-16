@@ -23,7 +23,7 @@ describe("buying from an allowance", () => {
     const funded = await world.balance(agent.address);
     expect(funded).toBe(300n * CENT);
 
-    const found = await wallet.find({ query: "haiku" });
+    const found = (await wallet.find({ query: "haiku" })).services;
     expect(found.map((service) => service.listing)).toEqual([listing]);
     expect(found[0]!.price).toEqual({ lamports: (20n * CENT).toString(), usdCents: 20 });
 
@@ -74,5 +74,87 @@ describe("buying from an allowance", () => {
     expect(tidied!.canRate).toBe(false);
     const kinds = (await wallet.listActivity()).map((entry) => entry.kind);
     expect(kinds).toEqual(expect.arrayContaining(["allowance", "hired", "paid", "tidied"]));
+  });
+
+  it("hands a drawing on as a file to open, not as a page of code", async () => {
+    const drawings = [
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+      '<?xml version="1.0" encoding="UTF-8"?>\n<!-- made for you -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<SVG width="10" height="10"></SVG>',
+      `${String.fromCharCode(0xfeff)}  <svg>\n</svg>`,
+    ];
+    const words = [
+      "Here is your logo, described: a circle. I could not attach an <svg> this time.",
+      "<p>A paragraph about svg files.</p>",
+      "<?xml version=\"1.0\"?><note>not a drawing</note>",
+      "<!-- only a comment",
+    ];
+    for (const delivery of [...drawings, ...words]) {
+      world = await startWorld({
+        services: (services) => ({
+          ...services,
+          fetchResult: async (input) => {
+            const found = await services.fetchResult(input);
+            return found === null
+              ? null
+              : { bytes: new TextEncoder().encode(delivery), uri: "https://deliveries.example/logo" };
+          },
+        }),
+      });
+      const { wallet, sandbox, listing } = world;
+      const agent = await wallet.createAgent("My assistant");
+      await wallet.setPolicy(agent.id, {
+        askAboveCents: 100,
+        refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      });
+      await wallet.fundAgent(agent.id, { usdCents: 300 });
+      const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A logo." });
+      await sandbox.workOnce();
+      const result = (await wallet.getJob(job.id, true)).result;
+      expect(result?.uri).toBe("https://deliveries.example/logo");
+      expect(result?.text ?? null).toBe(drawings.includes(delivery) ? null : delivery);
+      await wallet.close();
+      world = null;
+    }
+  });
+
+  it("hands a host nothing but a web address to open for a delivery", async () => {
+    // A host opens a delivery's address for a person, and some openers treat
+    // anything that is not a web address as a file on the computer. Whatever
+    // a source of deliveries says the address is, only https leaves the wallet.
+    for (const [claimed, kept] of [
+      ["https://deliveries.example/a.txt", "https://deliveries.example/a.txt"],
+      ["file:///etc/passwd", null],
+      ["/usr/bin/true", null],
+      ["\\\\host\\share\\run.exe", null],
+      ["http://deliveries.example/a.txt", null],
+      ["https://deliveries.example/a b", null],
+      ["javascript:alert(1)", null],
+    ] as const) {
+      world = await startWorld({
+        services: (services) => ({
+          ...services,
+          fetchResult: async (input) => {
+            const found = await services.fetchResult(input);
+            return found === null ? null : { ...found, uri: claimed };
+          },
+        }),
+      });
+      const { wallet, sandbox, listing } = world;
+      const agent = await wallet.createAgent("My assistant");
+      await wallet.setPolicy(agent.id, {
+        askAboveCents: 100,
+        refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      });
+      await wallet.fundAgent(agent.id, { usdCents: 300 });
+      const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+      await sandbox.workOnce();
+      const delivered = await wallet.getJob(job.id, true);
+      expect(delivered.status).toBe("delivered");
+      // The words still arrive; only the address is held to a web address.
+      expect(delivered.result?.text).toContain("old pond");
+      expect(delivered.result?.uri ?? null).toBe(kept);
+      await wallet.close();
+      world = null;
+    }
   });
 });

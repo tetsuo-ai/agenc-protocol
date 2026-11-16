@@ -48,12 +48,14 @@ export interface WalletMethods {
   };
 
   "market.find": {
-    params: { query?: string; maxPriceCents?: number; limit?: number };
+    /** `limit` is at most 50 a page; `offset` skips that many of the best matches. */
+    params: { query?: string; maxPriceCents?: number; limit?: number; offset?: number };
     /**
-     * `networkFee` is what every job costs on top of its price and is not
-     * returned, even when the job is cancelled.
+     * `total` is how many services match in all, of which `services` is one
+     * page. `networkFee` is what every job costs on top of its price and is
+     * not returned, even when the job is cancelled.
      */
-    result: { services: ServiceView[]; networkFee: Money };
+    result: { services: ServiceView[]; total: number; networkFee: Money };
   };
   "market.hire": {
     params: {

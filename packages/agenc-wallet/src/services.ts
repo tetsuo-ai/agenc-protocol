@@ -11,6 +11,24 @@ import { address, type Address, type KeyPairSigner } from "@solana/kit";
 import { createPublicUriFetcher, type UriFetcher } from "@tetsuo-ai/agenc-worker";
 import { taskThread, values } from "@tetsuo-ai/marketplace-sdk";
 import { WalletError } from "./errors.js";
+import {
+  NO_DETAILS,
+  listingDetails,
+  openDetailsCache,
+  summarize,
+  verifiedListingPayload,
+  withoutLeadingName,
+  type DetailsCache,
+  type ListingDetails,
+} from "./listing-details.js";
+
+/**
+ * How much of what a provider published about a service is known. "ready":
+ * it was read and is the text the listing committed to (it may still say
+ * nothing). "loading": it is being read. "unavailable": it could not be read,
+ * or what was read is not what the listing committed to.
+ */
+export type DetailsState = "ready" | "loading" | "unavailable";
 
 /** One service as a catalog source reports it (chain-shaped, not display). */
 export interface CatalogRow {
@@ -18,7 +36,18 @@ export interface CatalogRow {
   providerAgent: Address;
   name: string;
   category: string | null;
+  /** One or two sentences for a list. */
   summary: string | null;
+  /** The provider's whole description, as plain text. */
+  description: string | null;
+  tags: string[];
+  /** What the provider asks a buyer to send. */
+  inputs: string[];
+  /** What the provider says a buyer gets. */
+  outputs: string[];
+  /** The provider's own terms, one plain line each. */
+  terms: string[];
+  details: DetailsState;
   priceLamports: bigint;
   /** Average rating 1..5, or null when unrated. */
   rating: number | null;
@@ -349,6 +378,16 @@ export interface HostedServicesOptions {
   fetchImpl?: typeof fetch;
   /** Fetcher for provider-controlled URLs. Defaults to the SSRF-guarded one. */
   publicFetcher?: UriFetcher;
+  /**
+   * Where checked descriptions of services are remembered. Defaults to one
+   * that lasts as long as the process (see {@link openDetailsCache}).
+   */
+  detailsCache?: DetailsCache;
+  /**
+   * How long a list of services waits for descriptions that are still being
+   * read before it is handed back without them. Default 2.5 seconds.
+   */
+  detailsWaitMs?: number;
   now?: () => number;
 }
 
@@ -359,6 +398,82 @@ const CATALOG_TTL_MS = 60_000;
 const INFO_TTL_MS = 10 * 60_000;
 const MAX_CATALOG_PAGES = 3;
 const MAX_RESULT_BYTES = 256 * 1024;
+/** A description that could not be read is tried again after this long. */
+const DETAILS_RETRY_MS = 10 * 60_000;
+/** Descriptions are read from their providers' hosts this many at a time. */
+const DETAILS_AT_ONCE = 6;
+const DEFAULT_DETAILS_WAIT_MS = 2_500;
+
+/** A service as the marketplace's list gives it: no words yet, only where they are. */
+interface ListedService {
+  base: Pick<
+    CatalogRow,
+    | "listing"
+    | "providerAgent"
+    | "name"
+    | "priceLamports"
+    | "rating"
+    | "ratingCount"
+    | "jobsDone"
+    | "deliverySecs"
+  >;
+  /** Words the list itself carried, used when the description gives none. */
+  listedCategory: string | null;
+  listedSummary: string | null;
+  /** The hash the listing committed its description to. */
+  specHashHex: string | null;
+  /** Where that description is published, when it is a public https address. */
+  specUri: string | null;
+}
+
+function describedRow(
+  entry: ListedService,
+  details: ListingDetails,
+  state: DetailsState,
+): CatalogRow {
+  return {
+    ...entry.base,
+    category: details.category ?? entry.listedCategory,
+    summary: summarize(entry.base.name, details.description) ?? entry.listedSummary,
+    description:
+      details.description === null ? null : withoutLeadingName(entry.base.name, details.description),
+    tags: details.tags,
+    inputs: details.inputs,
+    outputs: details.outputs,
+    terms: details.terms,
+    details: state,
+  };
+}
+
+/**
+ * Drop a provider's exact repeats: the same agent offering the same
+ * description at the same price more than once is one offer to a buyer. The
+ * one with the most finished jobs stays. Services from different providers
+ * are never merged, however alike they look.
+ */
+function withoutRepeats(listed: readonly ListedService[]): ListedService[] {
+  const best = new Map<string, ListedService>();
+  const order: string[] = [];
+  listed.forEach((entry, index) => {
+    const key =
+      entry.specHashHex === null
+        ? `single ${index}`
+        : `${entry.base.providerAgent} ${entry.specHashHex} ${entry.base.priceLamports}`;
+    const kept = best.get(key);
+    if (kept === undefined) {
+      best.set(key, entry);
+      order.push(key);
+      return;
+    }
+    if (
+      entry.base.jobsDone > kept.base.jobsDone ||
+      (entry.base.jobsDone === kept.base.jobsDone && entry.base.ratingCount > kept.base.ratingCount)
+    ) {
+      best.set(key, entry);
+    }
+  });
+  return order.map((key) => best.get(key) as ListedService);
+}
 
 function trimBase(url: string, label: string): string {
   let parsed: URL;
@@ -402,8 +517,65 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
   const publicFetcher =
     options.publicFetcher ?? createPublicUriFetcher({ maxBytes: MAX_RESULT_BYTES });
 
-  let catalog: { at: number; rows: CatalogRow[] } | null = null;
+  const detailsCache = options.detailsCache ?? openDetailsCache({ now });
+  const detailsWaitMs = Math.max(0, options.detailsWaitMs ?? DEFAULT_DETAILS_WAIT_MS);
+
+  let catalog: { at: number; listed: ListedService[] } | null = null;
   let info: { at: number; moderator: Address } | null = null;
+  /** When a description last failed to load, by hash and address. */
+  const detailsFailedAt = new Map<string, number>();
+  /** Descriptions being read right now, by hash and address. */
+  const detailsInFlight = new Map<string, Promise<void>>();
+  let detailsRunning = 0;
+  const detailsWaiting: Array<() => void> = [];
+
+  /**
+   * Read one service's description from where its listing says it is and keep
+   * it only if it is the text the listing committed to. The address is the
+   * provider's own, so it is fetched like any other untrusted address: public
+   * hosts only, bounded size, bounded time.
+   */
+  async function loadDetails(specHashHex: string, uri: string): Promise<void> {
+    if (detailsRunning >= DETAILS_AT_ONCE) {
+      await new Promise<void>((resolve) => detailsWaiting.push(resolve));
+    }
+    detailsRunning += 1;
+    const key = `${specHashHex} ${uri}`;
+    try {
+      const payload = await verifiedListingPayload(await publicFetcher(uri), specHashHex);
+      if (payload === null) {
+        detailsFailedAt.set(key, now());
+      } else {
+        detailsCache.set(specHashHex, listingDetails(payload));
+        detailsFailedAt.delete(key);
+      }
+    } catch {
+      detailsFailedAt.set(key, now());
+    } finally {
+      detailsRunning -= 1;
+      detailsWaiting.shift()?.();
+    }
+  }
+
+  /** A listed service with whatever is known of its description, starting to read it when nothing is. */
+  function describe(entry: ListedService): CatalogRow {
+    const { specHashHex, specUri } = entry;
+    const known = specHashHex === null ? undefined : detailsCache.get(specHashHex);
+    if (known !== undefined) return describedRow(entry, known, "ready");
+    if (specHashHex === null || specUri === null) return describedRow(entry, NO_DETAILS, "unavailable");
+    const key = `${specHashHex} ${specUri}`;
+    const failed = detailsFailedAt.get(key);
+    if (failed !== undefined && now() - failed < DETAILS_RETRY_MS) {
+      return describedRow(entry, NO_DETAILS, "unavailable");
+    }
+    if (!detailsInFlight.has(key)) {
+      detailsInFlight.set(
+        key,
+        loadDetails(specHashHex, specUri).finally(() => detailsInFlight.delete(key)),
+      );
+    }
+    return describedRow(entry, NO_DETAILS, "loading");
+  }
 
   /**
    * Hand the marketplace a document to publish, signed by `signer`. It
@@ -495,7 +667,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     return info;
   }
 
-  function parseRow(value: unknown): CatalogRow | null {
+  function parseRow(value: unknown): ListedService | null {
     const item = record(value);
     if (item === null) return null;
     const listing = safeAddress(item.pda);
@@ -513,46 +685,72 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       ratingCount > 0 && average !== null && average >= 1 && average <= 5 ? average : null;
     const settled = finite(provenance?.settledHireCount);
     const deadline = finite(item.defaultDeadlineSecs);
+    const specHash = typeof item.specHash === "string" ? item.specHash.toLowerCase() : "";
+    const specUri = typeof item.specUri === "string" ? item.specUri.trim() : "";
     return {
-      listing,
-      providerAgent,
-      name,
-      category: tidyText(item.category, 40),
-      summary: tidyText(item.summary ?? item.description, 280),
-      priceLamports: price,
-      rating,
-      ratingCount: Math.max(0, Math.trunc(ratingCount)),
-      jobsDone: Math.max(0, Math.trunc(settled ?? 0)),
-      deliverySecs: deadline !== null && deadline > 0 ? Math.trunc(deadline) : null,
+      base: {
+        listing,
+        providerAgent,
+        name,
+        priceLamports: price,
+        rating,
+        ratingCount: Math.max(0, Math.trunc(ratingCount)),
+        jobsDone: Math.max(0, Math.trunc(settled ?? 0)),
+        deliverySecs: deadline !== null && deadline > 0 ? Math.trunc(deadline) : null,
+      },
+      // The list does not carry these today. They are kept as a fallback for
+      // a list that does, and never override what the description itself says.
+      listedCategory: tidyText(item.category, 40),
+      listedSummary: tidyText(item.summary ?? item.description, 280),
+      specHashHex: HEX64.test(specHash) ? specHash : null,
+      specUri: /^https:\/\/[^\s]{1,500}$/.test(specUri) ? specUri : null,
     };
   }
 
   return {
     async listServices() {
-      if (catalog !== null && now() - catalog.at < CATALOG_TTL_MS) return catalog.rows;
-      const rows: CatalogRow[] = [];
-      for (let page = 1; page <= MAX_CATALOG_PAGES; page += 1) {
-        const { status, body } = await requestJson(
-          fetchImpl,
-          `${siteUrl}/api/listings?hireable=1&page=${page}&pageSize=100`,
-          { method: "GET" },
-          { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
-        );
-        const data = record(body);
-        if (status !== 200 || data === null || !Array.isArray(data.items)) {
-          throw new WalletError(
-            "NETWORK",
-            "The list of services could not be loaded. Try again in a moment.",
+      if (catalog === null || now() - catalog.at >= CATALOG_TTL_MS) {
+        const found: ListedService[] = [];
+        for (let page = 1; page <= MAX_CATALOG_PAGES; page += 1) {
+          const { status, body } = await requestJson(
+            fetchImpl,
+            `${siteUrl}/api/listings?hireable=1&page=${page}&pageSize=100`,
+            { method: "GET" },
+            { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
           );
+          const data = record(body);
+          if (status !== 200 || data === null || !Array.isArray(data.items)) {
+            throw new WalletError(
+              "NETWORK",
+              "The list of services could not be loaded. Try again in a moment.",
+            );
+          }
+          for (const item of data.items) {
+            const row = parseRow(item);
+            if (row !== null) found.push(row);
+          }
+          const total = finite(data.total) ?? 0;
+          if (data.items.length === 0 || page * 100 >= total) break;
         }
-        for (const item of data.items) {
-          const row = parseRow(item);
-          if (row !== null) rows.push(row);
-        }
-        const total = finite(data.total) ?? 0;
-        if (data.items.length === 0 || page * 100 >= total) break;
+        catalog = { at: now(), listed: withoutRepeats(found) };
       }
-      catalog = { at: now(), rows };
+      const listed = catalog.listed;
+      let rows = listed.map(describe);
+      if (detailsWaitMs > 0 && rows.some((row) => row.details === "loading")) {
+        // Most descriptions are small files that arrive at once. Wait a moment
+        // for them, then hand the list back with whatever has come in: the
+        // rest keep loading and are there the next time the list is read.
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          Promise.allSettled([...detailsInFlight.values()]),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, detailsWaitMs);
+            timer.unref();
+          }),
+        ]);
+        clearTimeout(timer);
+        rows = listed.map(describe);
+      }
       return rows;
     },
 

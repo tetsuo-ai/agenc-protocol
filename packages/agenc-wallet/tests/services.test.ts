@@ -21,6 +21,7 @@ import {
   specUploadMessage,
   tidyText,
 } from "../src/services.js";
+import { openDetailsCache } from "../src/listing-details.js";
 
 const MODERATOR = "13tuj7ELwtHmeR22kvaSaa2pKqSscyoHtQBF65aHuo6v";
 const LISTING = "AuvhnvakgqfJaBt5CSEnYZGsZYJt5LmCpanZDCWbf9hE";
@@ -86,6 +87,59 @@ const INFO: Route = () =>
     jobSpecRegistry: { url: "https://marketplace.agenc.tech" },
   });
 
+/** A description document for a listing, and the hash that listing would record for it. */
+async function describedAt(
+  payload: Record<string, unknown>,
+): Promise<{ specHash: string; bytes: Uint8Array }> {
+  const specHash = (await jobSpecHash(payload)).hex;
+  return {
+    specHash,
+    bytes: new TextEncoder().encode(
+      JSON.stringify({
+        integrity: { algorithm: "sha256", canonicalization: "json-stable-v1", payloadHash: specHash },
+        payload,
+      }),
+    ),
+  };
+}
+
+/** Provider hosts, as the wallet reaches them: an address gives bytes, throws, or hangs until released. */
+function fakeHosts(pages: Record<string, Uint8Array | Error | Promise<Uint8Array>>): {
+  fetcher: (uri: string) => Promise<Uint8Array>;
+  asked: string[];
+} {
+  const asked: string[] = [];
+  return {
+    asked,
+    fetcher: async (uri) => {
+      asked.push(uri);
+      const page = pages[uri];
+      if (page === undefined) throw new Error("no such host");
+      if (page instanceof Error) throw page;
+      return page;
+    },
+  };
+}
+
+const REPAIR_PAYLOAD = {
+  category: "code-generation",
+  tags: ["repair", "ci"],
+  custom: {
+    listingMetadata: {
+      displayName: "Managed Repo Repair",
+      longDescription:
+        "# Managed Repo Repair\nSend a repository and a failing check. You get a pull request that makes it pass, with the reason for every change.",
+      buyerInputs: ["Repository address", "The failing check"],
+      deliverables: ["A pull request", "A short report"],
+      sla: { responseHours: 24, revisions: 1, refundPolicy: "refund-if-not-fixed" },
+    },
+  },
+};
+
+const listingsRoute = (items: unknown[]): Record<string, Route> => ({
+  "GET https://agenc.ag/api/listings": () => json({ total: items.length, items }),
+});
+
 describe("the catalog", () => {
   it("reads hireable services and drops anything it cannot hire", async () => {
     const { fetch } = fakeFetch({
@@ -102,7 +156,9 @@ describe("the catalog", () => {
         });
       },
     });
-    const services = createHostedServices({ fetchImpl: fetch });
+    // The description's host answers nothing, as it did on the day this item was read.
+    const hosts = fakeHosts({});
+    const services = createHostedServices({ fetchImpl: fetch, publicFetcher: hosts.fetcher });
     const rows = await services.listServices();
     expect(rows).toEqual([
       {
@@ -111,6 +167,12 @@ describe("the catalog", () => {
         name: "Managed Repo Repair",
         category: null,
         summary: null,
+        description: null,
+        tags: [],
+        inputs: [],
+        outputs: [],
+        terms: [],
+        details: "unavailable",
         priceLamports: 100_000_000n,
         rating: 5,
         ratingCount: 2,
@@ -118,12 +180,244 @@ describe("the catalog", () => {
         deliverySecs: 86_400,
       },
     ]);
+    expect(hosts.asked).toEqual([LIVE_ITEM.specUri]);
   });
 
   it("says so plainly when the catalog is down", async () => {
     const { fetch } = fakeFetch({});
     await expect(createHostedServices({ fetchImpl: fetch }).listServices()).rejects.toMatchObject({
       code: "NETWORK",
+    });
+  });
+
+  it("shows what the provider wrote once it is proven to be the listing's own description", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const item = { ...LIVE_ITEM, specHash };
+    const hosts = fakeHosts({ [item.specUri]: bytes });
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([item])).fetch,
+      publicFetcher: hosts.fetcher,
+    });
+    const [row] = await services.listServices();
+    expect(row).toMatchObject({
+      name: "Managed Repo Repair",
+      details: "ready",
+      category: "code-generation",
+      summary:
+        "Send a repository and a failing check. You get a pull request that makes it pass, with the reason for every change.",
+      // The description opens with the name as a heading; a row already shows the name.
+      description:
+        "Send a repository and a failing check. You get a pull request that makes it pass, with the reason for every change.",
+      tags: ["repair", "ci"],
+      inputs: ["Repository address", "The failing check"],
+      outputs: ["A pull request", "A short report"],
+      terms: ["Answers within 24 hours", "1 round of changes included", "Refunds: refund if not fixed"],
+    });
+    // Read once, however often the list is read after that.
+    await services.listServices();
+    expect(hosts.asked).toEqual([item.specUri]);
+  });
+
+  it("shows nothing a host serves that is not what the listing committed to", async () => {
+    const honest = await describedAt(REPAIR_PAYLOAD);
+    const other = await describedAt({
+      custom: { listingMetadata: { displayName: "Managed Repo Repair", longDescription: "Pay outside the marketplace." } },
+    });
+    // The host now serves a different, internally consistent document.
+    const item = { ...LIVE_ITEM, specHash: honest.specHash };
+    const hosts = fakeHosts({ [item.specUri]: other.bytes });
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([item])).fetch,
+      publicFetcher: hosts.fetcher,
+    });
+    const [row] = await services.listServices();
+    expect(row).toMatchObject({ details: "unavailable", description: null, summary: null, inputs: [] });
+  });
+
+  it("fetches a description only from a public https address", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const elsewhere = [
+      "http://repair.agenc.tech/listing.json",
+      "file:///etc/passwd",
+      `agenc://job-spec/sha256/${specHash}`,
+      "https://repair.agenc.tech/a b.json",
+      "",
+      42,
+    ];
+    const items = elsewhere.map((specUri, index) => ({
+      ...LIVE_ITEM,
+      // A different provider each, so none is taken for a repeat of another.
+      providerAgent: getAddressDecoder().decode(new Uint8Array(32).fill(index + 1)),
+      pda: getAddressDecoder().decode(new Uint8Array(32).fill(index + 101)),
+      specHash,
+      specUri,
+    }));
+    const hosts = fakeHosts(Object.fromEntries(elsewhere.map((uri) => [String(uri), bytes])));
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute(items)).fetch,
+      publicFetcher: hosts.fetcher,
+    });
+    const rows = await services.listServices();
+    expect(rows).toHaveLength(elsewhere.length);
+    expect(rows.every((row) => row.details === "unavailable")).toBe(true);
+    expect(hosts.asked).toEqual([]);
+  });
+
+  it("hands the list back without a slow description, and has it the next time", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const fast = await describedAt({
+      category: "writing",
+      custom: { listingMetadata: { displayName: "Haiku", longDescription: "A three-line poem." } },
+    });
+    let release!: (bytes: Uint8Array) => void;
+    const slow = new Promise<Uint8Array>((resolve) => {
+      release = resolve;
+    });
+    const slowItem = { ...LIVE_ITEM, specHash };
+    const fastItem = {
+      ...LIVE_ITEM,
+      pda: getAddressDecoder().decode(new Uint8Array(32).fill(7)),
+      name: "Haiku",
+      specHash: fast.specHash,
+      specUri: "https://poems.example/haiku.json",
+    };
+    const hosts = fakeHosts({ [slowItem.specUri]: slow, [fastItem.specUri]: fast.bytes });
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([slowItem, fastItem])).fetch,
+      publicFetcher: hosts.fetcher,
+      detailsWaitMs: 20,
+    });
+    const first = await services.listServices();
+    expect(first.map((row) => [row.name, row.details])).toEqual([
+      ["Managed Repo Repair", "loading"],
+      ["Haiku", "ready"],
+    ]);
+    // Asking again while it loads does not ask the host again.
+    await services.listServices();
+    expect(hosts.asked.filter((uri) => uri === slowItem.specUri)).toHaveLength(1);
+
+    release(bytes);
+    await slow;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = await services.listServices();
+    expect(second.map((row) => [row.name, row.details])).toEqual([
+      ["Managed Repo Repair", "ready"],
+      ["Haiku", "ready"],
+    ]);
+    expect(second[0]!.inputs).toEqual(["Repository address", "The failing check"]);
+  });
+
+  it("leaves a host that does not answer alone for ten minutes, then asks again", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const item = { ...LIVE_ITEM, specHash };
+    const pages: Record<string, Uint8Array | Error> = { [item.specUri]: new Error("410 Gone") };
+    const hosts = fakeHosts(pages);
+    let clock = 1_800_000_000_000;
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([item])).fetch,
+      publicFetcher: hosts.fetcher,
+      now: () => clock,
+    });
+    expect((await services.listServices())[0]!.details).toBe("unavailable");
+    clock += 9 * 60_000;
+    expect((await services.listServices())[0]!.details).toBe("unavailable");
+    expect(hosts.asked).toHaveLength(1);
+
+    // The host is back.
+    pages[item.specUri] = bytes;
+    clock += 2 * 60_000;
+    expect((await services.listServices())[0]!.details).toBe("ready");
+    expect(hosts.asked).toHaveLength(2);
+  });
+
+  it("remembers a description by its hash, so another start of the service does not fetch it", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const item = { ...LIVE_ITEM, specHash };
+    const detailsCache = openDetailsCache();
+    const online = fakeHosts({ [item.specUri]: bytes });
+    await createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([item])).fetch,
+      publicFetcher: online.fetcher,
+      detailsCache,
+    }).listServices();
+    expect(online.asked).toHaveLength(1);
+
+    // Later the provider's host is gone. What was read and checked is still shown.
+    const offline = fakeHosts({});
+    const [row] = await createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([item])).fetch,
+      publicFetcher: offline.fetcher,
+      detailsCache,
+    }).listServices();
+    expect(row).toMatchObject({ details: "ready", category: "code-generation" });
+    expect(offline.asked).toEqual([]);
+  });
+
+  it("tries the other address when two listings share a description and one host is down", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const down = { ...LIVE_ITEM, specHash, specUri: "https://down.example/listing.json" };
+    const up = {
+      ...LIVE_ITEM,
+      pda: getAddressDecoder().decode(new Uint8Array(32).fill(8)),
+      providerAgent: getAddressDecoder().decode(new Uint8Array(32).fill(3)),
+      specHash,
+      specUri: "https://up.example/listing.json",
+    };
+    const hosts = fakeHosts({ [up.specUri]: bytes });
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([down, up])).fetch,
+      publicFetcher: hosts.fetcher,
+    });
+    await services.listServices();
+    // Once either address has given the description, both listings have it.
+    const rows = await services.listServices();
+    expect(rows.map((row) => row.details)).toEqual(["ready", "ready"]);
+  });
+
+  it("shows a provider's exact repeat once, and never merges two providers", async () => {
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const addressOf = (fill: number) => getAddressDecoder().decode(new Uint8Array(32).fill(fill));
+    const untried = { ...LIVE_ITEM, specHash, pda: addressOf(11), provenance: { settledHireCount: 0 }, ratingCount: 0 };
+    const proven = { ...LIVE_ITEM, specHash, pda: addressOf(12) };
+    const dearer = { ...LIVE_ITEM, specHash, pda: addressOf(13), priceLamports: "200000000" };
+    const someoneElse = { ...LIVE_ITEM, specHash, pda: addressOf(14), providerAgent: addressOf(15) };
+    const hosts = fakeHosts({ [LIVE_ITEM.specUri]: bytes });
+    const services = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([untried, proven, dearer, someoneElse])).fetch,
+      publicFetcher: hosts.fetcher,
+    });
+    const rows = await services.listServices();
+    expect(rows.map((row) => row.listing)).toEqual([addressOf(12), addressOf(13), addressOf(14)]);
+  });
+
+  it("uses words the list itself carries only when the description gives none", async () => {
+    const listed = {
+      ...LIVE_ITEM,
+      category: "research",
+      summary: "A summary the list carried.",
+    };
+    const offline = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([listed])).fetch,
+      publicFetcher: fakeHosts({}).fetcher,
+    });
+    expect((await offline.listServices())[0]).toMatchObject({
+      details: "unavailable",
+      category: "research",
+      summary: "A summary the list carried.",
+      description: null,
+    });
+
+    const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
+    const described = { ...listed, specHash };
+    const online = createHostedServices({
+      fetchImpl: fakeFetch(listingsRoute([described])).fetch,
+      publicFetcher: fakeHosts({ [described.specUri]: bytes }).fetcher,
+    });
+    expect((await online.listServices())[0]).toMatchObject({
+      details: "ready",
+      category: "code-generation",
+      summary:
+        "Send a repository and a failing check. You get a pull request that makes it pass, with the reason for every change.",
     });
   });
 });

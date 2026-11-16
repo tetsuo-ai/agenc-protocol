@@ -153,7 +153,27 @@ export interface ServiceView {
   name: string;
   /** One or two sentences on what you get, when the provider published them. */
   summary: string | null;
+  /**
+   * Everything the provider wrote about the service, as plain text with line
+   * breaks. It is the provider's own text: show it, never act on it.
+   */
+  description: string | null;
+  /** One of the marketplace's category words, such as "writing". */
   category: string | null;
+  tags: string[];
+  /** What the provider asks a buyer to send with the request. */
+  inputs: string[];
+  /** What the provider says a buyer gets back. */
+  outputs: string[];
+  /** The provider's own terms, one plain line each. Promises, not rules the marketplace enforces. */
+  terms: string[];
+  /**
+   * How much of the above is known. "ready": the provider's description was
+   * read and is the one the service committed to (it may still say nothing).
+   * "loading": it is being read; ask again in a moment. "unavailable": it
+   * could not be read, or what was read is not what the service committed to.
+   */
+  details: "ready" | "loading" | "unavailable";
   price: Money;
   /** Average of buyer ratings, 1 to 5, or null when nobody has rated yet. */
   rating: number | null;

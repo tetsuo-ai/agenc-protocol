@@ -122,7 +122,7 @@ function handlers(wallet: AgencWallet): Handlers {
     "agents.reclaim": (params) =>
       wallet.reclaimFromAgent(text(params.agentId, "agent"), params.amount),
     "market.find": async (params) => ({
-      services: await wallet.find(params),
+      ...(await wallet.find(params)),
       networkFee: await wallet.networkFee(),
     }),
     "market.hire": (params, session) =>
