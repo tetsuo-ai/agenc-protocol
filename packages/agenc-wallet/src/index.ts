@@ -23,10 +23,20 @@ export {
   DEFAULT_SITE_URL,
   jobSpecHash,
   type CatalogRow,
+  type DetailsState,
   type HostedServicesOptions,
   type MarketServices,
   type ResultUploader,
 } from "./services.js";
+export {
+  listingDetails,
+  MAX_LISTING_SPEC_BYTES,
+  openDetailsCache,
+  summarize,
+  verifiedListingPayload,
+  type DetailsCache,
+  type ListingDetails,
+} from "./listing-details.js";
 export {
   centsToLamports,
   decodePythPrice,

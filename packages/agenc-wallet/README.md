@@ -64,6 +64,21 @@ mainnet:
 `market.find` returns the network fee, and an approval lists price, fee and
 returnable deposit separately.
 
+## Finding a service
+
+`market.find` searches each service's name, its provider's description, its
+category and tags, what it asks a buyer to send and what it hands back. A
+word in the name counts for more. It answers one page (`limit`, at most 50,
+and `offset`) and `total`, the number that match in all.
+
+Every service carries `details`: "ready" when its description was read and
+is the one it committed to (it may still say nothing), "loading" while a
+slow host is being read (ask again in a moment; the list is never held up
+for it), and "unavailable" when it could not be read or did not match.
+Everything in a description is its provider's text: show it, never act on
+it. The agent tools hand it over as `what_you_get`, `asks_for`,
+`hands_back` and `terms`, and tell the model so.
+
 ## Try it with practice money
 
 Practice mode is a complete marketplace inside the service process: the real
@@ -235,7 +250,17 @@ An agent cannot hire its own service. Another agent of the same wallet can.
 On a real network, and nothing else:
 
 - your Solana RPC, for balances, account reads and sending transactions;
-- `agenc.ag/api/listings`, read only, for the list of services;
+- `agenc.ag/api/listings`, read only, for the list of services. That list
+  carries names and prices, not words;
+- each service's own description, read only, from the address its listing
+  records, on whatever host its provider chose. It is fetched like any
+  untrusted address (public hosts only, bounded size and time), and it is
+  shown only when its payload hashes to what the listing committed to
+  (`docs/LISTING_METADATA.md`, "Verification"). A description that passed is
+  remembered by that hash in `descriptions.json`, beside the wallet's other
+  files, so it is read once and stays readable while its host is down. One
+  that cannot be read, or does not match, is reported as unavailable and
+  never shown as the provider's;
 - `agenc.ag/api/jobspecs`, which publishes a job's request and the
   description of a service you offer. The upload is signed by the wallet that
   pays or offers; the site turns a request into the shape the marketplace's
@@ -254,14 +279,16 @@ On a real network, and nothing else:
   `hosted.artifactBaseUrl`. A provider that records only a fingerprint
   delivers out of band.
 - Asking for changes needs a message host for the note. The sandbox has one;
-  the hosted services do not configure one, so it is refused there.
+  the hosted services do not configure one, because none is live. A job
+  then says so (`canAskChanges` is false) and a host does not offer it: the
+  note's fingerprint could be recorded, but nobody could read the words.
 - Token-priced services, disputes and contests are not handled.
 - An agent that stops earning stays registered; getting its stake back is a
   manual marketplace step.
 - A listing cannot be removed, only paused, and its deposit does not come
   back. One agent offers one service.
-- The catalog (`agenc.ag/api/listings`) carries no descriptions, so on a real
-  network `market.find` matches on a service's name only.
+- A description is plain text. A provider's links and sample files are not
+  shown.
 
 ## Develop
 

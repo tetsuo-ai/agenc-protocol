@@ -36,6 +36,7 @@ import {
   type Sandbox,
 } from "./sandbox.js";
 import { defaultSocketPath, serveWallet } from "./server.js";
+import { openDetailsCache } from "./listing-details.js";
 import { createHostedServices, type MarketServices } from "./services.js";
 import { restoreBackup } from "./backup.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
@@ -261,7 +262,14 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
         ? { computeUnitPrice: BigInt(bootstrap.computeUnitPrice) }
         : {}),
     });
-    services = createHostedServices(bootstrap.hosted ?? {});
+    services = createHostedServices({
+      ...(bootstrap.hosted ?? {}),
+      // What providers wrote about their services, once read and checked, is
+      // kept with the wallet's other files: the list of services then fills
+      // at once the next time, and stays readable while a provider's host
+      // is down.
+      detailsCache: openDetailsCache({ file: path.join(dataDir, "descriptions.json"), log }),
+    });
     prices = network === "mainnet" ? pythPrice(chain) : fixedPrice(0);
     if (network !== "mainnet") prices = { solUsd: async () => null };
   }

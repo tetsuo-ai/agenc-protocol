@@ -117,6 +117,72 @@ const NO_SHOW_GRACE_SECS = 120;
  */
 const FROZEN_SETTLE_RETRY_MS = 120_000;
 const MAX_RESULT_TEXT = 20_000;
+/**
+ * True when a delivery's text is an SVG drawing: after an optional byte-order
+ * mark, XML declaration, comments and doctype, the document opens with <svg>.
+ */
+function isDrawing(text: string): boolean {
+  let rest = (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).slice(0, 4096).trimStart();
+  for (let step = 0; step < 6; step += 1) {
+    const close = rest.startsWith("<?") ? "?>" : rest.startsWith("<!--") ? "-->" : /^<!doctype/i.test(rest) ? ">" : null;
+    if (close === null) break;
+    const end = rest.indexOf(close);
+    if (end === -1) return false;
+    rest = rest.slice(end + close.length).trimStart();
+  }
+  return /^<svg[\s>]/i.test(rest);
+}
+
+/** The most services one page of a search holds. */
+const MAX_FIND_LIMIT = 50;
+
+/**
+ * Words that say nothing about what is wanted. A person asks "find someone
+ * to write a haiku about my garden", and so does an agent; only "write",
+ * "haiku" and "garden" say what to look for.
+ */
+const SEARCH_FILLER = new Set([
+  "a", "an", "and", "any", "are", "about", "can", "do", "for", "find", "from", "get", "have", "i", "in", "is",
+  "it", "like", "looking", "me", "my", "need", "of", "on", "or", "our", "please", "some", "someone", "something",
+  "that", "the", "this", "to", "want", "who", "will", "with", "you", "your",
+]);
+
+/** A search word with the other forms it may take in a description. */
+interface SearchWord {
+  /** "memes" also finds "meme"; "summary" also finds "summaries". */
+  forms: string[];
+  /** A short word has to stand alone: "ai" is not in "maintain". */
+  whole: boolean;
+}
+
+/**
+ * The words of a search. Deliberately small: filler is dropped unless it is
+ * all there is, a plural does not hide a match, and a word of three letters
+ * or fewer only matches as a word of its own.
+ */
+function searchWords(query: string): SearchWord[] {
+  const all = [...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 0))];
+  const telling = all.filter((word) => !SEARCH_FILLER.has(word));
+  const words: SearchWord[] = [];
+  for (const word of (telling.length > 0 ? telling : all).slice(0, 12)) {
+    const forms = new Set([word]);
+    if (word.length > 4 && word.endsWith("ies")) forms.add(`${word.slice(0, -3)}y`);
+    else if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) forms.add(word.slice(0, -1));
+    if (word.length > 4 && word.endsWith("y")) forms.add(`${word.slice(0, -1)}ies`);
+    words.push({ forms: [...forms], whole: word.length <= 3 });
+  }
+  return words;
+}
+
+/** Text to search in, as it is and as the set of its words. */
+function searchable(text: string): { text: string; words: Set<string> } {
+  const lower = text.toLowerCase();
+  return { text: lower, words: new Set(lower.split(/[^a-z0-9]+/)) };
+}
+
+function found(word: SearchWord, place: { text: string; words: Set<string> }): boolean {
+  return word.forms.some((form) => (word.whole ? place.words.has(form) : place.text.includes(form)));
+}
 const BALANCE_CACHE_MS = 4_000;
 const STALE_PRICE_MS = 6 * 60 * 60_000;
 /** The marketplace's catalog hides a service priced below this. */
@@ -621,6 +687,7 @@ export class AgencWallet {
       network: this.#chain.network,
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
+      changesCanBeSent: this.#services.postChangeRequest !== undefined,
     });
   }
 
@@ -938,7 +1005,13 @@ export class AgencWallet {
       listing: row.listing,
       name: row.name,
       summary: row.summary,
+      description: row.description,
       category: row.category,
+      tags: row.tags,
+      inputs: row.inputs,
+      outputs: row.outputs,
+      terms: row.terms,
+      details: row.details,
       price: money(row.priceLamports, rate),
       rating: row.rating,
       ratingCount: row.ratingCount,
@@ -962,18 +1035,28 @@ export class AgencWallet {
     return money(record + approval + JOB_TRANSACTION_FEES_LAMPORTS, rate);
   }
 
+  /**
+   * Services a buyer can hire, best match first. `total` is how many match in
+   * all; `offset` and `limit` take a page of them.
+   *
+   * A search looks at everything a buyer could mean: the name, what the
+   * provider wrote about the service, its category and tags, what it asks for
+   * and what it hands back. Of several words, the services matching the most
+   * of them are the answer, and a word in the name counts for more than the
+   * same word further down. Words that say nothing ("find someone to ...")
+   * are left out, so a whole sentence works as a search.
+   */
   async find(params: {
     query?: string;
     maxPriceCents?: number;
     limit?: number;
-  }): Promise<ServiceView[]> {
+    offset?: number;
+  }): Promise<{ services: ServiceView[]; total: number }> {
     const [listed, rate] = await Promise.all([this.#services.listServices(), this.#displayRate()]);
     const rows = [...listed, ...(await this.#ownServices(listed))];
-    const words = (params.query ?? "")
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((word) => word.length > 1);
-    const limit = Math.min(20, Math.max(1, Math.trunc(params.limit ?? 8)));
+    const words = searchWords(params.query ?? "");
+    const limit = Math.min(MAX_FIND_LIMIT, Math.max(1, Math.trunc(params.limit ?? 8)));
+    const offset = Math.max(0, Math.trunc(params.offset ?? 0));
     let maxLamports: bigint | null = null;
     if (params.maxPriceCents !== undefined) {
       if (rate === null) {
@@ -984,22 +1067,50 @@ export class AgencWallet {
       }
       maxLamports = centsToLamports(params.maxPriceCents, rate);
     }
-    const scored = rows
+    const matched = rows
       .filter((row) => maxLamports === null || row.priceLamports <= maxLamports)
       .map((row) => {
-        const haystack = `${row.name} ${row.summary ?? ""} ${row.category ?? ""}`.toLowerCase();
-        const hits = words.filter((word) => haystack.includes(word)).length;
-        return { row, hits };
-      })
-      .filter((entry) => words.length === 0 || entry.hits > 0);
+        const name = searchable(row.name);
+        const rest = searchable(
+          [
+            row.summary ?? "",
+            row.description ?? "",
+            (row.category ?? "").replace(/-/g, " "),
+            row.tags.join(" ").replace(/-/g, " "),
+            row.inputs.join(" "),
+            row.outputs.join(" "),
+          ].join(" "),
+        );
+        let hits = 0;
+        let inName = 0;
+        for (const word of words) {
+          if (found(word, name)) {
+            hits += 1;
+            inName += 1;
+          } else if (found(word, rest)) {
+            hits += 1;
+          }
+        }
+        return { row, hits, inName };
+      });
+    // A search of several words shows the services that match the most of
+    // them: all of them when any service does, the nearest ones otherwise.
+    // One stray word in a long description does not make a match.
+    const most = matched.reduce((best, entry) => Math.max(best, entry.hits), 0);
+    const scored = matched.filter((entry) => words.length === 0 || (most > 0 && entry.hits === most));
     scored.sort(
       (a, b) =>
-        b.hits - a.hits ||
+        b.inName - a.inName ||
+        // A service nobody can read about goes below the ones that say what they do.
+        Number(a.row.details === "unavailable") - Number(b.row.details === "unavailable") ||
         (b.row.rating ?? 0) - (a.row.rating ?? 0) ||
         b.row.jobsDone - a.row.jobsDone ||
         (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
     );
-    return scored.slice(0, limit).map((entry) => this.#serviceView(entry.row, rate));
+    return {
+      services: scored.slice(offset, offset + limit).map((entry) => this.#serviceView(entry.row, rate)),
+      total: scored.length,
+    };
   }
 
   /**
@@ -1025,6 +1136,12 @@ export class AgencWallet {
         name: offer.name,
         category: offer.category,
         summary: offer.summary,
+        description: offer.summary,
+        tags: [],
+        inputs: [],
+        outputs: [],
+        terms: [],
+        details: "ready",
         priceLamports: BigInt(offer.priceLamports),
         rating: null,
         ratingCount: 0,
@@ -1125,6 +1242,14 @@ export class AgencWallet {
         name: terms.name,
         category: terms.category,
         summary: null,
+        description: null,
+        tags: [],
+        inputs: [],
+        outputs: [],
+        terms: [],
+        // The marketplace's list does not show this service, so its
+        // description was never read.
+        details: "unavailable",
         priceLamports: terms.priceLamports,
         rating: null,
         ratingCount: terms.ratingCount,
@@ -1840,11 +1965,17 @@ export class AgencWallet {
         let text: string | null = null;
         try {
           text = new TextDecoder("utf-8", { fatal: true }).decode(fetched.bytes);
-          if (text.length > MAX_RESULT_TEXT) text = `${text.slice(0, MAX_RESULT_TEXT)}\n[cut here]`;
+          // A drawing is a picture that happens to be written as text. Shown
+          // as words it is a page of code; it is handed on as a file instead.
+          if (isDrawing(text)) text = null;
+          else if (text.length > MAX_RESULT_TEXT) text = `${text.slice(0, MAX_RESULT_TEXT)}\n[cut here]`;
         } catch {
           text = null;
         }
-        return { text, uri: fetched.uri, hash: proofHashHex, verified: true };
+        // A host opens this address for a person. Whatever a source of
+        // deliveries hands back, only a web address ever leaves here.
+        const uri = fetched.uri !== null && /^https:\/\/[^\s]+$/.test(fetched.uri) ? fetched.uri : null;
+        return { text, uri, hash: proofHashHex, verified: true };
       }
     } catch (error) {
       this.#log(`delivery fetch: ${describeError(error)}`);
@@ -2018,6 +2149,7 @@ export class AgencWallet {
       network: this.#chain.network,
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
+      changesCanBeSent: this.#services.postChangeRequest !== undefined,
     };
     return records.slice(0, limit).map((job) => jobView(job, context));
   }

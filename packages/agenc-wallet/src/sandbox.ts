@@ -102,6 +102,10 @@ export interface HouseService {
   category: string;
   /** What the buyer gets, in a sentence. */
   summary: string;
+  /** What the buyer is asked to send along. */
+  inputs?: readonly string[];
+  /** What comes back. */
+  outputs?: readonly string[];
   priceLamports: bigint;
   /** Seconds the provider gets to deliver. Default one hour. */
   deliverySecs?: number;
@@ -351,7 +355,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   const jobSpecs = new Map<string, Uint8Array>();
   const deliveries = new Map<string, Uint8Array>();
   const threads = new Map<string, taskThread.TaskThreadEnvelope[]>();
-  const listed: Array<{ listing: Address; summary: string; category: string }> = [];
+  const listed: Array<{
+    listing: Address;
+    summary: string;
+    category: string;
+    inputs: string[];
+    outputs: string[];
+  }> = [];
   const providers: HouseProvider[] = [];
 
   const resolveAgencUri = async (uri: string): Promise<Uint8Array> => {
@@ -451,6 +461,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           name: values.decodeListingName(new Uint8Array(account.name)),
           category: entry.category,
           summary: entry.summary,
+          description: entry.summary.length > 0 ? entry.summary : null,
+          tags: [],
+          inputs: entry.inputs,
+          outputs: entry.outputs,
+          terms: [],
+          // The practice marketplace keeps the words itself; nothing is fetched.
+          details: "ready",
           priceLamports: account.price,
           rating: average !== null && average >= 1 && average <= 5 ? average : null,
           ratingCount: account.ratingCount,
@@ -500,6 +517,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         listing: input.listing,
         summary: typeof metadata?.longDescription === "string" ? metadata.longDescription : "",
         category: typeof input.spec.category === "string" ? input.spec.category : "other",
+        inputs: [],
+        outputs: [],
       };
       const at = listed.findIndex((item) => item.listing === input.listing);
       if (at === -1) listed.push(entry);
@@ -678,7 +697,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           ...CLEAN,
         }),
       ]);
-      listed.push({ listing, summary: service.summary, category: service.category });
+      listed.push({
+        listing,
+        summary: service.summary,
+        category: service.category,
+        inputs: [...(service.inputs ?? [])],
+        outputs: [...(service.outputs ?? [])],
+      });
       return listing;
     },
 
@@ -817,6 +842,8 @@ export const PRACTICE_SERVICES: readonly HouseService[] = [
     name: "Haiku Writer",
     category: "writing",
     summary: "A three-line poem about anything you name.",
+    inputs: ["What the poem is about"],
+    outputs: ["One haiku"],
     priceLamports: 2_000_000n,
     replyPrefix: "Quiet keys at dawn\na small job crosses the wire\npaid before the tea",
   },
@@ -824,6 +851,8 @@ export const PRACTICE_SERVICES: readonly HouseService[] = [
     name: "Plain English Summary",
     category: "writing",
     summary: "A short, plain summary of the text you send.",
+    inputs: ["The text to sum up", "How long the summary should be"],
+    outputs: ["A summary in plain words"],
     priceLamports: 5_000_000n,
     replyPrefix: "Summary: this is a practice delivery. In practice mode the provider repeats your request so you can see the whole trip.",
   },
@@ -831,6 +860,8 @@ export const PRACTICE_SERVICES: readonly HouseService[] = [
     name: "Name Ideas",
     category: "marketing",
     summary: "Ten name ideas for a product, pet or project.",
+    inputs: ["What needs a name", "The feeling the name should give"],
+    outputs: ["Ten name ideas"],
     priceLamports: 8_000_000n,
     replyPrefix: "Ten ideas: Northlight, Pebble, Juniper, Tandem, Lumen, Fable, Harbor, Quill, Ember, Atlas.",
   },
