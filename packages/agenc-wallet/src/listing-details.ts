@@ -112,22 +112,48 @@ export async function verifiedListingPayload(
 /** Control characters other than a line break and a tab, as one class. */
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f\u0080-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g;
 
+/**
+ * How much of a stranger's text is looked at, as a multiple of how much of it
+ * is kept. A description can be any length and can be written to make
+ * tidying it slow. Everything below works on a bounded piece of it, and no
+ * pattern below repeats without a bound, so the work is bounded whatever the
+ * text says.
+ */
+const LOOKED_AT = 4;
+/** No list a provider publishes is read past this many entries. */
+const MAX_ENTRIES_READ = 64;
+
+function bounded(text: string, kept: number): string {
+  return text.length > kept * LOOKED_AT ? text.slice(0, kept * LOOKED_AT) : text;
+}
+
 /** Take the marks of Markdown off a line: the words stay, the syntax goes. */
 function unmark(line: string): string {
   return line
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\((?:[^)]*)\)/g, "$1")
-    .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, "$2")
-    .replace(/`+([^`]+)`+/g, "$1")
+    .replace(/!\[([^\]\n]{0,300})\]\([^)\n]{0,600}\)/g, "$1")
+    .replace(/\[([^\]\n]{1,300})\]\([^)\n]{0,600}\)/g, "$1")
+    .replace(/(\*\*|__)(?=\S)([^\n]{1,300}?)(?<=\S)\1/g, "$2")
+    .replace(/`{1,3}([^`\n]{1,300})`{1,3}/g, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/, "")
     .replace(/^\s{0,3}>\s?/, "")
-    .replace(/^\s*[*+]\s+/, "- ");
+    .replace(/^\s{0,8}[*+]\s+/, "- ");
+}
+
+/** A rule (---, ***, ___) is layout, not words. */
+function isRule(entry: string): boolean {
+  if (entry.length === 0 || entry.length > 120) return false;
+  let marks = 0;
+  for (const character of entry) {
+    if (character === "-" || character === "*" || character === "_") marks += 1;
+    else if (character !== " ") return false;
+  }
+  return marks >= 3;
 }
 
 /** One tidy line of untrusted text, or null when nothing is left. */
 function line(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
-  const collapsed = unmark(value.replace(CONTROL, " ").replace(/\s+/g, " ").trim()).trim();
+  const collapsed = unmark(bounded(value, max).replace(CONTROL, " ").replace(/\s+/g, " ").trim()).trim();
   if (collapsed.length === 0) return null;
   return collapsed.length > max ? `${collapsed.slice(0, max - 1).trimEnd()}…` : collapsed;
 }
@@ -184,13 +210,15 @@ function unflatten(text: string): string {
 /** Untrusted text as plain paragraphs: line breaks kept, Markdown marks removed. */
 function paragraphs(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
-  const lines = unflatten(value.replace(/\r\n?/g, "\n").replace(CONTROL, " ").replace(/[ \t]+/g, " ").trim())
+  const lines = unflatten(
+    bounded(value, max).replace(/\r\n?/g, "\n").replace(CONTROL, " ").replace(/[ \t]+/g, " ").trim(),
+  )
     .split("\n")
     .map((entry) => unmark(entry).trim());
   const kept: string[] = [];
   for (const entry of lines) {
     // A rule (---) or a fence (```) is layout, not words.
-    if (/^(?:[-*_]\s*){3,}$/.test(entry) || /^`{3,}/.test(entry)) continue;
+    if (isRule(entry) || entry.startsWith("```")) continue;
     if (entry.length === 0 && (kept.length === 0 || kept[kept.length - 1] === "")) continue;
     kept.push(entry);
   }
@@ -204,7 +232,7 @@ function shortList(value: unknown, maxItems: number, maxLength: number): string[
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   const list: string[] = [];
-  for (const entry of value) {
+  for (const entry of value.slice(0, MAX_ENTRIES_READ)) {
     const text = line(entry, maxLength);
     if (text === null) continue;
     const key = text.toLowerCase();
@@ -272,7 +300,7 @@ export function listingDetails(payload: Record<string, unknown>): ListingDetails
   const tags = Array.isArray(payload.tags)
     ? [
         ...new Set(
-          payload.tags.filter(
+          payload.tags.slice(0, MAX_ENTRIES_READ).filter(
             (tag): tag is string => typeof tag === "string" && tag.length <= 32 && KEBAB.test(tag),
           ),
         ),
@@ -304,6 +332,7 @@ export function tidyDetails(value: unknown): ListingDetails | null {
     category,
     tags: Array.isArray(entry.tags)
       ? entry.tags
+          .slice(0, MAX_ENTRIES_READ)
           .filter((tag): tag is string => typeof tag === "string" && tag.length <= 32 && KEBAB.test(tag))
           .slice(0, MAX_TAGS)
       : [],
@@ -341,8 +370,9 @@ export function withoutLeadingName(name: string, text: string): string {
 function sentencesOf(text: string): string[] {
   const found: string[] = [];
   let from = 0;
-  for (const match of text.matchAll(/[.!?]+(?=\s)/g)) {
-    const end = (match.index ?? 0) + match[0].length;
+  // The last mark of a run ("..." or "?!") is the one followed by a space.
+  for (const match of text.matchAll(/[.!?](?=\s)/g)) {
+    const end = (match.index ?? 0) + 1;
     found.push(text.slice(from, end).trim());
     from = end;
   }
@@ -357,8 +387,11 @@ function sentencesOf(text: string): string[] {
  */
 export function summarize(name: string, description: string | null): string | null {
   if (description === null) return null;
-  const text = withoutLeadingName(name, description)
-    .replace(/\s*\n\s*/g, " ")
+  const text = withoutLeadingName(name, bounded(description, MAX_DESCRIPTION))
+    .split("\n")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(" ")
     .replace(/\s+/g, " ")
     .trim();
   if (text.length === 0) return null;
