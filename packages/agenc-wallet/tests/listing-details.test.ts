@@ -268,6 +268,55 @@ describe("tidying what a provider wrote", () => {
     expect(details.terms.every((entry) => entry.length <= 280)).toBe(true);
   });
 
+  it("is not slowed down by text written to make it slow", () => {
+    // A description is a stranger's file of up to 128 KiB. Each of these is
+    // the worst case for a pattern that repeats without a bound: text that
+    // almost matches, from every position, all the way to its end.
+    const size = 120_000;
+    const repeat = (unit: string): string => unit.repeat(Math.ceil(size / unit.length));
+    const attacks = [
+      repeat("!["),
+      repeat("[a]("),
+      repeat("[a](b"),
+      repeat("__a "),
+      repeat("**a "),
+      repeat("`a "),
+      `${" ".repeat(size)}x`,
+      `${repeat("- ")}x`,
+      `${"\n".repeat(size / 2)}${" ".repeat(size / 2)}x`,
+      repeat("a: - "),
+      repeat(" ## a - b"),
+      `${".".repeat(size)}x`,
+      `${"?!".repeat(size / 2)}x`,
+      "#".repeat(size),
+      `Name ${repeat("- - - ")}`,
+    ];
+    for (const text of attacks) {
+      const started = performance.now();
+      const details = listingDetails({
+        category: text,
+        tags: Array.from({ length: 20_000 }, (_, index) => `tag-${index}`),
+        custom: {
+          listingMetadata: {
+            longDescription: text,
+            buyerInputs: Array.from({ length: 20_000 }, () => text),
+            deliverables: [text, text],
+            sla: text,
+            pricingNotes: text,
+          },
+        },
+      });
+      summarize("Name", details.description);
+      summarize(text.slice(0, 60), text);
+      withoutLeadingName(text.slice(0, 60), text);
+      tidyDetails({ ...details, description: text, terms: [text, text], tags: Array.from({ length: 20_000 }, () => "a") });
+      // Far below what a pattern that scans the rest of the text from every
+      // position would take on this much text, and far above the real cost.
+      expect(performance.now() - started, `${JSON.stringify(text.slice(0, 12))} repeated`).toBeLessThan(1_500);
+      expect((details.description ?? "").length).toBeLessThanOrEqual(2_000);
+    }
+  });
+
   it("removes characters that hide or reorder text", () => {
     // A right-to-left override, a zero-width space, a byte-order mark and a bell.
     const hidden = String.fromCharCode(0x202e, 0x200b, 0xfeff, 0x07);
