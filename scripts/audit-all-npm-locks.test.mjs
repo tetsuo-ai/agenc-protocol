@@ -18,12 +18,41 @@ import {
   validateReviews,
 } from "./audit-all-npm-locks.mjs";
 
-const policy = JSON.parse(
+const onFile = JSON.parse(
   readFileSync(
     new URL("../supply-chain/npm-advisory-reviews.json", import.meta.url),
   ),
 );
+// These tests are about the rules, not about which package happens to be
+// under review today. They take the first review on file as their example,
+// and a made-up one when the file holds none: an empty file is the goal, and
+// reaching it must not break the suite.
+const policy =
+  onFile.reviews.length > 0
+    ? onFile
+    : {
+        schemaVersion: 1,
+        reviews: [
+          {
+            advisory: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+            package: "example-dev-tool",
+            version: "1.2.3",
+            root: ".",
+            node: "node_modules/example-dev-tool",
+            integrity: `sha512-${"A".repeat(86)}==`,
+            severity: "high",
+            reviewedAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2026-01-15T00:00:00Z",
+            owner: "protocol maintainers",
+            reason: "A made-up review, used only to exercise the rules.",
+          },
+        ],
+      };
 const review = policy.reviews[0];
+const name = review.package;
+/** A package that is affected only because it depends on the reviewed one. */
+const dependent = "depends-on-the-reviewed-package";
+const archive = `https://registry.npmjs.org/${name}/-/${name}-${review.version}.tgz`;
 // A moment at which every review on file is in force: just after the newest began.
 const now =
   Math.max(...policy.reviews.map((entry) => Date.parse(entry.reviewedAt))) +
@@ -40,7 +69,7 @@ function inputs() {
           version: review.version,
           integrity: review.integrity,
           dev: true,
-          resolved: "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz",
+          resolved: archive,
         },
       },
     },
@@ -51,21 +80,23 @@ function inputs() {
           info: 0,
           low: 0,
           moderate: 0,
-          high: 2,
+          high: 0,
           critical: 0,
+          // Two packages are affected, at the severity under review.
+          [review.severity]: 2,
           total: 2,
         },
       },
       vulnerabilities: {
-        braces: {
-          severity: "high",
+        [name]: {
+          severity: review.severity,
           nodes: [review.node],
-          via: [{ name: "braces", url: review.advisory, severity: "high" }],
+          via: [{ name, url: review.advisory, severity: review.severity }],
         },
-        micromatch: {
-          severity: "high",
-          nodes: ["node_modules/micromatch"],
-          via: ["braces"],
+        [dependent]: {
+          severity: review.severity,
+          nodes: [`node_modules/${dependent}`],
+          via: [name],
         },
       },
     },
@@ -90,12 +121,12 @@ test("all runtime findings are rejected even with a matching development review"
 
 test("critical findings cannot be concealed by inconsistent summary severities", () => {
   const x = inputs();
-  x.report.vulnerabilities.braces.severity = "critical";
+  x.report.vulnerabilities[name].severity = "critical";
   assert.throws(
     () => evaluateAudit(x),
     /inconsistent npm audit severity counts/,
   );
-  x.report.metadata.vulnerabilities.high = 1;
+  x.report.metadata.vulnerabilities[review.severity] = 1;
   x.report.metadata.vulnerabilities.critical = 1;
   assert.throws(
     () => evaluateAudit(x),
@@ -158,7 +189,7 @@ test("the actual CLI rejects an unlisted lock before invoking npm", (t) => {
 test("a review cannot follow a version, archive, dependency-scope or root change", () => {
   for (const change of [
     (x) => {
-      x.lock.packages[review.node].version = "3.0.4";
+      x.lock.packages[review.node].version = "999.0.0";
     },
     (x) => {
       x.lock.packages[review.node].integrity += "changed";
@@ -168,20 +199,22 @@ test("a review cannot follow a version, archive, dependency-scope or root change
     },
     (x) => {
       x.lock.packages[review.node].resolved =
-        "https://example.invalid/braces.tgz";
+        `https://example.invalid/${name}.tgz`;
     },
     (x) => {
       x.root = "tests-integration";
     },
     (x) => {
-      x.report.vulnerabilities.braces.nodes.push("nested/node_modules/braces");
+      x.report.vulnerabilities[name].nodes.push(
+        `nested/node_modules/${name}`,
+      );
     },
     (x) => {
-      x.report.vulnerabilities.braces.via[0].url =
-        "https://github.com/advisories/GHSA-aaaa-bbbb-cccc";
+      x.report.vulnerabilities[name].via[0].url =
+        "https://github.com/advisories/GHSA-zzzz-yyyy-xxxx";
     },
     (x) => {
-      x.report.vulnerabilities.braces.via[0].severity = "critical";
+      x.report.vulnerabilities[name].via[0].severity = "critical";
     },
   ]) {
     const x = inputs();
@@ -220,19 +253,19 @@ test("incomplete, failed, inconsistent and cyclic audit results fail closed", ()
       delete x.report.metadata;
     },
     (x) => {
-      x.report.metadata.vulnerabilities.high = 0;
+      x.report.metadata.vulnerabilities[review.severity] = 0;
     },
     (x) => {
-      x.report.vulnerabilities.micromatch.via = ["missing"];
+      x.report.vulnerabilities[dependent].via = ["missing"];
     },
     (x) => {
-      x.report.vulnerabilities.braces.via = ["micromatch"];
+      x.report.vulnerabilities[name].via = [dependent];
     },
     (x) => {
-      x.report.vulnerabilities.braces.via = [];
+      x.report.vulnerabilities[name].via = [];
     },
     (x) => {
-      x.report.vulnerabilities.braces.via[0].name = "other-package";
+      x.report.vulnerabilities[name].via[0].name = "other-package";
     },
   ]) {
     const x = inputs();
