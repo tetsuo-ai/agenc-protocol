@@ -315,13 +315,28 @@ export async function releaseOwnClaims(
   return released;
 }
 
-/** One upkeep pass: auto-accept what is overdue, then release unusable claims. */
+/**
+ * One upkeep pass: auto-accept what is overdue, then release unusable claims.
+ * It never fails its caller: a step that cannot read the chain is logged
+ * (`upkeep.failed`) and done on a later pass, so the worker's own jobs and
+ * its search for new ones go on.
+ */
 export async function runUpkeep(
   ctx: WorkerContext,
   agent: WorkerAgent,
   memory: UpkeepMemory = new Map(),
 ): Promise<UpkeepReport> {
-  const autoAccepted = await collectOverdueReviews(ctx, agent, memory);
-  const released = await releaseOwnClaims(ctx, agent, memory);
+  const step = async <T>(name: string, run: () => Promise<T[]>): Promise<T[]> => {
+    try {
+      return await run();
+    } catch (error) {
+      ctx.log({ event: "upkeep.failed", step: name, reason: failureText(error) });
+      return [];
+    }
+  };
+  const autoAccepted = await step("auto-accept", () =>
+    collectOverdueReviews(ctx, agent, memory),
+  );
+  const released = await step("release", () => releaseOwnClaims(ctx, agent, memory));
   return { autoAccepted, released };
 }

@@ -177,7 +177,9 @@ agent to read it**. The worker is built around that assumption:
   over. Both return the claim's rent and free one of the agent's ten
   active-task slots. Each such transaction is signed and paid (5,000 lamports)
   by the worker's own wallet; `expire_claim` also records the expiry in the
-  agent's public `AgentStats`, creating that account on first use.
+  agent's public `AgentStats`, creating that account on first use. A pass
+  that cannot read the chain is logged (`upkeep.failed`) and done later; it
+  never stops a tick or `up`.
 - **Earnings settled together are each counted.** When several deliveries are
   paid between two looks, the rise in the agent's on-chain `totalEarned` is
   divided by each task's own terms, so every paid job reports what it earned.

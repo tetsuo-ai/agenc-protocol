@@ -41,6 +41,7 @@ import {
   processCandidate,
   resumeOpenClaim,
   runTickOnce,
+  runUp,
   shareEarnings,
   SUBMISSION_ACCOUNT_SIZE,
   type WorkerAgent,
@@ -2450,6 +2451,102 @@ describe("settlement evidence coherence", () => {
     expect(second.map((report) => [report.task, report.earnedLamports])).toEqual([
       [SECOND_TASK, SECOND_PAY],
     ]);
+  });
+});
+
+describe("upkeep that cannot read the chain", () => {
+  const GIVEN_UP = address("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin");
+
+  /**
+   * A registered worker holding a landed claim it can finish, and a given-up
+   * job whose claim cannot be read right now (the connection fails).
+   */
+  async function workerWithUpkeepDown() {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-upkeep-down-"));
+    const agentId = new Uint8Array(32).fill(9);
+    const [agentPda] = await findAgentPda({ agentId });
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: agentPda });
+    const [givenUpClaim] = await findClaimPda({ task: GIVEN_UP, bidder: agentPda });
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const payload = { title: "finish the landed claim", summary: "do it" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const state = emptyState();
+    state.agentIdHex = bytesToHex(agentId);
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-19T00:00:00.000Z",
+      phase: "claiming",
+    };
+    state.failedJobs = [
+      {
+        task: GIVEN_UP,
+        claimedAt: "2026-07-18T00:00:00.000Z",
+        failedAt: "2026-07-18T01:00:00.000Z",
+        cause: "attempts",
+        reason: "the program that does the work kept failing",
+        attempts: 3,
+        claimReleased: false,
+      },
+    ];
+    saveState(stateDir, state);
+    const accounts = new Map<Address, Uint8Array>([
+      [agentPda, agentRegistrationData(0n)],
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda, agentPda)],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+    ]);
+    const submitTaskResult = vi.fn(async () => ({ signature: "submit-signature" }));
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, { submitTaskResult }, events);
+    ctx.fetchUri = async () => body;
+    ctx.readAccount = async (account) => {
+      if (account === givenUpClaim) throw new Error("rpc answered 503");
+      return accounts.get(account) ?? null;
+    };
+    return { stateDir, ctx, events, submitTaskResult };
+  }
+
+  it("does not stop a tick: the rest of its work is done and the failure is logged", async () => {
+    const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
+    const result = await runTickOnce(ctx);
+    expect(result.outcome?.status).toBe("submitted");
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.event === "upkeep.failed")).toMatchObject({
+      reason: expect.stringMatching(/rpc answered 503/),
+    });
+  });
+
+  it("does not stop a long run when the first upkeep fails", async () => {
+    const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 300);
+    await expect(runUp(ctx, { signal: controller.signal })).resolves.toBeUndefined();
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
+    expect(events.map(({ event }) => event)).toContain("upkeep.failed");
   });
 });
 
