@@ -25,7 +25,13 @@ import {
   requestDescription,
   turnDownReason,
 } from "../src/market.js";
-import { CENT, eventually, startWorld, type World } from "./harness.js";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { startSandbox } from "../src/sandbox.js";
+import { AgencWallet } from "../src/wallet.js";
+import { CENT, SOL, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -244,6 +250,58 @@ describe("posting a request", () => {
     const refunded = await wallet.getJob(posted.id, true);
     expect(refunded.status).toBe("refunded");
     expect(refunded.statusText).toBe("Nobody took this request in time, so it was cancelled and the reward came back.");
+  });
+
+  it("cancels a request whose taker never delivers, once the time to deliver has passed", async () => {
+    // A practice marketplace whose only house provider takes jobs and goes quiet.
+    const sandbox = await startSandbox({ followWallClock: false });
+    await sandbox.addService({
+      name: "Sleepy Provider",
+      category: "writing",
+      summary: "Takes the job and goes quiet.",
+      priceLamports: 30n * CENT,
+      replyPrefix: "",
+      noShow: true,
+    });
+    const clock = { now: 1_800_000_000_000 };
+    const wallet = await AgencWallet.open({
+      dataDir: mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-")),
+      unlockSecret: randomBytes(32),
+      chain: sandbox.chain,
+      services: sandbox.services,
+      prices: sandbox.prices,
+      now: () => clock.now,
+    });
+    try {
+      sandbox.fund(wallet.mainAddress, 5n * SOL);
+      const quote = await eventually(async () => (await wallet.overview()).postCost);
+      const before = await sandbox.chain.getBalance(wallet.mainAddress);
+      const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 1 });
+      await sandbox.workOnce();
+      const taken = await wallet.getJob(posted.id, true);
+      expect(taken.status).toBe("working");
+      expect(taken.statusText).toBe("Someone took it and is working on it.");
+      expect(taken.provider).not.toBeNull();
+      // Taken, so it cannot be cancelled before the time to deliver is up.
+      expect(taken.canRefund).toBe(false);
+      await expect(wallet.refundJob(posted.id, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+      sandbox.advanceClock(24 * 3600 + 180);
+      await wallet.tick();
+      const refunded = await wallet.getJob(posted.id, true);
+      expect(refunded.status).toBe("refunded");
+      expect(refunded.statusText).toBe(
+        "Whoever took this request did not deliver in time, so it was cancelled and the reward came back.",
+      );
+      await wallet.tick();
+      // The reward came back; what is gone is what the quote called kept (and,
+      // on the practice chain, the fee of the cancel it refused above).
+      const gone = before - (await sandbox.chain.getBalance(wallet.mainAddress));
+      expect(gone).toBeGreaterThanOrEqual(BigInt(quote.kept.lamports));
+      expect(gone).toBeLessThanOrEqual(BigInt(quote.kept.lamports) + 5_000n);
+    } finally {
+      await wallet.close();
+    }
   });
 
   it("lets an agent post within its budget, and asks the person above it", async () => {
