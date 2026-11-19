@@ -29,6 +29,7 @@ import {
   createMarketplaceClient,
   facade,
   findAgentPda,
+  findClaimPda,
   findHireRecordPda,
   findListingModerationPda,
   findProtocolConfigPda,
@@ -124,8 +125,13 @@ export interface OpenJob {
   task: Address;
   /** The house buyer approves the delivery, paying whoever did the job. */
   approve(): Promise<void>;
-  /** The house buyer turns the delivery down, which puts the price on hold for review. */
-  turnDown(): Promise<void>;
+  /**
+   * The house buyer turns the delivery down, which puts the price on hold for
+   * review. Like any wallet it counts the turn-down only in a record the
+   * provider already has; with `payForRecord` it is a buyer who pays to start
+   * that record, which the marketplace lets anyone do.
+   */
+  turnDown(options?: { payForRecord?: boolean }): Promise<void>;
   /** True once someone has delivered and the job waits for approval. */
   delivered(): Promise<boolean>;
 }
@@ -885,8 +891,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           await sendApproval(chain, buyer, task, claim.worker);
         },
-        async turnDown() {
-          const { sendRejectAndFreeze } = await import("./market.js");
+        async turnDown(options = {}) {
+          const { providerRecordAddress, sendRejectAndFreeze } = await import("./market.js");
           const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
             "@tetsuo-ai/marketplace-sdk"
           );
@@ -899,13 +905,22 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .map((entry) => getTaskClaimDecoder().decode(entry.data))
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
-          await sendRejectAndFreeze(
-            chain,
-            buyer,
-            task,
-            claim.worker,
-            (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array,
-          );
+          const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
+          if (options.payForRecord !== true) {
+            await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
+            return;
+          }
+          const [claimAddress] = await findClaimPda({ task, bidder: claim.worker });
+          await chain.clientFor(buyer).send([
+            await facade.rejectAndFreeze({
+              task,
+              claim: claimAddress,
+              creator: buyer,
+              rejectionHash: reason,
+              agentStats: await providerRecordAddress(claim.worker),
+              systemProgram: SYSTEM_PROGRAM_ADDRESS,
+            }),
+          ]);
         },
       };
     },

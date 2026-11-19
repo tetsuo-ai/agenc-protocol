@@ -164,8 +164,6 @@ export function jobView(
     isOwner: boolean;
     /** Lamports a rating costs, when known. */
     ratingCostLamports?: bigint | null;
-    /** Lamports the deposit behind a provider's record costs, when known. */
-    recordCostLamports?: bigint | null;
     /**
      * Whether a note saying what to change can reach the provider. Sending a
      * delivery back records only the note's fingerprint; the words travel
@@ -220,10 +218,7 @@ export function jobView(
       canRate && context.ratingCostLamports != null
         ? money(context.ratingCostLamports, context.usdPerSol)
         : null,
-    turnDownCost:
-      canTurnDown && job.providerRecorded === false && context.recordCostLamports != null
-        ? money(context.recordCostLamports, context.usdPerSol)
-        : null,
+    turnDownRecorded: canTurnDown && job.providerRecorded === true,
     receiptUrl: receiptUrlFor(job, context.network),
     error: job.error,
   };

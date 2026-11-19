@@ -335,12 +335,12 @@ export interface JobView {
   /** What leaving a rating costs (a permanent record), while `canRate`. */
   ratingCost: Money | null;
   /**
-   * A turned-down delivery goes on the provider's marketplace record. When
-   * the provider has no record yet, turning this delivery down also pays the
-   * deposit behind it, which is not returned: that amount, while the
-   * delivery can be turned down. Null when there is nothing extra to pay.
+   * While the delivery can be turned down: whether turning it down goes on
+   * the provider's marketplace record. Only a record the provider already
+   * has is counted in; starting one would cost the buyer, so a provider
+   * without one gets none. Turning a delivery down costs its fee either way.
    */
-  turnDownCost: Money | null;
+  turnDownRecorded: boolean;
   receiptUrl: string | null;
   error: string | null;
 }

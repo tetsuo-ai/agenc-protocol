@@ -37,7 +37,7 @@ function job(patch: Partial<JobView> = {}): JobView {
     canRate: false,
     rating: null,
     ratingCost: null,
-    turnDownCost: null,
+    turnDownRecorded: false,
     receiptUrl: null,
     error: null,
     ...patch,

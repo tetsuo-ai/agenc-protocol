@@ -53,7 +53,6 @@ import {
   LISTING_NAME_MAX_BYTES,
   listingAddressFor,
   providerHasRecord,
-  providerRecordDeposit,
   purchaseDeposits,
   ratingCost,
   readAgent,
@@ -804,8 +803,6 @@ export class AgencWallet {
     return this.#ratingCostLamports;
   }
 
-  #recordCostLamports: bigint | null = null;
-
   /** What posting a request from the main balance costs on top of its reward, when read. */
   #postCostCache: { at: number; total: bigint; kept: bigint } | null = null;
   #postCostReading: Promise<void> | null = null;
@@ -844,17 +841,6 @@ export class AgencWallet {
     };
   }
 
-  /**
-   * What turning down a provider's first delivery costs on top of the fee:
-   * the deposit behind its record. Read once and remembered.
-   */
-  async #recordCost(): Promise<bigint | null> {
-    if (this.#recordCostLamports === null) {
-      this.#recordCostLamports = await providerRecordDeposit(this.#chain).catch(() => null);
-    }
-    return this.#recordCostLamports;
-  }
-
   async #jobView(job: JobRecord, isOwner: boolean): Promise<JobView> {
     return jobView(job, {
       usdPerSol: await this.#displayRate(),
@@ -862,7 +848,6 @@ export class AgencWallet {
       network: this.#chain.network,
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
-      recordCostLamports: await this.#recordCost(),
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
     });
   }
@@ -2559,9 +2544,12 @@ export class AgencWallet {
       if (result === null || result.hash !== seen.submission.proofHashHex) {
         result = await this.#loadResult(seen.submission.proofHashHex, seen.submission.resultData);
       }
-      // Whether turning this down would also pay for the provider's record.
-      if (providerRecorded === undefined && provider !== null) {
-        providerRecorded = await providerHasRecord(this.#chain, provider).catch(() => undefined);
+      // Whether turning this down would go on the provider's record. Read
+      // until it has one: anyone may start it at any time, and nobody can
+      // remove it.
+      if (providerRecorded !== true && provider !== null) {
+        providerRecorded =
+          (await providerHasRecord(this.#chain, provider).catch(() => undefined)) ?? providerRecorded;
       }
     }
     const reviewDeadlineAt =
@@ -2792,7 +2780,6 @@ export class AgencWallet {
       network: this.#chain.network,
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
-      recordCostLamports: await this.#recordCost(),
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
     };
     return records.slice(0, limit).map((job) => jobView(job, context));
@@ -3056,17 +3043,17 @@ export class AgencWallet {
         if (delivery === null) {
           throw new WalletError("NOT_ALLOWED", "There is no delivery to turn down yet.");
         }
-        let signature: string;
+        let sent: { signature: string; recorded: boolean };
         try {
           const reason = await turnDownReason({
             task,
             deliveryHashHex: delivery,
             requestHashHex: job.jobSpecHashHex,
           });
-          signature = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash);
+          sent = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash);
         } catch (error) {
           if (hireFailureText(error).code === "NOT_ENOUGH_MONEY") {
-            // The provider's record is paid for by whoever turns its first delivery down.
+            // Its fee is all a turn-down costs, and even that was not there.
             throw new WalletError(
               "NOT_ENOUGH_MONEY",
               "There is not enough money to turn this down. Nothing changed.",
@@ -3081,10 +3068,11 @@ export class AgencWallet {
             { cause: error },
           );
         }
+        const { signature, recorded } = sent;
         this.#patchJob(jobId, (entry, draft) => {
           entry.chainStatus = "reject_frozen";
           entry.signatures.reject = signature;
-          entry.providerRecorded = true;
+          entry.providerRecorded = recorded;
           // The review clock is read back from the chain on the next look.
           entry.reviewDeadlineAt = null;
           this.#note(draft, {

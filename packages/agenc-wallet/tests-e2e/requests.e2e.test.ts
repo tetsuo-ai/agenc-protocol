@@ -8,7 +8,6 @@ import {
   findTaskJobSpecPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
-  getAgentStatsDecoder,
   getTaskDecoder,
   getTaskJobSpecDecoder,
   getTaskSubmissionDecoder,
@@ -20,7 +19,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
 import {
   providerRecordAddress,
-  providerRecordDeposit,
   readAgent,
   requestDescription,
   turnDownReason,
@@ -174,26 +172,24 @@ describe("posting a request", () => {
     await expect(wallet.rateJob(posted.id, 5, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
   });
 
-  it("turns a delivered request down: the reward is held for review, and the provider's record counts it", async () => {
+  it("turns a delivered request down: the reward is held for review, and the buyer pays the fee alone", async () => {
     world = await startWorld();
     const { wallet, sandbox } = world;
     const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 } });
     await sandbox.workOnce();
     const delivered = await wallet.getJob(posted.id, true);
     expect(delivered.status).toBe("delivered");
-    expect(delivered.turnDownCost?.lamports).toBe((await providerRecordDeposit(sandbox.chain)).toString());
+    // Whoever took it has no record of turn-downs, and starting one would cost the buyer.
+    expect(delivered.turnDownRecorded).toBe(false);
 
     const before = await world.balance(wallet.mainAddress);
     const held = await wallet.refundJob(posted.id, true);
     expect(held.status).toBe("in_review");
     expect(held.statusText).toMatch(/the reward is on hold while it is reviewed/);
-    expect(before - (await world.balance(wallet.mainAddress))).toBe(
-      5_000n + (await providerRecordDeposit(sandbox.chain)),
-    );
-    // The turn-down is on the provider's record, with a reason anyone can
+    expect(before - (await world.balance(wallet.mainAddress))).toBe(5_000n);
+    // No record was started. The turn-down carries a reason anyone can
     // rebuild from the chain alone.
-    const record = await sandbox.chain.readAccount(await providerRecordAddress(delivered.provider as Address));
-    expect(getAgentStatsDecoder().decode(record!).tasksRejected).toBe(1n);
+    expect(await sandbox.chain.readAccount(await providerRecordAddress(delivered.provider as Address))).toBeNull();
     const submission = await submissionOf(world, posted.task!, delivered.provider!);
     const [specAddress] = await findTaskJobSpecPda({ task: posted.task as Address });
     const pinned = getTaskJobSpecDecoder().decode((await sandbox.chain.readAccount(specAddress))!);

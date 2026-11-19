@@ -31,7 +31,6 @@ import {
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
   getAgentStatsDiscriminatorBytes,
-  getAgentStatsSize,
   getAuthorityRateLimitSize,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
@@ -888,7 +887,11 @@ export async function providerRecordAddress(providerAgent: Address): Promise<Add
   return stats;
 }
 
-/** Whether the provider agent already has that record. The first turn-down creates it. */
+/**
+ * Whether the marketplace keeps that record for the provider agent. Nobody
+ * has to keep one: it exists only once someone paid to start it, and it is
+ * never removed.
+ */
 export async function providerHasRecord(chain: Chain, providerAgent: Address): Promise<boolean> {
   const info = await chain.readAccountInfo(await providerRecordAddress(providerAgent));
   return (
@@ -899,24 +902,20 @@ export async function providerHasRecord(chain: Chain, providerAgent: Address): P
 }
 
 /**
- * The deposit behind a provider's record, which whoever turns down its first
- * delivery pays. The record stays on the marketplace, so it is never returned.
- */
-export function providerRecordDeposit(chain: Chain): Promise<bigint> {
-  return chain.getMinimumBalanceForRentExemption(getAgentStatsSize());
-}
-
-/**
  * Turn a delivery down and hold the price for review. Unlike a plain
  * rejection, this does not hand the money back: the job stays with the
  * provider, a reviewer decides who gets the price, and if nobody rules before
  * the review time runs out the provider is paid. A buyer cannot read the work
  * and then walk away with both it and the price.
  *
- * The turn-down goes on the provider's own record (made here when it has
- * none), with a reason that says what was turned down (see
- * {@link turnDownReason}). The marketplace leaves that record to whoever sends
- * this; a wallet that leaves it out keeps the provider's record clean for free.
+ * The turn-down goes on the provider's own record when it has one, with a
+ * reason that says what was turned down (see {@link turnDownReason}). A
+ * provider without a record gets none: the marketplace makes whoever passes a
+ * missing record pay to start it, and turning work down must never cost the
+ * buyer more than the transaction. So the record is read right before the
+ * transaction is built and passed only when it is already there, where
+ * counting costs nothing; a record is never removed, so it is still there
+ * when the transaction lands. `recorded` says which it was.
  */
 export async function sendRejectAndFreeze(
   chain: Chain,
@@ -924,8 +923,9 @@ export async function sendRejectAndFreeze(
   task: Address,
   providerAgent: Address,
   rejectionHash: Uint8Array,
-): Promise<string> {
+): Promise<{ signature: string; recorded: boolean }> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
+  const recorded = await providerHasRecord(chain, providerAgent);
   const client = chain.clientFor(buyer);
   const result = await client.send([
     await facade.rejectAndFreeze({
@@ -933,11 +933,12 @@ export async function sendRejectAndFreeze(
       claim,
       creator: buyer,
       rejectionHash,
-      agentStats: await providerRecordAddress(providerAgent),
-      systemProgram: SYSTEM_PROGRAM_ADDRESS,
+      ...(recorded
+        ? { agentStats: await providerRecordAddress(providerAgent), systemProgram: SYSTEM_PROGRAM_ADDRESS }
+        : {}),
     }),
   ]);
-  return result.signature;
+  return { signature: result.signature, recorded };
 }
 
 /**

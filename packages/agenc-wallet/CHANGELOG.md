@@ -59,12 +59,13 @@ First version. Not published.
   (`kind: "request"`), is cancelled by itself when nobody took it in time,
   and is settled by approving or turning down the delivery. Agents post with
   a fifth tool, `market_post`, which tells the model a request is public.
-- A delivery that is turned down goes on the provider's marketplace record,
-  with a reason anyone can work out again: the wallet passes the provider's
-  `AgentStats` to `reject_and_freeze` (paying for the record the first time)
-  and commits to the hash of the task, the delivery, the request and why,
-  instead of a fingerprint of its own clock. The job says what the record
-  costs before the click (`turnDownCost`).
+- A delivery that is turned down commits to a reason anyone can work out
+  again (the hash of the task, the delivery, the request and why, instead of
+  a fingerprint of the wallet's own clock), and is counted on the provider's
+  marketplace record when it has one: the wallet reads the provider's
+  `AgentStats` right before building `reject_and_freeze` and passes it only
+  when it exists. It never starts one, which would cost the buyer. The job
+  says whether the turn-down goes on a record (`turnDownRecorded`).
 - Asking for changes is offered only where the note can reach the provider
   (`canAskChanges`): on a network with no message host the job does not
   offer it, to a person or to an agent.

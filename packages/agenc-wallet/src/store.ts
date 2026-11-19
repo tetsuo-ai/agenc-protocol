@@ -205,9 +205,10 @@ export interface JobRecord {
   changesRequested: boolean;
   result: JobResult | null;
   /**
-   * Whether the provider already has its marketplace record of turn-downs,
-   * read once the job is delivered. Turning down a provider's first delivery
-   * also pays for that record. Absent until read.
+   * Whether the provider has a marketplace record of turn-downs, read while
+   * the job is delivered until it has one (a record is never removed). A
+   * turn-down is counted only in a record that exists: starting one would
+   * cost the buyer. Absent until read.
    */
   providerRecorded?: boolean;
   rating: number | null;
