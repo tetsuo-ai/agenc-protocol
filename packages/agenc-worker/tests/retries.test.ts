@@ -483,6 +483,43 @@ describe("a job spec that cannot be fetched for hours", () => {
     expect(Date.now() - Date.parse(state.openClaim!.fetchFailingSince!)).toBeLessThan(60_000);
   });
 
+  it("keeps counting the time spent trying across a gap, so six hours of trying in parts give it up", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob();
+    ctx.fetchUri = async () => {
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-20T00:00:00.000Z"));
+      await resumeOpenClaim(ctx, agent);
+      // Four hours of trying, a try at every wait (the longest is half an hour).
+      for (let look = 0; look < 8; look += 1) {
+        vi.setSystemTime(new Date(Date.now() + 30 * 60_000));
+        waitOut();
+        await resumeOpenClaim(ctx, agent);
+      }
+      expect(loadState(stateDir).openClaim).not.toBeNull();
+      // The wallet is closed overnight, eight hours.
+      vi.setSystemTime(new Date(Date.now() + 8 * 60 * 60_000));
+      waitOut();
+      await resumeOpenClaim(ctx, agent);
+      expect(loadState(stateDir).openClaim).not.toBeNull();
+      // Two more hours of trying make six.
+      for (let look = 0; look < 5 && loadState(stateDir).openClaim !== null; look += 1) {
+        vi.setSystemTime(new Date(Date.now() + 30 * 60_000));
+        waitOut();
+        await resumeOpenClaim(ctx, agent);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", reason: "the job spec could not be fetched for 6 hours" }),
+    ]);
+  });
+
   it("is given up after six hours of failures at every wait while it runs", async () => {
     const { stateDir, ctx, waitOut } = await heldJob();
     ctx.fetchUri = async () => {

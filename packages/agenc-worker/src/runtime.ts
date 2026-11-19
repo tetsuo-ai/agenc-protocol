@@ -155,8 +155,9 @@ export const DEFAULT_MAX_FETCH_WAIT_MS = 6 * 60 * 60_000;
 /**
  * A fetch failure this long after the one before cannot come from a worker
  * that kept running (it never waits more than {@link MAX_RETRY_DELAY_MS}
- * between tries, plus one poll): it was stopped, or the computer slept. The
- * waiting then starts again, so time nobody could try is not counted.
+ * between tries, plus one poll): it was stopped, or the computer slept. That
+ * gap is left out of the waiting (its start moves forward by the gap), so
+ * time nobody could try is not counted and time spent trying still is.
  */
 export const FETCH_RESUME_GAP_MS = 2 * MAX_RETRY_DELAY_MS;
 
@@ -1098,15 +1099,18 @@ function noteJobWait(
   const last =
     marker.lastFetchFailureAt === undefined ? Number.NaN : Date.parse(marker.lastFetchFailureAt);
   // A gap no running worker leaves: it was stopped or the computer slept.
-  // That time does not count, and the waits start short again.
+  // That time does not count (the start of the waiting moves forward by it,
+  // so the time spent trying before it still does), and the waits start
+  // short again.
   const resumed =
     Number.isFinite(last) && now - last > FETCH_RESUME_GAP_MS + ctx.config.pollIntervalMs;
   const fetchWaits = resumed ? 1 : (marker.fetchWaits ?? 0) + 1;
   const lastFetchFailureAt = new Date(now).toISOString();
-  const fetchFailingSince =
-    resumed || marker.fetchFailingSince === undefined
-      ? lastFetchFailureAt
-      : marker.fetchFailingSince;
+  const since =
+    marker.fetchFailingSince === undefined ? Number.NaN : Date.parse(marker.fetchFailingSince);
+  const fetchFailingSince = Number.isFinite(since)
+    ? new Date(since + (resumed ? now - last : 0)).toISOString()
+    : lastFetchFailureAt;
   const limitMs = Math.max(0, ctx.config.maxFetchWaitMs ?? DEFAULT_MAX_FETCH_WAIT_MS);
   if (now - Date.parse(fetchFailingSince) >= limitMs) {
     // The detail stays in the log: a timeout in it would read as the work
