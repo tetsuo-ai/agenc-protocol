@@ -11,11 +11,13 @@
 //
 // Every step reads the chain first and sends at most one transaction per job,
 // signed by the worker's own wallet. Nothing here runs or delivers work.
-import { address, unwrapOption, type Address } from "@solana/kit";
+import { AccountRole, address, unwrapOption, type Address, type Instruction } from "@solana/kit";
 import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencError,
   facade,
   findClaimPda,
+  findExpireClaimAgentStatsPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
@@ -234,6 +236,32 @@ function markReleased(ctx: WorkerContext, task: Address): void {
  * reclaimed straight away, an open one's is expired once its time is over.
  * Either returns the claim's rent to this worker and frees its slot.
  */
+/**
+ * Expiring a claim counts the lapse in the agent's own marketplace record of
+ * turn-downs and lapses (`AgentStats`), and starts that record when it does
+ * not exist yet: the sender pays its rent (about $0.09) for good. That buys
+ * the worker nothing, so it counts a lapse only in a record that already
+ * exists. Otherwise the record is left out, which the program allows: it
+ * then counts nothing and charges nothing.
+ */
+export async function withoutNewRecord<T extends Instruction>(
+  ctx: WorkerContext,
+  worker: Address,
+  instruction: T,
+): Promise<T> {
+  const [record] = await findExpireClaimAgentStatsPda({ worker });
+  if ((await ctx.readAccount(record)) !== null) return instruction;
+  return {
+    ...instruction,
+    accounts: (instruction.accounts ?? []).map((meta) =>
+      // An optional account left out is the program's own address, read-only.
+      meta.address === record
+        ? { address: AGENC_COORDINATION_PROGRAM_ADDRESS, role: AccountRole.READONLY }
+        : meta,
+    ),
+  };
+}
+
 export async function releaseOwnClaims(
   ctx: WorkerContext,
   agent: WorkerAgent,
@@ -287,22 +315,26 @@ export async function releaseOwnClaims(
             treasury,
             rentRecipient: ctx.signer.address,
           })
-        : await facade.expireClaim({
-            authority: ctx.signer,
-            task,
-            worker: agent.agentPda,
-            rentRecipient: ctx.signer.address,
-            treasury,
-            // An exclusive no-show must show its (possibly absent) bond.
-            workerCompletionBond: (
-              await findWorkerCompletionBondPda({
-                task,
-                workerAuthority: ctx.signer.address,
-              })
-            )[0],
-            bondCreator: decoded.creator,
-            ...(parent !== null ? { dependencyParent: parent } : {}),
-          });
+        : await withoutNewRecord(
+            ctx,
+            agent.agentPda,
+            await facade.expireClaim({
+              authority: ctx.signer,
+              task,
+              worker: agent.agentPda,
+              rentRecipient: ctx.signer.address,
+              treasury,
+              // An exclusive no-show must show its (possibly absent) bond.
+              workerCompletionBond: (
+                await findWorkerCompletionBondPda({
+                  task,
+                  workerAuthority: ctx.signer.address,
+                })
+              )[0],
+              bondCreator: decoded.creator,
+              ...(parent !== null ? { dependencyParent: parent } : {}),
+            }),
+          );
       const { signature } = await ctx.client.send([instruction], { maxRetries: 0 });
       markReleased(ctx, task);
       const how = ended ? "reclaimed" : "expired";

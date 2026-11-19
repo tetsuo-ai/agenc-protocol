@@ -7,12 +7,16 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { KeyPairSigner } from "@solana/kit";
+import { lamports, type Address, type KeyPairSigner } from "@solana/kit";
 import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   createMarketplaceClient,
   facade,
   findAgentPda,
   findClaimPda,
+  findExpireClaimAgentStatsPda,
+  getAgentStatsDecoder,
+  getAgentStatsEncoder,
   findHireRecordPda,
   findTaskJobSpecPda,
   findTaskPda,
@@ -39,6 +43,7 @@ import { createLiteSvmTransport } from "./litesvm-transport.js";
 import { GpaSimulator } from "./gpa-sim.js";
 
 const ENCODER = new TextEncoder();
+const FEE = 5_000n;
 const PAYLOAD = { title: "Write a line", summary: "write one friendly line on stdout" };
 const CANONICAL = ENCODER.encode(values.canonicalJobSpecJson(PAYLOAD));
 const SPEC_HASH = sha256(CANONICAL);
@@ -177,6 +182,31 @@ async function world(executor: string[], config: Partial<WorkerContext["config"]
   return { svm, ctx, events, stateDir, task, creator: creator as KeyPairSigner, workerWallet, advance, workerAgent };
 }
 
+/** An agent's record of turn-downs and lapses, as if someone had started it. */
+function seedRecord(svm: ReturnType<typeof freshSvm>, record: Address, agent: Address, bump: number): void {
+  const data = new Uint8Array(
+    getAgentStatsEncoder().encode({
+      agent,
+      tasksRejected: 0n,
+      disputesWon: 0n,
+      disputesLost: 0n,
+      claimsExpired: 0n,
+      totalCancelled: 0n,
+      lastUpdated: 0n,
+      bump,
+      reserved: new Uint8Array(32),
+    }),
+  );
+  svm.setAccount({
+    address: record,
+    data,
+    executable: false,
+    lamports: lamports(svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
+    space: BigInt(data.length),
+  });
+}
+
 describe("e2e: a worker looks after its own jobs", () => {
   it("auto-accepts its delivery once the buyer has let the review window pass, and is paid", async () => {
     const w = await world([process.execPath, "-e", "process.stdout.write('Here is your line.')", "{prompt}"]);
@@ -233,6 +263,7 @@ describe("e2e: a worker looks after its own jobs", () => {
     // After it (the deadline plus an hour), the worker expires its own claim.
     w.advance(3_600n + 30n);
     const before = w.svm.getBalance(w.workerWallet.address) ?? 0n;
+    const claimHeld = w.svm.getBalance(claim) ?? 0n;
     await runTickOnce(w.ctx);
     expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({
       task: w.task,
@@ -240,10 +271,32 @@ describe("e2e: a worker looks after its own jobs", () => {
     });
     expect(accountData(w.svm, claim)).toBeNull();
     expect(getAgentRegistrationDecoder().decode(accountData(w.svm, agentPda)!).activeTasks).toBe(0);
-    expect((w.svm.getBalance(w.workerWallet.address) ?? 0n) > before).toBe(true);
+    // Everything the claim held came back, less the one fee: the agent had no
+    // record of lapses, and the worker did not pay to start one (its rent
+    // would have come out of this).
+    const [record] = await findExpireClaimAgentStatsPda({ worker: agentPda });
+    expect(accountData(w.svm, record)).toBeNull();
+    expect((w.svm.getBalance(w.workerWallet.address) ?? 0n) - before).toBeGreaterThanOrEqual(claimHeld - FEE);
     expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
     // The task is open again for someone who can do it.
     expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.Open);
+  });
+
+  it("counts the lapse of a job it gave up in a record of lapses the agent already has", async () => {
+    const w = await world(
+      [process.execPath, "-e", "process.exit(3)", "{prompt}"],
+      { maxJobAttempts: 1 },
+    );
+    await runTickOnce(w.ctx);
+    const agentPda = await w.workerAgent();
+    // Someone already started the agent's record (anyone may, at their cost).
+    const [record, bump] = await findExpireClaimAgentStatsPda({ worker: agentPda });
+    seedRecord(w.svm, record, agentPda, bump);
+
+    w.advance(DEADLINE_SECS + 3_600n + 30n);
+    await runTickOnce(w.ctx);
+    expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
+    expect(getAgentStatsDecoder().decode(accountData(w.svm, record)!).claimsExpired).toBe(1n);
   });
 
   it("gives up a job whose time to deliver ran out while it waited to try again, and releases it", async () => {

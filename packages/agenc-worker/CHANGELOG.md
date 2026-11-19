@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delivery the buyer never reviews is auto-accepted by the worker once its
   review window has passed, so the worker is paid.
 - The claim of a given-up job is expired or reclaimed by the worker, returning
-  its rent and freeing its active-task slot.
+  its rent and freeing its active-task slot. An expiry is counted in the
+  agent's `AgentStats` only when that record already exists: the worker no
+  longer pays to start it.
 - Several deliveries paid between two looks are each reported with what they
   earned instead of no amount at all. Anything beyond what they pay is kept
   back only when it could be a waiting job's whole pay.
