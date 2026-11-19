@@ -22,6 +22,10 @@ First version. Not published.
   reported as money that arrived, even when the connection still shows the
   balance from before for a moment: what came back is counted in only by a
   look a minute or more later.
+- A job program in progress is killed when the wallet closes (stopped by its
+  host or service manager) instead of outliving it, and the job runs again on
+  the next start without a try used up. Switching an agent's earning off
+  still lets a job in progress finish.
 
 - A local wallet service: an encrypted key vault, one main balance, one
   wallet per agent, and a crash-safe journal of every job.

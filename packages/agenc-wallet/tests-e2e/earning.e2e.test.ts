@@ -2,6 +2,9 @@
 // hears when an earned job is paid and what it was called; a buyer who goes
 // quiet still pays; two jobs paid while the agent was not looking are both
 // counted; and a job whose work keeps failing stops and says why.
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WalletEvent } from "../src/client/protocol.js";
 import type { EarnOptions } from "../src/earn.js";
@@ -39,7 +42,62 @@ async function delivered(w: World, task: string): Promise<void> {
   }, 30_000);
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("earning on practice money", () => {
+  it("stops a job in progress at once when it closes, without counting a failed try", async () => {
+    const folder = mkdtempSync(path.join(tmpdir(), "agenc-wallet-stop-"));
+    const pidFile = path.join(folder, "pid");
+    // A job program that would take a minute.
+    const slow = 'require("node:fs").writeFileSync(process.argv[1],String(process.pid));setTimeout(()=>{},60000)';
+    world = await startWorld({
+      earn: {
+        executor: { argv: [process.execPath, "-e", slow, pidFile, "{prompt}"], mode: "sandboxed", envAllowlist: [], timeoutMs: 120_000 },
+        pollIntervalMs: 150,
+      },
+    });
+    const { wallet, sandbox, dataDir } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    const open = await sandbox.postOpenJob({
+      title: "Write a line",
+      instructions: "Write one friendly line.",
+      rewardLamports: 50n * CENT,
+    });
+    let pid = 0;
+    try {
+      await eventually(async () => existsSync(pidFile), 30_000);
+      pid = Number(readFileSync(pidFile, "utf8"));
+      expect(alive(pid)).toBe(true);
+      const closing = Date.now();
+      const closed = await Promise.race([
+        wallet.close().then(() => "closed"),
+        new Promise((resolve) => setTimeout(() => resolve("still closing"), 5_000)),
+      ]);
+      expect(closed).toBe("closed");
+      expect(Date.now() - closing).toBeLessThan(5_000);
+      expect(alive(pid)).toBe(false);
+      // The job is still the agent's, to be done on the next start: no try used up.
+      const state = JSON.parse(readFileSync(path.join(dataDir, "earn", agent.id, "state.json"), "utf8")) as {
+        openClaim: { task: string; failures?: number } | null;
+        failedJobs?: unknown[];
+      };
+      expect(state.openClaim).toMatchObject({ task: open.task });
+      expect(state.openClaim?.failures).toBeUndefined();
+      expect(state.failedJobs ?? []).toEqual([]);
+    } finally {
+      if (pid > 0 && alive(pid)) process.kill(-pid, "SIGKILL");
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it("tells the host when an earned job is paid, and names the job", async () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;

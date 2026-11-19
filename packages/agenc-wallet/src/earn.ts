@@ -160,6 +160,13 @@ export class EarnHost {
   readonly #serves: (agentId: string) => boolean;
   readonly #ownAddresses: () => Address[];
   readonly #running = new Map<string, Running>();
+  /**
+   * Aborted when the wallet closes. A job program in progress is then killed
+   * at once (it would otherwise outlive the wallet, spending with nobody to
+   * deliver its work) and runs again on the next start. Switching an agent's
+   * earning off only stops it looking for work: a job in progress finishes.
+   */
+  readonly #shutdown = new AbortController();
 
   constructor(deps: {
     chain: Chain;
@@ -396,7 +403,9 @@ export class EarnHost {
     await entry.done;
   }
 
+  /** The wallet is closing: stop every loop, and any job in progress with it. */
   async stopAll(): Promise<void> {
+    this.#shutdown.abort();
     await Promise.all([...this.#running.keys()].map((agentId) => this.stop(agentId)));
   }
 
@@ -558,6 +567,7 @@ export class EarnHost {
         this.#chain.getMinimumBalanceForRentExemption(space),
       // Review windows and claim times run on the chain's clock.
       clusterTime: () => this.#chain.clusterTime(),
+      signal: this.#shutdown.signal,
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
         : {}),
