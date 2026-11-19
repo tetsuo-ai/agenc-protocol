@@ -196,6 +196,38 @@ describe("a busy network", () => {
     expect(back.agents.every((entry) => entry.balanceKnown)).toBe(true);
   });
 
+  it("knows a new agent's balance even when a read that began before it ends last", async () => {
+    const gate = { hold: false, waiting: [] as Array<() => void> };
+    const gated = (base: Chain): Chain => ({
+      ...base,
+      getBalances: async (accounts) => {
+        if (gate.hold) {
+          gate.hold = false;
+          await new Promise<void>((done) => gate.waiting.push(done));
+        }
+        return base.getBalances(accounts);
+      },
+    });
+    world = await startWorld({ chain: gated });
+    const { wallet, clock } = world;
+    await wallet.overview();
+    // A read begins and is slow: it asks for every balance there is now.
+    clock.now += 60_000;
+    gate.hold = true;
+    const slow = wallet.overview();
+    for (let tries = 0; gate.waiting.length === 0 && tries < 200; tries += 1) await new Promise((done) => setTimeout(done, 5));
+    expect(gate.waiting).toHaveLength(1);
+    // Meanwhile an agent is made, and its own view reads every balance, its own too.
+    const made = await wallet.createAgent("Newcomer");
+    expect(made.balanceKnown).toBe(true);
+    // The slow read ends last, without the new agent.
+    for (const done of gate.waiting) done();
+    await slow;
+    const after = await wallet.overview();
+    expect(after.offline).toBe(false);
+    expect(after.agents.find((entry) => entry.id === made.id)).toMatchObject({ balance: { lamports: "0" }, balanceKnown: true });
+  });
+
   it("is given up on after a while, in words that say what happened", async () => {
     const mode = { busy: 1_000, tried: 0 };
     world = await startWorld({ chain: busyChain(mode) });

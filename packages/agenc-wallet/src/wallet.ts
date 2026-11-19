@@ -696,16 +696,19 @@ export class AgencWallet {
     const wallets = this.#walletIds();
     try {
       const amounts = await this.#chain.getBalances(wallets.map((wallet) => wallet.address));
-      const values = new Map<string, bigint>();
+      // A read that began before an agent was made does not cover it, and may
+      // end after one that did: what it did not read keeps its last figure,
+      // so a new agent is never taken for one whose balance was never read.
+      const values = new Map<string, bigint>(this.#balances?.values ?? []);
       wallets.forEach((wallet, index) => values.set(wallet.id, amounts[index]!));
       this.#balances = { at: this.#now(), values, offline: false };
       // Remembered across restarts, so a busy network never shows an agent
       // with nothing when it has money.
       const known = this.#store.state.lastSeenLamports ?? {};
-      if (wallets.some((wallet) => known[wallet.id] !== values.get(wallet.id)!.toString())) {
+      if ([...values].some(([id, lamports]) => known[id] !== lamports.toString())) {
         this.#store.update((draft) => {
           draft.lastSeenLamports = Object.fromEntries(
-            wallets.map((wallet) => [wallet.id, values.get(wallet.id)!.toString()]),
+            [...values].map(([id, lamports]) => [id, lamports.toString()]),
           );
         });
       }
