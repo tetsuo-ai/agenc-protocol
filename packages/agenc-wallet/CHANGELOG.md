@@ -14,7 +14,9 @@ First version. Not published.
   at a time (`earn.offer` with `offerId`).
 - Earned jobs are named (the agent's own service, or the job's own title),
   a paid one is announced as a `job` event, and two paid in one round are
-  both counted.
+  both counted. An earned job's view carries a `listing` only when it came
+  through one of the agent's own services, so a host can tell the person's
+  own words from a stranger's.
 - A job the worker gave up shows as failed with why; an agent that stopped
   after several failed jobs in a row says so and its services come off
   offer until earning is switched on again.

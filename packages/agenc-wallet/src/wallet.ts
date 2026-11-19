@@ -2114,6 +2114,15 @@ export class AgencWallet {
 
   #earnJobs(agentId: string): JobRecord[] {
     const agent = this.#store.state.agents[agentId];
+    // A job keeps its listing only when it came through one of this agent's
+    // own services: its name is then the person's own words. Any other
+    // job's title is a stranger's, and a host may show a listed job's name
+    // where it looks like the host's own (a system notification).
+    const own = new Set(
+      agent === undefined
+        ? []
+        : agentOffers(agent).flatMap((offer) => (offer.listing !== null ? [offer.listing] : [])),
+    );
     return this.#earn.jobs(agentId).map((entry) => ({
       id: `earn_${agentId}_${entry.task}`,
       role: "working" as const,
@@ -2121,7 +2130,7 @@ export class AgencWallet {
       createdAt: entry.at,
       updatedAt: entry.at,
       idempotencyKey: null,
-      listing: entry.listing ?? "",
+      listing: entry.listing !== null && own.has(entry.listing) ? entry.listing : "",
       providerAgent: "",
       title: agent === undefined ? "Job from the marketplace" : this.#earnedJobName(agent, entry),
       request: "",

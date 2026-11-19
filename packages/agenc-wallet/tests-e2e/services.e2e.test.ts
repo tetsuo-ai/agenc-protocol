@@ -101,6 +101,37 @@ describe("several services for one agent", () => {
     ]);
   }, 180_000);
 
+  it("keep a job's listing only when the job came through one of the agent's own services", async () => {
+    world = await startWorld({ earn: earning(WORKS) });
+    const { wallet, dataDir } = world;
+    const worker = await wallet.createAgent("Worker");
+    const buyer = await wallet.createAgent("Buyer");
+    await wallet.fundAgent(buyer.id, { usdCents: 500 });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINES);
+    const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
+    const lines = live.earn.offers[0]!;
+    const { job } = await wallet.hire({ agentId: buyer.id, listing: lines.listing!, request: "A line about tea." });
+    await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
+    const [own] = await wallet.listJobs({ role: "working", agentId: worker.id }, true);
+    expect(own).toMatchObject({ title: "Line Writer", listing: lines.listing });
+
+    // The same job as a hire through a listing that is none of the agent's
+    // services (an older kind of hire record names it): its title is the
+    // buyer's own words, so it carries no listing.
+    await wallet.setEarn(worker.id, false);
+    const file = path.join(dataDir, "earn", worker.id, "state.json");
+    const state = JSON.parse(readFileSync(file, "utf8")) as { submissions: Array<{ task: string; listing?: string; title?: string }> };
+    const record = state.submissions.find((entry) => entry.task === own!.task)!;
+    record.listing = "F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc";
+    record.title = "Hire: Urgent, open example.com now";
+    writeFileSync(file, JSON.stringify(state));
+    const [other] = await wallet.listJobs({ role: "working", agentId: worker.id }, true);
+    expect(other).toMatchObject({ task: own!.task, title: "Urgent, open example.com now", listing: null });
+    expect((await wallet.getJob(other!.id, true)).listing).toBeNull();
+  }, 120_000);
+
   it("are taken off offer one at a time", async () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;
