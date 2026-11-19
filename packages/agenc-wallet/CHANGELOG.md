@@ -9,6 +9,18 @@ and this package follows [Semantic Versioning](https://semver.org/).
 
 First version. Not published.
 
+- An agent can offer several services (up to ten), each its own listing,
+  named by `id` in `AgentView.earn.offers` and changed or taken off offer one
+  at a time (`earn.offer` with `offerId`).
+- Earned jobs are named (the agent's own service, or the job's own title),
+  a paid one is announced as a `job` event, and two paid in one round are
+  both counted.
+- A job the worker gave up shows as failed with why; an agent that stopped
+  after several failed jobs in a row says so and its services come off
+  offer until earning is switched on again.
+- A job's price or deposits coming back to the main balance are no longer
+  reported as money that arrived.
+
 - A local wallet service: an encrypted key vault, one main balance, one
   wallet per agent, and a crash-safe journal of every job.
 - The buying side end to end: find, hire (from an allowance or after a

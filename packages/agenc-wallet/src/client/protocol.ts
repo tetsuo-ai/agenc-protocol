@@ -129,12 +129,16 @@ export interface WalletMethods {
   };
   /**
    * Offer a service other agents can hire, done by this agent while it takes
-   * jobs. Calling it again changes the price or the description (the name is
-   * fixed once the service exists). `offer: null` takes the service off offer.
+   * jobs. An agent can offer several. `offerId` names one of them (from
+   * `AgentView.earn.offers`): with `offer` it changes that service's price
+   * or description (its name is fixed once it exists), with `offer: null` it
+   * takes that service off offer. Without `offerId` a new service is offered,
+   * unless the agent already offers one by that name, which is then changed.
    */
   "earn.offer": {
     params: {
       agentId: string;
+      offerId?: string;
       offer: { name: string; summary: string; price: AmountInput } | null;
     };
     result: AgentView;

@@ -29,6 +29,11 @@ const MAX_FINISHED_JOBS = 500;
  * in line one step at a time, so a crash between steps loses nothing.
  */
 export interface OfferRecord {
+  /**
+   * Stable for as long as the person keeps this service, while its listing
+   * may be replaced (a retired listing starts over under a new id).
+   */
+  id: string;
   /** Random per offer; with the agent's marketplace address it fixes the listing address. */
   listingIdHex: string;
   /** The listing address, known once the agent is registered on the marketplace. */
@@ -93,9 +98,23 @@ export interface AgentRecord {
     minPayCents: number;
     jobsDone: number;
     lastError: string | null;
-    /** Absent in journals written before offers existed; treat as null. */
+    /**
+     * The services this agent offers, oldest first. A journal from before an
+     * agent could offer several holds `offer` instead; it is moved here when
+     * the journal is read.
+     */
+    offers?: OfferRecord[];
+    /** Journals written before several services: read once, then gone. */
     offer?: OfferRecord | null;
   };
+}
+
+/** The services an agent offers, whatever journal it came from. */
+export function agentOffers(agent: Pick<AgentRecord, "earn">): OfferRecord[] {
+  const earn = agent.earn as AgentRecord["earn"];
+  if (earn.offers !== undefined) return earn.offers;
+  const legacy = earn.offer ?? null;
+  return legacy === null ? [] : [{ ...legacy, id: legacy.id ?? legacy.listingIdHex }];
 }
 
 /**
@@ -408,6 +427,14 @@ export class StateStore {
         "INTERNAL",
         "The wallet's records are from a version this build cannot read.",
       );
+    }
+    // An agent from a journal written before several services keeps its one
+    // service as the first of its list.
+    for (const agent of Object.values(parsed.agents)) {
+      if (agent.earn.offers === undefined) {
+        agent.earn.offers = agentOffers(agent);
+        delete agent.earn.offer;
+      }
     }
     return new StateStore(file, parsed);
   }

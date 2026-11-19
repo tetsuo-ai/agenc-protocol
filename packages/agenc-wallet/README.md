@@ -229,7 +229,8 @@ only from this wallet's own addresses, and nothing a stranger wrote is run.
 
 ## Offering a service
 
-`earn.offer` gives an earning agent one service others can hire:
+`earn.offer` gives an earning agent a service others can hire. An agent can
+offer up to ten, each its own listing:
 
 ```ts
 await owner.call("earn.offer", {
@@ -257,13 +258,20 @@ reads the chain before each step so it can be interrupted anywhere:
 A listing that points somewhere its description cannot be read is moved to
 where the description really is, with the same words, before it is checked.
 
-Calling `earn.offer` again changes the price or the description (a new
-description is checked again). `offer: null` withdraws it.
+Each service has an `id` in `AgentView.earn.offers`. `earn.offer` with that
+`offerId` changes its price or description (a new description is checked
+again; the name is fixed once listed), and `offer: null` with it takes that
+service off offer. Without `offerId`, a name the agent already uses changes
+that service (or offers it again, on the same listing, after it was taken
+off); a new name adds a service. `AgentView.earn.offer` (the first wanted
+service) is kept for hosts that show one. A journal written when an agent had one
+service is read as that agent's first.
 
 A service is on the marketplace only while someone is there to do the work.
 The listing is paused when taking jobs is switched off, when the offer is
-withdrawn, and when the wallet closes; it is put back when they return. A
-wallet that is killed outright leaves its listing up until the next start.
+withdrawn, when the agent stopped taking jobs after several in a row failed,
+and when the wallet closes; it is put back when they return. A wallet that
+is killed outright leaves its listing up until the next start.
 
 Two things keep a hire from sitting unstarted, because nobody else can take
 a hire of this agent's service:
@@ -318,7 +326,7 @@ On a real network, and nothing else:
 - An agent that stops earning stays registered; getting its stake back is a
   manual marketplace step.
 - A listing cannot be removed, only paused, and its deposit does not come
-  back. One agent offers one service.
+  back.
 - A description is plain text. A provider's links and sample files are not
   shown.
 - A file with a delivery is at most 256 KB, because that is what the

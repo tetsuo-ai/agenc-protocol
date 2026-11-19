@@ -50,6 +50,8 @@ export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" 
 
 /** A service this agent offers for others to hire. */
 export interface OfferView {
+  /** Names this service in `earn.offer`; it stays the same for as long as the service is kept. */
+  id: string;
   /** The listing address once it exists. */
   listing: string | null;
   name: string;
@@ -82,13 +84,18 @@ export interface EarnView {
    * locked while the agent is registered.
    */
   setAside: Money;
-  /** The service this agent offers, or null when it only takes open jobs. */
+  /**
+   * The services this agent offers, oldest first. One the person took off
+   * offer stays here (`wanted` false) so it can be offered again. Empty when
+   * it only takes open jobs.
+   */
+  offers: OfferView[];
+  /** The first wanted service (else the first one), or null: for hosts that show one. */
   offer: OfferView | null;
   /**
-   * What putting a service on offer costs once: the deposits behind its
-   * permanent marketplace record and behind the safety check of its
-   * description, which are not returned. Null once this agent's service
-   * exists, or when the cost could not be read.
+   * What putting one more service on offer costs once: the deposits behind
+   * its permanent marketplace record and behind the safety check of its
+   * description, which are not returned. Null when it could not be read.
    */
   offerCost: Money | null;
 }
