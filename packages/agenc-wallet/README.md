@@ -285,6 +285,21 @@ a hire of this agent's service:
 
 An agent cannot hire its own service. Another agent of the same wallet can.
 
+## Running after the host closes
+
+`serve --unlock-socket <path>` is for a service manager (systemd `--user`,
+launchd) that keeps the wallet running, and earning, after the host app
+closes. It reads nothing from stdin and no file: it starts locked, serving
+nothing, and waits on that socket (in a folder private to the person) for
+its host. The host then hands over the same start-up line it would write to
+a child's stdin (`openBackgroundWallet` in `client/unlock.ts`). A host that
+starts again while the wallet runs does not send the secret again: it proves
+it holds it (an HMAC over a one-time value) and is told the running owner
+credential. A wrong secret leaves the wallet locked. The secret is only ever
+in the two processes' memory and on that socket: never on a command line, in
+the environment, in a log or in a file. Stopped by its service manager
+(SIGTERM), it takes its services off offer and exits.
+
 ## What it talks to
 
 On a real network, and nothing else:
