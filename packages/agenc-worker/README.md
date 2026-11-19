@@ -157,9 +157,10 @@ agent to read it**. The worker is built around that assumption:
   executor's process group so ordinary background descendants cannot escape.
   Non-zero exit, signal death, or timeout means nothing is submitted. An
   embedder that shuts down aborts the context's `signal`: a job program in
-  progress is then killed with its process group at once (`runExecutor`'s
-  `signal`, reason `aborted`, event `task.execution-stopped`), which is not a
-  failed try; the job runs again on the next start.
+  progress is then asked to end with its process group (SIGTERM), so it can
+  clean up after itself, and killed `ABORT_GRACE_MS` (2 s) later if it has not
+  (`runExecutor`'s `signal`, reason `aborted`, event `task.execution-stopped`),
+  which is not a failed try; the job runs again on the next start.
 - **A failing job is tried three times, then given up.** Each failed attempt
   (the executor, a job spec that is not the one the task names) waits before
   the next one: one minute, then four (`retryDelayMs`, growing fourfold up to

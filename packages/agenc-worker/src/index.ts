@@ -40,6 +40,7 @@ export {
   DEFAULT_MAX_STDERR_BYTES,
   DEFAULT_MAX_EXECUTOR_PROMPT_BYTES,
   PROMPT_PLACEHOLDER,
+  ABORT_GRACE_MS,
   type ExecutorResult,
 } from "./executor.js";
 export {

@@ -31,10 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listing from claim to ledger.
 - Runtime options `maxJobAttempts`, `retryDelayMs`, `maxFailedJobsInARow`,
   `upkeepIntervalMs` and `maxFetchWaitMs`, and optional `clusterTime` and
-  `signal` context hooks. Aborting `signal` kills a job program in progress
-  with its process group (`runExecutor`'s new `signal` option, reason
-  `aborted`) without counting a failed try, so a job program no longer
-  outlives a worker host that shuts down.
+  `signal` context hooks. Aborting `signal` asks a job program in progress to
+  end with its process group (SIGTERM, so it can clean up after itself) and
+  kills what is left `ABORT_GRACE_MS` (2 s) later (`runExecutor`'s new
+  `signal` option, reason `aborted`), without counting a failed try, so a job
+  program no longer outlives a worker host that shuts down.
 
 ## 0.3.0
 

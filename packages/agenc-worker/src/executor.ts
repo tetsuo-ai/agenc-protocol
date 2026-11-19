@@ -245,19 +245,32 @@ export function preflightExecutor(options: {
   }
 }
 
-function killExecutor(child: ReturnType<typeof spawn>): void {
+/**
+ * How long a stopped job program has, after it is asked to end (SIGTERM), to
+ * end on its own before whatever is left of its process group is killed. A
+ * program that cleans up after itself gets to: Desktop's job room cancels its
+ * AI run and ends its session, which a kill at once would skip. Well inside a
+ * host's own stop limit (Desktop waits 5 s for the wallet).
+ */
+export const ABORT_GRACE_MS = 2_000;
+
+function signalExecutor(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
   if (process.platform !== "win32") {
     try {
-      // Safe/sandboxed children start a new process group. Kill descendants as
-      // well so a timed-out executor cannot leave background helpers behind.
-      process.kill(-child.pid, "SIGKILL");
+      // Safe/sandboxed children start a new process group. Signal descendants
+      // as well so an executor cannot leave background helpers behind.
+      process.kill(-child.pid, signal);
       return;
     } catch {
       // It may have exited between the event and this call; fall through.
     }
   }
-  child.kill("SIGKILL");
+  child.kill(signal);
+}
+
+function killExecutor(child: ReturnType<typeof spawn>): void {
+  signalExecutor(child, "SIGKILL");
 }
 
 /**
@@ -288,8 +301,9 @@ export async function runExecutor(options: {
   unsafeInheritProcessContext?: boolean;
   /**
    * When this aborts, the program and everything in its process group is
-   * killed at once and the run fails with reason "aborted": whoever runs the
-   * worker is stopping, and a program left running would outlive it.
+   * asked to end (SIGTERM), killed {@link ABORT_GRACE_MS} later if it has
+   * not, and the run fails with reason "aborted": whoever runs the worker is
+   * stopping, and a program left running would outlive it.
    */
   signal?: AbortSignal;
 }): Promise<ExecutorResult> {
@@ -351,6 +365,7 @@ export async function runExecutor(options: {
       );
       killExecutor(child);
     }, timeoutMs);
+    let grace: ReturnType<typeof setTimeout> | null = null;
     const onAbort = (): void => {
       if (failure === null) {
         failure = new ExecutorError("executor was stopped", {
@@ -359,7 +374,12 @@ export async function runExecutor(options: {
           reason: "aborted",
         });
       }
-      killExecutor(child);
+      // Stopped, so its own time limit no longer applies: the grace does.
+      clearTimeout(timer);
+      // Asked to end first, so a program that cleans up after itself can;
+      // whatever is left of its group is killed once the grace is over.
+      signalExecutor(child, "SIGTERM");
+      grace = setTimeout(() => killExecutor(child), ABORT_GRACE_MS);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -396,6 +416,7 @@ export async function runExecutor(options: {
 
     child.on("error", (error) => {
       clearTimeout(timer);
+      if (grace !== null) clearTimeout(grace);
       signal?.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
@@ -412,6 +433,7 @@ export async function runExecutor(options: {
 
     child.on("close", (exitCode, exitSignal) => {
       clearTimeout(timer);
+      if (grace !== null) clearTimeout(grace);
       signal?.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
