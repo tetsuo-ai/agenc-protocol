@@ -123,8 +123,8 @@ export type WorkerRuntimeConfig = Pick<
    */
   maxFailedJobsInARow?: number;
   /**
-   * How often the long-running loop auto-accepts overdue deliveries.
-   * Default every fourth poll.
+   * How often the long-running loop auto-accepts overdue deliveries and
+   * releases unusable claims. Default every fourth poll.
    */
   upkeepIntervalMs?: number;
 };
@@ -1942,11 +1942,16 @@ export async function resumeOpenClaim(
   }
   if (!ctx.dryRun) {
     // Out of time: the work can no longer be delivered, so trying again
-    // would only spend. A result already being submitted is left to its
-    // reconciliation above.
+    // would only spend. The claim is released once it can be. A result
+    // already being submitted is given until its claim runs out, since a
+    // landed submission was handled above.
     const now = await clusterNowSeconds(ctx);
     const deliverBy = Number(decodedTask.deadline);
-    if (marker.phase !== "submitting" && deliverBy > 0 && now > deliverBy) {
+    const claimEnds = Number(claim.expiresAt);
+    if (
+      (marker.phase !== "submitting" && deliverBy > 0 && now > deliverBy) ||
+      (claimEnds > 0 && now > claimEnds)
+    ) {
       giveUpJob(ctx, loadState(ctx.stateDir), marker, {
         cause: "expired",
         reason: "the time to deliver ran out",
@@ -2491,7 +2496,8 @@ async function runTickOnceLocked(ctx: WorkerContext): Promise<TickResult> {
   const initialSettlements = agent.registered
     ? await checkSettlements(ctx, agent)
     : [];
-  // Be paid for overdue deliveries before looking for new work.
+  // Be paid for overdue deliveries and get back unusable claims before
+  // looking for new work.
   await runUpkeep(ctx, agent);
   let outcome: ProcessOutcome | null = await resumeOpenClaim(ctx, agent);
   let candidateCount = 0;

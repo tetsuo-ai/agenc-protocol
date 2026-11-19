@@ -4,6 +4,10 @@
 // - A delivery the buyer never reviews is paid by auto-accept once its review
 //   window has passed. Anyone may send it; the worker sends it for its own
 //   deliveries, so a provider whose buyer goes quiet is still paid.
+// - A claim the worker can no longer use (a job it gave up, or one whose
+//   time ran out) is released: expired once its time is over, or reclaimed
+//   when the task has already ended. That returns the claim's rent and frees
+//   one of the agent's limited active-task slots.
 //
 // Every step reads the chain first and sends at most one transaction per job,
 // signed by the worker's own wallet. Nothing here runs or delivers work.
@@ -15,7 +19,9 @@ import {
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findWorkerCompletionBondPda,
   getProtocolConfigDecoder,
+  getTaskClaimDecoder,
   getTaskDecoder,
   getTaskSubmissionDecoder,
   getTaskValidationConfigDecoder,
@@ -23,11 +29,12 @@ import {
   TaskStatus,
   TaskType,
   type Task,
+  type TaskClaim,
   type TaskSubmission,
 } from "@tetsuo-ai/marketplace-sdk";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import type { WorkerAgent, WorkerContext } from "./runtime.js";
-import { loadState } from "./state.js";
+import { loadState, saveState, type FailedJob } from "./state.js";
 
 const CLOCK_SYSVAR = address("SysvarC1ock11111111111111111111111111111111");
 
@@ -65,6 +72,8 @@ const DEFAULT_ADDRESS = "11111111111111111111111111111111";
 export type UpkeepReport = {
   /** Deliveries this worker auto-accepted (task PDAs). */
   autoAccepted: Address[];
+  /** Claims released, and how. */
+  released: Array<{ task: Address; how: "expired" | "reclaimed" | "closed" }>;
 };
 
 /**
@@ -77,6 +86,18 @@ export type UpkeepMemory = Map<string, number>;
 async function readTask(ctx: WorkerContext, task: Address): Promise<Task | null> {
   const data = await ctx.readAccount(task);
   return data === null ? null : getTaskDecoder().decode(data);
+}
+
+async function readClaim(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  task: Address,
+): Promise<TaskClaim | null> {
+  const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
+  const data = await ctx.readAccount(claim);
+  if (data === null) return null;
+  const decoded = getTaskClaimDecoder().decode(data);
+  return decoded.task === task && decoded.worker === agent.agentPda ? decoded : null;
 }
 
 async function readSubmission(
@@ -200,12 +221,107 @@ export async function collectOverdueReviews(
   return accepted;
 }
 
-/** One upkeep pass: auto-accept what is overdue. */
+function markReleased(ctx: WorkerContext, task: Address): void {
+  const state = loadState(ctx.stateDir);
+  const job = state.failedJobs.find((entry) => entry.task === task);
+  if (job === undefined || job.claimReleased) return;
+  job.claimReleased = true;
+  saveState(ctx.stateDir, state);
+}
+
+/**
+ * Release the claims of jobs this worker gave up: an ended task's claim is
+ * reclaimed straight away, an open one's is expired once its time is over.
+ * Either returns the claim's rent to this worker and frees its slot.
+ */
+export async function releaseOwnClaims(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  memory: UpkeepMemory = new Map(),
+): Promise<UpkeepReport["released"]> {
+  if (ctx.dryRun || !agent.registered) return [];
+  const waiting: FailedJob[] = loadState(ctx.stateDir).failedJobs.filter(
+    (job) => !job.claimReleased,
+  );
+  const released: UpkeepReport["released"] = [];
+  let now: number | null = null;
+  let treasury: Address | null = null;
+  for (const job of waiting) {
+    const task = job.task as Address;
+    const claim = await readClaim(ctx, agent, task);
+    if (claim === null) {
+      // Someone else's transaction closed it (a cancel returns it too).
+      markReleased(ctx, task);
+      released.push({ task, how: "closed" });
+      ctx.log({ event: "claim.released", task, how: "closed" });
+      continue;
+    }
+    const decoded = await readTask(ctx, task);
+    if (decoded === null) continue;
+    now ??= await clusterNowSeconds(ctx);
+    const ended =
+      decoded.status === TaskStatus.Completed || decoded.status === TaskStatus.Cancelled;
+    const expired =
+      (decoded.status === TaskStatus.InProgress ||
+        decoded.status === TaskStatus.PendingValidation) &&
+      claim.expiresAt > 0n &&
+      now > Number(claim.expiresAt);
+    if (!ended && !expired) continue;
+    if (expired) {
+      // A claim with a delivery waiting for review is settled by the review,
+      // never expired.
+      const submission = await readSubmission(ctx, agent, task);
+      if (submission !== null && submission.status === SubmissionStatus.Submitted) continue;
+    }
+    const key = `release:${task}`;
+    if (!due(memory, key, now)) continue;
+    memory.set(key, now);
+    try {
+      treasury ??= await readTreasury(ctx);
+      const parent = unwrapOption(decoded.dependsOn);
+      const instruction = ended
+        ? await facade.reclaimTerminalClaim({
+            authority: ctx.signer,
+            task,
+            worker: agent.agentPda,
+            treasury,
+            rentRecipient: ctx.signer.address,
+          })
+        : await facade.expireClaim({
+            authority: ctx.signer,
+            task,
+            worker: agent.agentPda,
+            rentRecipient: ctx.signer.address,
+            treasury,
+            // An exclusive no-show must show its (possibly absent) bond.
+            workerCompletionBond: (
+              await findWorkerCompletionBondPda({
+                task,
+                workerAuthority: ctx.signer.address,
+              })
+            )[0],
+            bondCreator: decoded.creator,
+            ...(parent !== null ? { dependencyParent: parent } : {}),
+          });
+      const { signature } = await ctx.client.send([instruction], { maxRetries: 0 });
+      markReleased(ctx, task);
+      const how = ended ? "reclaimed" : "expired";
+      released.push({ task, how });
+      ctx.log({ event: "claim.released", task, how, signature });
+    } catch (error) {
+      ctx.log({ event: "claim.release-failed", task, reason: failureText(error) });
+    }
+  }
+  return released;
+}
+
+/** One upkeep pass: auto-accept what is overdue, then release unusable claims. */
 export async function runUpkeep(
   ctx: WorkerContext,
   agent: WorkerAgent,
   memory: UpkeepMemory = new Map(),
 ): Promise<UpkeepReport> {
   const autoAccepted = await collectOverdueReviews(ctx, agent, memory);
-  return { autoAccepted };
+  const released = await releaseOwnClaims(ctx, agent, memory);
+  return { autoAccepted, released };
 }

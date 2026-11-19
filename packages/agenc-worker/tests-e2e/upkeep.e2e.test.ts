@@ -1,6 +1,8 @@
 // The worker looks after its own jobs against the REAL compiled program
 // (litesvm): a delivery whose buyer never reviews it is auto-accepted by the
-// worker itself once the review window has passed, so it is paid.
+// worker itself once the review window has passed, so it is paid; and the
+// claim of a job it gave up is expired by the worker once its time is over,
+// so the claim's rent comes back and its active-task slot is free again.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,9 +12,11 @@ import {
   createMarketplaceClient,
   facade,
   findAgentPda,
+  findClaimPda,
   findHireRecordPda,
   findTaskJobSpecPda,
   findTaskPda,
+  getAgentRegistrationDecoder,
   getTaskDecoder,
   TaskStatus,
   values,
@@ -202,5 +206,62 @@ describe("e2e: a worker looks after its own jobs", () => {
     // Paid, plus its claim and submission deposits back, less one fee.
     expect(after - before).toBeGreaterThan(1_980_000n);
     expect(loadState(w.stateDir).submissions[0]).toMatchObject({ settled: true, outcome: "accepted", title: "Write a line" });
+  });
+
+  it("expires the claim of a job it gave up once its time is over, and gets the claim's rent back", async () => {
+    const w = await world(
+      [process.execPath, "-e", "process.exit(3)", "{prompt}"],
+      { maxJobAttempts: 1 },
+    );
+    const first = await runTickOnce(w.ctx);
+    expect(first.outcome?.status).toBe("execution-failed");
+    const given = loadState(w.stateDir);
+    expect(given.openClaim).toBeNull();
+    expect(given.failedJobs).toEqual([
+      expect.objectContaining({ task: w.task, cause: "attempts", attempts: 1, claimReleased: false }),
+    ]);
+    const agentPda = await w.workerAgent();
+    const [claim] = await findClaimPda({ task: w.task, bidder: agentPda });
+    expect(accountData(w.svm, claim)).not.toBeNull();
+    expect(getAgentRegistrationDecoder().decode(accountData(w.svm, agentPda)!).activeTasks).toBe(1);
+
+    // Before the claim's time is over, it cannot be released.
+    w.advance(DEADLINE_SECS);
+    await runTickOnce(w.ctx);
+    expect(accountData(w.svm, claim)).not.toBeNull();
+
+    // After it (the deadline plus an hour), the worker expires its own claim.
+    w.advance(3_600n + 30n);
+    const before = w.svm.getBalance(w.workerWallet.address) ?? 0n;
+    await runTickOnce(w.ctx);
+    expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({
+      task: w.task,
+      how: "expired",
+    });
+    expect(accountData(w.svm, claim)).toBeNull();
+    expect(getAgentRegistrationDecoder().decode(accountData(w.svm, agentPda)!).activeTasks).toBe(0);
+    expect((w.svm.getBalance(w.workerWallet.address) ?? 0n) > before).toBe(true);
+    expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
+    // The task is open again for someone who can do it.
+    expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.Open);
+  });
+
+  it("gives up a job whose time to deliver ran out while it waited to try again, and releases it", async () => {
+    const w = await world(
+      [process.execPath, "-e", "process.exit(3)", "{prompt}"],
+      { retryDelayMs: 24 * 3_600_000 },
+    );
+    await runTickOnce(w.ctx);
+    expect(loadState(w.stateDir).openClaim?.failures).toBe(1);
+
+    w.advance(DEADLINE_SECS + 10n);
+    await runTickOnce(w.ctx);
+    expect(loadState(w.stateDir).failedJobs).toEqual([
+      expect.objectContaining({ cause: "expired", reason: "the time to deliver ran out", claimReleased: false }),
+    ]);
+
+    w.advance(3_600n + 30n);
+    await runTickOnce(w.ctx);
+    expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
   });
 });

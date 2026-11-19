@@ -1,18 +1,20 @@
 // The worker's upkeep, at the edges the end-to-end run does not reach: a
-// contest is never auto-accepted, and a refused transaction is not sent again
-// on every poll.
+// claim left on a task that already ended is reclaimed, a contest is never
+// auto-accepted, and a refused transaction is not sent again on every poll.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { address, type Address, type TransactionSigner } from "@solana/kit";
+import { address, type Address, type Instruction, type TransactionSigner } from "@solana/kit";
 import {
   DependencyType,
   findClaimPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   getProtocolConfigEncoder,
+  getTaskClaimEncoder,
   getTaskEncoder,
   getTaskSubmissionEncoder,
+  RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR,
   SubmissionStatus,
   TaskStatus,
   TaskType,
@@ -23,7 +25,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerAgent, WorkerContext, WorkerLogEvent } from "../src/runtime.js";
 import { emptyState, loadState, saveState } from "../src/state.js";
-import { collectOverdueReviews, UPKEEP_RETRY_SECONDS } from "../src/upkeep.js";
+import { collectOverdueReviews, releaseOwnClaims, UPKEEP_RETRY_SECONDS } from "../src/upkeep.js";
 
 const TASK = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
 const CREATOR = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
@@ -72,6 +74,24 @@ function taskData(status: TaskStatus, overrides: Partial<TaskArgs> = {}): Uint8A
       referrer: NONE,
       referrerFeeBps: 0,
       ...overrides,
+    }),
+  );
+}
+
+function claimData(expiresAt: bigint): Uint8Array {
+  return new Uint8Array(
+    getTaskClaimEncoder().encode({
+      task: TASK,
+      worker: WORKER,
+      claimedAt: 1n,
+      expiresAt,
+      completedAt: 0n,
+      proofHash: new Uint8Array(32),
+      resultData: new Uint8Array(64),
+      isCompleted: false,
+      isValidated: false,
+      rewardPaid: 0n,
+      bump: 251,
     }),
   );
 }
@@ -159,6 +179,75 @@ async function setup(client: Record<string, unknown>) {
     },
   };
 }
+
+function givenUp(stateDir: string): void {
+  const state = emptyState();
+  state.failedJobs.push({
+    task: TASK,
+    claimedAt: "2026-11-19T00:00:00.000Z",
+    failedAt: "2026-11-19T00:10:00.000Z",
+    cause: "attempts",
+    reason: "executor exited with code 3",
+    attempts: 3,
+    claimReleased: false,
+  });
+  saveState(stateDir, state);
+}
+
+describe("releasing a given-up job's claim", () => {
+  it("reclaims it at once when the task already ended", async () => {
+    const send = vi.fn(async (_instructions: readonly Instruction[]) => ({ signature: "reclaim-sig" }));
+    const w = await setup({ send });
+    givenUp(w.stateDir);
+    w.accounts.set(TASK, taskData(TaskStatus.Completed));
+    w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600)));
+
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([{ task: TASK, how: "reclaimed" }]);
+    expect(send).toHaveBeenCalledTimes(1);
+    const [instruction] = send.mock.calls[0]![0];
+    expect([...instruction!.data!.slice(0, 8)]).toEqual([...RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR]);
+    expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).toBe(true);
+    expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({ how: "reclaimed", signature: "reclaim-sig" });
+  });
+
+  it("waits while the task runs and the claim's time is not over", async () => {
+    const send = vi.fn();
+    const w = await setup({ send });
+    givenUp(w.stateDir);
+    w.accounts.set(TASK, taskData(TaskStatus.InProgress));
+    w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600)));
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("counts a claim someone else closed as released, sending nothing", async () => {
+    const send = vi.fn();
+    const w = await setup({ send });
+    givenUp(w.stateDir);
+    w.accounts.set(TASK, taskData(TaskStatus.Cancelled));
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([{ task: TASK, how: "closed" }]);
+    expect(send).not.toHaveBeenCalled();
+    expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).toBe(true);
+  });
+
+  it("sends a refused release again only after a wait", async () => {
+    const send = vi.fn(async () => {
+      throw new Error("blockhash not found");
+    });
+    const w = await setup({ send });
+    givenUp(w.stateDir);
+    w.accounts.set(TASK, taskData(TaskStatus.InProgress));
+    w.accounts.set(w.claim, claimData(BigInt(NOW - 10)));
+    const memory = new Map<string, number>();
+    await releaseOwnClaims(w.ctx, agent, memory);
+    await releaseOwnClaims(w.ctx, agent, memory);
+    expect(send).toHaveBeenCalledTimes(1);
+    w.later(UPKEEP_RETRY_SECONDS);
+    await releaseOwnClaims(w.ctx, agent, memory);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).toBe(false);
+  });
+});
 
 describe("auto-accepting a delivery nobody reviewed", () => {
   function delivered(stateDir: string): void {

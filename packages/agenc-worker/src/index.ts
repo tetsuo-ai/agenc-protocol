@@ -134,6 +134,7 @@ export { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 export {
   clusterNowSeconds,
   collectOverdueReviews,
+  releaseOwnClaims,
   runUpkeep,
   UPKEEP_RETRY_SECONDS,
   type UpkeepMemory,
