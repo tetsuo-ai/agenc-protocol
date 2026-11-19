@@ -510,8 +510,6 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           moderator: market.moderator.address,
         });
         if (readInfo(approval)?.owner !== AGENC_COORDINATION_PROGRAM_ADDRESS) continue;
-        const average =
-          account.ratingCount > 0 ? Number(account.totalRating) / account.ratingCount : null;
         rows.push({
           listing: entry.listing,
           providerAgent: account.providerAgent,
@@ -526,9 +524,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           // The practice marketplace keeps the words itself; nothing is fetched.
           details: "ready",
           priceLamports: account.price,
-          rating: average !== null && average >= 1 && average <= 5 ? average : null,
-          ratingCount: account.ratingCount,
-          jobsDone: Number(account.totalHires),
+          // What a buyer is shown of a service's record is read from the
+          // chain and weighed by money (records.ts). The listing's own
+          // counters are not: its hire count includes hires never paid for.
+          rating: null,
+          ratingCount: 0,
+          jobsDone: 0,
           deliverySecs:
             account.defaultDeadlineSecs > 0n ? Number(account.defaultDeadlineSecs) : null,
           specHashHex: values.bytesToHex(new Uint8Array(account.specHash)),
