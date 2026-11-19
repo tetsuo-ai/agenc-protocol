@@ -36,10 +36,12 @@ import {
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   FEE_HEADROOM_LAMPORTS,
   checkSettlements,
+  expectedWorkerPayout,
   listClaimCandidates,
   processCandidate,
   resumeOpenClaim,
   runTickOnce,
+  shareEarnings,
   SUBMISSION_ACCOUNT_SIZE,
   type WorkerAgent,
   type WorkerContext,
@@ -2203,6 +2205,177 @@ describe("settlement evidence coherence", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0]?.earnedLamports).toBe(100n);
     expect(loadState(stateDir).totalEarnedBaseline).toBe("150");
+  });
+
+  // A second job, paid 2,000,000 with the same 1% fee as TASK.
+  const SECOND_TASK = address("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin");
+  const SECOND_REWARD = 2_000_000n;
+  // What each job pays after the 1% marketplace fee in `taskArgs`.
+  const FIRST_PAY = REWARD - REWARD / 100n;
+  const SECOND_PAY = SECOND_REWARD - SECOND_REWARD / 100n;
+
+  function twoPendingJobs(stateDir: string): void {
+    pendingState(stateDir, "2000-01-01T00:00:00.000Z");
+    const state = loadState(stateDir);
+    state.submissions.push({
+      task: SECOND_TASK,
+      submissionSignature: "second-signature",
+      resultUri: "agenc://result/sha256/second",
+      resultHashHex: sha256Hex(new TextEncoder().encode("second result")),
+      rewardAmount: SECOND_REWARD.toString(),
+      submittedAt: "2000-01-01T00:00:00.000Z",
+      settled: false,
+    });
+    saveState(stateDir, state);
+  }
+
+  it("counts two jobs paid in one round, each with what it paid", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-two-paid-"),
+    );
+    twoPendingJobs(stateDir);
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + SECOND_PAY)],
+    ]);
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, {}, events);
+
+    const reports = await checkSettlements(ctx, agent);
+    expect(
+      reports.map(({ task, outcome, earnedLamports }) => ({
+        task,
+        outcome,
+        earnedLamports,
+      })),
+    ).toEqual([
+      { task: TASK, outcome: "accepted", earnedLamports: FIRST_PAY },
+      { task: SECOND_TASK, outcome: "accepted", earnedLamports: SECOND_PAY },
+    ]);
+    const state = loadState(stateDir);
+    expect(state.submissions.map((record) => record.earnedLamports)).toEqual([
+      FIRST_PAY.toString(),
+      SECOND_PAY.toString(),
+    ]);
+    expect(state.totalEarnedBaseline).toBe(
+      (50n + FIRST_PAY + SECOND_PAY).toString(),
+    );
+    // Each paid job says what it earned, so a host can tell the person.
+    expect(
+      events
+        .filter(({ event }) => event === "settlement.observed")
+        .map(({ earnedLamports }) => earnedLamports),
+    ).toEqual([FIRST_PAY.toString(), SECOND_PAY.toString()]);
+  });
+
+  it("divides what came in by each job's terms when it is not what they pay", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-two-paid-short-"),
+    );
+    twoPendingJobs(stateDir);
+    // 101 lamports short of both jobs' pay (a stale read, a discount, a leg).
+    const cameIn = FIRST_PAY + SECOND_PAY - 101n;
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + cameIn)],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+
+    const reports = await checkSettlements(ctx, agent);
+    const earned = reports.map((report) => report.earnedLamports!);
+    expect(earned[0]! + earned[1]!).toBe(cameIn);
+    expect(earned[0]! > earned[1]!).toBe(true);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(
+      (50n + cameIn).toString(),
+    );
+  });
+
+  it("leaves a still-waiting job's pay for that job when it lands between the reads", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-late-pay-"),
+    );
+    twoPendingJobs(stateDir);
+    // The second job's pay is already in the agent's total, but its task was
+    // still read as waiting for review.
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.PendingValidation, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + SECOND_PAY)],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+
+    const first = await checkSettlements(ctx, agent);
+    expect(first.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [TASK, FIRST_PAY],
+    ]);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(
+      (50n + FIRST_PAY).toString(),
+    );
+
+    accounts.set(
+      SECOND_TASK,
+      taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+    );
+    const second = await checkSettlements(ctx, agent);
+    expect(second.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [SECOND_TASK, SECOND_PAY],
+    ]);
+    expect(loadState(stateDir).submissions.every((record) => record.settled)).toBe(
+      true,
+    );
+  });
+});
+
+describe("dividing one round's earnings", () => {
+  it("adds up to exactly what came in", () => {
+    expect(shareEarnings(100n, [60n, 40n])).toEqual([60n, 40n]);
+    expect(shareEarnings(101n, [60n, 40n])).toEqual([61n, 40n]);
+    expect(shareEarnings(10n, [1n, 1n, 1n])).toEqual([4n, 3n, 3n]);
+    expect(shareEarnings(9n, [0n, 0n])).toEqual([5n, 4n]);
+    expect(shareEarnings(0n, [5n, 5n])).toEqual([0n, 0n]);
+  });
+
+  it("gives each job its pay and keeps the rest when asked to", () => {
+    expect(shareEarnings(130n, [60n, 40n], true)).toEqual([60n, 40n]);
+    expect(shareEarnings(90n, [60n, 40n], true)).toEqual([54n, 36n]);
+  });
+
+  it("knows what a job pays by its own terms", () => {
+    expect(
+      expectedWorkerPayout({
+        rewardAmount: 1_000_000n,
+        taskType: TaskType.Exclusive,
+        requiredCompletions: 1,
+        protocolFeeBps: 500,
+        operator: WALLET,
+        operatorFeeBps: 1_000,
+        referrer: PARENT,
+        referrerFeeBps: 2_000,
+      }),
+    ).toBe(850_000n);
+    expect(
+      expectedWorkerPayout({
+        rewardAmount: 1_000_001n,
+        taskType: TaskType.Collaborative,
+        requiredCompletions: 2,
+        protocolFeeBps: 500,
+        operator: PARENT,
+        operatorFeeBps: 0,
+        referrer: PARENT,
+        referrerFeeBps: 0,
+      }),
+    ).toBe(475_000n);
   });
 });
 

@@ -1767,8 +1767,9 @@ export type SettlementReport = {
 /**
  * Reconcile tracked submissions against on-chain task state. Earnings are
  * measured from the agent's on-chain `totalEarned` delta since the last
- * reconciliation — exact when one settlement landed in the window (the common
- * one-claim-at-a-time case), reported as a combined delta otherwise.
+ * reconciliation. When several settlements land in one window the delta is
+ * divided by each task's own terms (`shareEarnings`), so every paid job is
+ * reported with what it earned.
  */
 export async function checkSettlements(
   ctx: WorkerContext,
@@ -1782,6 +1783,8 @@ export async function checkSettlements(
     record: SubmissionRecord;
     outcome: NonNullable<SubmissionRecord["outcome"]>;
     solDenominated: boolean;
+    /** What the task's own terms pay this worker (paid SOL outcomes only). */
+    payout?: bigint;
   }> = [];
   let revisionRestored = false;
   let stateChanged = false;
@@ -1859,6 +1862,7 @@ export async function checkSettlements(
           record,
           outcome: "accepted",
           solDenominated: unwrapOption(decodedTask.rewardMint) === null,
+          payout: expectedWorkerPayout(decodedTask),
         });
       } else if (
         submission !== null &&
@@ -1890,6 +1894,7 @@ export async function checkSettlements(
           record,
           outcome: "accepted",
           solDenominated: unwrapOption(decodedTask.rewardMint) === null,
+          payout: expectedWorkerPayout(decodedTask),
         });
       } else if (
         claim === null &&
@@ -1907,6 +1912,7 @@ export async function checkSettlements(
           record,
           outcome: "accepted",
           solDenominated: unwrapOption(decodedTask.rewardMint) === null,
+          payout: expectedWorkerPayout(decodedTask),
         });
       }
     } else if (decodedTask.status === TaskStatus.Open) {
@@ -1990,6 +1996,24 @@ export async function checkSettlements(
     totalEarned !== null && totalEarned > baseline
       ? totalEarned - baseline
       : 0n;
+  // Several jobs can be paid between two looks (a buyer approves two at
+  // once, or the worker was offline). The agent's on-chain total says how
+  // much came in; each job's own terms say how it divides. Earnings beyond
+  // what this round's jobs pay stay unattributed while another tracked job
+  // is still waiting, because they are most likely that job's pay landing
+  // between the reads.
+  const othersWaiting = pending.some(
+    (record) => !resolved.some((entry) => entry.record === record),
+  );
+  const shares = shareEarnings(
+    delta,
+    paidSolOutcomes.map((entry) => entry.payout ?? 0n),
+    othersWaiting,
+  );
+  const shareFor = new Map(
+    paidSolOutcomes.map((entry, index) => [entry.record, shares[index]!]),
+  );
+  const attributed = shares.reduce((sum, share) => sum + share, 0n);
 
   const reports: SettlementReport[] = [];
   for (const { record, outcome, solDenominated } of resolved) {
@@ -1998,9 +2022,7 @@ export async function checkSettlements(
       ? 0n
       : !solDenominated
         ? null
-        : paidSolOutcomes.length === 1
-          ? delta
-          : null;
+        : (shareFor.get(record) ?? null);
     let settlementSignature: string | null = null;
     if (paid && ctx.findSettlementSignature !== undefined) {
       try {
@@ -2049,10 +2071,76 @@ export async function checkSettlements(
     });
   }
   if (totalEarned !== null) {
-    state.totalEarnedBaseline = totalEarned.toString();
+    state.totalEarnedBaseline = (baseline + attributed).toString();
   }
   saveState(ctx.stateDir, state);
   return reports;
+}
+
+/**
+ * What a settled SOL task pays this worker by the task's own terms: its share
+ * of the reward less the marketplace fee and any operator or referrer leg the
+ * task carries. Only used to divide what the agent's on-chain total says came
+ * in; it is never reported as earned on its own.
+ */
+export function expectedWorkerPayout(
+  task: Pick<
+    Task,
+    | "rewardAmount"
+    | "taskType"
+    | "requiredCompletions"
+    | "protocolFeeBps"
+    | "operator"
+    | "operatorFeeBps"
+    | "referrer"
+    | "referrerFeeBps"
+  >,
+): bigint {
+  const base =
+    task.taskType === TaskType.Collaborative && task.requiredCompletions > 0
+      ? task.rewardAmount / BigInt(task.requiredCompletions)
+      : task.rewardAmount;
+  const leg = (payee: Address, bps: number): bigint =>
+    payee === DEFAULT_ADDRESS || bps <= 0 ? 0n : (base * BigInt(bps)) / 10_000n;
+  const net =
+    base -
+    (base * BigInt(Math.max(0, task.protocolFeeBps))) / 10_000n -
+    leg(task.operator, task.operatorFeeBps) -
+    leg(task.referrer, task.referrerFeeBps);
+  return net > 0n ? net : 0n;
+}
+
+/**
+ * Divide `delta` lamports among jobs paid in one round, by what each one's
+ * terms pay (equal parts when nothing is known). When `keepSurplus` is set
+ * and `delta` covers every job's pay, each job gets exactly its pay and the
+ * rest is left over; otherwise the parts add up to exactly `delta`.
+ */
+export function shareEarnings(
+  delta: bigint,
+  payouts: readonly bigint[],
+  keepSurplus = false,
+): bigint[] {
+  if (payouts.length === 0) return [];
+  const expected = payouts.reduce((sum, payout) => sum + payout, 0n);
+  if (keepSurplus && expected > 0n && delta >= expected) return [...payouts];
+  if (delta <= 0n) return payouts.map(() => 0n);
+  const weights = expected > 0n ? payouts : payouts.map(() => 1n);
+  const total = weights.reduce((sum, weight) => sum + weight, 0n);
+  const shares = weights.map((weight) => (delta * weight) / total);
+  let rest = delta - shares.reduce((sum, share) => sum + share, 0n);
+  // Integer division leaves fewer lamports than there are jobs; hand them
+  // out one each, largest job first.
+  const order = weights
+    .map((weight, index) => ({ weight, index }))
+    .sort((a, b) =>
+      a.weight === b.weight ? a.index - b.index : a.weight > b.weight ? -1 : 1,
+    );
+  for (let next = 0; rest > 0n; next = (next + 1) % order.length) {
+    shares[order[next]!.index]! += 1n;
+    rest -= 1n;
+  }
+  return shares;
 }
 
 /** Result of one `once` tick. */
