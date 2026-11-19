@@ -23,7 +23,8 @@ describe("approvals", () => {
     });
     expect(job.status).toBe("needs_approval");
     expect(approval).not.toBeNull();
-    expect(approval!.service.name).toBe("Haiku Writer");
+    expect(approval!.kind).toBe("hire");
+    expect(approval!.service?.name).toBe("Haiku Writer");
     expect(approval!.price).toEqual({ lamports: (20n * CENT).toString(), usdCents: 20 });
     expect(BigInt(approval!.fromMain.lamports)).toBeGreaterThan(20n * CENT);
     expect(BigInt(approval!.fees.lamports)).toBeGreaterThan(0n);

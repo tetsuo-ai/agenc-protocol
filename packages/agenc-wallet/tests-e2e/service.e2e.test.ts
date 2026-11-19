@@ -127,6 +127,10 @@ describe("the wallet service", () => {
         agent.call("wallet.withdraw", { to: other.address, amount: "all" }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(agent.call("approvals.list", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      // Posting from the main balance is the person's: an agent posts only from its own money.
+      await expect(
+        agent.call("wallet.post", { request: "A haiku about rain.", reward: { usdCents: 30 } }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       // Earning and what is put on offer are the owner's decisions too.
       await expect(
         agent.call("earn.set", { agentId: mine.id, enabled: true }),
@@ -165,6 +169,19 @@ describe("the wallet service", () => {
     await expect(
       narrowed.call("approvals.decide", { approvalId: hired.approval!.id, approve: true }),
     ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    // The same for a request it posts: made as itself, from its own money,
+    // which is empty, so it waits for the person.
+    const asked = await narrowed.call("market.post", {
+      agentId: other.id,
+      request: "A haiku about rain.",
+      reward: { usdCents: 30 },
+    });
+    expect(asked.job).toMatchObject({ agentId: mine.id, kind: "request", status: "needs_approval" });
+    expect(asked.approval).toMatchObject({ kind: "request", service: null });
+    // The person posts from the main balance with one call, and nobody is asked.
+    const own = await owner.call("wallet.post", { request: "A haiku about snow.", reward: { usdCents: 30 } });
+    expect(own.job).toMatchObject({ agentId: "", kind: "request", status: "waiting" });
 
     // Another agent cannot watch that request either.
     const otherLane = await connect({ actAs: other.id });

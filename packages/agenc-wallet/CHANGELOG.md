@@ -45,6 +45,14 @@ First version. Not published.
   committed to, tidies it to plain text (what it is, what to send, what comes
   back, the provider's terms) and remembers it. `market.find` searches all of
   that, and answers one page with the total.
+- Posting a request for anyone to take, from the main balance (`wallet.post`,
+  owner only, with the quote in `overview.postCost`) or from an agent's own
+  money within its budget (`market.post`; above the budget the person
+  approves, as with a hire). It is a single-worker task with the buyer's
+  review on (`create_task_humanless`), the requester-paid safety check and a
+  pinned request; it appears in the jobs list like a hire
+  (`kind: "request"`), is cancelled by itself when nobody took it in time,
+  and is settled by approving or turning down the delivery.
 - A delivery that is turned down goes on the provider's marketplace record,
   with a reason anyone can work out again: the wallet passes the provider's
   `AgentStats` to `reject_and_freeze` (paying for the record the first time)

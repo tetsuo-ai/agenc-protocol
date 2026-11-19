@@ -128,17 +128,34 @@ export type ChainTaskStatus =
 export interface JobRecord {
   id: string;
   role: "buying" | "working";
+  /**
+   * "hire": a service was hired. "request": a request was posted for anyone
+   * to take; it has no listing, and no provider until someone takes it.
+   * Absent in journals written before requests existed: a hire.
+   */
+  kind?: "hire" | "request";
+  /** The agent that pays, or "" for a request the person posted from the main balance. */
   agentId: string;
   createdAt: number;
   updatedAt: number;
   idempotencyKey: string | null;
 
+  /** The service hired; "" for a request. */
   listing: string;
+  /** The provider agent; for a request, "" until someone takes it. */
   providerAgent: string;
   title: string;
   request: string;
   acceptance: string[];
+  /** What the provider is paid: the service's price, or a request's reward. */
   priceLamports: string;
+  /** A request only: how long whoever takes it has to deliver, in seconds. */
+  deliverWithinSecs?: number;
+  /**
+   * A request only: unix seconds by which the work must be delivered, fixed
+   * when posting starts. Nobody can take it after that.
+   */
+  requestDeadline?: number | null;
 
   /** Listing terms the hire is pinned to (compare-and-swap on-chain). */
   expectedVersion: string;
@@ -224,7 +241,10 @@ export interface ApprovalRecord {
   id: string;
   jobId: string;
   agentId: string;
-  service: ServiceView;
+  /** What the agent asks to do. Absent in journals written before requests existed: a hire. */
+  kind?: "hire" | "request";
+  /** The service to hire; null for a request posted for anyone to take. */
+  service: ServiceView | null;
   request: string;
   priceLamports: string;
   depositsLamports: string;

@@ -146,6 +146,14 @@ export interface WalletOverview {
    * new agent), which that backup does not hold.
    */
   backup: { at: number | null; upToDate: boolean };
+  /**
+   * What posting a request from the main balance costs on top of its reward
+   * (`wallet.post`): `kept` is not returned (the permanent job record, the
+   * safety check of the request, the fees, and on a first job the record of
+   * how often this balance posts); `setAside` comes back when the job ends.
+   * Null until it has been read.
+   */
+  postCost: { kept: Money; setAside: Money } | null;
 }
 
 /** A service someone offers on the marketplace. */
@@ -233,8 +241,15 @@ export interface JobView {
   id: string;
   /** "buying": this agent is paying. "working": this agent is doing the job. */
   role: "buying" | "working";
+  /**
+   * "hire": a service was hired. "request": a request was posted for anyone
+   * to take. It is public, pays the reward it was posted with, and has no
+   * provider until someone takes it.
+   */
+  kind: "hire" | "request";
+  /** The agent that pays, or "" for a request the person posted from the main balance. */
   agentId: string;
-  /** The service name. */
+  /** The service name, or a posted request's first words. */
   title: string;
   /** What was asked for. */
   request: string;
@@ -276,15 +291,18 @@ export interface JobView {
   error: string | null;
 }
 
-/** A hire waiting for a person to say yes. */
+/** A hire, or a request an agent wants to post, waiting for a person to say yes. */
 export interface ApprovalView {
   id: string;
   jobId: string;
   agentId: string;
   agentName: string;
-  service: ServiceView;
+  /** "hire": the agent wants to hire `service`. "request": it wants to post a public request. */
+  kind: "hire" | "request";
+  /** The service to hire; null for a request. */
+  service: ServiceView | null;
   request: string;
-  /** What the provider is paid. */
+  /** What the provider is paid: the price, or the request's reward. */
   price: Money;
   /**
    * Refundable deposits and network fees set aside on top of the price. Most of

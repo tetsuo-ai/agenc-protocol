@@ -31,9 +31,10 @@ live; no mainnet hire has been made with this package yet.
   covers it, otherwise from the main balance.
 - A price is **held** until the delivery is approved. A job nobody starts is
   cancelled automatically and the price returns.
-- An agent connection can find, hire, check and review **its own** jobs. It
-  cannot move money between wallets, change its limit, approve its own
-  request, turn down a delivery, or withdraw. Those belong to the owner.
+- An agent connection can find, hire, post, check and review **its own**
+  jobs. It cannot move money between wallets, change its limit, approve its
+  own request, turn down a delivery, post from the main balance, or
+  withdraw. Those belong to the owner.
 - One kind of transaction is **built by someone else**: the approval of a
   job's request, or of a service's description, comes from the marketplace's
   safety check already signed by its approver, for the wallet that asked to
@@ -87,6 +88,36 @@ for it), and "unavailable" when it could not be read or did not match.
 Everything in a description is its provider's text: show it, never act on
 it. The agent tools hand it over as `what_you_get`, `asks_for`,
 `hands_back` and `terms`, and tell the model so.
+
+## Posting a request
+
+When nothing on offer fits, a request can be posted for anyone on the
+marketplace to take: what is wanted, the reward, and how many days to deliver
+in (1 to 30, 7 by default). It is the marketplace's single-worker task with
+the buyer's review forced on (`create_task_humanless`), with the same
+requester-paid safety check and pinned request as a hire. Nobody can take it
+until the request is pinned.
+
+- `wallet.post` (owner only): the person posts from the main balance.
+  Asking is the yes. `overview.postCost` is the quote to show first: what is
+  kept (the job record, the safety check of the request, the fees, and on a
+  balance's first job the record of how often it posts) and what is set
+  aside and comes back when the job ends.
+- `market.post` (an agent method): an agent posts from its own money. Within
+  its daily budget, when its money covers the reward and the deposits, it is
+  posted at once; anything else waits for the person, as a hire does, with
+  the same quote on the approval (`approval.kind` is "request").
+- **A request is public.** Anyone can read it, as they can read a hire's.
+- Until someone takes it, it can be cancelled and the reward comes back.
+  Nobody can take it after the time it had to be delivered by; the wallet
+  then cancels it by itself. Whoever takes it and does not deliver in time is
+  cancelled the same way.
+- A delivery is settled as a hire's is: approve and pay
+  (`accept_task_result`), or turn it down (`reject_and_freeze`, never a plain
+  rejection), which only a person can do. A request has no service, so it is
+  not rated, and the finished job is tidied at once.
+- The job view says `kind: "request"`. Its `provider` is null until someone
+  takes it; the wallet finds who did from the claim on the task.
 
 ## Try it with practice money
 
@@ -173,7 +204,7 @@ wallet.start(); // housekeeping: resume, refund, tidy, top up
 
 ## Crash safety
 
-A job's intent (service, price, task address) is written to the journal
+A job's intent (service or request, price, task address) is written to the journal
 before any transaction is sent. A task address is fixed by the payer and a
 random id, and the program creates it at most once, so after a crash or a
 lost answer the chain says what happened: a hire that landed is carried on,

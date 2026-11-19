@@ -74,6 +74,45 @@ export interface WalletMethods {
     result: { job: JobView; approval: ApprovalView | null };
   };
 
+  /**
+   * Post a request for anyone on the marketplace to take, as an agent paying
+   * from its own money: one worker, and the delivery is reviewed before it is
+   * paid. A reward within the agent's daily budget that its money covers is
+   * posted at once; anything else waits for the person, as a hire does. The
+   * request is public: anyone can read it.
+   */
+  "market.post": {
+    params: {
+      agentId: string;
+      /** What is wanted, in plain words, written for whoever takes it. */
+      request: string;
+      /** What whoever does it is paid. */
+      reward: AmountInput;
+      /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
+      deadlineDays?: number;
+      /** Checks the delivery must pass. */
+      acceptance?: string[];
+      /** Makes a retried call return the same job instead of posting twice. */
+      idempotencyKey?: string;
+    };
+    result: { job: JobView; approval: ApprovalView | null };
+  };
+  /**
+   * The person posts a request from the main balance. Owner only: asking is
+   * the yes, so nothing waits for approval. `overview.postCost` says what it
+   * costs on top of the reward.
+   */
+  "wallet.post": {
+    params: {
+      request: string;
+      reward: AmountInput;
+      deadlineDays?: number;
+      acceptance?: string[];
+      idempotencyKey?: string;
+    };
+    result: { job: JobView };
+  };
+
   "approvals.list": { params: Record<string, never>; result: { approvals: ApprovalView[] } };
   "approvals.decide": {
     params: { approvalId: string; approve: boolean };
@@ -180,6 +219,7 @@ export type MethodResult<M extends WalletMethod> = WalletMethods[M]["result"];
 export const AGENT_METHODS: readonly WalletMethod[] = [
   "market.find",
   "market.hire",
+  "market.post",
   "approvals.wait",
   "jobs.list",
   "jobs.get",
