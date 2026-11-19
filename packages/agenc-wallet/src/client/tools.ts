@@ -219,7 +219,8 @@ function describeService(service: ServiceView) {
     ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
     ...(service.terms.length > 0 ? { terms: service.terms } : {}),
     price: formatMoney(service.price),
-    ...(service.marketFee !== null
+    // A wallet older than this client sends no fee and no record: those are left out, not guessed.
+    ...(service.marketFee != null
       ? { marketplace_fee: `${formatMoney(service.marketFee.amount)} of the price (${service.marketFee.bps / 100}%)` }
       : {}),
     ...describeRecord(service),
@@ -249,7 +250,7 @@ function describeRecord(service: ServiceView): Record<string, unknown> {
           : "Its record could not be read right now.",
     };
   }
-  const provider = service.offeredBy;
+  const provider = service.offeredBy ?? null;
   return {
     rating:
       service.rating === null
