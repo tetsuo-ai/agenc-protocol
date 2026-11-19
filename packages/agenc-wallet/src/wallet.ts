@@ -34,7 +34,13 @@ import {
   signApproval,
   type ApprovalTarget,
 } from "./approval.js";
-import { EarnHost, type EarnedJob, type EarnNotice, type EarnOptions } from "./earn.js";
+import {
+  EarnHost,
+  failureWords,
+  type EarnedJob,
+  type EarnNotice,
+  type EarnOptions,
+} from "./earn.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import {
@@ -2100,7 +2106,12 @@ export class AgencWallet {
       jobSpec: {},
       jobSpecHashHex: "",
       jobSpecUri: null,
-      phase: entry.state === "paid" || entry.state === "not_paid" ? "done" : "active",
+      phase:
+        entry.state === "failed"
+          ? ("failed" as const)
+          : entry.state === "paid" || entry.state === "not_paid"
+            ? ("done" as const)
+            : ("active" as const),
       hireAttemptAt: null,
       hiredAt: null,
       chainStatus:
@@ -2129,7 +2140,7 @@ export class AgencWallet {
       tidied: true,
       signatures: entry.settlementSignature === null ? {} : { accept: entry.settlementSignature },
       changes: [],
-      error: null,
+      error: entry.failure === null ? null : earnFailureSentence(entry.failure),
     }));
   }
 
@@ -2524,7 +2535,7 @@ export class AgencWallet {
   }
 
   #onEarnNotice(agentId: string, notice: EarnNotice): void {
-    if (notice.type === "paid") {
+    if (notice.type === "paid" || notice.type === "failed") {
       const jobId = `earn_${agentId}_${notice.task}`;
       const entry = this.#earn.jobs(agentId).find((job) => job.task === notice.task);
       const record = this.#store.state.agents[agentId];
@@ -2532,20 +2543,29 @@ export class AgencWallet {
       this.#store.update((draft) => {
         const agent = draft.agents[agentId];
         if (agent === undefined) return;
-        agent.earnedLamports = (BigInt(agent.earnedLamports) + notice.earnedLamports).toString();
-        agent.earn.jobsDone += 1;
-        this.#note(draft, {
-          kind: "earned",
-          text: name === null ? `${agent.name} was paid for a job.` : `${agent.name} was paid for ${name}.`,
-          lamports: notice.earnedLamports,
-          agentId,
-          jobId,
-          signature: notice.signature,
-        });
+        if (notice.type === "paid") {
+          agent.earnedLamports = (BigInt(agent.earnedLamports) + notice.earnedLamports).toString();
+          agent.earn.jobsDone += 1;
+          this.#note(draft, {
+            kind: "earned",
+            text: name === null ? `${agent.name} was paid for a job.` : `${agent.name} was paid for ${name}.`,
+            lamports: notice.earnedLamports,
+            agentId,
+            jobId,
+            signature: notice.signature,
+          });
+        } else {
+          this.#note(draft, {
+            kind: "note",
+            text: `${agent.name} could not do ${name ?? "a job"}: ${earnFailureWords(notice.failure)}.`,
+            agentId,
+            jobId,
+          });
+        }
       });
       this.#dropBalances();
       this.#emit({ type: "activity" });
-      // Hosts tell the person their agent was paid.
+      // Hosts tell the person about a job that was paid, or that failed.
       this.#emit({ type: "job", jobId });
     }
     this.#emit({ type: "overview" });
@@ -2596,8 +2616,15 @@ export class AgencWallet {
       entry.earn.lastError = null;
       if (minPayCents !== undefined) entry.earn.minPayCents = Math.round(minPayCents);
     });
-    if (enabled) await this.#startEarning(this.#agentRecord(agentId));
-    else await this.#earn.stop(agentId);
+    if (enabled) {
+      // Switching on is the person's go to try again after the agent
+      // stopped because several jobs in a row failed.
+      if (this.#earn.pausedReason(agentId) !== null) {
+        await this.#earn.stop(agentId);
+        this.#earn.clearPause(agentId);
+      }
+      await this.#startEarning(this.#agentRecord(agentId));
+    } else await this.#earn.stop(agentId);
     // A service on offer follows the switch: it leaves the marketplace while
     // nobody is taking jobs, and comes back when someone is.
     await this.#advanceOffer(agentId);
@@ -2813,7 +2840,12 @@ export class AgencWallet {
     // On offer only while someone is here to do the work: wanted, taking
     // jobs switched on, a host that can run jobs at all, and not closing.
     const wantLive =
-      offer.wanted && agent.earn.enabled && this.#earn.available && !this.#closing;
+      offer.wanted &&
+      agent.earn.enabled &&
+      this.#earn.available &&
+      !this.#closing &&
+      // An agent that stopped after several failed jobs cannot do this one.
+      this.#earn.pausedReason(agentId) === null;
     const settle = (status: OfferRecord["status"], error: string | null = null): false => {
       if (offer.status !== status || offer.error !== error) {
         this.#patchOffer(agentId, (entry) => {
@@ -3194,3 +3226,29 @@ export class AgencWallet {
 
 /** Status used by tests and hosts that inspect a record directly. */
 export { jobStatus };
+
+/** Why an earned job failed, in a few plain words. */
+function earnFailureWords(failure: EarnedJob["failure"] & object): string {
+  switch (failure.cause) {
+    case "expired":
+      return "the time to deliver ran out";
+    case "cancelled":
+      return "the buyer cancelled it first";
+    case "attempts":
+      return failureWords(failure.reason);
+  }
+}
+
+/** The status line of an earned job that was given up. */
+function earnFailureSentence(failure: EarnedJob["failure"] & object): string {
+  switch (failure.cause) {
+    case "expired":
+      return "Your agent ran out of time to deliver this job.";
+    case "cancelled":
+      return "The buyer cancelled this job before your agent delivered it.";
+    case "attempts":
+      return failure.attempts > 1
+        ? `Your agent stopped after ${failure.attempts} tries: ${failureWords(failure.reason)}.`
+        : `Your agent could not do this job: ${failureWords(failure.reason)}.`;
+  }
+}

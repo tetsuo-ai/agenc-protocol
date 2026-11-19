@@ -1,6 +1,7 @@
 // Earning on practice money, end to end against the real program: the host
-// hears when an earned job is paid and what it was called, and two jobs paid
-// while the agent was not looking are both counted.
+// hears when an earned job is paid and what it was called; a buyer who goes
+// quiet still pays; two jobs paid while the agent was not looking are both
+// counted; and a job whose work keeps failing stops and says why.
 import { afterEach, describe, expect, it } from "vitest";
 import type { WalletEvent } from "../src/client/protocol.js";
 import type { EarnOptions } from "../src/earn.js";
@@ -29,6 +30,7 @@ function earning(script: string, extra: Partial<EarnOptions> = {}): EarnOptions 
 }
 
 const WORKS = "process.stdout.write('Here is the finished work.')";
+const FAILS = "process.exit(3)";
 
 async function delivered(w: World, task: string): Promise<void> {
   await eventually(async () => {
@@ -102,5 +104,72 @@ describe("earning on practice money", () => {
       "My assistant was paid for First line.",
       "My assistant was paid for Second line.",
     ]);
+  }, 120_000);
+
+  it("stops trying a job whose work keeps failing, and says why", async () => {
+    world = await startWorld({ earn: earning(FAILS, { retryDelayMs: 100 }) });
+    const { wallet, sandbox } = world;
+    const events: WalletEvent[] = [];
+    wallet.on((event) => events.push(event));
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    const open = await sandbox.postOpenJob({ title: "Write a line", instructions: "Write one friendly line.", rewardLamports: 50n * CENT });
+    const jobId = `earn_${agent.id}_${open.task}`;
+
+    const failed = await eventually(async () => {
+      const job = (await wallet.listJobs({ role: "working" }, true)).find((entry) => entry.id === jobId);
+      return job?.status === "failed" ? job : null;
+    }, 30_000);
+    expect(failed).toMatchObject({
+      title: "Write a line",
+      statusText: "Your agent stopped after 3 tries: the program that does the work kept failing.",
+    });
+    // It shows what the job would have paid.
+    expect(failed.price.lamports).toBe((50n * CENT).toString());
+    expect(events).toContainEqual({ type: "job", jobId });
+    expect((await wallet.listActivity()).find((entry) => entry.jobId === jobId)).toMatchObject({
+      kind: "note",
+      text: "My assistant could not do Write a line: the program that does the work kept failing.",
+    });
+
+    // And it is not tried again: the job stays as it is.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect((await wallet.getJob(jobId, true)).status).toBe("failed");
+  }, 90_000);
+
+  it("stops taking jobs after several in a row fail, until earning is switched on again", async () => {
+    world = await startWorld({ earn: earning(FAILS, { maxJobAttempts: 1 }) });
+    const { wallet, sandbox } = world;
+    const agent = await wallet.createAgent("My assistant");
+    // Given-up jobs keep their deposits out until their claims are released.
+    await wallet.fundAgent(agent.id, { usdCents: 1_000 });
+    await wallet.setEarn(agent.id, true, 10);
+    for (const title of ["One", "Two", "Three"]) {
+      const open = await sandbox.postOpenJob({ title, instructions: "Write a line.", rewardLamports: 50n * CENT });
+      await eventually(async () =>
+        (await wallet.listJobs({ role: "working" }, true)).some(
+          (job) => job.task === open.task && job.status === "failed",
+        ),
+      30_000);
+    }
+    const stopped = await eventually(async () => {
+      const view = (await wallet.overview()).agents[0]!;
+      return view.earn.state === "error" ? view : null;
+    }, 30_000);
+    expect(stopped.earn.lastError).toBe(
+      "Stopped taking jobs after several in a row failed: the program that does the work kept failing.",
+    );
+    // A fourth job is left alone.
+    const fourth = await sandbox.postOpenJob({ title: "Four", instructions: "Write a line.", rewardLamports: 50n * CENT });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect((await wallet.listJobs({ role: "working" }, true)).some((job) => job.task === fourth.task)).toBe(false);
+
+    // Switching earning off and on is the go to try again.
+    await wallet.setEarn(agent.id, false);
+    const again = await wallet.setEarn(agent.id, true);
+    expect(again.earn.lastError).toBeNull();
+    await eventually(async () =>
+      (await wallet.listJobs({ role: "working" }, true)).some((job) => job.task === fourth.task),
+    30_000);
   }, 120_000);
 });

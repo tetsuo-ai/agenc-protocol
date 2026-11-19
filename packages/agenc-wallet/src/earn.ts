@@ -15,6 +15,7 @@ import type { Address, KeyPairSigner } from "@solana/kit";
 import { findAgentPda, getAgentRegistrationDecoder } from "@tetsuo-ai/marketplace-sdk";
 import {
   claimFundingRequirement,
+  clearWorkerPause,
   DEFAULT_ENDPOINT,
   hexToBytes,
   loadState,
@@ -88,6 +89,12 @@ export interface EarnOptions {
    * be looked at again, and nobody else can take it. Default one minute.
    */
   serviceRefreshMs?: number;
+  /** Attempts a failing job gets before it is given up (worker default 3). */
+  maxJobAttempts?: number;
+  /** Wait before the second attempt; later waits grow (worker default one minute). */
+  retryDelayMs?: number;
+  /** Jobs given up in a row before the agent takes no new one (worker default 3). */
+  maxFailedJobsInARow?: number;
 }
 
 export interface EarnAgent {
@@ -99,11 +106,20 @@ export interface EarnAgent {
   minPayCents?: number | null;
 }
 
+/** Why the worker gave a job up, as its ledger records it. */
+export interface EarnFailure {
+  /** "attempts": it kept failing. "expired": time ran out. "cancelled": the job ended first. */
+  cause: "attempts" | "expired" | "cancelled";
+  /** The worker's own words (a technical line, not for a person). */
+  reason: string;
+  attempts: number;
+}
+
 /** One job the agent took, as the worker's own ledger records it. */
 export interface EarnedJob {
   task: string;
   rewardLamports: bigint;
-  state: "working" | "delivered" | "paid" | "not_paid";
+  state: "working" | "delivered" | "paid" | "not_paid" | "failed";
   earnedLamports: bigint | null;
   at: number;
   resultHashHex: string | null;
@@ -112,11 +128,14 @@ export interface EarnedJob {
   title: string | null;
   /** The listing a hire came from, or null for an open job. */
   listing: string | null;
+  /** Set when the job was given up. */
+  failure: EarnFailure | null;
 }
 
 export type EarnNotice =
   | { type: "state" }
-  | { type: "paid"; task: string; earnedLamports: bigint; signature: string | null };
+  | { type: "paid"; task: string; earnedLamports: bigint; signature: string | null }
+  | { type: "failed"; task: string; failure: EarnFailure };
 
 const DEFAULT_MAX_REWARD_LAMPORTS = 1_000_000_000n;
 const RESTART_DELAY_MS = 20_000;
@@ -127,6 +146,8 @@ interface Running {
   done: Promise<void>;
   state: EarnState;
   lastError: string | null;
+  /** Set while the worker takes no new job after several failed in a row. */
+  paused: string | null;
 }
 
 export class EarnHost {
@@ -274,6 +295,7 @@ export class EarnHost {
         settlementSignature: null,
         title: claim.title ?? null,
         listing: claim.listing ?? null,
+        failure: null,
       });
     }
     for (const record of state.submissions) {
@@ -291,9 +313,51 @@ export class EarnHost {
         settlementSignature: record.settlementSignature ?? null,
         title: record.title ?? null,
         listing: record.listing ?? null,
+        failure: null,
+      });
+    }
+    for (const job of state.failedJobs) {
+      jobs.push({
+        task: job.task,
+        rewardLamports: job.rewardAmount === undefined ? 0n : BigInt(job.rewardAmount),
+        state: "failed",
+        earnedLamports: null,
+        at: Date.parse(job.failedAt) || 0,
+        resultHashHex: null,
+        settlementSignature: null,
+        title: job.title ?? null,
+        listing: job.listing ?? null,
+        failure: { cause: job.cause, reason: job.reason, attempts: job.attempts },
       });
     }
     return jobs.sort((a, b) => b.at - a.at);
+  }
+
+  /**
+   * Why the agent takes no new job, when several in a row failed: the
+   * worker's own words for the last failure. Null when it is not stopped.
+   */
+  pausedReason(agentId: string): string | null {
+    const running = this.#running.get(agentId);
+    if (running !== undefined) return running.paused;
+    try {
+      return loadState(this.stateDir(agentId)).pause?.reason ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Let a stopped agent take jobs again (the person switched earning back
+   * on). Its loop must not be running. Returns true when it was stopped.
+   */
+  clearPause(agentId: string): boolean {
+    if (this.#running.has(agentId)) return false;
+    try {
+      return clearWorkerPause(this.stateDir(agentId));
+    } catch {
+      return false;
+    }
   }
 
   /** Start (or keep) the loop for one agent. */
@@ -306,7 +370,17 @@ export class EarnHost {
       done: Promise.resolve(),
       state: "starting",
       lastError: null,
+      paused: null,
     };
+    try {
+      entry.paused = loadState(this.stateDir(agent.agentId)).pause?.reason ?? null;
+    } catch {
+      entry.paused = null;
+    }
+    if (entry.paused !== null) {
+      entry.state = "error";
+      entry.lastError = pausedText(entry.paused);
+    }
     this.#running.set(agent.agentId, entry);
     entry.done = this.#loop(agent, executor, entry).finally(() => {
       if (this.#running.get(agent.agentId) === entry) this.#running.delete(agent.agentId);
@@ -347,7 +421,10 @@ export class EarnHost {
         ? DEFAULT_MAX_REWARD_LAMPORTS
         : this.#options.maxRewardLamports;
 
-    const setState = (state: EarnState, lastError: string | null = null): void => {
+    const setState = (wanted: EarnState, wantedError: string | null = null): void => {
+      // A stopped agent stays shown as stopped, whatever the loop does.
+      const state: EarnState = entry.paused !== null ? "error" : wanted;
+      const lastError = entry.paused !== null ? pausedText(entry.paused) : wantedError;
       if (entry.state === state && entry.lastError === lastError) return;
       entry.state = state;
       entry.lastError = lastError;
@@ -367,6 +444,48 @@ export class EarnHost {
         case "task.upload-failed":
           this.#log(`earn ${agent.agentId}: ${event.event} ${String(event.reason ?? "")}`);
           setState("watching");
+          break;
+        case "task.retry-scheduled":
+          this.#log(
+            `earn ${agent.agentId}: trying ${String(event.task)} again at ${String(event.retryAt)} (attempt ${String(event.attempt)} of ${String(event.maxAttempts)} failed)`,
+          );
+          break;
+        case "task.given-up": {
+          this.#log(
+            `earn ${agent.agentId}: gave up ${String(event.task)} (${String(event.cause)}): ${String(event.reason ?? "")}`,
+          );
+          const cause = event.cause;
+          if (
+            typeof event.task === "string" &&
+            (cause === "attempts" || cause === "expired" || cause === "cancelled")
+          ) {
+            this.#notify(agent.agentId, {
+              type: "failed",
+              task: event.task,
+              failure: {
+                cause,
+                reason: typeof event.reason === "string" ? event.reason : "",
+                attempts: typeof event.attempts === "number" ? event.attempts : 0,
+              },
+            });
+          }
+          setState("watching");
+          break;
+        }
+        case "worker.paused":
+          this.#log(`earn ${agent.agentId}: stopped taking jobs: ${String(event.reason ?? "")}`);
+          entry.paused = typeof event.reason === "string" ? event.reason : "unknown failure";
+          setState("error");
+          break;
+        case "settlement.auto-accepted":
+        case "claim.released":
+          this.#log(`earn ${agent.agentId}: ${event.event} ${String(event.task ?? "")}`);
+          break;
+        case "settlement.auto-accept-failed":
+        case "claim.release-failed":
+          this.#log(
+            `earn ${agent.agentId}: ${event.event} ${String(event.task ?? "")}: ${String(event.reason ?? "").slice(0, 300)}`,
+          );
           break;
         case "settlement.observed": {
           setState("watching");
@@ -417,6 +536,15 @@ export class EarnHost {
         endpoint: this.#options.endpoint ?? DEFAULT_ENDPOINT,
         executorTimeoutMs: executor.timeoutMs,
         pollIntervalMs: this.#options.pollIntervalMs ?? 15_000,
+        ...(this.#options.maxJobAttempts !== undefined
+          ? { maxJobAttempts: this.#options.maxJobAttempts }
+          : {}),
+        ...(this.#options.retryDelayMs !== undefined
+          ? { retryDelayMs: this.#options.retryDelayMs }
+          : {}),
+        ...(this.#options.maxFailedJobsInARow !== undefined
+          ? { maxFailedJobsInARow: this.#options.maxFailedJobsInARow }
+          : {}),
       },
       client: this.#chain.clientFor(agent.signer),
       signer: agent.signer,
@@ -504,6 +632,25 @@ export class EarnHost {
       }
     }
   }
+}
+
+/**
+ * Why a job could not be done, in a few plain words, from the worker's own
+ * account of its last failure.
+ */
+export function failureWords(reason: string): string {
+  if (/timed out|timeout/i.test(reason)) return "it took longer than a job may take";
+  if (/job spec/i.test(reason)) return "the job's description could not be read";
+  if (/too large/i.test(reason)) return "the job is too large to run";
+  if (/buyer's note/i.test(reason)) return "the buyer's note could not be read";
+  if (/upload/i.test(reason)) return "the finished work could not be sent";
+  if (/ran out|time to deliver/i.test(reason)) return "the time to deliver ran out";
+  return "the program that does the work kept failing";
+}
+
+/** The agent's line while it takes no new job after several failed in a row. */
+export function pausedText(reason: string): string {
+  return `Stopped taking jobs after several in a row failed: ${failureWords(reason)}.`;
 }
 
 /** Reduce a worker failure to one sentence a person can act on. */

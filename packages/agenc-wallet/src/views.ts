@@ -74,6 +74,8 @@ function statusText(
         return `Done. Your agent earned ${amount}.`;
       case "refunded":
         return "The buyer cancelled this job.";
+      case "failed":
+        return job.error ?? "Your agent could not do this job.";
       default:
         return "This job did not complete.";
     }
