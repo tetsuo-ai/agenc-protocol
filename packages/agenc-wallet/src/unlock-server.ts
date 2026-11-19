@@ -107,7 +107,9 @@ export function listenForUnlock(options: {
           refuse("This wallet is already open. Prove the secret instead.");
           return;
         }
-        if (unlocking !== null) await unlocking.catch(() => undefined);
+        // Several hosts can be waiting here: each looks again after every
+        // attempt it waited for, so only one of them goes next.
+        while (unlocking !== null) await unlocking.catch(() => undefined);
         if (options.opened() !== null) {
           refuse("This wallet is already open. Prove the secret instead.");
           return;
