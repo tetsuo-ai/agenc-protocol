@@ -74,7 +74,6 @@ export {
   CLAIM_ACCOUNT_RENT_LAMPORTS,
   claimFundingRequirement,
   clearWorkerPause,
-  clusterNowSeconds,
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   decodeTaskDescription,
   DEFAULT_MAX_FAILED_JOBS_IN_A_ROW,
@@ -132,6 +131,14 @@ export {
   type WorkerState,
 } from "./state.js";
 export { formatDiagnosticError, redactSensitiveText } from "./redact.js";
+export {
+  clusterNowSeconds,
+  collectOverdueReviews,
+  runUpkeep,
+  UPKEEP_RETRY_SECONDS,
+  type UpkeepMemory,
+  type UpkeepReport,
+} from "./upkeep.js";
 export {
   AGENC_PROGRAM_ID,
   DEFAULT_SETTLEMENT_SIGNATURE_SCAN_LIMIT,

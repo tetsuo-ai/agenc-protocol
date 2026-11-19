@@ -84,6 +84,7 @@ import {
   type WorkerState,
 } from "./state.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
+import { clusterNowSeconds, runUpkeep, type UpkeepMemory } from "./upkeep.js";
 
 /** One structured log event (a JSON line in the CLI). */
 export type WorkerLogEvent = { event: string } & Record<string, unknown>;
@@ -121,6 +122,11 @@ export type WorkerRuntimeConfig = Pick<
    * {@link clearWorkerPause}. Default {@link DEFAULT_MAX_FAILED_JOBS_IN_A_ROW}.
    */
   maxFailedJobsInARow?: number;
+  /**
+   * How often the long-running loop auto-accepts overdue deliveries.
+   * Default every fourth poll.
+   */
+  upkeepIntervalMs?: number;
 };
 
 /** A job is tried at most this many times before it is given up. */
@@ -220,7 +226,6 @@ export const CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000n;
 // broadcast returns an ambiguous transport error, wait beyond that window
 // before treating an absent claim PDA as definitive and claiming elsewhere.
 const TRANSACTION_RECONCILIATION_GRACE_MS = 120_000;
-const CLOCK_SYSVAR = address("SysvarC1ock11111111111111111111111111111111");
 
 /**
  * Read the live `ProtocolConfig.minAgentStake` — the on-chain floor that
@@ -898,32 +903,6 @@ function keptMarkerFields(
       ? { lastFailure: marker.lastFailure }
       : {}),
   };
-}
-
-/** The cluster's clock in unix seconds, as well as this worker can tell. */
-export async function clusterNowSeconds(ctx: WorkerContext): Promise<number> {
-  if (ctx.clusterTime !== undefined) {
-    try {
-      const seconds = await ctx.clusterTime();
-      if (Number.isFinite(seconds)) return seconds;
-    } catch {
-      // Fall back to the sysvar below.
-    }
-  }
-  try {
-    const data = await ctx.readAccount(CLOCK_SYSVAR);
-    if (data !== null && data.byteLength >= 40) {
-      return Number(
-        new DataView(data.buffer, data.byteOffset, data.byteLength).getBigInt64(
-          32,
-          true,
-        ),
-      );
-    }
-  } catch {
-    // Fall back to this computer's clock.
-  }
-  return Math.floor(Date.now() / 1_000);
 }
 
 /** A failure reason as one bounded line for the state file and the log. */
@@ -1961,12 +1940,13 @@ export async function resumeOpenClaim(
     ctx.log({ event: "task.chain-state-incoherent", task, reason });
     return { status: "execution-failed", task, reason };
   }
-  if (marker.phase !== "submitting" && !ctx.dryRun) {
+  if (!ctx.dryRun) {
     // Out of time: the work can no longer be delivered, so trying again
-    // would only spend. The claim is released once it can be.
+    // would only spend. A result already being submitted is left to its
+    // reconciliation above.
     const now = await clusterNowSeconds(ctx);
     const deliverBy = Number(decodedTask.deadline);
-    if (deliverBy > 0 && now > deliverBy) {
+    if (marker.phase !== "submitting" && deliverBy > 0 && now > deliverBy) {
       giveUpJob(ctx, loadState(ctx.stateDir), marker, {
         cause: "expired",
         reason: "the time to deliver ran out",
@@ -1978,7 +1958,7 @@ export async function resumeOpenClaim(
     // After a failed attempt the next one waits its turn.
     const retryAt =
       marker.retryAt === undefined ? Number.NaN : Date.parse(marker.retryAt);
-    if (Number.isFinite(retryAt) && Date.now() < retryAt) {
+    if (marker.phase !== "submitting" && Number.isFinite(retryAt) && Date.now() < retryAt) {
       return {
         status: "execution-failed",
         task,
@@ -2511,6 +2491,8 @@ async function runTickOnceLocked(ctx: WorkerContext): Promise<TickResult> {
   const initialSettlements = agent.registered
     ? await checkSettlements(ctx, agent)
     : [];
+  // Be paid for overdue deliveries before looking for new work.
+  await runUpkeep(ctx, agent);
   let outcome: ProcessOutcome | null = await resumeOpenClaim(ctx, agent);
   let candidateCount = 0;
   if (outcome === null) {
@@ -2574,6 +2556,13 @@ async function runUpLocked(
   });
   const agent = await ensureRegistered(ctx);
   await checkSettlements(ctx, agent);
+  const upkeepMemory: UpkeepMemory = new Map();
+  const upkeepEveryMs = Math.max(
+    0,
+    ctx.config.upkeepIntervalMs ?? Math.max(1_000, 4 * ctx.config.pollIntervalMs),
+  );
+  let lastUpkeepAt = Date.now();
+  await runUpkeep(ctx, agent, upkeepMemory);
   await resumeOpenClaim(ctx, agent);
 
   // Serialize every state-touching step through one chain: candidate
@@ -2600,6 +2589,10 @@ async function runUpLocked(
     void enqueue(async () => {
       try {
         await checkSettlements(ctx, agent);
+        if (Date.now() - lastUpkeepAt >= upkeepEveryMs) {
+          lastUpkeepAt = Date.now();
+          await runUpkeep(ctx, agent, upkeepMemory);
+        }
         await resumeOpenClaim(ctx, agent);
       } catch (error) {
         ctx.log({
