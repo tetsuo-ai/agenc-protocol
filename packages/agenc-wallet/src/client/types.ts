@@ -123,8 +123,12 @@ export interface AgentView {
 
 export interface WalletOverview {
   network: WalletNetwork;
-  /** The main balance. Money is added here and handed out to agents. */
-  main: { address: string; balance: Money };
+  /**
+   * The main balance. Money is added here and handed out to agents. `spent`
+   * is what it paid out for requests the person posted from it; what agents
+   * pay is on each agent.
+   */
+  main: { address: string; balance: Money; spent: Money };
   /** Everything currently held in running jobs, across all agents. */
   held: Money;
   agents: AgentView[];

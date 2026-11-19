@@ -828,6 +828,7 @@ export class AgencWallet {
       main: {
         address: this.mainAddress,
         balance: money(balances.values.get(MAIN_KEY) ?? 0n, rate),
+        spent: money(state.mainSpentLamports ?? "0", rate),
       },
       held: money(this.#heldBy(null), rate),
       agents: ordered.map((agent, index) =>
@@ -2303,6 +2304,9 @@ export class AgencWallet {
       const agent = draft.agents[entry.agentId];
       if (agent !== undefined) {
         agent.spentLamports = (BigInt(agent.spentLamports) + BigInt(entry.priceLamports)).toString();
+      } else if (entry.agentId === "") {
+        // A request the person posted from the main balance.
+        draft.mainSpentLamports = (BigInt(draft.mainSpentLamports ?? "0") + BigInt(entry.priceLamports)).toString();
       }
       this.#note(draft, {
         kind: "paid",

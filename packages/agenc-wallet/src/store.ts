@@ -279,6 +279,11 @@ export interface WalletState {
   /** Main-balance lamports last seen, to notice money arriving. */
   lastMainLamports: string | null;
   /**
+   * Lifetime lamports the main balance paid out for requests the person
+   * posted from it. What agents pay is counted on each agent.
+   */
+  mainSpentLamports?: string;
+  /**
    * The last balance read for each wallet (the main one and every agent's),
    * by id. Only for showing something true when the network cannot be reached.
    */

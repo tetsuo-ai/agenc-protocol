@@ -166,6 +166,8 @@ describe("posting a request", () => {
     expect((await wallet.getJob(posted.id, true)).status).toBe("paid");
     expect(before - (await world.balance(wallet.mainAddress))).toBe(30n * CENT + BigInt(quote.kept.lamports));
     expect((await wallet.overview()).held.lamports).toBe("0");
+    // Paid from the main balance, so counted as what the balance spent.
+    expect((await wallet.overview()).main.spent.lamports).toBe((30n * CENT).toString());
     const said = (await wallet.listActivity()).map((entry) => entry.text);
     expect(said).toContain("You posted a request: Write a haiku about a lighthouse.");
     expect(said).toContain("Paid for Write a haiku about a lighthouse.");
@@ -213,6 +215,7 @@ describe("posting a request", () => {
     const refunded = await wallet.getJob(posted.id, true);
     expect(refunded.status).toBe("refunded");
     expect((await world.balance(wallet.mainAddress)) - before).toBeGreaterThanOrEqual(30n * CENT);
+    expect((await wallet.overview()).main.spent.lamports).toBe("0");
   });
 
   it("cancels a request before anyone takes it, and the reward comes back", async () => {
