@@ -88,6 +88,33 @@ describe("a service's record", () => {
     expect(after!.offeredBy).toMatchObject({ jobsDone: 1, buyers: 1, paid: { usdCents: 20 } });
   });
 
+  it("keeps a paid job nobody rated after the job is tidied", async () => {
+    world = await startWorld();
+    const { wallet, sandbox, listing, clock } = world;
+    const agent = await spender(world, 300);
+    await paidJob(world, agent.id, listing);
+    const provider = (await sandbox.services.listServices()).find((row) => row.listing === listing)!.providerAgent;
+    expect(await sandbox.services.finishedJobs!(provider)).toHaveLength(1);
+
+    // A job nobody rated waits an hour for its stars, then is tidied: its
+    // link to the service closes, and the marketplace's list, which reads
+    // only what is still open, no longer names it.
+    clock.now += 60 * 60_000 + 1_000;
+    await wallet.tick();
+    expect(await sandbox.services.finishedJobs!(provider)).toEqual([]);
+
+    const [after] = (await wallet.find({ query: "haiku" })).services;
+    expect(after).toMatchObject({
+      record: "ready",
+      rating: null,
+      ratingCount: 0,
+      jobsDone: 1,
+      buyers: 1,
+      paid: { lamports: HAIKU.priceLamports.toString(), usdCents: 20 },
+    });
+    expect(after!.offeredBy).toMatchObject({ jobsDone: 1, buyers: 1, paid: { usdCents: 20 } });
+  });
+
   it("ranks many paid jobs above one cheap five-star rating", async () => {
     world = await startWorld();
     const { wallet, sandbox, listing: haiku } = world;

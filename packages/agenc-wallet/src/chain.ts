@@ -31,6 +31,7 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
+import { readSettlementWorker } from "./settlement.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
 const CLOCK_SYSVAR_ADDRESS = address("SysvarC1ock11111111111111111111111111111111");
@@ -77,6 +78,12 @@ export interface Chain {
   readonly transferFeeLamports: bigint;
   /** Most recent verified settlement transaction for a task, when known. */
   findSettlementSignature?(task: Address): Promise<string | null>;
+  /**
+   * The agent the transaction that settled a finished task paid, read from
+   * the task's history on the chain; null when none of it settles the task.
+   * Absent where the chain keeps no history to read.
+   */
+  findSettlementWorker?(task: Address): Promise<Address | null>;
 }
 
 /** A System Program transfer, built by hand so no extra package is needed. */
@@ -386,6 +393,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
+    findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
   };
 }
 
