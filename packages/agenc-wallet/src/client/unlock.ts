@@ -9,10 +9,15 @@
 // value the service picks) and is given the current owner credential.
 //
 // The secret is never written anywhere: it goes from the host's memory, over
-// the socket, into the service's memory. Dependency-free (node:net and
-// node:crypto), so a host can vendor this folder unchanged.
+// the socket, into the service's memory. Before anything is sent, the socket
+// must sit in a folder only this user can reach into and belong to this user:
+// a socket in a shared place such as /tmp could otherwise be someone else's.
+// Dependency-free (node built-ins only), so a host can vendor this folder
+// unchanged.
 import { createHmac } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { connect } from "node:net";
+import { dirname } from "node:path";
 
 /** What the HMAC proof is bound to, so it means nothing anywhere else. */
 export const UNLOCK_PROOF_CONTEXT = "agenc-wallet unlock v1";
@@ -47,6 +52,24 @@ export class UnlockRefused extends Error {
 }
 
 /**
+ * Refuse a socket anyone else could have put there: its folder must be this
+ * user's and closed to everyone else, and the socket this user's. A missing
+ * one throws the file system's own ENOENT, so a caller can wait for it.
+ */
+export function assertPrivateSocket(socketPath: string): void {
+  if (process.platform === "win32") return;
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const folder = lstatSync(dirname(socketPath));
+  if (!folder.isDirectory() || (uid !== null && folder.uid !== uid) || (folder.mode & 0o077) !== 0) {
+    throw new UnlockRefused("The wallet's socket folder is not private to you, so nothing was sent to it.");
+  }
+  const socket = lstatSync(socketPath);
+  if (!socket.isSocket() || (uid !== null && socket.uid !== uid)) {
+    throw new UnlockRefused("Something other than your wallet is at its socket, so nothing was sent to it.");
+  }
+}
+
+/**
  * Open the background service at `socketPath`: unlock it with the start-up
  * line from `startup()` when it is locked (only then is that line made), or
  * prove `unlockSecret` when it already runs.
@@ -58,6 +81,11 @@ export function openBackgroundWallet(options: {
   startup: () => { ownerToken: string } & Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<OpenedBackgroundWallet> {
+  try {
+    assertPrivateSocket(options.socketPath);
+  } catch (error) {
+    return Promise.reject(error);
+  }
   return new Promise<OpenedBackgroundWallet>((resolve, reject) => {
     const socket = connect(options.socketPath);
     let buffered = "";
