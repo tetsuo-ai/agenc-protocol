@@ -8,7 +8,8 @@ import type { Address } from "@solana/kit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentView, OfferView } from "../src/client/types.js";
 import type { EarnOptions } from "../src/earn.js";
-import { isRetiredAgent, listingsOf, readAgent, readListing } from "../src/market.js";
+import { TaskStatus } from "@tetsuo-ai/marketplace-sdk";
+import { isRetiredAgent, listingsOf, readAgent, readListing, readTask } from "../src/market.js";
 import { CENT, eventually, startWorld, type World } from "./harness.js";
 
 function earning(script: string, extra: Partial<EarnOptions> = {}): EarnOptions {
@@ -213,7 +214,7 @@ describe("stopping an agent's earning for good", () => {
     const stake = (await readAgent(sandbox.chain, provider))!.stake;
     await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({
       code: "NOT_ALLOWED",
-      message: "Someone hired Worker and is waiting for the work. Switch on Earns so it gets done, then try again.",
+      message: "Someone hired Worker and is waiting for the work. Switch on Earns until it is done and paid, then switch it off and try again.",
     });
     // Nothing for good happened: the service is only off offer, still wanted,
     // and the agent is still there to do the job it was paid for.
@@ -252,9 +253,13 @@ describe("stopping an agent's earning for good", () => {
     await wallet.setEarn(worker.id, false);
     await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
 
+    // A stranger's job paying more than the hire but less than the smallest pay.
+    const stranger = await world.sandbox.postOpenJob({ title: "A line", instructions: "Write one line.", rewardLamports: 40n * CENT });
     // Earns on with a smallest pay above the service's price: the hire it owes is still done.
     await wallet.setEarn(worker.id, true, 50);
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
+    // The smallest pay still holds for every other job.
+    expect(Number((await readTask(world.sandbox.chain, stranger.task))!.status)).toBe(TaskStatus.Open);
     await wallet.approveJob(job.id, undefined, true);
     await wallet.setEarn(worker.id, false);
     expect((await wallet.retireAgent(worker.id)).earn.retired).toBe(true);

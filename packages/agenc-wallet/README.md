@@ -400,8 +400,9 @@ job it gave up is still held. A service still on offer is first taken off
 (paused, which can be undone); then a hire of the agent that nobody started
 and that can still be done stops it, before anything is for good: the agent
 is the only one who may do it, so the buyer would wait out the time to deliver
-for nothing. Switch earning on so it gets done (the loop then takes it
-whatever the agent's smallest pay), then retire again. A hire whose time to
+for nothing. Switch earning on until it is done and paid (the loop takes
+that hire whatever the agent's smallest pay; every other job keeps it), then
+switch it off and retire again. A hire whose time to
 deliver is over does not stop it (its buyer gets the price back). A job the
 agent had not finished when its wallet last closed goes on only with earning
 on, and the refusal says so. The marketplace's own record wins: an agent retired there is taken

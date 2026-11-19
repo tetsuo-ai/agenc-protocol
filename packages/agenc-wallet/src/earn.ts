@@ -109,6 +109,8 @@ export interface EarnAgent {
   minRewardLamports: bigint;
   /** The same floor in US cents, or null when the going rate is not known. */
   minPayCents?: number | null;
+  /** Hires it owes, by task, with what each pays: taken whatever the floor. */
+  owed?: ReadonlyMap<string, bigint>;
 }
 
 /** Why the worker gave a job up, as its ledger records it. */
@@ -550,6 +552,7 @@ export class EarnHost {
 
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),
       config: {
         ...this.#config(agent, executor.argv.map(fill)),
         executorMode: executor.mode,

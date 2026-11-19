@@ -281,8 +281,9 @@ async function unreachable<T>(step: () => Promise<T>): Promise<T> {
     return await step();
   } catch (error) {
     if (error instanceof WalletError) throw error;
-    const text = error instanceof Error ? `${error.message} ${String(error.cause ?? "")}` : String(error);
-    if (/custom program error|Error Code:|InstructionError|Transaction failed|Program failed/i.test(text)) {
+    // The program's own error code; anything else may be the network, even a
+    // send whose outcome is unknown, which trying again settles.
+    if (error instanceof AgencError && error.code !== null) {
       throw new WalletError("NOT_ALLOWED", "The marketplace refused this step right now.", { cause: error });
     }
     throw new WalletError(
@@ -512,11 +513,11 @@ export class AgencWallet {
   /** The smallest pay each running earn loop was started with. */
   readonly #earnFloor = new Map<string, bigint>();
   /**
-   * What the least of an agent's waiting hires pays, found when stopping it
-   * for good was refused for them: its loop takes them whatever its smallest
-   * pay says, or it could never stop.
+   * An agent's waiting hires, found when stopping it for good was refused for
+   * them, with what each pays: its loop takes them whatever its smallest pay
+   * says, or it could never stop. Every other job keeps that floor.
    */
-  readonly #owedFloor = new Map<string, bigint>();
+  readonly #owed = new Map<string, ReadonlyMap<string, bigint>>();
   /** Who offers each service and what buyers paid them, read in the background. */
   readonly #records: RecordKeeper;
   /** The marketplace's fee rate in basis points, as last read (null: it could not be). */
@@ -3345,13 +3346,13 @@ export class AgencWallet {
           minRewardLamports = BigInt(offer.priceLamports);
         }
       }
-      const owed = this.#owedFloor.get(agent.id);
-      if (owed !== undefined && owed < minRewardLamports) minRewardLamports = owed;
       this.#earnFloor.set(agent.id, minRewardLamports);
+      const owed = this.#owed.get(agent.id);
       this.#earn.start({
         agentId: agent.id,
         signer,
         minRewardLamports,
+        ...(owed !== undefined ? { owed } : {}),
         // What the least job pays, for the program that does the job to keep its spending under.
         minPayCents: rate === null ? null : lamportsToCents(minRewardLamports, rate),
       });
@@ -3503,7 +3504,7 @@ export class AgencWallet {
       const jobs = this.#earn.jobs(agent.id);
       if (jobs.some((job) => job.state === "working")) {
         // With Earns off its loop is not running, so the job goes on only with it.
-        return `${agent.name} has a job it has not finished. Switch on Earns so it can, then try again.`;
+        return `${agent.name} has a job it has not finished. Switch on Earns until it is paid, then switch it off and try again.`;
       }
       if (jobs.some((job) => job.state === "delivered")) {
         return `${agent.name} is waiting to be paid for a job. Try again once it is paid.`;
@@ -3604,13 +3605,10 @@ export class AgencWallet {
     // Nothing for good has happened yet; with Earns on again it gets done.
     const waiting = await unreachable(() => waitingHires(this.#chain, providerAgent));
     if (waiting.length > 0) {
-      this.#owedFloor.set(
-        agentId,
-        waiting.reduce((least, hire) => (hire.rewardLamports < least ? hire.rewardLamports : least), waiting[0]!.rewardLamports),
-      );
+      this.#owed.set(agentId, new Map(waiting.map((hire) => [hire.task, hire.rewardLamports])));
       throw new WalletError(
         "NOT_ALLOWED",
-        `Someone hired ${agent.name} and is waiting for the work. Switch on Earns so it gets done, then try again.`,
+        `Someone hired ${agent.name} and is waiting for the work. Switch on Earns until it is done and paid, then switch it off and try again.`,
       );
     }
 
@@ -3676,7 +3674,7 @@ export class AgencWallet {
     });
     // Whatever may still run for it ends (a switch that raced this one).
     void this.#earn.stop(agentId);
-    this.#owedFloor.delete(agentId);
+    this.#owed.delete(agentId);
     this.#emit({ type: "overview" });
   }
 

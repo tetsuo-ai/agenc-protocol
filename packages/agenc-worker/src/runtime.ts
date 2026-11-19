@@ -223,6 +223,12 @@ export type WorkerContext = {
    * signal only stops it looking for work: a job in progress finishes.)
    */
   signal?: AbortSignal;
+  /**
+   * Hires this worker owes, by task, with what each pays: taken whatever
+   * `minRewardLamports` says, since only this worker may do them and their
+   * buyers paid. Every other job still has to pay at least the floor.
+   */
+  owedTasks?: ReadonlyMap<string, bigint>;
 };
 
 /** The worker's on-chain identity. */
@@ -610,7 +616,7 @@ function passesLocalFilters(
   ) {
     return { ok: false, reason: "capabilities" };
   }
-  if (candidate.rewardAmount < config.minRewardLamports) {
+  if (candidate.rewardAmount < config.minRewardLamports && ctx.owedTasks?.has(candidate.task) !== true) {
     return { ok: false, reason: "below-min-reward" };
   }
   if (
@@ -2830,7 +2836,11 @@ async function runUpLocked(
     rpc: ctx.gpa,
     filter: {
       capabilities: ctx.config.capabilities,
-      minReward: ctx.config.minRewardLamports,
+      // Low enough to see a hire it owes; the local filters keep the floor for the rest.
+      minReward: [...(ctx.owedTasks?.values() ?? [])].reduce(
+        (least, reward) => (reward < least ? reward : least),
+        ctx.config.minRewardLamports,
+      ),
     },
     pollIntervalMs: ctx.config.pollIntervalMs,
     onTask: () => {}, // consumed via the async iterator below
