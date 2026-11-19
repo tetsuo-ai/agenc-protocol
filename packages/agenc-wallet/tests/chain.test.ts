@@ -3,12 +3,13 @@
 // requests" instead of failing what it was doing.
 import { describe, expect, it } from "vitest";
 import {
+  getAddressDecoder,
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   SolanaError,
   type RpcTransport,
 } from "@solana/kit";
 import { AgencError } from "@tetsuo-ai/marketplace-sdk";
-import { isNetworkTrouble, politeTransport } from "../src/chain.js";
+import { createRpcChain, isNetworkTrouble, politeTransport } from "../src/chain.js";
 import { WalletError } from "../src/errors.js";
 
 function refused(status: number, retryAfter?: string): SolanaError {
@@ -192,5 +193,49 @@ describe("telling a busy network from a no", () => {
     expect(isNetworkTrouble(new WalletError("NETWORK", "The network could not be reached."))).toBe(false);
     expect(isNetworkTrouble("fetch failed")).toBe(false);
     expect(isNetworkTrouble(null)).toBe(false);
+  });
+});
+
+describe("reading many accounts", () => {
+  it("asks for at most a hundred at a time and keeps the order", async () => {
+    const asked: string[][] = [];
+    const transport = (async (config: { payload: { id: unknown; method: string; params: unknown[] } }) => {
+      const { id, method, params } = config.payload;
+      expect(method).toBe("getMultipleAccounts");
+      const addresses = params[0] as string[];
+      asked.push(addresses);
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          context: { slot: 1 },
+          value: addresses.map((address, index) =>
+            index % 2 === 1
+              ? null
+              : {
+                  data: [Buffer.from(address.slice(0, 4)).toString("base64"), "base64"],
+                  executable: false,
+                  lamports: 7,
+                  owner: "11111111111111111111111111111111",
+                  rentEpoch: 0,
+                  space: 4,
+                },
+          ),
+        },
+      };
+    }) as unknown as RpcTransport;
+    const chain = createRpcChain({ network: "mainnet", rpcUrl: "https://rpc.example", transport, minRequestGapMs: 0 });
+    const addresses = Array.from({ length: 150 }, (_, index) =>
+      getAddressDecoder().decode(new Uint8Array(32).fill(index + 1)),
+    );
+    const accounts = await chain.readRawAccounts(addresses);
+    expect(asked.map((batch) => batch.length)).toEqual([100, 50]);
+    expect(accounts).toHaveLength(150);
+    expect(accounts[1]).toBeNull();
+    expect(accounts[100]).toEqual({
+      data: new Uint8Array(Buffer.from(addresses[100]!.slice(0, 4))),
+      owner: "11111111111111111111111111111111",
+      lamports: 7n,
+    });
   });
 });

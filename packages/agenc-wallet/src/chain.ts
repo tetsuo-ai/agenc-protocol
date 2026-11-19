@@ -58,6 +58,8 @@ export interface Chain {
   readAccount(account: Address): Promise<Uint8Array | null>;
   /** Bytes plus owner, for accounts whose owner matters. */
   readRawAccount(account: Address): Promise<RawAccount | null>;
+  /** Several accounts at once, in the order asked; null for one that does not exist. */
+  readRawAccounts(accounts: readonly Address[]): Promise<Array<RawAccount | null>>;
   /** Owner/executable-aware reader in the shape the worker runtime expects. */
   readAccountInfo: AccountInfoReader;
   getBalance(account: Address): Promise<bigint>;
@@ -320,6 +322,31 @@ export function createRpcChain(options: RpcChainOptions): Chain {
         };
       });
     },
+    readRawAccounts: (accounts) =>
+      network(async () => {
+        const out: Array<RawAccount | null> = [];
+        // The endpoint takes at most 100 addresses at a time.
+        for (let start = 0; start < accounts.length; start += 100) {
+          const { value } = await rpc
+            .getMultipleAccounts(accounts.slice(start, start + 100), {
+              commitment: "confirmed",
+              encoding: "base64",
+            })
+            .send();
+          for (const account of value) {
+            out.push(
+              account === null
+                ? null
+                : {
+                    data: new Uint8Array(Buffer.from(account.data[0], "base64")),
+                    owner: account.owner,
+                    lamports: BigInt(account.lamports),
+                  },
+            );
+          }
+        }
+        return out;
+      }),
     getBalance: (account) =>
       network(async () =>
         BigInt((await rpc.getBalance(account, { commitment: "confirmed" }).send()).value),
