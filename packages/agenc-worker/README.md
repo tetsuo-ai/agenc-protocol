@@ -164,8 +164,11 @@ agent to read it**. The worker is built around that assumption:
   says so. A job whose time to deliver runs out is given up the same way. A
   failed upload of finished work only waits and is sent again; the work is
   not run again. A job spec or buyer's note that cannot be fetched (its host
-  or the network is down) also only waits, with the same growing waits
-  (`task.fetch-wait-scheduled`), until it arrives or the time runs out.
+  or the network is down, or the host answers 5xx, 408 or 429) also only
+  waits, with the same growing waits (`task.fetch-wait-scheduled`), until it
+  arrives, the time runs out, or it has waited six hours in a row
+  (`maxFetchWaitMs`); then the job is given up. A host that refuses for good
+  (any other 4xx, such as 404 or 410) counts as a failed attempt.
   After `maxFailedJobsInARow` (3) given-up jobs in a row the worker takes no
   new job (`worker.paused`) until `clearWorkerPause(stateDir)` is called. A
   delivered job resets the count.

@@ -45,6 +45,7 @@ export {
 export {
   fetchAndVerifyJobSpec,
   createPublicUriFetcher,
+  isDefiniteHttpRefusal,
   isPublicIpAddress,
   JobSpecError,
   JobSpecUnreachableError,
@@ -78,6 +79,7 @@ export {
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   decodeTaskDescription,
   DEFAULT_MAX_FAILED_JOBS_IN_A_ROW,
+  DEFAULT_MAX_FETCH_WAIT_MS,
   DEFAULT_MAX_JOB_ATTEMPTS,
   DEFAULT_RETRY_DELAY_MS,
   ensureRegistered,

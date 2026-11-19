@@ -3,6 +3,8 @@
 // again every poll in silence. Several given-up jobs in a row stop the worker
 // from taking new ones until whoever runs it clears that.
 import { mkdtempSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { address, type Address, type TransactionSigner } from "@solana/kit";
@@ -20,9 +22,15 @@ import {
   type ProgramAccountsTransport,
   type TaskArgs,
 } from "@tetsuo-ai/marketplace-sdk";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  defaultPinnedRequester,
+  JobSpecError,
+  JobSpecUnreachableError,
+} from "../src/job-spec.js";
 import {
   clearWorkerPause,
+  DEFAULT_MAX_FETCH_WAIT_MS,
   DEFAULT_RETRY_DELAY_MS,
   processCandidate,
   resumeOpenClaim,
@@ -334,6 +342,121 @@ describe("a job whose job spec cannot be fetched", () => {
     expect(state.failedJobs).toEqual([
       expect.objectContaining({ cause: "attempts", attempts: 3, reason: expect.stringMatching(/job spec could not be checked/) }),
     ]);
+  });
+});
+
+describe("a job spec host that answers with an HTTP error", () => {
+  // A real HTTP server on this computer, reached the way the worker reaches a
+  // job spec host: the pinned requester, with the answer's status as sent.
+  let server: Server;
+  let port = 0;
+  beforeAll(async () => {
+    server = createServer((request, response) => {
+      const status = Number((request.url ?? "/500").slice(1));
+      response.statusCode = Number.isInteger(status) ? status : 500;
+      response.end();
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    port = (server.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+  /** What the worker's own downloader makes of the host answering `status`. */
+  const download = (status: number) => async (): Promise<Uint8Array> => {
+    const answer = await defaultPinnedRequester({
+      url: new URL(`http://127.0.0.1:${port}/${status}`),
+      address: { address: "127.0.0.1", family: 4 },
+      maxBytes: 64 * 1024,
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (answer.kind !== "success") throw new Error("unexpected redirect");
+    return answer.bytes;
+  };
+
+  it("tells a refusal for good from a host that is down or busy", async () => {
+    for (const status of [404, 410, 403, 401]) {
+      const error = await download(status)().catch((caught: unknown) => caught);
+      expect(error, `status ${status}`).toBeInstanceOf(JobSpecError);
+      expect(error, `status ${status}`).not.toBeInstanceOf(JobSpecUnreachableError);
+    }
+    for (const status of [500, 502, 503, 408, 429]) {
+      const error = await download(status)().catch((caught: unknown) => caught);
+      expect(error, `status ${status}`).toBeInstanceOf(JobSpecUnreachableError);
+    }
+  });
+
+  it("gives a job up after its tries when the job spec is gone (404)", async () => {
+    const { stateDir, ctx, runs, waitOut } = await heldJob();
+    ctx.fetchUri = download(404);
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", attempts: 3, reason: expect.stringMatching(/job spec could not be checked.*404/) }),
+    ]);
+    expect(runs()).toBe(0);
+  });
+
+  it("keeps waiting while the job spec host answers that it is down (500)", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob();
+    ctx.fetchUri = download(500);
+    for (let look = 0; look < 4; look += 1) {
+      waitOut();
+      await resumeOpenClaim(ctx, agent);
+    }
+    const held = loadState(stateDir);
+    expect(held.failedJobs).toEqual([]);
+    expect(held.openClaim).toMatchObject({ task: TASK, fetchWaits: 4 });
+    expect(held.openClaim?.failures).toBeUndefined();
+  });
+});
+
+describe("a job spec that cannot be fetched for hours", () => {
+  it("is given up once the waiting has gone on for six hours, with why", async () => {
+    const { stateDir, ctx, events, waitOut } = await heldJob();
+    ctx.fetchUri = async () => {
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+    await resumeOpenClaim(ctx, agent);
+    const waiting = loadState(stateDir).openClaim!;
+    expect(Date.now() - Date.parse(waiting.fetchFailingSince!)).toBeLessThan(60_000);
+
+    // Six hours of failed fetches later.
+    const later = loadState(stateDir);
+    later.openClaim!.fetchFailingSince = new Date(Date.now() - DEFAULT_MAX_FETCH_WAIT_MS - 1_000).toISOString();
+    saveState(stateDir, later);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", reason: "the job spec could not be fetched for 6 hours", rewardAmount: REWARD.toString() }),
+    ]);
+    expect(events.some((event) => event.event === "task.given-up")).toBe(true);
+  });
+
+  it("starts the six hours again after a good fetch", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob();
+    const good = heldJobSpec;
+    ctx.fetchUri = async () => {
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+    await resumeOpenClaim(ctx, agent);
+    expect(loadState(stateDir).openClaim?.fetchFailingSince).toBeDefined();
+    // The host is back: the job spec arrives (the work then fails, as this job's always does).
+    ctx.fetchUri = good;
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    const after = loadState(stateDir).openClaim!;
+    expect(after.fetchFailingSince).toBeUndefined();
+    expect(after.fetchWaits).toBeUndefined();
+    expect(after.failures).toBe(1);
   });
 });
 

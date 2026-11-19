@@ -2007,6 +2007,56 @@ describe("transaction-boundary recovery", () => {
     expect(held.openClaim?.failures).toBeUndefined();
   });
 
+  it("counts a buyer's note the host refuses for good (404) as a failed try", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-feedback-gone-"),
+    );
+    const state = emptyState();
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-18T00:00:00.000Z",
+      phase: "claimed",
+      revisionSubmissionCount: 1,
+    };
+    saveState(stateDir, state);
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda)],
+      [
+        submissionPda,
+        submissionData(
+          claimPda,
+          new Uint8Array(32).fill(3),
+          SubmissionStatus.Rejected,
+          new Uint8Array(32).fill(4),
+        ),
+      ],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+    ctx.config.executor = ["/must/not/execute", "{prompt}"];
+    // The host answers that the note is not there: waiting will not bring it.
+    ctx.taskThreadTransport = {
+      baseUrl: "https://threads.example",
+      get: async () => {
+        throw new taskThread.ContentTransportError("content host answered 404", { status: 404 });
+      },
+      post: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    const counted = loadState(stateDir);
+    expect(counted.openClaim).toMatchObject({
+      task: TASK,
+      failures: 1,
+      lastFailure: expect.stringMatching(/buyer's note could not be read/),
+    });
+    expect(counted.openClaim?.fetchWaits).toBeUndefined();
+  });
+
   it("recovers executed/uploading phases from private stdout without rerunning the executor", async () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-executed-"));
     const resultBytes = new TextEncoder().encode("persisted executor stdout");

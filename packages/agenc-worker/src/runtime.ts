@@ -54,6 +54,7 @@ import {
 } from "./executor.js";
 import {
   fetchAndVerifyJobSpec,
+  isDefiniteHttpRefusal,
   JobSpecError,
   JobSpecUnreachableError,
   type AccountReader,
@@ -128,6 +129,12 @@ export type WorkerRuntimeConfig = Pick<
    * releases unusable claims. Default every fourth poll.
    */
   upkeepIntervalMs?: number;
+  /**
+   * How long a job waits, in a row, for a job spec or a buyer's note that
+   * cannot be fetched before it is given up. Default
+   * {@link DEFAULT_MAX_FETCH_WAIT_MS}.
+   */
+  maxFetchWaitMs?: number;
 };
 
 /** A job is tried at most this many times before it is given up. */
@@ -138,6 +145,12 @@ export const DEFAULT_RETRY_DELAY_MS = 60_000;
 export const MAX_RETRY_DELAY_MS = 30 * 60_000;
 /** Jobs given up in a row before no new job is taken. */
 export const DEFAULT_MAX_FAILED_JOBS_IN_A_ROW = 3;
+/**
+ * How long a job waits for a job spec or a buyer's note that cannot be
+ * fetched. Bounded so a host that stays down, or a buyer who takes the job
+ * spec away, cannot hold the worker's one job for days.
+ */
+export const DEFAULT_MAX_FETCH_WAIT_MS = 6 * 60 * 60_000;
 
 /** Everything the worker loop needs, injected (see cli.ts for the RPC wiring). */
 export type WorkerContext = {
@@ -1042,14 +1055,35 @@ function noteJobFailure(
  * job. Wait, longer each time, without using up one of its attempts; the job
  * is still given up once its time to deliver runs out.
  */
-function noteJobWait(ctx: WorkerContext, task: Address, reason: string): void {
+function noteJobWait(
+  ctx: WorkerContext,
+  task: Address,
+  what: "the job spec" | "the buyer's note",
+  reason: string,
+  rewardAmount: bigint,
+): void {
   const state = loadState(ctx.stateDir);
   const marker = state.openClaim;
   if (marker === null || marker.task !== task) return;
   const fetchWaits = (marker.fetchWaits ?? 0) + 1;
-  const line = reasonLine(reason);
-  const retryAt = new Date(Date.now() + retryDelayMs(ctx, fetchWaits)).toISOString();
-  state.openClaim = { ...marker, fetchWaits, retryAt, lastFailure: line };
+  const line = reasonLine(`${what} could not be fetched: ${reason}`);
+  const now = Date.now();
+  const fetchFailingSince = marker.fetchFailingSince ?? new Date(now).toISOString();
+  const limitMs = Math.max(0, ctx.config.maxFetchWaitMs ?? DEFAULT_MAX_FETCH_WAIT_MS);
+  if (now - Date.parse(fetchFailingSince) >= limitMs) {
+    // The detail stays in the log: a timeout in it would read as the work
+    // taking too long.
+    const hours = Math.max(1, Math.round(limitMs / 3_600_000));
+    giveUpJob(ctx, state, { ...marker, lastFailure: line }, {
+      cause: "attempts",
+      reason: `${what} could not be fetched for ${hours} hour${hours === 1 ? "" : "s"}`,
+      rewardAmount: rewardAmount.toString(),
+      claimReleased: false,
+    });
+    return;
+  }
+  const retryAt = new Date(now + retryDelayMs(ctx, fetchWaits)).toISOString();
+  state.openClaim = { ...marker, fetchWaits, fetchFailingSince, retryAt, lastFailure: line };
   saveState(ctx.stateDir, state);
   ctx.log({
     event: "task.fetch-wait-scheduled",
@@ -1060,12 +1094,27 @@ function noteJobWait(ctx: WorkerContext, task: Address, reason: string): void {
   });
 }
 
-/** Whether the buyer's note failed to arrive, rather than arriving wrong. */
+/**
+ * Whether the buyer's note failed to arrive (no answer, or a host down or
+ * busy), rather than arriving wrong or being refused for good.
+ */
 function noteUnreachable(error: unknown): boolean {
   return (
     error instanceof taskThread.ContentTransportError &&
-    (error.status < 200 || error.status >= 300)
+    (error.status < 200 || error.status >= 300) &&
+    !isDefiniteHttpRefusal(error.status)
   );
+}
+
+/** Everything the job needs was fetched: its fetch waits start over. */
+function clearFetchWaits(ctx: WorkerContext, task: Address): void {
+  const state = loadState(ctx.stateDir);
+  const marker = state.openClaim;
+  if (marker === null || marker.task !== task) return;
+  if (marker.fetchWaits === undefined && marker.fetchFailingSince === undefined) return;
+  const { fetchWaits: _waits, fetchFailingSince: _since, ...rest } = marker;
+  state.openClaim = rest;
+  saveState(ctx.stateDir, state);
 }
 
 /**
@@ -2070,7 +2119,7 @@ export async function resumeOpenClaim(
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.revision-feedback-unavailable", task, reason });
       if (noteUnreachable(error)) {
-        noteJobWait(ctx, task, `the buyer's note could not be fetched: ${reason}`);
+        noteJobWait(ctx, task, "the buyer's note", reason, decodedTask.rewardAmount);
       } else {
         noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`, {
           rewardAmount: decodedTask.rewardAmount,
@@ -2093,7 +2142,7 @@ export async function resumeOpenClaim(
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.job-spec-rejected", task, reason });
     if (error instanceof JobSpecUnreachableError) {
-      noteJobWait(ctx, task, `the job spec could not be fetched: ${reason}`);
+      noteJobWait(ctx, task, "the job spec", reason, decodedTask.rewardAmount);
     } else {
       noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
         rewardAmount: decodedTask.rewardAmount,
@@ -2101,6 +2150,7 @@ export async function resumeOpenClaim(
     }
     return { status: "execution-failed", task, reason };
   }
+  clearFetchWaits(ctx, task);
   let prompt: string;
   try {
     const description = decodeTaskDescription(

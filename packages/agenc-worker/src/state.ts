@@ -99,6 +99,11 @@ export type OpenClaim = {
    * down, which says nothing about the job.
    */
   fetchWaits?: number;
+  /**
+   * ISO timestamp of the first of those fetch failures since the last good
+   * fetch. Waiting ends some hours after it: the job is then given up.
+   */
+  fetchFailingSince?: string;
   /** ISO timestamp before which the job is not tried again. */
   retryAt?: string;
   /** Why the last attempt failed (redacted, one line). */
@@ -378,6 +383,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "listing",
       "failures",
       "fetchWaits",
+      "fetchFailingSince",
       "retryAt",
       "lastFailure",
     ],
@@ -439,6 +445,9 @@ function openClaim(value: unknown, label: string): OpenClaim {
       : {}),
     ...(parsed.fetchWaits !== undefined
       ? { fetchWaits: count(parsed.fetchWaits, `${label}.fetchWaits`, 1) }
+      : {}),
+    ...(parsed.fetchFailingSince !== undefined
+      ? { fetchFailingSince: iso(parsed.fetchFailingSince, `${label}.fetchFailingSince`) }
       : {}),
     ...(parsed.retryAt !== undefined
       ? { retryAt: iso(parsed.retryAt, `${label}.retryAt`) }

@@ -56,11 +56,21 @@ export class JobSpecError extends Error {
 
 /**
  * The job spec could not be reached: reading its account, looking up its
- * host or downloading it failed, took too long or was answered with an HTTP
- * error. Unlike a job spec that was read and is wrong, this can pass.
+ * host or downloading it failed, took too long, or the host answered that it
+ * is down or busy (5xx, 408, 429). Unlike a job spec that was read and is
+ * wrong, or a host that says it is not there for us, this can pass.
  */
 export class JobSpecUnreachableError extends JobSpecError {
   override name = "JobSpecUnreachableError";
+}
+
+/**
+ * An HTTP answer that says the thing asked for is not there for us (404,
+ * 410, 403...), as opposed to a host that is down, overloaded or slow (5xx,
+ * 408, 429). Waiting does not change such an answer.
+ */
+export function isDefiniteHttpRefusal(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
 
 /** A verified job spec, ready to feed the executor prompt. */
@@ -258,7 +268,8 @@ function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-function defaultPinnedRequester(options: {
+/** Exported for tests only; embedders inject a `PinnedHttpRequester`. */
+export function defaultPinnedRequester(options: {
   url: URL;
   address: ResolvedAddress;
   maxBytes: number;
@@ -304,10 +315,11 @@ function defaultPinnedRequester(options: {
         }
         if (status < 200 || status >= 300) {
           response.resume();
+          const answer = `${status} ${response.statusMessage ?? ""}`.trim();
           reject(
-            new JobSpecUnreachableError(
-              `job-spec download failed: ${status} ${response.statusMessage ?? ""}`.trim(),
-            ),
+            isDefiniteHttpRefusal(status)
+              ? new JobSpecError(`job-spec download refused: ${answer}`)
+              : new JobSpecUnreachableError(`job-spec download failed: ${answer}`),
           );
           return;
         }
