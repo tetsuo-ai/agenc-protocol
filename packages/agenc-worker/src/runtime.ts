@@ -70,6 +70,7 @@ import {
   bytesToHex,
   hexToBytes,
   loadState,
+  MAX_JOB_TITLE_CHARS,
   MAX_UNSETTLED_SUBMISSIONS,
   newAgentId,
   saveState,
@@ -629,6 +630,8 @@ async function readTask(
  */
 type HireClaimBinding = {
   isHire: boolean;
+  /** The listing a hire was made from (null for a direct task). */
+  listing: Address | null;
   legacyListing: Address | null;
   rejection: "not-designated-provider" | null;
 };
@@ -646,12 +649,12 @@ async function hireBindingForClaim(
     // System-owned placeholder accepted by the on-chain program.
     data = await ctx.readAccount(hireRecordPda);
     if (data === null || data.byteLength === 0) {
-      return { isHire: false, legacyListing: null, rejection: null };
+      return { isHire: false, listing: null, legacyListing: null, rejection: null };
     }
   } else {
     const account = await ctx.readAccountInfo(hireRecordPda);
     if (account === null) {
-      return { isHire: false, legacyListing: null, rejection: null };
+      return { isHire: false, listing: null, legacyListing: null, rejection: null };
     }
     let accountData: unknown;
     let accountOwner: unknown;
@@ -679,7 +682,7 @@ async function hireBindingForClaim(
           `canonical hire account ${hireRecordPda} is System Program-owned but has non-empty data`,
         );
       }
-      return { isHire: false, legacyListing: null, rejection: null };
+      return { isHire: false, listing: null, legacyListing: null, rejection: null };
     }
     if (accountOwner !== AGENC_COORDINATION_PROGRAM_ADDRESS) {
       throw new Error(
@@ -711,12 +714,14 @@ async function hireBindingForClaim(
   ) {
     return {
       isHire: true,
+      listing: hireRecord.listing,
       legacyListing: null,
       rejection: "not-designated-provider",
     };
   }
   return {
     isHire: true,
+    listing: hireRecord.listing,
     legacyListing:
       hireRecord.designatedProvider === DEFAULT_ADDRESS
         ? hireRecord.listing
@@ -797,6 +802,51 @@ async function readSubmission(
 
 function hashHex(bytes: ArrayLike<number>): string {
   return Buffer.from(bytes).toString("hex");
+}
+
+/**
+ * What a job is called, from its verified job spec's `title`, as one short
+ * line of plain text: the creator's own words, so control and direction
+ * characters are dropped and it is cut to {@link MAX_JOB_TITLE_CHARS}.
+ */
+export function jobTitle(content: Uint8Array): string | undefined {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(content));
+  } catch {
+    return undefined;
+  }
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const title = (payload as { title?: unknown }).title;
+  if (typeof title !== "string") return undefined;
+  const line = title
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (line.length === 0) return undefined;
+  const characters = [...line];
+  return characters.length <= MAX_JOB_TITLE_CHARS
+    ? line
+    : `${characters.slice(0, MAX_JOB_TITLE_CHARS - 1).join("").trimEnd()}…`;
+}
+
+/** The fields of an in-flight marker that every later phase keeps. */
+function keptMarkerFields(
+  marker: OpenClaim,
+): Pick<
+  OpenClaim,
+  "claimTransactionSignature" | "revisionSubmissionCount" | "title" | "listing"
+> {
+  return {
+    ...(marker.claimTransactionSignature !== undefined
+      ? { claimTransactionSignature: marker.claimTransactionSignature }
+      : {}),
+    ...(marker.revisionSubmissionCount !== undefined
+      ? { revisionSubmissionCount: marker.revisionSubmissionCount }
+      : {}),
+    ...(marker.title !== undefined ? { title: marker.title } : {}),
+    ...(marker.listing !== undefined ? { listing: marker.listing } : {}),
+  };
 }
 
 /** Pending/accepted means the submission transaction definitively landed. */
@@ -933,6 +983,9 @@ function restoreRevisionRound(
 ): void {
   const state = loadState(ctx.stateDir);
   const priorMarker = state.openClaim?.task === task ? state.openClaim : null;
+  const priorRecord = state.submissions.find((record) => record.task === task);
+  const title = priorMarker?.title ?? priorRecord?.title;
+  const listing = priorMarker?.listing ?? priorRecord?.listing;
   state.submissions = state.submissions.filter(
     (record) => record.task !== task,
   );
@@ -944,6 +997,8 @@ function restoreRevisionRound(
       ? { claimTransactionSignature: priorMarker.claimTransactionSignature }
       : {}),
     revisionSubmissionCount: submission.submissionCount,
+    ...(title !== undefined ? { title } : {}),
+    ...(listing !== undefined ? { listing } : {}),
   };
   saveState(ctx.stateDir, state);
   ctx.log({
@@ -982,6 +1037,7 @@ function commitSubmission(
   }
   // Clear the WAL only after capacity has been established. A capacity error
   // leaves the exact landed-submission intent available to recovery.
+  const marker = state.openClaim?.task === task ? state.openClaim : null;
   state.openClaim = null;
   const record: SubmissionRecord = {
     task: task as string,
@@ -991,6 +1047,8 @@ function commitSubmission(
     rewardAmount: intent.rewardAmount,
     submittedAt: options.submittedAt ?? new Date().toISOString(),
     settled: false,
+    ...(marker?.title !== undefined ? { title: marker.title } : {}),
+    ...(marker?.listing !== undefined ? { listing: marker.listing } : {}),
   };
   state.submissions.push(record);
   saveState(ctx.stateDir, state);
@@ -1125,12 +1183,7 @@ async function continueExecutedResult(
       task: task as string,
       claimedAt: marker.claimedAt,
       phase: "uploading",
-      ...(marker.claimTransactionSignature !== undefined
-        ? { claimTransactionSignature: marker.claimTransactionSignature }
-        : {}),
-      ...(marker.revisionSubmissionCount !== undefined
-        ? { revisionSubmissionCount: marker.revisionSubmissionCount }
-        : {}),
+      ...keptMarkerFields(marker),
       execution,
     };
     saveState(ctx.stateDir, uploadingState);
@@ -1166,12 +1219,7 @@ async function continueExecutedResult(
     task: task as string,
     claimedAt: marker.claimedAt,
     phase: "submitting",
-    ...(marker.claimTransactionSignature !== undefined
-      ? { claimTransactionSignature: marker.claimTransactionSignature }
-      : {}),
-    ...(marker.revisionSubmissionCount !== undefined
-      ? { revisionSubmissionCount: marker.revisionSubmissionCount }
-      : {}),
+    ...keptMarkerFields(marker),
     submission: intent,
   };
   saveState(ctx.stateDir, submittingState);
@@ -1218,12 +1266,7 @@ async function executeAndSubmit(
     task: task as string,
     claimedAt: marker.claimedAt,
     phase: "executed",
-    ...(marker.claimTransactionSignature !== undefined
-      ? { claimTransactionSignature: marker.claimTransactionSignature }
-      : {}),
-    ...(marker.revisionSubmissionCount !== undefined
-      ? { revisionSubmissionCount: marker.revisionSubmissionCount }
-      : {}),
+    ...keptMarkerFields(marker),
     execution,
   };
   saveState(ctx.stateDir, executedState);
@@ -1361,11 +1404,17 @@ export async function processCandidate(
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
   // reconciles the canonical claim PDA before considering another task.
+  const title = jobTitle(verified.content);
+  const labels = {
+    ...(title !== undefined ? { title } : {}),
+    ...(hireBinding.listing !== null ? { listing: hireBinding.listing as string } : {}),
+  };
   const claimingState = loadState(ctx.stateDir);
   claimingState.openClaim = {
     task: task as string,
     claimedAt: claimStartedAt,
     phase: "claiming",
+    ...labels,
   };
   saveState(ctx.stateDir, claimingState);
 
@@ -1391,9 +1440,10 @@ export async function processCandidate(
       task: task as string,
       claimedAt: claimStartedAt,
       phase: "claimed",
+      ...labels,
     };
     saveState(ctx.stateDir, claimedState);
-    ctx.log({ event: "task.claimed", task, signature, parentTask });
+    ctx.log({ event: "task.claimed", task, signature, parentTask, ...labels });
   } catch (error) {
     const reason = redactSensitiveText(
       error instanceof AgencError
@@ -1424,6 +1474,7 @@ export async function processCandidate(
           ...(ambiguousSignature !== undefined
             ? { claimTransactionSignature: ambiguousSignature }
             : {}),
+          ...labels,
         };
         saveState(ctx.stateDir, recoveredState);
         ctx.log({
@@ -1835,6 +1886,8 @@ export async function checkSettlements(
           claimedAt: claimTimestamp(claim, record.submittedAt),
           phase: "claimed",
           revisionSubmissionCount: submission.account.submissionCount,
+          ...(record.title !== undefined ? { title: record.title } : {}),
+          ...(record.listing !== undefined ? { listing: record.listing } : {}),
         };
         revisionRestored = true;
         stateChanged = true;

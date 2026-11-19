@@ -25,6 +25,12 @@ import { address } from "@solana/kit";
 
 export const WORKER_STATE_VERSION = 1 as const;
 
+/**
+ * What a job is called, from its verified job spec: the creator's own words,
+ * kept as plain display text of at most this many characters.
+ */
+export const MAX_JOB_TITLE_CHARS = 120;
+
 /** Hard resource ceilings for the hot worker WAL/state file. */
 export const MAX_WORKER_STATE_BYTES = 16 * 1024 * 1024;
 export const MAX_UNSETTLED_SUBMISSIONS = 10_000;
@@ -75,6 +81,10 @@ export type OpenClaim = {
   execution?: ExecutionIntent;
   /** Required exactly for `submitting`. */
   submission?: SubmissionIntent;
+  /** What the job is called, from its verified job spec (display text only). */
+  title?: string;
+  /** The service listing a hired job came from. */
+  listing?: string;
 };
 
 /** One submitted result awaiting (or past) settlement. */
@@ -103,6 +113,10 @@ export type SubmissionRecord = {
   settlementSignature?: string | null;
   /** ISO timestamp settlement was observed. */
   settledAt?: string;
+  /** What the job is called, from its verified job spec (display text only). */
+  title?: string;
+  /** The service listing a hired job came from. */
+  listing?: string;
 };
 
 /** The whole persisted state. */
@@ -199,6 +213,33 @@ function taskAddress(value: unknown, label: string): string {
   return parsed;
 }
 
+function optionalTitle(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const parsed = nonempty(value, label);
+  if ([...parsed].length > MAX_JOB_TITLE_CHARS || /\p{Cc}/u.test(parsed)) {
+    fail(`${label} must be a short line of text`);
+  }
+  return parsed;
+}
+
+function optionalListing(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  return taskAddress(value, label);
+}
+
+/** The display fields a job carries from claim to ledger. */
+function jobLabels(
+  parsed: Record<string, unknown>,
+  label: string,
+): { title?: string; listing?: string } {
+  const title = optionalTitle(parsed.title, `${label}.title`);
+  const listing = optionalListing(parsed.listing, `${label}.listing`);
+  return {
+    ...(title !== undefined ? { title } : {}),
+    ...(listing !== undefined ? { listing } : {}),
+  };
+}
+
 function optionalSignature(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined;
   return nonempty(value, label);
@@ -272,6 +313,8 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "revisionSubmissionCount",
       "execution",
       "submission",
+      "title",
+      "listing",
     ],
   );
   const phase = parsed.phase;
@@ -325,6 +368,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
       : {}),
     ...(execution !== undefined ? { execution } : {}),
     ...(submission !== undefined ? { submission } : {}),
+    ...jobLabels(parsed, label),
   };
 }
 
@@ -348,6 +392,8 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       "earnedLamports",
       "settlementSignature",
       "settledAt",
+      "title",
+      "listing",
     ],
   );
   if (
@@ -440,6 +486,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
     ...(parsed.settledAt !== undefined
       ? { settledAt: iso(parsed.settledAt, `${label}.settledAt`) }
       : {}),
+    ...jobLabels(parsed, label),
   };
 }
 
