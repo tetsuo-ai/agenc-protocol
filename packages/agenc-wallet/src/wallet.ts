@@ -2006,16 +2006,28 @@ export class AgencWallet {
       if (this.#now() - job.updatedAt < window) return;
     }
     const payer = await this.#payerSigner(job);
-    const signature = await sendTidy(
-      this.#chain,
-      payer,
-      job.task as Address,
-      job.providerAgent as Address,
-    );
+    const tidy = async (): Promise<string | null> => {
+      const sent = await sendTidy(
+        this.#chain,
+        payer,
+        job.task as Address,
+        job.providerAgent as Address,
+      );
+      this.#store.update((draft) => {
+        const entry = draft.jobs[job.id];
+        if (entry === undefined) return;
+        entry.tidied = true;
+        // What came back to the main balance is not money that arrived.
+        if (entry.payer === "main") entry.balanceSettled = false;
+      });
+      return sent;
+    };
+    // Not alongside the check for money that arrived in the main balance.
+    const signature =
+      job.payer === "main" ? await this.#lock(MAIN_KEY, tidy) : await tidy();
     this.#store.update((draft) => {
       const entry = draft.jobs[job.id];
       if (entry === undefined) return;
-      entry.tidied = true;
       if (signature !== null) {
         entry.signatures.close = signature;
         this.#note(draft, {
@@ -3128,13 +3140,30 @@ export class AgencWallet {
         return;
       }
       const previous = BigInt(last);
-      if (balance === previous) return;
+      // Jobs whose returned money this look counts in, whatever it shows.
+      const settling = Object.values(this.#store.state.jobs)
+        .filter((job) => job.payer === "main" && job.balanceSettled === false)
+        .map((job) => job.id);
+      const markSettled = (draft: WalletState): void => {
+        for (const id of settling) {
+          const entry = draft.jobs[id];
+          if (entry !== undefined) entry.balanceSettled = true;
+        }
+      };
+      if (balance === previous) {
+        if (settling.length > 0) this.#store.update(markSettled);
+        return;
+      }
       // Purchases paid from the main balance move it too; only a rise that
-      // no running job explains is reported as money added.
-      const mainJobsMoving = Object.values(this.#store.state.jobs).some(
-        (job) => job.payer === "main" && !(job.phase === "done" && job.tidied) && job.phase !== "failed" && job.phase !== "declined",
-      );
+      // no running job explains is reported as money added. A job that just
+      // ended gave its price or deposits back, and that is no arrival either.
+      const mainJobsMoving =
+        settling.length > 0 ||
+        Object.values(this.#store.state.jobs).some(
+          (job) => job.payer === "main" && !(job.phase === "done" && job.tidied) && job.phase !== "failed" && job.phase !== "declined",
+        );
       this.#store.update((draft) => {
+        markSettled(draft);
         draft.lastMainLamports = balance.toString();
         if (balance > previous && !mainJobsMoving) {
           this.#note(draft, {

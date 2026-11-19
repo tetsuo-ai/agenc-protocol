@@ -190,6 +190,13 @@ export interface JobRecord {
   rating: number | null;
   /** The finished job's deposits were collected and its slot released. */
   tidied: boolean;
+  /**
+   * False while what this job gave back to the main balance (its price on a
+   * refund, its deposits when it was tidied) has not yet been counted into
+   * the balance the wallet compares against, so it is not taken for money
+   * that arrived. Absent on jobs from before this existed: counted.
+   */
+  balanceSettled?: boolean;
   signatures: {
     hire?: string;
     /** The buyer's payment for the safety check of the request. */
