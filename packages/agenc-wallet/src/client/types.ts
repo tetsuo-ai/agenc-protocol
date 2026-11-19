@@ -98,6 +98,21 @@ export interface EarnView {
    * description, which are not returned. Null when it could not be read.
    */
   offerCost: Money | null;
+  /**
+   * True once the person stopped this agent earning for good
+   * (`agents.retire`). It takes no jobs and offers nothing again; its money
+   * stays its own until the person takes it back.
+   */
+  retired: boolean;
+  /**
+   * Whether the agent can be stopped earning for good, which brings its
+   * deposit for taking jobs (`setAside`) back to its own money. Null when
+   * there is no deposit to bring back: it never took jobs, or it was stopped
+   * already. `refusal` is the sentence `agents.retire` would refuse with
+   * right now (it still takes jobs, or a job of its is not finished), else
+   * null.
+   */
+  retire: { refusal: string | null } | null;
 }
 
 export interface AgentView {

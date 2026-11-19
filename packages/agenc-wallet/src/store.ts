@@ -106,6 +106,12 @@ export interface AgentRecord {
     offers?: OfferRecord[];
     /** Journals written before several services: read once, then gone. */
     offer?: OfferRecord | null;
+    /**
+     * When the person stopped this agent earning for good: its services left
+     * the marketplace for good and it was retired there, which brought its
+     * deposit back. It takes no jobs again. Absent until then.
+     */
+    retiredAt?: number | null;
   };
 }
 

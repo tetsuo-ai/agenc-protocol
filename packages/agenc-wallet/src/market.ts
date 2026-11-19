@@ -1252,19 +1252,116 @@ export async function sendUpdateListing(
   return result.signature;
 }
 
-/** Take a listing off offer (paused) or put it back (active). */
+/**
+ * Put a listing on offer ("Active"), take it off ("Paused"), or take it off
+ * for good ("Retired", which cannot be undone).
+ */
 export async function sendListingState(
   chain: Chain,
   provider: KeyPairSigner,
-  input: { listing: Address; providerAgent: Address; active: boolean },
+  input: { listing: Address; providerAgent: Address; state: "Active" | "Paused" | "Retired" },
 ): Promise<string> {
   const result = await chain.clientFor(provider).send([
     await facade.setServiceListingState({
       listing: input.listing,
       authority: provider,
       providerAgent: input.providerAgent,
-      state: input.active ? "Active" : "Paused",
+      state: input.state,
     }),
+  ]);
+  return result.signature;
+}
+
+// ------------------------------------------------- stopping for good
+
+/** `AgentRegistration._reserved` of an agent that was retired (`deregister_agent`). */
+const RETIRED_IDENTITY_MARKER = [0x52, 0x45, 0x54, 0x44]; // "RETD"
+
+/** True once the agent was retired on the marketplace. It can never take a job again. */
+export function isRetiredAgent(agent: AgentRegistration): boolean {
+  const reserved = agent.reserved;
+  return (
+    reserved.length === RETIRED_IDENTITY_MARKER.length &&
+    RETIRED_IDENTITY_MARKER.every((byte, index) => reserved[index] === byte)
+  );
+}
+
+/**
+ * Every listing a provider agent has on the marketplace, in any state, with
+ * its address. The wallet's own records name the ones it made; this also
+ * finds one it replaced or forgot.
+ */
+export async function listingsOf(
+  chain: Chain,
+  providerAgent: Address,
+): Promise<Array<{ address: Address; listing: ServiceListing }>> {
+  const found = await resolveProgramAccountsTransport(chain.gpa).getProgramAccounts({
+    filters: [
+      { memcmp: { offset: 0, bytes: Uint8Array.from(getServiceListingDiscriminatorBytes()) } },
+      { memcmp: { offset: 8, bytes: Uint8Array.from(getAddressEncoder().encode(providerAgent)) } },
+    ],
+  });
+  const out: Array<{ address: Address; listing: ServiceListing }> = [];
+  for (const entry of found) {
+    try {
+      const listing = getServiceListingDecoder().decode(entry.data);
+      if (listing.providerAgent === providerAgent) out.push({ address: entry.address, listing });
+    } catch {
+      // Not a listing this wallet can read.
+    }
+  }
+  return out;
+}
+
+/** Offset of `HireRecord.designated_provider`: discriminator, task, listing, operator, fee, bump. */
+const HIRE_DESIGNATED_PROVIDER_OFFSET = 8 + 32 + 32 + 32 + 2 + 1;
+
+/**
+ * Hires of a provider's services that nobody has started yet: the buyer
+ * paid and waits, and only this provider may take them. A provider that
+ * stopped for good could never do them, so the buyer would wait out the
+ * whole time to deliver for nothing.
+ */
+export async function waitingHires(chain: Chain, providerAgent: Address): Promise<Address[]> {
+  const found = await resolveProgramAccountsTransport(chain.gpa).getProgramAccounts({
+    filters: [
+      { memcmp: { offset: 0, bytes: Uint8Array.from(getHireRecordDiscriminatorBytes()) } },
+      {
+        memcmp: {
+          offset: HIRE_DESIGNATED_PROVIDER_OFFSET,
+          bytes: Uint8Array.from(getAddressEncoder().encode(providerAgent)),
+        },
+      },
+    ],
+  });
+  const waiting: Address[] = [];
+  for (const entry of found) {
+    let hire: HireRecord;
+    try {
+      hire = getHireRecordDecoder().decode(entry.data);
+    } catch {
+      continue;
+    }
+    if (hire.designatedProvider !== providerAgent) continue;
+    const task = await readTask(chain, hire.task);
+    if (task !== null && Number(task.status) === TaskStatus.Open) waiting.push(hire.task);
+  }
+  return waiting;
+}
+
+/**
+ * Retire a provider agent on the marketplace (`deregister_agent`): it can
+ * never take a job again, and every lamport its record holds above the
+ * network's minimum, its deposit for taking jobs, goes back to its wallet.
+ * The marketplace refuses while the agent still holds a job.
+ */
+export async function sendRetireAgent(
+  chain: Chain,
+  authority: KeyPairSigner,
+  agent: Address,
+): Promise<string> {
+  const result = await chain.clientFor(authority).send([
+    await facade.deregisterAgent({ agent, authority }),
   ]);
   return result.signature;
 }

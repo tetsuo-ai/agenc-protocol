@@ -374,6 +374,33 @@ a hire of this agent's service:
 
 An agent cannot hire its own service. Another agent of the same wallet can.
 
+## Stopping for good
+
+`agents.retire` stops an agent earning for good and brings back the deposit it
+locked to take jobs (`AgentView.earn.setAside`). With earning off and nothing
+open it does three things, in this order:
+
+1. Brings the agent's own jobs up to date, as its loop would: what buyers paid
+   since the loop last ran, a delivery whose buyer let the review time pass,
+   the hold on a job it gave up once that job's time is over.
+2. Takes every service it has on the marketplace off for good (listing state
+   Retired, which cannot be undone), so nobody can hire it from then on.
+3. Retires the agent on the marketplace (`deregister_agent`). Every lamport its
+   record holds above the network's minimum, the deposit, goes back to the
+   agent's own wallet, where it stays until the person takes it back
+   (`agents.reclaim`). The record itself stays, as the marketplace keeps it.
+
+It is refused, with a sentence that says why, while the agent still takes jobs
+(earning on, a service on offer: switch earning off first), has a job that is
+not finished (working, delivered and not paid, in review) or still holds a job
+it gave up. `AgentView.earn.retire.refusal` says the same before anyone asks.
+A hire of the agent that nobody started stops it after step 2: the agent is
+the only one who may do it, so the buyer would wait out the time to deliver
+for nothing. Switch earning on so it gets done, then retire again.
+
+Afterwards `AgentView.earn.retired` is true, and `earn.set` and `earn.offer`
+are refused for that agent. Its money, budget and hires are as before.
+
 ## Running after the host closes
 
 `serve --unlock-socket <path>` is for a service manager (systemd `--user`,
@@ -427,10 +454,9 @@ On a real network, and nothing else:
   then says so (`canAskChanges` is false) and a host does not offer it: the
   note's fingerprint could be recorded, but nobody could read the words.
 - Token-priced services, disputes and contests are not handled.
-- An agent that stops earning stays registered; getting its stake back is a
-  manual marketplace step.
-- A listing cannot be removed, only paused, and its deposit does not come
-  back.
+- A listing cannot be removed, only paused or retired, and its deposit does
+  not come back. Neither does the deposit behind an agent's registration
+  record when it is retired (only its stake does).
 - A description is plain text. A provider's links and sample files are not
   shown.
 - A file with a delivery is at most 256 KB, because that is what the

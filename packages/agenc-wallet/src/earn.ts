@@ -12,8 +12,10 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Address, KeyPairSigner } from "@solana/kit";
-import { findAgentPda, getAgentRegistrationDecoder } from "@tetsuo-ai/marketplace-sdk";
+import { findAgentPda, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
+  acquireStateLock,
+  checkSettlements,
   claimFundingRequirement,
   clearWorkerPause,
   DEFAULT_ENDPOINT,
@@ -23,13 +25,16 @@ import {
   readMinAgentStake,
   registrationFundingRequirement,
   runUp,
+  runUpkeep,
   type ExecutorMode,
+  type WorkerAgent,
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { describeError } from "./errors.js";
+import { readAgent } from "./market.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import type { MarketServices } from "./services.js";
 
@@ -265,18 +270,61 @@ export class EarnHost {
   }
 
   /**
+   * The agent's record on the marketplace, or null when it has never
+   * registered: its deposit for taking jobs (`stake`), how many jobs it holds
+   * (`activeTasks`), and whether it was retired.
+   */
+  async registration(agentId: string): Promise<{ address: Address; account: AgentRegistration } | null> {
+    const address = await this.marketplaceAgent(agentId);
+    if (address === null) return null;
+    const account = await readAgent(this.#chain, address);
+    return account === null ? null : { address, account };
+  }
+
+  /**
    * Lamports locked as this agent's marketplace deposit (its stake), or 0
    * when it has never registered.
    */
   async setAside(agentId: string): Promise<bigint> {
-    const agent = await this.marketplaceAgent(agentId);
-    if (agent === null) return 0n;
-    const data = await this.#chain.readAccount(agent);
-    if (data === null) return 0n;
+    return (await this.registration(agentId))?.account.stake ?? 0n;
+  }
+
+  /**
+   * Bring the agent's own jobs up to date once, without looking for new
+   * work: record what was paid since its loop last ran, have a delivery whose
+   * buyer let the review time pass paid, and give back the hold on a job it
+   * gave up once that job's time is over. Its loop must not be running: this
+   * is for an agent that takes no jobs (earning switched off), before it
+   * stops for good. Failures are logged; the chain stays the judge of what
+   * is still open.
+   */
+  async tidyUp(agent: EarnAgent): Promise<void> {
+    if (this.#running.has(agent.agentId)) return;
+    const stateDir = this.stateDir(agent.agentId);
+    let agentIdHex: string | null;
     try {
-      return getAgentRegistrationDecoder().decode(data).stake;
+      agentIdHex = loadState(stateDir).agentIdHex;
     } catch {
-      return 0n;
+      return;
+    }
+    if (agentIdHex === null) return;
+    const agentId = hexToBytes(agentIdHex);
+    const [agentPda] = await findAgentPda({ agentId });
+    const worker: WorkerAgent = { agentId, agentPda, registered: true, justRegistered: false };
+    const release = acquireStateLock(stateDir);
+    try {
+      const ctx: WorkerContext = {
+        ...this.#chainContext(agent, stateDir),
+        config: this.#config(agent, []),
+        log: (event) => this.#workerEvent(agent.agentId, event),
+      };
+      await checkSettlements(ctx, worker);
+      await runUpkeep(ctx, worker);
+      await checkSettlements(ctx, worker);
+    } catch (error) {
+      this.#log(`earn ${agent.agentId}: tidying up: ${describeError(error)}`);
+    } finally {
+      release();
     }
   }
 
@@ -425,11 +473,6 @@ export class EarnHost {
         .replaceAll("{outbox}", fileLinkPrefix === null ? "" : outboxDir)
         .replaceAll("{files}", fileLinkPrefix ?? "")
         .replaceAll("{pay}", pay === null ? "" : String(Math.max(0, Math.trunc(pay))));
-    const maxReward =
-      this.#options.maxRewardLamports === undefined
-        ? DEFAULT_MAX_REWARD_LAMPORTS
-        : this.#options.maxRewardLamports;
-
     const setState = (wanted: EarnState, wantedError: string | null = null): void => {
       // A stopped agent stays shown as stopped, whatever the loop does.
       const state: EarnState = entry.paused !== null ? "error" : wanted;
@@ -486,31 +529,9 @@ export class EarnHost {
           entry.paused = typeof event.reason === "string" ? event.reason : "unknown failure";
           setState("error");
           break;
-        case "settlement.auto-accepted":
-        case "claim.released":
-          this.#log(`earn ${agent.agentId}: ${event.event} ${String(event.task ?? "")}`);
-          break;
-        case "settlement.auto-accept-failed":
-        case "claim.release-failed":
-          this.#log(
-            `earn ${agent.agentId}: ${event.event} ${String(event.task ?? "")}: ${String(event.reason ?? "").slice(0, 300)}`,
-          );
-          break;
-        case "settlement.observed": {
+        case "settlement.observed":
           setState("watching");
-          const earned =
-            typeof event.earnedLamports === "string" ? BigInt(event.earnedLamports) : 0n;
-          if (event.outcome === "accepted" && earned > 0n && typeof event.task === "string") {
-            this.#notify(agent.agentId, {
-              type: "paid",
-              task: event.task,
-              earnedLamports: earned,
-              signature:
-                typeof event.settlementSignature === "string" ? event.settlementSignature : null,
-            });
-          }
           break;
-        }
         case "sweep.candidates":
           if (entry.state === "starting") setState("watching");
           break;
@@ -524,50 +545,19 @@ export class EarnHost {
         default:
           break;
       }
-      // Everything the worker decides, for diagnosing why a job was not taken.
-      if (process.env.AGENC_WALLET_EARN_DEBUG === "1") {
-        this.#log(`earn ${agent.agentId}: ${JSON.stringify(event)}`);
-      }
+      this.#workerEvent(agent.agentId, event);
     };
 
     const ctx: WorkerContext = {
+      ...this.#chainContext(agent, stateDir),
       config: {
-        capabilities: 1n,
-        minRewardLamports: agent.minRewardLamports,
-        maxRewardLamports: maxReward,
-        allowUnboundedReward: maxReward === null,
-        executor: executor.argv.map(fill),
+        ...this.#config(agent, executor.argv.map(fill)),
         executorMode: executor.mode,
         executorEnvAllowlist: executor.envAllowlist,
         resultUploader: uploader?.url ?? null,
-        creatorAllowlist: null,
-        allowAnyCreator: true,
-        endpoint: this.#options.endpoint ?? DEFAULT_ENDPOINT,
         executorTimeoutMs: executor.timeoutMs,
-        pollIntervalMs: this.#options.pollIntervalMs ?? 15_000,
-        ...(this.#options.maxJobAttempts !== undefined
-          ? { maxJobAttempts: this.#options.maxJobAttempts }
-          : {}),
-        ...(this.#options.retryDelayMs !== undefined
-          ? { retryDelayMs: this.#options.retryDelayMs }
-          : {}),
-        ...(this.#options.maxFailedJobsInARow !== undefined
-          ? { maxFailedJobsInARow: this.#options.maxFailedJobsInARow }
-          : {}),
       },
-      client: this.#chain.clientFor(agent.signer),
-      signer: agent.signer,
-      gpa: this.#chain.gpa,
-      readAccount: (account: Address) => this.#chain.readAccount(account),
-      readAccountInfo: this.#chain.readAccountInfo,
-      stateDir,
       log,
-      getBalance: (account) => this.#chain.getBalance(account),
-      getMinimumBalanceForRentExemption: (space) =>
-        this.#chain.getMinimumBalanceForRentExemption(space),
-      // Review windows and claim times run on the chain's clock.
-      clusterTime: () => this.#chain.clusterTime(),
-      signal: this.#shutdown.signal,
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
         : {}),
@@ -576,9 +566,6 @@ export class EarnHost {
         : {}),
       ...(this.#services.taskThreadTransport !== undefined
         ? { taskThreadTransport: this.#services.taskThreadTransport }
-        : {}),
-      ...(this.#chain.findSettlementSignature !== undefined
-        ? { findSettlementSignature: (task) => this.#chain.findSettlementSignature!(task) }
         : {}),
     };
 
@@ -642,6 +629,96 @@ export class EarnHost {
         clearInterval(refresh);
         signal.removeEventListener("abort", endRun);
       }
+    }
+  }
+
+  /** The worker settings every run for this agent shares. */
+  #config(agent: EarnAgent, argv: string[]): WorkerContext["config"] {
+    const executor = this.#options.executor;
+    const maxReward =
+      this.#options.maxRewardLamports === undefined
+        ? DEFAULT_MAX_REWARD_LAMPORTS
+        : this.#options.maxRewardLamports;
+    return {
+      capabilities: 1n,
+      minRewardLamports: agent.minRewardLamports,
+      maxRewardLamports: maxReward,
+      allowUnboundedReward: maxReward === null,
+      executor: argv,
+      executorMode: executor?.mode ?? "sandboxed",
+      executorEnvAllowlist: executor?.envAllowlist ?? [],
+      resultUploader: null,
+      creatorAllowlist: null,
+      allowAnyCreator: true,
+      endpoint: this.#options.endpoint ?? DEFAULT_ENDPOINT,
+      executorTimeoutMs: executor?.timeoutMs ?? 60_000,
+      pollIntervalMs: this.#options.pollIntervalMs ?? 15_000,
+      ...(this.#options.maxJobAttempts !== undefined
+        ? { maxJobAttempts: this.#options.maxJobAttempts }
+        : {}),
+      ...(this.#options.retryDelayMs !== undefined
+        ? { retryDelayMs: this.#options.retryDelayMs }
+        : {}),
+      ...(this.#options.maxFailedJobsInARow !== undefined
+        ? { maxFailedJobsInARow: this.#options.maxFailedJobsInARow }
+        : {}),
+    };
+  }
+
+  /** How the worker reaches the chain as this agent. */
+  #chainContext(agent: EarnAgent, stateDir: string): Omit<WorkerContext, "config" | "log"> {
+    return {
+      client: this.#chain.clientFor(agent.signer),
+      signer: agent.signer,
+      gpa: this.#chain.gpa,
+      readAccount: (account: Address) => this.#chain.readAccount(account),
+      readAccountInfo: this.#chain.readAccountInfo,
+      stateDir,
+      getBalance: (account) => this.#chain.getBalance(account),
+      getMinimumBalanceForRentExemption: (space) =>
+        this.#chain.getMinimumBalanceForRentExemption(space),
+      // Review windows and claim times run on the chain's clock.
+      clusterTime: () => this.#chain.clusterTime(),
+      signal: this.#shutdown.signal,
+      ...(this.#chain.findSettlementSignature !== undefined
+        ? { findSettlementSignature: (task: Address) => this.#chain.findSettlementSignature!(task) }
+        : {}),
+    };
+  }
+
+  /** What every run reports alike: pay that arrived, and its own upkeep. */
+  #workerEvent(agentId: string, event: WorkerLogEvent): void {
+    switch (event.event) {
+      case "settlement.auto-accepted":
+      case "claim.released":
+        this.#log(`earn ${agentId}: ${event.event} ${String(event.task ?? "")}`);
+        break;
+      case "settlement.auto-accept-failed":
+      case "claim.release-failed":
+        this.#log(
+          `earn ${agentId}: ${event.event} ${String(event.task ?? "")}: ${String(event.reason ?? "").slice(0, 300)}`,
+        );
+        break;
+      case "settlement.observed": {
+        const earned =
+          typeof event.earnedLamports === "string" ? BigInt(event.earnedLamports) : 0n;
+        if (event.outcome === "accepted" && earned > 0n && typeof event.task === "string") {
+          this.#notify(agentId, {
+            type: "paid",
+            task: event.task,
+            earnedLamports: earned,
+            signature:
+              typeof event.settlementSignature === "string" ? event.settlementSignature : null,
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    // Everything the worker decides, for diagnosing why a job was not taken.
+    if (process.env.AGENC_WALLET_EARN_DEBUG === "1") {
+      this.#log(`earn ${agentId}: ${JSON.stringify(event)}`);
     }
   }
 }

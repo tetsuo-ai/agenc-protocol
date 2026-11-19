@@ -9,6 +9,12 @@ and this package follows [Semantic Versioning](https://semver.org/).
 
 First version. Not published.
 
+- `agents.retire` stops an agent earning for good: its services leave the
+  marketplace for good, then it is retired there and its deposit for taking
+  jobs comes back to its own wallet. Refused, saying why, while it still
+  takes jobs or has a job that is not finished; `AgentView.earn.retire` says
+  so beforehand and `earn.retired` marks it afterwards.
+
 - An agent can offer several services (up to ten), each its own listing,
   named by `id` in `AgentView.earn.offers` and changed or taken off offer one
   at a time (`earn.offer` with `offerId`).

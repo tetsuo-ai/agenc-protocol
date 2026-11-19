@@ -61,6 +61,8 @@ import {
   providerHasRecord,
   purchaseDeposits,
   ratingCost,
+  isRetiredAgent,
+  listingsOf,
   readAgent,
   readHireableListing,
   readListing,
@@ -79,11 +81,13 @@ import {
   sendRating,
   sendRejectAndFreeze,
   sendRequest,
+  sendRetireAgent,
   sendTidy,
   sendUpdateListing,
   TASK_ACCOUNT_SPACE,
   taskAddressFor,
   turnDownReason,
+  waitingHires,
   type ListingTerms,
   type RequestIntent,
 } from "./market.js";
@@ -99,6 +103,7 @@ import {
   type ApprovalPayment,
   type PublishedJob,
 } from "./services.js";
+import type { AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
   acquireServiceLock,
   StateStore,
@@ -247,6 +252,28 @@ const MAX_REQUEST_DAYS = 30;
 const POST_COST_TTL_MS = 10 * 60_000;
 const LISTING_STATE_ACTIVE = 0;
 const LISTING_STATE_PAUSED = 1;
+const LISTING_STATE_RETIRED = 2;
+
+/** What the marketplace's record of an earning agent says about stopping it for good. */
+interface RegistrationFacts {
+  /** Its deposit for taking jobs. */
+  stake: bigint;
+  /** Jobs it holds: taken and not yet paid, or given up and not yet let go. */
+  activeTasks: number;
+  /** Turned-down work of its, or disputes, a reviewer has not settled. */
+  disputes: number;
+  /** Retired already: it can never take a job again. */
+  retired: boolean;
+}
+
+function registrationFacts(account: AgentRegistration): RegistrationFacts {
+  return {
+    stake: account.stake,
+    activeTasks: account.activeTasks,
+    disputes: account.disputesAsDefendant + account.activeDisputeVotes,
+    retired: isRetiredAgent(account),
+  };
+}
 
 export interface WalletConfig {
   /** Absolute folder for the vault, the journal and the earn ledgers. */
@@ -452,6 +479,8 @@ export class AgencWallet {
   #closed = false;
   /** Set while closing: every service comes off offer, since nobody will do the work. */
   #closing = false;
+  /** Agents being stopped earning for good right now. */
+  readonly #retiring = new Set<string>();
   /** The smallest pay each running earn loop was started with. */
   readonly #earnFloor = new Map<string, bigint>();
   /** Who offers each service and what buyers paid them, read in the background. */
@@ -778,10 +807,11 @@ export class AgencWallet {
     agent: AgentRecord,
     balance: bigint,
     rate: number | null,
-    setAside: bigint,
+    facts: RegistrationFacts | null,
     offerCost: bigint | null,
   ): AgentView {
     const earn = this.#earn.state(agent.id);
+    const retired = agent.earn.retiredAt != null || facts?.retired === true;
     // A service the person took off offer is still listed, so it can be
     // offered again.
     const offers = agentOffers(agent).map((offer) => this.#offerView(agent, offer, rate));
@@ -797,15 +827,20 @@ export class AgencWallet {
       earned: money(agent.earnedLamports, rate),
       policy: agent.policy,
       earn: {
-        enabled: agent.earn.enabled,
-        state: agent.earn.enabled ? earn.state : "off",
+        enabled: agent.earn.enabled && !retired,
+        state: agent.earn.enabled && !retired ? earn.state : "off",
         lastError: earn.lastError ?? agent.earn.lastError,
         jobsDone: agent.earn.jobsDone,
         minPayCents: agent.earn.minPayCents,
-        setAside: money(setAside, rate),
+        setAside: money(facts?.stake ?? 0n, rate),
         offers,
         offer: offers.find((offer) => offer.wanted) ?? offers[0] ?? null,
         offerCost: offerCost === null ? null : money(offerCost, rate),
+        retired,
+        retire:
+          retired || facts === null || facts.stake === 0n
+            ? null
+            : { refusal: this.#retireRefusal(agent, facts) },
       },
       createdAt: agent.createdAt,
     };
@@ -818,7 +853,7 @@ export class AgencWallet {
       agent,
       balances.values.get(agentId) ?? 0n,
       rate,
-      await this.#setAside(agent),
+      await this.#registrationFacts(agent),
       await this.#offerCost(),
     );
   }
@@ -847,8 +882,10 @@ export class AgencWallet {
    * registered, whether or not taking jobs is switched on, so it is shown
    * either way. An agent that never registered costs no network read.
    */
-  async #setAside(agent: AgentRecord): Promise<bigint> {
-    return this.#earn.setAside(agent.id).catch(() => 0n);
+  /** The agent's record on the marketplace, or null when it never registered (or cannot be read). */
+  async #registrationFacts(agent: AgentRecord): Promise<RegistrationFacts | null> {
+    const found = await this.#earn.registration(agent.id).catch(() => null);
+    return found === null ? null : registrationFacts(found.account);
   }
 
   #ratingCostLamports: bigint | null = null;
@@ -914,7 +951,7 @@ export class AgencWallet {
     const [balances, rate] = await Promise.all([this.#readBalances(), this.#displayRate()]);
     const state = this.#store.state;
     const ordered = Object.values(state.agents).sort((a, b) => a.createdAt - b.createdAt);
-    const setAside = await Promise.all(ordered.map((agent) => this.#setAside(agent)));
+    const facts = await Promise.all(ordered.map((agent) => this.#registrationFacts(agent)));
     const offerCost = await this.#offerCost();
     return {
       network: this.#chain.network,
@@ -925,7 +962,7 @@ export class AgencWallet {
       },
       held: money(this.#heldBy(null), rate),
       agents: ordered.map((agent, index) =>
-        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, setAside[index]!, offerCost),
+        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, facts[index] ?? null, offerCost),
       ),
       solUsd: rate,
       pendingApprovals: Object.values(state.approvals).filter(
@@ -3338,6 +3375,7 @@ export class AgencWallet {
   /** Switch "take jobs while idle" on or off for an agent. Owner only. */
   async setEarn(agentId: string, enabled: boolean, minPayCents?: number): Promise<AgentView> {
     const agent = this.#agentRecord(agentId);
+    if (enabled) this.#refuseIfRetired(agent);
     if (minPayCents !== undefined && (!Number.isFinite(minPayCents) || minPayCents < 0)) {
       throw new WalletError("BAD_REQUEST", "The smallest pay must be zero or more.");
     }
@@ -3381,6 +3419,184 @@ export class AgencWallet {
     return this.#oneAgentView(agentId);
   }
 
+  /** A stopped agent takes no jobs and offers nothing, ever. */
+  #refuseIfRetired(agent: AgentRecord): void {
+    if (agent.earn.retiredAt != null || this.#retiring.has(agent.id)) {
+      throw new WalletError("NOT_ALLOWED", `${agent.name} stopped earning for good.`);
+    }
+  }
+
+  /**
+   * Why the agent cannot stop earning for good right now, in plain words, or
+   * null when nothing the wallet knows of stands in the way. `facts` is its
+   * record on the marketplace.
+   */
+  #retireRefusal(agent: AgentRecord, facts: RegistrationFacts): string | null {
+    if (agent.earn.enabled) {
+      const onOffer = agentOffers(agent).find((offer) => offer.wanted);
+      return onOffer !== undefined
+        ? `${agent.name} still offers “${onOffer.name}”. Switch off Earns first.`
+        : `${agent.name} is still taking jobs. Switch off Earns first.`;
+    }
+    if (facts.disputes > 0) {
+      return `A reviewer is still looking at a job ${agent.name} did. Try again once that is settled.`;
+    }
+    if (facts.activeTasks > 0) {
+      const jobs = this.#earn.jobs(agent.id);
+      if (jobs.some((job) => job.state === "working")) {
+        return `${agent.name} is still doing a job. Try again once it is paid.`;
+      }
+      if (jobs.some((job) => job.state === "delivered")) {
+        return `${agent.name} is waiting to be paid for a job. Try again once it is paid.`;
+      }
+      return `${agent.name} still holds a job it gave up. Try again once that job's time runs out.`;
+    }
+    return null;
+  }
+
+  /**
+   * Stop an agent earning for good. Owner only. Refused, with a sentence
+   * that says why, while it still takes jobs (Earns on, a service on offer),
+   * has a job that is not finished or holds one. Otherwise its own jobs are
+   * brought up to date, every service it has on the marketplace is taken off
+   * for good, and then the agent is retired there, which brings its deposit
+   * for taking jobs back to its own wallet. A hire of it that nobody started
+   * stops it just before that, since the buyer would wait for nothing.
+   */
+  async retireAgent(agentId: string): Promise<AgentView> {
+    const first = this.#agentRecord(agentId);
+    if (first.earn.retiredAt != null) return this.#oneAgentView(agentId);
+    if (this.#retiring.has(agentId)) {
+      throw new WalletError("BUSY", `${first.name} is already stopping.`);
+    }
+    this.#retiring.add(agentId);
+    try {
+      // Not alongside a step that puts one of its services on offer.
+      await this.#lock(`offer:${agentId}`, () => this.#retire(agentId));
+    } finally {
+      this.#retiring.delete(agentId);
+    }
+    this.#dropBalances();
+    this.#emit({ type: "overview" });
+    this.#emit({ type: "activity" });
+    return this.#oneAgentView(agentId);
+  }
+
+  async #retire(agentId: string): Promise<void> {
+    const agent = this.#agentRecord(agentId);
+    if (agent.earn.enabled) {
+      throw new WalletError(
+        "NOT_ALLOWED",
+        this.#retireRefusal(agent, { stake: 0n, activeTasks: 0, disputes: 0, retired: false })!,
+      );
+    }
+    const providerAgent = await this.#earn.marketplaceAgent(agentId);
+    const found = providerAgent === null ? null : await readAgent(this.#chain, providerAgent);
+    if (providerAgent === null || found === null) {
+      throw new WalletError(
+        "NOT_ALLOWED",
+        `${agent.name} has never taken jobs, so it has no deposit to get back.`,
+      );
+    }
+    if (isRetiredAgent(found)) {
+      // Retired already (the wallet stopped right after it last time).
+      this.#markRetired(agentId, null, null);
+      return;
+    }
+    // Earning is off, so its loop is stopped or finishing a job; let it end,
+    // then bring its own jobs up to date: what was paid meanwhile, a buyer
+    // who let the review time pass, a job it gave up whose time is over.
+    await this.#earn.stop(agentId);
+    const signer = await this.#vault.signer(agent.keyId);
+    await this.#earn.tidyUp({ agentId, signer, minRewardLamports: 0n });
+    const now = await readAgent(this.#chain, providerAgent);
+    if (now === null) {
+      throw new WalletError("NETWORK", "Market could not read the marketplace right now. Try again in a moment.");
+    }
+    const refusal = this.#retireRefusal(this.#agentRecord(agentId), registrationFacts(now));
+    if (refusal !== null) throw new WalletError("NOT_ALLOWED", refusal);
+
+    // Its services first: once they are off the marketplace for good, nobody
+    // can hire it any more. Every listing it has counts, the ones this
+    // wallet replaced too.
+    const listings = new Map<Address, number>();
+    for (const offer of agentOffers(agent)) {
+      if (offer.listing === null) continue;
+      const account = await readListing(this.#chain, offer.listing as Address);
+      if (account !== null) listings.set(offer.listing as Address, Number(account.state));
+    }
+    for (const entry of await listingsOf(this.#chain, providerAgent)) {
+      listings.set(entry.address, Number(entry.listing.state));
+    }
+    for (const [listing, state] of listings) {
+      if (state === LISTING_STATE_RETIRED) continue;
+      const signature = await sendListingState(this.#chain, signer, {
+        listing,
+        providerAgent,
+        state: "Retired",
+      });
+      this.#store.update((draft) => {
+        const owner = draft.agents[agentId];
+        const offer = owner === undefined ? undefined : agentOffers(owner).find((entry) => entry.listing === listing);
+        if (offer !== undefined) offer.signatures.state = signature;
+      });
+    }
+    this.#store.update((draft) => {
+      const owner = draft.agents[agentId];
+      if (owner === undefined) return;
+      for (const offer of agentOffers(owner)) {
+        offer.wanted = false;
+        offer.status = "paused";
+        offer.error = null;
+      }
+    });
+
+    // A hire made before that and not started yet: only this agent may do
+    // it, so the buyer would wait out the whole time to deliver for nothing.
+    const waiting = await waitingHires(this.#chain, providerAgent);
+    if (waiting.length > 0) {
+      throw new WalletError(
+        "NOT_ALLOWED",
+        `Someone hired ${agent.name} and is waiting for the work. Switch on Earns so it gets done, then try again.`,
+      );
+    }
+
+    const before = await this.#chain.readRawAccount(providerAgent);
+    const signature = await sendRetireAgent(this.#chain, signer, providerAgent);
+    const after = await this.#chain.readRawAccount(providerAgent);
+    const returned =
+      before !== null && after !== null && before.lamports > after.lamports
+        ? before.lamports - after.lamports
+        : found.stake;
+    this.#markRetired(agentId, signature, returned);
+  }
+
+  /** Record that the agent was retired on the marketplace. */
+  #markRetired(agentId: string, signature: string | null, returned: bigint | null): void {
+    this.#store.update((draft) => {
+      const agent = draft.agents[agentId];
+      if (agent === undefined) return;
+      agent.earn.enabled = false;
+      agent.earn.lastError = null;
+      agent.earn.retiredAt = this.#now();
+      for (const offer of agentOffers(agent)) {
+        offer.wanted = false;
+        offer.status = "paused";
+        offer.error = null;
+      }
+      this.#note(draft, {
+        kind: returned === null ? "note" : "returned",
+        text:
+          returned === null
+            ? `${agent.name} stopped earning for good.`
+            : `${agent.name} stopped earning for good. Its deposit came back to its own money.`,
+        lamports: returned,
+        agentId,
+        ...(signature === null ? {} : { signature }),
+      });
+    });
+  }
+
   // -------------------------------------------------------------- offer
 
   #patchOffer(agentId: string, offerId: string, patch: (offer: OfferRecord) => void): void {
@@ -3405,6 +3621,7 @@ export class AgencWallet {
     offerId?: string,
   ): Promise<AgentView> {
     const agent = this.#agentRecord(agentId);
+    if (input !== null) this.#refuseIfRetired(agent);
     const offers = agentOffers(agent);
     if (input === null) {
       const wanted = offers.filter((offer) => offer.wanted);
@@ -3730,7 +3947,7 @@ export class AgencWallet {
         const signature = await sendListingState(
           this.#chain,
           await this.#vault.signer(agent.keyId),
-          { listing, providerAgent, active: false },
+          { listing, providerAgent, state: "Paused" },
         );
         this.#patchOffer(agentId, offerId, (entry) => {
           entry.signatures.state = signature;
@@ -3769,7 +3986,7 @@ export class AgencWallet {
       const signature = await sendListingState(
         this.#chain,
         await this.#vault.signer(agent.keyId),
-        { listing, providerAgent, active: true },
+        { listing, providerAgent, state: "Active" },
       );
       this.#patchOffer(agentId, offerId, (entry) => {
         entry.signatures.state = signature;

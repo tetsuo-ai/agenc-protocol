@@ -47,6 +47,15 @@ export interface WalletMethods {
     params: { agentId: string; amount: AmountInput | "all" };
     result: AgentView;
   };
+  /**
+   * Stop an agent earning for good: its services come off the marketplace
+   * for good, then it is retired there, which brings its deposit for taking
+   * jobs (`earn.setAside`) back to its own money. It cannot take jobs again.
+   * Refused, with a sentence that says why, while it still takes jobs (Earns
+   * on, a service on offer), has a job that is not finished or holds one, or
+   * someone hired it and waits for the work.
+   */
+  "agents.retire": { params: { agentId: string }; result: AgentView };
 
   "market.find": {
     /** `limit` is at most 50 a page; `offset` skips that many of the best matches. */
