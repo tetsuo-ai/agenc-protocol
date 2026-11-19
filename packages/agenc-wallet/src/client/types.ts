@@ -99,6 +99,13 @@ export interface EarnView {
    */
   offerCost: Money | null;
   /**
+   * What saving new words for a service already on the marketplace costs:
+   * the deposit behind a new safety check of its description and the fees,
+   * which are not returned. Paid each time the words change; a new price
+   * alone pays for no check. Null when it could not be read.
+   */
+  wordsCost: Money | null;
+  /**
    * True once the person stopped this agent earning for good
    * (`agents.retire`). It takes no jobs and offers nothing again; its money
    * stays its own until the person takes it back.

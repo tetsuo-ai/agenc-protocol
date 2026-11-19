@@ -271,6 +271,14 @@ interface RegistrationFacts {
   suspended: boolean;
 }
 
+/** What a service costs that does not come back, in lamports; null when it could not be read. */
+interface ServiceCosts {
+  /** Putting one more service on offer. */
+  offer: bigint | null;
+  /** Saving new words for a service already on the marketplace. */
+  words: bigint | null;
+}
+
 /**
  * A marketplace step during retirement, in plain words when it fails: the
  * marketplace refusing it is said as such; anything else is the network,
@@ -843,7 +851,7 @@ export class AgencWallet {
     balance: bigint,
     rate: number | null,
     facts: RegistrationFacts | null,
-    offerCost: bigint | null,
+    costs: ServiceCosts,
   ): AgentView {
     const earn = this.#earn.state(agent.id);
     const retired = agent.earn.retiredAt != null || facts?.retired === true;
@@ -870,7 +878,8 @@ export class AgencWallet {
         setAside: money(facts?.stake ?? 0n, rate),
         offers,
         offer: offers.find((offer) => offer.wanted) ?? offers[0] ?? null,
-        offerCost: offerCost === null ? null : money(offerCost, rate),
+        offerCost: costs.offer === null ? null : money(costs.offer, rate),
+        wordsCost: costs.words === null ? null : money(costs.words, rate),
         retired,
         retire:
           retired || facts === null || facts.stake === 0n
@@ -889,27 +898,31 @@ export class AgencWallet {
       balances.values.get(agentId) ?? 0n,
       rate,
       await this.#registrationFacts(agent),
-      await this.#offerCost(),
+      await this.#serviceCosts(),
     );
   }
 
-  #offerCostLamports: bigint | null = null;
+  #serviceCostLamports: ServiceCosts | null = null;
 
   /**
-   * What putting a service on offer costs once: the deposits behind its
-   * permanent marketplace record and behind the safety check of its
-   * description (neither is returned) plus the fees. Read once.
+   * What a service costs that does not come back. `offer`: putting one on
+   * offer, once: the deposits behind its permanent marketplace record and
+   * behind the safety check of its description, plus the fees. `words`:
+   * saving new words for one already on the marketplace: the deposit behind
+   * a new safety check, the check's fee and the change's own fee. Read once.
    */
-  async #offerCost(): Promise<bigint | null> {
-    if (this.#offerCostLamports === null) {
-      this.#offerCostLamports = await Promise.all([
+  async #serviceCosts(): Promise<ServiceCosts> {
+    if (this.#serviceCostLamports === null) {
+      const read = await Promise.all([
         this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE),
         approvalCost(this.#chain, "listing"),
-      ])
-        .then(([rent, check]) => rent + this.#chain.transferFeeLamports + check)
-        .catch(() => null);
+      ]).catch(() => null);
+      if (read === null) return { offer: null, words: null };
+      const [rent, check] = read;
+      const fee = this.#chain.transferFeeLamports;
+      this.#serviceCostLamports = { offer: rent + fee + check, words: check + fee };
     }
-    return this.#offerCostLamports;
+    return this.#serviceCostLamports;
   }
 
   /**
@@ -987,7 +1000,7 @@ export class AgencWallet {
     const state = this.#store.state;
     const ordered = Object.values(state.agents).sort((a, b) => a.createdAt - b.createdAt);
     const facts = await Promise.all(ordered.map((agent) => this.#registrationFacts(agent)));
-    const offerCost = await this.#offerCost();
+    const costs = await this.#serviceCosts();
     return {
       network: this.#chain.network,
       main: {
@@ -997,7 +1010,7 @@ export class AgencWallet {
       },
       held: money(this.#heldBy(null), rate),
       agents: ordered.map((agent, index) =>
-        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, facts[index] ?? null, offerCost),
+        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, facts[index] ?? null, costs),
       ),
       solUsd: rate,
       pendingApprovals: Object.values(state.approvals).filter(

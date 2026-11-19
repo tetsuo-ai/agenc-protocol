@@ -9,6 +9,11 @@ and this package follows [Semantic Versioning](https://semver.org/).
 
 First version. Not published.
 
+- `AgentView.earn.wordsCost` says what saving new words for a service
+  already on the marketplace costs, before the person saves them: the
+  deposit behind a new safety check of its description and the fees, which
+  are not returned. A new price alone pays for no check.
+
 - `agents.retire` stops an agent earning for good: its services leave the
   marketplace for good, then it is retired there and its deposit for taking
   jobs comes back to its own wallet. Refused, saying why, while it still
