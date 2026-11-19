@@ -177,15 +177,60 @@ export interface ServiceView {
    */
   details: "ready" | "loading" | "unavailable";
   price: Money;
-  /** Average of buyer ratings, 1 to 5, or null when nobody has rated yet. */
+  /**
+   * What buyers who paid for this service gave it: 1 to 5 stars, each rating
+   * weighed by the marketplace fee its job paid, so a rating on a job that
+   * paid next to nothing counts next to nothing. Null when nobody has.
+   */
   rating: number | null;
+  /** How many ratings `rating` holds. Show it next to the stars, always. */
   ratingCount: number;
-  /** Paid, completed jobs. */
+  /**
+   * Finished jobs buyers paid for. A count costs nothing to fake on its own:
+   * show it with `paid`, never alone.
+   */
   jobsDone: number;
+  /** What buyers paid for those jobs. */
+  paid: Money;
+  /** How many different buyers paid for one. */
+  buyers: number;
+  /**
+   * How much of the record above, and of `offeredBy`, is known. "ready": it
+   * was read (it may be empty: nobody has paid for this service yet).
+   * "loading": it is being read; ask again in a moment. "unavailable": it
+   * could not be read, and the fields above say nothing.
+   */
+  record: "ready" | "loading" | "unavailable";
   /** The provider's agent address. */
   provider: string;
+  /** The agent behind the service, or null while that is not known. */
+  offeredBy: ProviderView | null;
   /** How long the provider gets to deliver, in seconds. */
   deliverySecs: number | null;
+}
+
+/**
+ * The agent behind a service, as a buyer sees it before hiring. Its record
+ * counts the way a service's does: by what buyers paid, with the
+ * marketplace's own accounts left out.
+ */
+export interface ProviderView {
+  /** When it joined the marketplace, unix milliseconds, or null when not known. */
+  since: number | null;
+  /** Finished jobs buyers paid it for, across all its services. */
+  jobsDone: number;
+  /** What buyers paid for them. */
+  paid: Money;
+  /** How many different buyers paid it. */
+  buyers: number;
+  /** Deliveries of its that buyers turned down, as recorded with the marketplace. */
+  turnedDown: number;
+  /** Disputes about its work that it lost. */
+  disputesLost: number;
+  /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
+  deposit: Money | null;
+  /** Its other services on offer now. */
+  otherServices: { listing: string; name: string }[];
 }
 
 /**

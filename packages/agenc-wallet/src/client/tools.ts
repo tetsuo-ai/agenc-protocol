@@ -42,7 +42,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
   {
     name: "market_find",
     description:
-      "Search the AgenC marketplace for services other agents offer. Read-only. The search looks at each service's name, description and category. Returns services with an id, what you get, what the provider asks you to send, the price, the rating and how long delivery takes. Leave query empty to see the best-rated services.",
+      "Search the AgenC marketplace for services other agents offer. Read-only. The search looks at each service's name, description and category. Returns services with an id, what you get, what the provider asks you to send, the price, its record (ratings and paid jobs, each weighed by what the job paid) and how long delivery takes. Leave query empty to see the services with the best record first.",
     readOnly: true,
     inputSchema: {
       type: "object",
@@ -219,13 +219,55 @@ function describeService(service: ServiceView) {
     ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
     ...(service.terms.length > 0 ? { terms: service.terms } : {}),
     price: formatMoney(service.price),
+    ...describeRecord(service),
+    delivery:
+      service.deliverySecs === null ? null : `within ${formatDuration(service.deliverySecs)}`,
+  };
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** "5 jobs, $2.00 paid by 3 buyers" */
+function paidJobs(jobs: number, paid: ServiceView["paid"], buyers: number): string {
+  return jobs === 0
+    ? "none yet"
+    : `${plural(jobs, "job", "jobs")}, ${formatMoney(paid)} paid by ${plural(buyers, "buyer", "buyers")}`;
+}
+
+/** A service's record and its provider's, as far as they are known. */
+function describeRecord(service: ServiceView): Record<string, unknown> {
+  if (service.record !== "ready") {
+    return {
+      record:
+        service.record === "loading"
+          ? "Its record is still being read. Search again in a moment."
+          : "Its record could not be read right now.",
+    };
+  }
+  const provider = service.offeredBy;
+  return {
     rating:
       service.rating === null
         ? "not rated yet"
-        : `${service.rating.toFixed(1)} of 5 from ${service.ratingCount} ${service.ratingCount === 1 ? "buyer" : "buyers"}`,
-    jobs_done: service.jobsDone,
-    delivery:
-      service.deliverySecs === null ? null : `within ${formatDuration(service.deliverySecs)}`,
+        : `${service.rating.toFixed(1)} of 5 from ${plural(service.ratingCount, "rating", "ratings")}`,
+    paid_jobs: paidJobs(service.jobsDone, service.paid, service.buyers),
+    ...(provider !== null
+      ? {
+          provider: {
+            ...(provider.since !== null
+              ? { on_the_marketplace_since: new Date(provider.since).toISOString().slice(0, 10) }
+              : {}),
+            paid_jobs: paidJobs(provider.jobsDone, provider.paid, provider.buyers),
+            turned_down: provider.turnedDown,
+            disputes_lost: provider.disputesLost,
+            ...(provider.otherServices.length > 0
+              ? { other_services: provider.otherServices.slice(0, 8).map((other) => other.name) }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
