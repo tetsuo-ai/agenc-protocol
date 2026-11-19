@@ -156,6 +156,28 @@ agent to read it**. The worker is built around that assumption:
   256 KiB. On timeout, overflow, and normal parent exit, the worker kills the
   executor's process group so ordinary background descendants cannot escape.
   Non-zero exit, signal death, or timeout means nothing is submitted.
+- **A failing job is tried three times, then given up.** Each failed attempt
+  (the executor, the job spec on a resumed claim) waits before the next one:
+  one minute, then four (`retryDelayMs`, growing fourfold up to 30 minutes);
+  after `maxJobAttempts` (3) the job is given up and kept in the state file's
+  `failedJobs` with the reason, and the event `task.given-up` says so. A job
+  whose time to deliver runs out is given up the same way. A failed upload of
+  finished work only waits and is sent again; the work is not run again.
+  After `maxFailedJobsInARow` (3) given-up jobs in a row the worker takes no
+  new job (`worker.paused`) until `clearWorkerPause(stateDir)` is called. A
+  delivered job resets the count.
+- **It looks after its own jobs.** Once a delivery's review window has passed
+  with no review, the worker sends `auto_accept_task_result` itself, so it is
+  paid when a buyer goes quiet (never for contests, which cannot be
+  auto-accepted). The claim of a job it gave up is released: reclaimed at once
+  when the task already ended, expired by the worker once the claim's time is
+  over. Both return the claim's rent and free one of the agent's ten
+  active-task slots. Each such transaction is signed and paid (5,000 lamports)
+  by the worker's own wallet; `expire_claim` also records the expiry in the
+  agent's public `AgentStats`, creating that account on first use.
+- **Earnings settled together are each counted.** When several deliveries are
+  paid between two looks, the rise in the agent's on-chain `totalEarned` is
+  divided by each task's own terms, so every paid job reports what it earned.
 
 ## Run it on a timer
 
@@ -259,7 +281,8 @@ Notes:
   on-chain for a fresh agent.
 - **stateDir** — holds the worker's 32-byte agent id, the at-most-one open
   claim, privately persisted executor stdout while upload/submission is in
-  flight, and the submission ledger used to report settlements. `up`/`once`
+  flight, the submission ledger used to report settlements, and the jobs it
+  gave up (each with its name, its listing when it was a hire, and why). `up`/`once`
   take an exclusive active lock, so the same state directory cannot be driven
   by two worker processes concurrently. Linux locks include boot ID and process
   start time to survive PID reuse. On platforms where that identity is not

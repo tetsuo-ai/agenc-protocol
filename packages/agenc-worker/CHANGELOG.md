@@ -5,6 +5,28 @@ All notable changes to `@tetsuo-ai/agenc-worker` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- A failing job is no longer run again on every poll. Each failed attempt
+  waits longer before the next (one minute, then four), the job is given up
+  after three attempts with its reason kept in `failedJobs`, and three
+  given-up jobs in a row stop new claims until `clearWorkerPause`.
+- A delivery the buyer never reviews is auto-accepted by the worker once its
+  review window has passed, so the worker is paid.
+- The claim of a given-up job is expired or reclaimed by the worker, returning
+  its rent and freeing its active-task slot.
+- Several deliveries paid between two looks are each reported with what they
+  earned instead of no amount at all.
+
+### Added
+
+- Each job keeps its name (from its verified job spec) and, for a hire, its
+  listing from claim to ledger.
+- Runtime options `maxJobAttempts`, `retryDelayMs`, `maxFailedJobsInARow` and
+  `upkeepIntervalMs`, and an optional `clusterTime` context hook.
+
 ## 0.3.0
 
 This release depends on `@tetsuo-ai/marketplace-sdk@^0.13.0` and belongs to
