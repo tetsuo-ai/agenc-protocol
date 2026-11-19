@@ -372,6 +372,20 @@ describe("reading a service's record", () => {
       disputesLost: 1,
       active: true,
     });
+    expect(record.facts.get(OTHER_PROVIDER)).toMatchObject({ turnedDown: null, disputesLost: null });
+  });
+
+  it("reads a provider without a stats record as not counted, never as clean", async () => {
+    const { read } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER)],
+        // A record that is kept and empty is clean.
+        [OTHER_PROVIDER, agentData(OTHER_OWNER)],
+        [await statsAddress(OTHER_PROVIDER), statsData(OTHER_PROVIDER, 0, 0)],
+      ],
+    });
+    const record = await read([ROW, OTHER_ROW]);
+    expect(record.facts.get(PROVIDER)).toMatchObject({ turnedDown: null, disputesLost: null });
     expect(record.facts.get(OTHER_PROVIDER)).toMatchObject({ turnedDown: 0, disputesLost: 0 });
   });
 });

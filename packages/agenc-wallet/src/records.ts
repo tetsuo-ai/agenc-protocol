@@ -45,10 +45,14 @@ export interface ProviderFacts {
   since: number | null;
   /** What it keeps on deposit with the marketplace to take jobs. */
   depositLamports: bigint | null;
-  /** Deliveries of its that buyers turned down, as recorded with the marketplace. */
-  turnedDown: number;
-  /** Disputes about its work that it lost. */
-  disputesLost: number;
+  /**
+   * Deliveries of its that buyers turned down, as its stats record counts
+   * them. Null when it has no stats record: nobody has to keep one, and
+   * starting it costs whoever does, so a missing record says nothing.
+   */
+  turnedDown: number | null;
+  /** Disputes about its work that it lost, from the same record. Null without one. */
+  disputesLost: number | null;
   /** True while it may take jobs (not suspended or retired). */
   active: boolean;
   /** Jobs it finished, by its registration's own count (any size, any buyer). */
@@ -161,8 +165,9 @@ export async function readMarketRecord(source: RecordSource, rows: readonly Reco
       wallet: registration?.authority ?? null,
       since: registration !== null && registration.registeredAt > 0n ? Number(registration.registeredAt) * 1000 : null,
       depositLamports: registration?.stake ?? null,
-      turnedDown: stats === null || stats.agent !== agent ? 0 : Number(stats.tasksRejected),
-      disputesLost: stats === null || stats.agent !== agent ? 0 : Number(stats.disputesLost),
+      // No stats record is not a clean one: nothing was kept.
+      turnedDown: stats === null || stats.agent !== agent ? null : Number(stats.tasksRejected),
+      disputesLost: stats === null || stats.agent !== agent ? null : Number(stats.disputesLost),
       // 1 is Active and 2 is Busy: both take jobs.
       active: registration !== null && (Number(registration.status) === 1 || Number(registration.status) === 2),
       finished: registration === null ? 0 : Number(registration.tasksCompleted),

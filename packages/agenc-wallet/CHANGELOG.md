@@ -43,6 +43,8 @@ First version. Not published.
   deposit and other services, and ratings and paid jobs weighed by the fee
   each job paid, with the marketplace's own accounts left out. The list ranks
   by that record, and each service gives the marketplace's fee on its price.
+  A provider with no stats record has its turn-downs and lost disputes null
+  (no record kept), never zero.
 - A practice mode: the real marketplace program in-process with play money.
 - A service says what it is. The marketplace's list carries names and prices
   only, so the wallet reads each listing's own description from the address

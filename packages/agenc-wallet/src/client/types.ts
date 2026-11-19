@@ -240,10 +240,15 @@ export interface ProviderView {
   paid: Money;
   /** How many different buyers paid it. */
   buyers: number;
-  /** Deliveries of its that buyers turned down, as recorded with the marketplace. */
-  turnedDown: number;
-  /** Disputes about its work that it lost. */
-  disputesLost: number;
+  /**
+   * Deliveries of its that buyers turned down, as recorded with the
+   * marketplace. Null when no such record is kept for it: the marketplace
+   * keeps one only once someone pays to start it, so a missing record is not
+   * a clean one.
+   */
+  turnedDown: number | null;
+  /** Disputes about its work that it lost, from the same record. Null when none is kept. */
+  disputesLost: number | null;
   /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
   deposit: Money | null;
   /** Its other services on offer now. */

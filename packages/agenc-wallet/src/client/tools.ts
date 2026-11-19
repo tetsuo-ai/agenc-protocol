@@ -307,8 +307,9 @@ function describeRecord(service: ServiceView): Record<string, unknown> {
               ? { on_the_marketplace_since: new Date(provider.since).toISOString().slice(0, 10) }
               : {}),
             paid_jobs: paidJobs(provider.jobsDone, provider.paid, provider.buyers),
-            turned_down: provider.turnedDown,
-            disputes_lost: provider.disputesLost,
+            // A provider without a stats record has not been counted, not cleared.
+            turned_down: provider.turnedDown ?? "no record kept",
+            disputes_lost: provider.disputesLost ?? "no record kept",
             ...(provider.otherServices.length > 0
               ? { other_services: provider.otherServices.slice(0, 8).map((other) => other.name) }
               : {}),

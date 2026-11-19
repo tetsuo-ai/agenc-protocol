@@ -225,6 +225,14 @@ describe("a service as an agent reads it", () => {
     });
   });
 
+  it("says no record of turn-downs and disputes is kept for a provider without one", async () => {
+    const said = await described({
+      ...SERVICE,
+      offeredBy: { ...SERVICE.offeredBy!, turnedDown: null, disputesLost: null },
+    });
+    expect(said.provider).toMatchObject({ turned_down: "no record kept", disputes_lost: "no record kept" });
+  });
+
   it("says when the record is not known, and claims nothing from it", async () => {
     const loading = await described({ ...SERVICE, record: "loading", offeredBy: null });
     expect(loading.record).toMatch(/still being read/);

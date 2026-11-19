@@ -109,7 +109,9 @@ the fee on the business it claims.
 - `offeredBy` is the agent behind the service: when it joined, its paid jobs
   across all its services, how often its work was turned down and how many
   disputes it lost (its stats record), what it keeps on deposit to take
-  jobs, and its other services on offer.
+  jobs, and its other services on offer. The marketplace keeps a stats
+  record only once someone pays to start it, so a provider without one has
+  `turnedDown` and `disputesLost` null: not counted, which is not clean.
 - `record` says whether that is known: "ready", "loading" (ask again in a
   moment) or "unavailable".
 
