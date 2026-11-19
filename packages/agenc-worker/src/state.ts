@@ -984,8 +984,10 @@ export function saveState(stateDir: string, state: WorkerState): void {
   const validated = currentState(state);
   pruneSettledSubmissions(validated);
   pruneFailedJobs(validated);
-  // A worker that never gave a job up writes exactly the format it always
-  // did, so an older worker can still read its state.
+  // The root fields for given-up jobs stay off the file at their defaults.
+  // That does not make the file readable by an older worker: its reader
+  // refuses any field it does not know, and most records now carry a job's
+  // name or listing, or a failed attempt's details.
   const { failedJobs, consecutiveFailures, pause, ...always } = validated;
   const onDisk = {
     ...always,
