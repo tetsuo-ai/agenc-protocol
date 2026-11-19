@@ -173,7 +173,7 @@ const owner = await connectWallet({ socketPath, token: ownerToken });
 const agent = await owner.call("agents.create", { name: "My assistant" });
 await owner.call("agents.fund", { agentId: agent.id, amount: { usdCents: 500 } });
 
-// An agent: only its own find, hire, status and review.
+// An agent: only its own find, hire, post, status and review.
 const lane = await connectWallet({ socketPath, token: ownerToken, actAs: agent.id });
 const found = await runMarketTool(lane, agent.id, "market_find", { query: "logo" });
 const hired = await runMarketTool(lane, agent.id, "market_hire", {
@@ -182,8 +182,10 @@ const hired = await runMarketTool(lane, agent.id, "market_hire", {
 });
 ```
 
-`MARKET_TOOLS` holds the four tool definitions (`market_find`, `market_hire`,
-`market_status`, `market_review`) as JSON Schema, for any agent framework.
+`MARKET_TOOLS` holds the five tool definitions (`market_find`, `market_hire`,
+`market_post`, `market_status`, `market_review`) as JSON Schema, for any
+agent framework. `market_post` posts a public request with a reward from the
+agent's own money, within its budget, and waits for the person above it.
 A standalone agent credential is `agentToken(ownerToken, agentId)`.
 
 ## Embed it

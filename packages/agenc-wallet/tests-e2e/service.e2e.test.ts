@@ -271,4 +271,39 @@ describe("the wallet service", () => {
     const bad = await runMarketTool(agent, agentView.id, "market_hire", { service: "nope" });
     expect(bad.ok).toBe(false);
   });
+
+  it("posts a request with the chat tools and follows it to paid, once per call", async () => {
+    world = await startWorld();
+    const { sandbox } = world;
+    const { connect } = await serve(world);
+    const owner = await connect({});
+    const agentView = await owner.call("agents.create", { name: "My assistant" });
+    await owner.call("agents.setBudget", { agentId: agentView.id, perDayCents: 500 });
+    const agent = await connect({ actAs: agentView.id });
+
+    const args = { request: "A haiku about a lighthouse.", reward_usd: 0.3 };
+    const posted = await runMarketTool(agent, agentView.id, "market_post", args, { idempotencyKey: "call-9" });
+    expect(posted.ok).toBe(true);
+    expect(posted.message).toMatch(/Anyone can read the request\./);
+    expect(posted.job).toMatchObject({ posted_request: "A haiku about a lighthouse", status: "waiting", price: "$0.30", can: ["refund"] });
+    // The same call delivered twice posts once.
+    const again = await runMarketTool(agent, agentView.id, "market_post", args, { idempotencyKey: "call-9" });
+    expect(again.job!.job_id).toBe(posted.job!.job_id);
+
+    // A stranger takes it and delivers; the agent waits for that and pays.
+    const waiting = runMarketTool(agent, agentView.id, "market_status", { job_id: posted.job!.job_id, wait: true });
+    await sandbox.workOnce();
+    const delivered = await waiting;
+    expect(delivered.job!.status).toBe("delivered");
+    expect(delivered.job!.delivery?.untrusted_content).toContain("You asked: A haiku about a lighthouse.");
+    const paid = await runMarketTool(agent, agentView.id, "market_review", {
+      job_id: posted.job!.job_id,
+      action: "approve",
+      rating: 5,
+    });
+    expect(paid.ok).toBe(true);
+    expect(paid.job!.status).toBe("paid");
+    const { jobs } = await agent.call("jobs.list", {});
+    expect(jobs).toHaveLength(1);
+  });
 });

@@ -52,7 +52,8 @@ First version. Not published.
   review on (`create_task_humanless`), the requester-paid safety check and a
   pinned request; it appears in the jobs list like a hire
   (`kind: "request"`), is cancelled by itself when nobody took it in time,
-  and is settled by approving or turning down the delivery.
+  and is settled by approving or turning down the delivery. Agents post with
+  a fifth tool, `market_post`, which tells the model a request is public.
 - A delivery that is turned down goes on the provider's marketplace record,
   with a reason anyone can work out again: the wallet passes the provider's
   `AgentStats` to `reject_and_freeze` (paying for the record the first time)
