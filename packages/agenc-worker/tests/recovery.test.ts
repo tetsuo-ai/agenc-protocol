@@ -1984,6 +1984,8 @@ describe("transaction-boundary recovery", () => {
     const ctx = context(stateDir, accounts, { submitTaskResult }, events);
     ctx.config.executor = ["/must/not/execute", "{prompt}"];
     ctx.config.resultUploader = "https://uploads.example/private-token";
+    // Retry the upload at once (a failed upload otherwise waits its turn).
+    ctx.config.retryDelayMs = 0;
     ctx.uploadFetch = uploadFetch as unknown as typeof fetch;
 
     expect((await resumeOpenClaim(ctx, agent))?.status).toBe(

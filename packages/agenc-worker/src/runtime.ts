@@ -75,7 +75,9 @@ import {
   newAgentId,
   saveState,
   WorkerStateError,
+  MAX_FAILURE_REASON_CHARS,
   type ExecutionIntent,
+  type FailedJob,
   type OpenClaim,
   type SubmissionIntent,
   type SubmissionRecord,
@@ -103,7 +105,32 @@ export type WorkerRuntimeConfig = Pick<
   | "endpoint"
   | "executorTimeoutMs"
   | "pollIntervalMs"
->;
+> & {
+  /**
+   * Attempts a job gets before it is given up: the work, its upload and its
+   * job spec each count when they fail. Default {@link DEFAULT_MAX_JOB_ATTEMPTS}.
+   */
+  maxJobAttempts?: number;
+  /**
+   * Wait before the second attempt; each later wait is four times longer, up
+   * to {@link MAX_RETRY_DELAY_MS}. Default {@link DEFAULT_RETRY_DELAY_MS}.
+   */
+  retryDelayMs?: number;
+  /**
+   * Jobs given up in a row before the worker stops taking new ones until
+   * {@link clearWorkerPause}. Default {@link DEFAULT_MAX_FAILED_JOBS_IN_A_ROW}.
+   */
+  maxFailedJobsInARow?: number;
+};
+
+/** A job is tried at most this many times before it is given up. */
+export const DEFAULT_MAX_JOB_ATTEMPTS = 3;
+/** Wait before the second attempt at a failed job. */
+export const DEFAULT_RETRY_DELAY_MS = 60_000;
+/** The longest wait between two attempts. */
+export const MAX_RETRY_DELAY_MS = 30 * 60_000;
+/** Jobs given up in a row before no new job is taken. */
+export const DEFAULT_MAX_FAILED_JOBS_IN_A_ROW = 3;
 
 /** Everything the worker loop needs, injected (see cli.ts for the RPC wiring). */
 export type WorkerContext = {
@@ -154,6 +181,12 @@ export type WorkerContext = {
    * start. Static rent guesses are never used for a signed claim.
    */
   getMinimumBalanceForRentExemption?: (space: number) => Promise<bigint>;
+  /**
+   * The cluster's clock, unix seconds. Optional: without it the worker reads
+   * the Clock sysvar through `readAccount`, and failing that uses this
+   * computer's clock.
+   */
+  clusterTime?: () => Promise<number>;
 };
 
 /** The worker's on-chain identity. */
@@ -187,6 +220,7 @@ export const CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000n;
 // broadcast returns an ambiguous transport error, wait beyond that window
 // before treating an absent claim PDA as definitive and claiming elsewhere.
 const TRANSACTION_RECONCILIATION_GRACE_MS = 120_000;
+const CLOCK_SYSVAR = address("SysvarC1ock11111111111111111111111111111111");
 
 /**
  * Read the live `ProtocolConfig.minAgentStake` — the on-chain floor that
@@ -556,11 +590,17 @@ function passesLocalFilters(
   ) {
     return { ok: false, reason: "creator-not-allowlisted" };
   }
+  if (state.pause !== null) {
+    return { ok: false, reason: "paused-after-failed-jobs" };
+  }
   if (state.openClaim !== null) {
     return { ok: false, reason: "already-holding-a-claim" };
   }
   if (state.submissions.some((record) => record.task === candidate.task)) {
     return { ok: false, reason: "already-worked" };
+  }
+  if (state.failedJobs.some((job) => job.task === candidate.task)) {
+    return { ok: false, reason: "already-given-up" };
   }
   return { ok: true };
 }
@@ -835,7 +875,13 @@ function keptMarkerFields(
   marker: OpenClaim,
 ): Pick<
   OpenClaim,
-  "claimTransactionSignature" | "revisionSubmissionCount" | "title" | "listing"
+  | "claimTransactionSignature"
+  | "revisionSubmissionCount"
+  | "title"
+  | "listing"
+  | "failures"
+  | "retryAt"
+  | "lastFailure"
 > {
   return {
     ...(marker.claimTransactionSignature !== undefined
@@ -846,7 +892,185 @@ function keptMarkerFields(
       : {}),
     ...(marker.title !== undefined ? { title: marker.title } : {}),
     ...(marker.listing !== undefined ? { listing: marker.listing } : {}),
+    ...(marker.failures !== undefined ? { failures: marker.failures } : {}),
+    ...(marker.retryAt !== undefined ? { retryAt: marker.retryAt } : {}),
+    ...(marker.lastFailure !== undefined
+      ? { lastFailure: marker.lastFailure }
+      : {}),
   };
+}
+
+/** The cluster's clock in unix seconds, as well as this worker can tell. */
+export async function clusterNowSeconds(ctx: WorkerContext): Promise<number> {
+  if (ctx.clusterTime !== undefined) {
+    try {
+      const seconds = await ctx.clusterTime();
+      if (Number.isFinite(seconds)) return seconds;
+    } catch {
+      // Fall back to the sysvar below.
+    }
+  }
+  try {
+    const data = await ctx.readAccount(CLOCK_SYSVAR);
+    if (data !== null && data.byteLength >= 40) {
+      return Number(
+        new DataView(data.buffer, data.byteOffset, data.byteLength).getBigInt64(
+          32,
+          true,
+        ),
+      );
+    }
+  } catch {
+    // Fall back to this computer's clock.
+  }
+  return Math.floor(Date.now() / 1_000);
+}
+
+/** A failure reason as one bounded line for the state file and the log. */
+function reasonLine(reason: string): string {
+  const line = reason
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const text = line.length === 0 ? "unknown failure" : line;
+  const characters = [...text];
+  return characters.length <= MAX_FAILURE_REASON_CHARS
+    ? text
+    : `${characters.slice(0, MAX_FAILURE_REASON_CHARS - 1).join("")}…`;
+}
+
+function retryDelayMs(ctx: WorkerContext, failures: number): number {
+  const base = Math.max(0, ctx.config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+  return Math.min(MAX_RETRY_DELAY_MS, base * 4 ** Math.max(0, failures - 1));
+}
+
+/**
+ * Move the in-flight job into the given-up ledger and free the worker for
+ * other work. The claim itself stays on the chain until it can be released.
+ */
+function giveUpJob(
+  ctx: WorkerContext,
+  state: WorkerState,
+  marker: OpenClaim,
+  details: {
+    cause: FailedJob["cause"];
+    reason: string;
+    rewardAmount?: string;
+    claimReleased: boolean;
+  },
+): FailedJob {
+  const reason = reasonLine(details.reason);
+  const rewardAmount =
+    details.rewardAmount ??
+    marker.execution?.rewardAmount ??
+    marker.submission?.rewardAmount;
+  const job: FailedJob = {
+    task: marker.task,
+    claimedAt: marker.claimedAt,
+    failedAt: new Date().toISOString(),
+    cause: details.cause,
+    reason,
+    attempts: marker.failures ?? 0,
+    ...(rewardAmount !== undefined ? { rewardAmount } : {}),
+    ...(marker.title !== undefined ? { title: marker.title } : {}),
+    ...(marker.listing !== undefined ? { listing: marker.listing } : {}),
+    claimReleased: details.claimReleased,
+  };
+  state.openClaim = null;
+  state.failedJobs = [
+    ...state.failedJobs.filter((entry) => entry.task !== job.task),
+    job,
+  ];
+  // A buyer cancelling is not the worker failing; anything else counts.
+  if (details.cause !== "cancelled") {
+    state.consecutiveFailures += 1;
+    const limit = Math.max(
+      1,
+      ctx.config.maxFailedJobsInARow ?? DEFAULT_MAX_FAILED_JOBS_IN_A_ROW,
+    );
+    if (state.pause === null && state.consecutiveFailures >= limit) {
+      state.pause = { since: job.failedAt, reason };
+    }
+  }
+  saveState(ctx.stateDir, state);
+  ctx.log({
+    event: "task.given-up",
+    task: job.task,
+    cause: job.cause,
+    attempts: job.attempts,
+    reason,
+    ...(job.title !== undefined ? { title: job.title } : {}),
+  });
+  if (state.pause !== null && state.pause.since === job.failedAt) {
+    ctx.log({
+      event: "worker.paused",
+      reason,
+      failedJobsInARow: state.consecutiveFailures,
+    });
+  }
+  return job;
+}
+
+/**
+ * Count one failed attempt at the in-flight job. Below the cap the next
+ * attempt waits (longer each time); at the cap the job is given up. A failed
+ * upload of finished work is never given up for: sending it again costs
+ * nothing, so it only waits, until the time to deliver runs out.
+ */
+function noteJobFailure(
+  ctx: WorkerContext,
+  task: Address,
+  reason: string,
+  options: { finishedWork?: boolean } = {},
+): void {
+  const state = loadState(ctx.stateDir);
+  const marker = state.openClaim;
+  if (marker === null || marker.task !== task) return;
+  const failures = (marker.failures ?? 0) + 1;
+  const maxAttempts = Math.max(
+    1,
+    ctx.config.maxJobAttempts ?? DEFAULT_MAX_JOB_ATTEMPTS,
+  );
+  const line = reasonLine(reason);
+  if (failures >= maxAttempts && options.finishedWork !== true) {
+    giveUpJob(ctx, state, { ...marker, failures, lastFailure: line }, {
+      cause: "attempts",
+      reason: line,
+      claimReleased: false,
+    });
+    return;
+  }
+  const retryAt = new Date(Date.now() + retryDelayMs(ctx, failures)).toISOString();
+  state.openClaim = { ...marker, failures, retryAt, lastFailure: line };
+  saveState(ctx.stateDir, state);
+  ctx.log({
+    event: "task.retry-scheduled",
+    task,
+    attempt: failures,
+    maxAttempts,
+    retryAt,
+    reason: line,
+  });
+}
+
+/**
+ * Let the worker take new jobs again after it stopped because several jobs
+ * in a row failed. For whoever runs it to call once the cause is dealt with.
+ * Returns true when there was a pause to clear.
+ */
+export function clearWorkerPause(stateDir: string): boolean {
+  const releaseLock = acquireStateLock(stateDir);
+  try {
+    const state = loadState(stateDir);
+    if (state.pause === null && state.consecutiveFailures === 0) return false;
+    const paused = state.pause !== null;
+    state.pause = null;
+    state.consecutiveFailures = 0;
+    saveState(stateDir, state);
+    return paused;
+  } finally {
+    releaseLock();
+  }
 }
 
 /** Pending/accepted means the submission transaction definitively landed. */
@@ -1039,6 +1263,8 @@ function commitSubmission(
   // leaves the exact landed-submission intent available to recovery.
   const marker = state.openClaim?.task === task ? state.openClaim : null;
   state.openClaim = null;
+  // A delivered job ends a run of failed ones.
+  state.consecutiveFailures = 0;
   const record: SubmissionRecord = {
     task: task as string,
     submissionSignature: options.signature,
@@ -1198,6 +1424,9 @@ async function continueExecutedResult(
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.upload-failed", task, reason });
+      noteJobFailure(ctx, task, `upload failed: ${reason}`, {
+        finishedWork: true,
+      });
       return { status: "execution-failed", task, reason };
     }
   } else {
@@ -1247,6 +1476,7 @@ async function executeAndSubmit(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.execution-failed", task, reason });
+    noteJobFailure(ctx, task, reason);
     return { status: "execution-failed", task, reason };
   }
 
@@ -1701,14 +1931,60 @@ export async function resumeOpenClaim(
   if (canonicalLifecycleGone) {
     ctx.log({ event: "task.open-claim-gone", task });
     const clearedState = loadState(ctx.stateDir);
-    if (clearedState.openClaim?.task === task) clearedState.openClaim = null;
-    saveState(ctx.stateDir, clearedState);
+    const current = clearedState.openClaim;
+    if (current?.task === task) {
+      if (current.phase === "claiming") {
+        // The claim never landed: this was never the worker's job.
+        clearedState.openClaim = null;
+        saveState(ctx.stateDir, clearedState);
+      } else {
+        // The worker held this job and it ended before anything was
+        // delivered: its claim ran out and the task reopened, or the task
+        // was cancelled. Keep it, with why, instead of dropping it.
+        const reopened = decodedTask?.status === TaskStatus.Open;
+        giveUpJob(ctx, clearedState, current, {
+          cause: reopened ? "expired" : "cancelled",
+          reason: reopened
+            ? "the claim ran out before the work was delivered"
+            : "the task ended before the work was delivered",
+          ...(decodedTask !== null
+            ? { rewardAmount: decodedTask.rewardAmount.toString() }
+            : {}),
+          claimReleased: true,
+        });
+      }
+    }
     return null;
   }
   if (claim === null || decodedTask === null) {
     const reason = `incoherent canonical reads: task=${decodedTask === null ? "null" : decodedTask.status}, claim=${claim === null ? "null" : "present"}`;
     ctx.log({ event: "task.chain-state-incoherent", task, reason });
     return { status: "execution-failed", task, reason };
+  }
+  if (marker.phase !== "submitting" && !ctx.dryRun) {
+    // Out of time: the work can no longer be delivered, so trying again
+    // would only spend. The claim is released once it can be.
+    const now = await clusterNowSeconds(ctx);
+    const deliverBy = Number(decodedTask.deadline);
+    if (deliverBy > 0 && now > deliverBy) {
+      giveUpJob(ctx, loadState(ctx.stateDir), marker, {
+        cause: "expired",
+        reason: "the time to deliver ran out",
+        rewardAmount: decodedTask.rewardAmount.toString(),
+        claimReleased: false,
+      });
+      return null;
+    }
+    // After a failed attempt the next one waits its turn.
+    const retryAt =
+      marker.retryAt === undefined ? Number.NaN : Date.parse(marker.retryAt);
+    if (Number.isFinite(retryAt) && Date.now() < retryAt) {
+      return {
+        status: "execution-failed",
+        task,
+        reason: `waiting to try again at ${marker.retryAt}`,
+      };
+    }
   }
   ctx.log({ event: "task.resuming-open-claim", task });
   if (ctx.dryRun) {
@@ -1772,6 +2048,7 @@ export async function resumeOpenClaim(
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.revision-feedback-unavailable", task, reason });
+      noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`);
       return { status: "execution-failed", task, reason };
     }
   }
@@ -1788,6 +2065,7 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.job-spec-rejected", task, reason });
+    noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`);
     return { status: "execution-failed", task, reason };
   }
   let prompt: string;
@@ -1800,6 +2078,7 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.prompt-rejected", task, reason });
+    noteJobFailure(ctx, task, `the job is too large to run: ${reason}`);
     return { status: "execution-failed", task, reason };
   }
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
