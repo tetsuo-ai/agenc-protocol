@@ -81,8 +81,8 @@ import {
   sendRating,
   sendRejectAndFreeze,
   sendRequest,
+  sendListingStates,
   sendRetireAgent,
-  sendRetireListings,
   sendTidy,
   sendUpdateListing,
   TASK_ACCOUNT_SPACE,
@@ -3530,7 +3530,7 @@ export class AgencWallet {
       listings.set(entry.address, Number(entry.listing.state));
     }
     const toRetire = [...listings].filter(([, state]) => state !== LISTING_STATE_RETIRED).map(([listing]) => listing);
-    const sent = await sendRetireListings(this.#chain, signer, providerAgent, toRetire);
+    const sent = await sendListingStates(this.#chain, signer, providerAgent, toRetire, "Retired");
     this.#store.update((draft) => {
       const owner = draft.agents[agentId];
       if (owner === undefined) return;
@@ -3796,6 +3796,12 @@ export class AgencWallet {
   #advanceOffer(agentId: string): Promise<void> {
     // One agent's services one after another: they share its wallet.
     return this.#lock(`offer:${agentId}`, async () => {
+      try {
+        await this.#offerStatesTogether(agentId);
+      } catch (error) {
+        // The steps below do the same one at a time.
+        this.#log(`offer ${agentId}: ${describeError(error)}`);
+      }
       const agent = this.#store.state.agents[agentId];
       const ids = agent === undefined ? [] : agentOffers(agent).map((offer) => offer.id);
       for (const offerId of ids) {
@@ -3835,20 +3841,85 @@ export class AgencWallet {
     this.#emit({ type: "overview" });
   }
 
-  /** One step. Returns true when it changed something and another look is worth it. */
-  async #offerStep(agentId: string, offerId: string): Promise<boolean> {
-    const agent = this.#store.state.agents[agentId];
-    const offer = agent === undefined ? null : (agentOffers(agent).find((entry) => entry.id === offerId) ?? null);
-    if (agent === undefined || offer === null) return false;
-    // On offer only while someone is here to do the work: wanted, taking
-    // jobs switched on, a host that can run jobs at all, and not closing.
-    const wantLive =
+  /**
+   * On offer only while someone is here to do the work: wanted, taking jobs
+   * switched on, a host that can run jobs at all, and not closing.
+   */
+  #wantsLive(agent: AgentRecord, offer: OfferRecord): boolean {
+    return (
       offer.wanted &&
       agent.earn.enabled &&
       this.#earn.available &&
       !this.#closing &&
       // An agent that stopped after several failed jobs cannot do this one.
-      this.#earn.pausedReason(agentId) === null;
+      this.#earn.pausedReason(agent.id) === null
+    );
+  }
+
+  /**
+   * Several of an agent's services going off offer, or back on as they
+   * were, go in one transaction: one fee for all of them instead of one
+   * each. What is left (one service, a new listing, new words or price, the
+   * safety check) is done by the steps one at a time.
+   */
+  async #offerStatesTogether(agentId: string): Promise<void> {
+    const agent = this.#store.state.agents[agentId];
+    if (agent === undefined) return;
+    const offers = agentOffers(agent).filter((offer) => offer.listed && offer.listing !== null);
+    if (offers.length < 2) return;
+    const providerAgent = await this.#earn.marketplaceAgent(agentId);
+    if (providerAgent === null || (await readAgent(this.#chain, providerAgent)) === null) return;
+    const pause: Address[] = [];
+    const resume: Address[] = [];
+    for (const offer of offers) {
+      const listing = offer.listing as Address;
+      const account = await readListing(this.#chain, listing);
+      if (account === null) continue;
+      const state = Number(account.state);
+      const wantLive = this.#wantsLive(agent, offer);
+      if (!wantLive && state === LISTING_STATE_ACTIVE) pause.push(listing);
+      if (
+        wantLive &&
+        state === LISTING_STATE_PAUSED &&
+        // Back exactly as it was: same price, same words, where they are.
+        account.price === BigInt(offer.priceLamports) &&
+        values.bytesToHex(new Uint8Array(account.specHash)) === offer.specHashHex &&
+        (offer.specUri ?? null) !== null &&
+        account.specUri === offer.specUri
+      ) {
+        resume.push(listing);
+      }
+    }
+    for (const [listings, state] of [
+      [pause, "Paused"],
+      [resume, "Active"],
+    ] as const) {
+      if (listings.length < 2) continue;
+      const sent = await sendListingStates(
+        this.#chain,
+        await this.#vault.signer(agent.keyId),
+        providerAgent,
+        listings,
+        state,
+      );
+      this.#store.update((draft) => {
+        const owner = draft.agents[agentId];
+        if (owner === undefined) return;
+        for (const offer of agentOffers(owner)) {
+          const signature = offer.listing === null ? undefined : sent.get(offer.listing as Address);
+          if (signature !== undefined) offer.signatures.state = signature;
+        }
+      });
+      this.#dropBalances();
+    }
+  }
+
+  /** One step. Returns true when it changed something and another look is worth it. */
+  async #offerStep(agentId: string, offerId: string): Promise<boolean> {
+    const agent = this.#store.state.agents[agentId];
+    const offer = agent === undefined ? null : (agentOffers(agent).find((entry) => entry.id === offerId) ?? null);
+    if (agent === undefined || offer === null) return false;
+    const wantLive = this.#wantsLive(agent, offer);
     const settle = (status: OfferRecord["status"], error: string | null = null): false => {
       if (offer.status !== status || offer.error !== error) {
         this.#patchOffer(agentId, offerId, (entry) => {

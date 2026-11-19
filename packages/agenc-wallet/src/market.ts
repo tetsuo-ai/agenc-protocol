@@ -1272,36 +1272,34 @@ export async function sendListingState(
   return result.signature;
 }
 
-// ------------------------------------------------- stopping for good
-
-/** Listings taken off for good in one transaction: well inside its size limit. */
-const RETIRE_PER_TRANSACTION = 12;
+/** Listings set in one transaction: well inside its size limit. */
+const LISTINGS_PER_TRANSACTION = 12;
 
 /**
- * Take a provider's listings off the marketplace for good (state Retired,
- * which cannot be undone), several in one transaction, so the agent pays
- * one fee for all of them instead of one each. Returns each listing's
- * transaction.
+ * Set several of a provider's listings to one state, as few transactions as
+ * fit, so the agent pays one fee for all of them instead of one each.
+ * Returns each listing's transaction.
  */
-export async function sendRetireListings(
+export async function sendListingStates(
   chain: Chain,
   provider: KeyPairSigner,
   providerAgent: Address,
   listings: readonly Address[],
+  state: "Active" | "Paused" | "Retired",
 ): Promise<Map<Address, string>> {
   const sent = new Map<Address, string>();
-  for (let start = 0; start < listings.length; start += RETIRE_PER_TRANSACTION) {
-    const batch = listings.slice(start, start + RETIRE_PER_TRANSACTION);
+  for (let start = 0; start < listings.length; start += LISTINGS_PER_TRANSACTION) {
+    const batch = listings.slice(start, start + LISTINGS_PER_TRANSACTION);
     const instructions = await Promise.all(
-      batch.map((listing) =>
-        facade.setServiceListingState({ listing, authority: provider, providerAgent, state: "Retired" }),
-      ),
+      batch.map((listing) => facade.setServiceListingState({ listing, authority: provider, providerAgent, state })),
     );
     const { signature } = await chain.clientFor(provider).send(instructions);
     for (const listing of batch) sent.set(listing, signature);
   }
   return sent;
 }
+
+// ------------------------------------------------- stopping for good
 
 /** `AgentRegistration._reserved` of an agent that was retired (`deregister_agent`). */
 const RETIRED_IDENTITY_MARKER = [0x52, 0x45, 0x54, 0x44]; // "RETD"

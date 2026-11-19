@@ -168,6 +168,36 @@ describe("several services for one agent", () => {
     expect(back.earn.offers.map((offer) => offer.listing)).toEqual([lines.listing, haiku.listing]);
   }, 120_000);
 
+  it("go off offer together and back together, for one fee each way", async () => {
+    world = await startWorld({ earn: earning(WORKS) });
+    const { wallet, sandbox } = world;
+    const worker = await wallet.createAgent("Worker");
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINES);
+    await wallet.setOffer(worker.id, HAIKU);
+    const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
+    const states = async (): Promise<number[]> =>
+      Promise.all(
+        live.earn.offers.map(async (offer) => Number((await readListing(sandbox.chain, offer.listing as Address))!.state)),
+      );
+    const fee = sandbox.chain.transferFeeLamports;
+
+    const before = await world.balance(worker.address);
+    await wallet.setEarn(worker.id, false);
+    await servicesReach(world, worker.id, (offer) => offer.status === "paused");
+    expect(await states()).toEqual([PAUSED, PAUSED]);
+    const off = await world.balance(worker.address);
+    expect(off).toBe(before - fee);
+
+    const main = await world.balance(wallet.mainAddress);
+    await wallet.setEarn(worker.id, true, 10);
+    await servicesReach(world, worker.id, (offer) => offer.status === "live");
+    expect(await states()).toEqual([ACTIVE, ACTIVE]);
+    expect(await world.balance(worker.address)).toBe(off - fee);
+    // Already on the marketplace, the agent needed no more money to take jobs again.
+    expect(await world.balance(wallet.mainAddress)).toBe(main);
+  }, 120_000);
+
   it("are kept to ten for one agent", async () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet } = world;
