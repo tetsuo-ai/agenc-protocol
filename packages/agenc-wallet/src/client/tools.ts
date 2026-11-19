@@ -219,6 +219,9 @@ function describeService(service: ServiceView) {
     ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
     ...(service.terms.length > 0 ? { terms: service.terms } : {}),
     price: formatMoney(service.price),
+    ...(service.marketFee !== null
+      ? { marketplace_fee: `${formatMoney(service.marketFee.amount)} of the price (${service.marketFee.bps / 100}%)` }
+      : {}),
     ...describeRecord(service),
     delivery:
       service.deliverySecs === null ? null : `within ${formatDuration(service.deliverySecs)}`,

@@ -202,6 +202,7 @@ export function approvalView(
       outputs: saved.outputs ?? [],
       terms: saved.terms ?? [],
       details: saved.details ?? (approval.service.summary === null ? "unavailable" : "ready"),
+      marketFee: saved.marketFee ?? null,
       // An older request counted its record another way: it says nothing now.
       paid: saved.paid ?? money(0n, usdPerSol),
       buyers: saved.buyers ?? 0,

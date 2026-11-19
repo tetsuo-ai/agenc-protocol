@@ -47,6 +47,9 @@ Measured against the program in the sandbox, and the same accounts exist on
 mainnet:
 
 - **The price**, held until you approve, paid to the provider on approval.
+  The marketplace keeps its fee out of it (5% on mainnet): `market.find`
+  gives each service's share and amount as `marketFee`. It is part of the
+  price, not added to it.
 - **A network fee that is not returned**, even when the job is cancelled: the
   deposit behind the permanent job record, the deposit behind the permanent
   record of the safety check of your request (whoever asks for a check pays

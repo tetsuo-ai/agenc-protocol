@@ -178,6 +178,11 @@ export interface ServiceView {
   details: "ready" | "loading" | "unavailable";
   price: Money;
   /**
+   * The marketplace's fee, taken out of the price (not added to it): its
+   * share in basis points and what that comes to. Null when it is not known.
+   */
+  marketFee: { bps: number; amount: Money } | null;
+  /**
    * What buyers who paid for this service gave it: 1 to 5 stars, each rating
    * weighed by the marketplace fee its job paid, so a rating on a job that
    * paid next to nothing counts next to nothing. Null when nobody has.

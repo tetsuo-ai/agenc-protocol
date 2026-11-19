@@ -57,6 +57,7 @@ import {
   readAgent,
   readHireableListing,
   readListing,
+  readProtocolConfig,
   sendActivation,
   sendApproval,
   sendCancel,
@@ -196,6 +197,10 @@ const STALE_PRICE_MS = 6 * 60 * 60_000;
  * the list is read again.
  */
 const RECORD_WAIT_MS = 4_000;
+/** How long the marketplace's fee rate is used before it is read again. */
+const FEE_RATE_TTL_MS = 10 * 60_000;
+/** After the fee rate could not be read, how long before it is tried again. */
+const FEE_RATE_RETRY_MS = 60_000;
 /** The marketplace's catalog hides a service priced below this. */
 const MIN_OFFER_PRICE_LAMPORTS = 1_000n;
 /** How long an agent gets to deliver a job hired from its own service. */
@@ -309,10 +314,11 @@ function hireFailureText(error: unknown): { code: "PRICE_CHANGED" | "NOT_ENOUGH_
   };
 }
 
-/** What a list of services is described with: the record, the dollar rate, who offers what. */
+/** What a list of services is described with: the record, the dollar rate, the fee rate, who offers what. */
 interface ServiceContext {
   known: KnownRecord;
   rate: number | null;
+  feeBps: number | null;
   /** Every service on the list, by the agent that offers it. */
   byProvider: Map<string, { listing: string; name: string }[]>;
 }
@@ -359,6 +365,8 @@ export class AgencWallet {
   readonly #earnFloor = new Map<string, bigint>();
   /** Who offers each service and what buyers paid them, read in the background. */
   readonly #records: RecordKeeper;
+  /** The marketplace's fee rate in basis points, as last read (null: it could not be). */
+  #feeRate: { at: number; bps: number | null } | null = null;
 
   private constructor(
     config: WalletConfig,
@@ -1043,20 +1051,45 @@ export class AgencWallet {
 
   // ------------------------------------------------------------ catalog
 
+  /**
+   * The marketplace's fee rate, in basis points: its share of every price.
+   * Null when it cannot be read.
+   */
+  async #marketFeeBps(): Promise<number | null> {
+    const known = this.#feeRate;
+    if (known !== null && this.#now() - known.at < (known.bps === null ? FEE_RATE_RETRY_MS : FEE_RATE_TTL_MS)) {
+      return known.bps;
+    }
+    let bps: number | null = null;
+    try {
+      const config = await readProtocolConfig(this.#chain);
+      bps = config.protocolFeeBps >= 0 && config.protocolFeeBps <= 10_000 ? config.protocolFeeBps : null;
+    } catch {
+      bps = null;
+    }
+    // A rate read before stays good when a later read fails.
+    this.#feeRate = { at: this.#now(), bps: bps ?? (known?.bps ?? null) };
+    return bps ?? known?.bps ?? null;
+  }
+
   /** Everything a list of services is described with, besides the services themselves. */
   async #serviceContext(rows: readonly CatalogRow[], waitMs: number): Promise<ServiceContext> {
-    const [known, rate] = await Promise.all([this.#records.read(rows.map(recordRow), waitMs), this.#displayRate()]);
+    const [known, rate, feeBps] = await Promise.all([
+      this.#records.read(rows.map(recordRow), waitMs),
+      this.#displayRate(),
+      this.#marketFeeBps(),
+    ]);
     const byProvider = new Map<string, { listing: string; name: string }[]>();
     for (const row of rows) {
       const list = byProvider.get(row.providerAgent) ?? [];
       if (!list.some((entry) => entry.listing === row.listing)) list.push({ listing: row.listing, name: row.name });
       byProvider.set(row.providerAgent, list);
     }
-    return { known, rate, byProvider };
+    return { known, rate, feeBps, byProvider };
   }
 
   #serviceView(row: CatalogRow, context: ServiceContext): ServiceView {
-    const { rate } = context;
+    const { rate, feeBps } = context;
     const record = knownRecord(context.known, row);
     const facts = record === null ? null : context.known.record!.facts.get(row.providerAgent)!;
     const listing = record ?? EMPTY_RECORD;
@@ -1086,6 +1119,10 @@ export class AgencWallet {
       terms: row.terms,
       details: row.details,
       price: money(row.priceLamports, rate),
+      marketFee:
+        feeBps === null
+          ? null
+          : { bps: feeBps, amount: money((row.priceLamports * BigInt(feeBps)) / 10_000n, rate) },
       rating: listing.rating,
       ratingCount: listing.ratings,
       jobsDone: listing.jobs,
