@@ -229,7 +229,10 @@ export function jobView(
   };
 }
 
-function savedService(service: NonNullable<ApprovalRecord["service"]>): ApprovalView["service"] {
+function savedService(
+  service: NonNullable<ApprovalRecord["service"]>,
+  usdPerSol: number | null,
+): ApprovalView["service"] {
   // A request saved by an older version knows less about the service than
   // the type says: those records are still on disk.
   const saved: Partial<NonNullable<ApprovalRecord["service"]>> = service;
@@ -241,6 +244,12 @@ function savedService(service: NonNullable<ApprovalRecord["service"]>): Approval
     outputs: saved.outputs ?? [],
     terms: saved.terms ?? [],
     details: saved.details ?? (service.summary === null ? "unavailable" : "ready"),
+    marketFee: saved.marketFee ?? null,
+    // An older request counted its record another way: it says nothing now.
+    paid: saved.paid ?? money(0n, usdPerSol),
+    buyers: saved.buyers ?? 0,
+    record: saved.record ?? "unavailable",
+    offeredBy: saved.offeredBy ?? null,
   };
 }
 
@@ -256,7 +265,8 @@ export function approvalView(
     agentId: approval.agentId,
     agentName,
     kind,
-    service: kind === "request" || approval.service === null ? null : savedService(approval.service),
+    service:
+      kind === "request" || approval.service === null ? null : savedService(approval.service, usdPerSol),
     request: approval.request,
     price: money(approval.priceLamports, usdPerSol),
     deposits: money(approval.depositsLamports, usdPerSol),

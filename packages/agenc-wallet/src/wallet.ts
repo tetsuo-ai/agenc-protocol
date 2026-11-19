@@ -24,6 +24,7 @@ import type {
   JobView,
   Money,
   OfferView,
+  ProviderView,
   ServiceView,
   WalletOverview,
 } from "./client/types.js";
@@ -35,6 +36,7 @@ import {
   type ApprovalTarget,
 } from "./approval.js";
 import { EarnHost, type EarnNotice, type EarnOptions } from "./earn.js";
+import { firstPartyAccounts } from "./first-party.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import {
@@ -57,6 +59,7 @@ import {
   readAgent,
   readHireableListing,
   readListing,
+  readProtocolConfig,
   requestDeposits,
   requestLanded,
   requestWorker,
@@ -80,6 +83,7 @@ import {
   type RequestIntent,
 } from "./market.js";
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
+import { createRecordKeeper, type KnownRecord, type RecordKeeper, type RecordRow } from "./records.js";
 import {
   buildJobSpec,
   buildListingSpec,
@@ -98,6 +102,7 @@ import {
   type OfferRecord,
   type WalletState,
 } from "./store.js";
+import { compareRecords, EMPTY_RECORD, type TrustRecord } from "./trust.js";
 import { KeyVault } from "./vault.js";
 import { activityView, approvalView, jobStatus, jobView, money } from "./views.js";
 
@@ -194,6 +199,16 @@ function found(word: SearchWord, place: { text: string; words: Set<string> }): b
 }
 const BALANCE_CACHE_MS = 4_000;
 const STALE_PRICE_MS = 6 * 60 * 60_000;
+/**
+ * How long a list of services waits for the record of who offers them and
+ * what buyers paid them, when that is being read. The rest is filled in when
+ * the list is read again.
+ */
+const RECORD_WAIT_MS = 4_000;
+/** How long the marketplace's fee rate is used before it is read again. */
+const FEE_RATE_TTL_MS = 10 * 60_000;
+/** After the fee rate could not be read, how long before it is tried again. */
+const FEE_RATE_RETRY_MS = 60_000;
 /** The marketplace's catalog hides a service priced below this. */
 const MIN_OFFER_PRICE_LAMPORTS = 1_000n;
 /** How long an agent gets to deliver a job hired from its own service. */
@@ -372,6 +387,29 @@ interface RequestTerms {
   deliverWithinSecs: number;
 }
 
+/** What a list of services is described with: the record, the dollar rate, the fee rate, who offers what. */
+interface ServiceContext {
+  known: KnownRecord;
+  rate: number | null;
+  feeBps: number | null;
+  /** Every service on the list, by the agent that offers it. */
+  byProvider: Map<string, { listing: string; name: string }[]>;
+}
+
+function recordRow(row: CatalogRow): RecordRow {
+  return { listing: row.listing, providerAgent: row.providerAgent, specHashHex: row.specHashHex };
+}
+
+/**
+ * A service's record, or null when it is not known: not read yet, or its
+ * agent's finished jobs could not be read the last time.
+ */
+function knownRecord(known: KnownRecord, row: CatalogRow): TrustRecord | null {
+  const record = known.record;
+  if (record === null || !record.facts.has(row.providerAgent) || record.unread.has(row.providerAgent)) return null;
+  return record.listings.get(row.listing) ?? EMPTY_RECORD;
+}
+
 export class AgencWallet {
   readonly #config: WalletConfig;
   readonly #chain: Chain;
@@ -398,6 +436,10 @@ export class AgencWallet {
   #closing = false;
   /** The smallest pay each running earn loop was started with. */
   readonly #earnFloor = new Map<string, bigint>();
+  /** Who offers each service and what buyers paid them, read in the background. */
+  readonly #records: RecordKeeper;
+  /** The marketplace's fee rate in basis points, as last read (null: it could not be). */
+  #feeRate: { at: number; bps: number | null } | null = null;
 
   private constructor(
     config: WalletConfig,
@@ -413,6 +455,14 @@ export class AgencWallet {
     this.#releaseLock = releaseLock;
     this.#now = config.now ?? Date.now;
     this.#log = config.log ?? (() => {});
+    this.#records = createRecordKeeper(
+      {
+        chain: config.chain,
+        services: config.services,
+        firstParty: firstPartyAccounts(config.chain.network),
+      },
+      this.#now,
+    );
     this.#earn = new EarnHost({
       chain: config.chain,
       services: config.services,
@@ -1128,7 +1178,62 @@ export class AgencWallet {
 
   // ------------------------------------------------------------ catalog
 
-  #serviceView(row: CatalogRow, rate: number | null): ServiceView {
+  /**
+   * The marketplace's fee rate, in basis points: its share of every price.
+   * Null when it cannot be read.
+   */
+  async #marketFeeBps(): Promise<number | null> {
+    const known = this.#feeRate;
+    if (known !== null && this.#now() - known.at < (known.bps === null ? FEE_RATE_RETRY_MS : FEE_RATE_TTL_MS)) {
+      return known.bps;
+    }
+    let bps: number | null = null;
+    try {
+      const config = await readProtocolConfig(this.#chain);
+      bps = config.protocolFeeBps >= 0 && config.protocolFeeBps <= 10_000 ? config.protocolFeeBps : null;
+    } catch {
+      bps = null;
+    }
+    // A rate read before stays good when a later read fails.
+    this.#feeRate = { at: this.#now(), bps: bps ?? (known?.bps ?? null) };
+    return bps ?? known?.bps ?? null;
+  }
+
+  /** Everything a list of services is described with, besides the services themselves. */
+  async #serviceContext(rows: readonly CatalogRow[], waitMs: number): Promise<ServiceContext> {
+    const [known, rate, feeBps] = await Promise.all([
+      this.#records.read(rows.map(recordRow), waitMs),
+      this.#displayRate(),
+      this.#marketFeeBps(),
+    ]);
+    const byProvider = new Map<string, { listing: string; name: string }[]>();
+    for (const row of rows) {
+      const list = byProvider.get(row.providerAgent) ?? [];
+      if (!list.some((entry) => entry.listing === row.listing)) list.push({ listing: row.listing, name: row.name });
+      byProvider.set(row.providerAgent, list);
+    }
+    return { known, rate, feeBps, byProvider };
+  }
+
+  #serviceView(row: CatalogRow, context: ServiceContext): ServiceView {
+    const { rate, feeBps } = context;
+    const record = knownRecord(context.known, row);
+    const facts = record === null ? null : context.known.record!.facts.get(row.providerAgent)!;
+    const listing = record ?? EMPTY_RECORD;
+    let offeredBy: ProviderView | null = null;
+    if (record !== null && facts !== null) {
+      const provider = context.known.record!.providers.get(row.providerAgent) ?? EMPTY_RECORD;
+      offeredBy = {
+        since: facts.since,
+        jobsDone: provider.jobs,
+        paid: money(provider.paidLamports, rate),
+        buyers: provider.buyers,
+        turnedDown: facts.turnedDown,
+        disputesLost: facts.disputesLost,
+        deposit: facts.depositLamports === null ? null : money(facts.depositLamports, rate),
+        otherServices: (context.byProvider.get(row.providerAgent) ?? []).filter((other) => other.listing !== row.listing),
+      };
+    }
     return {
       listing: row.listing,
       name: row.name,
@@ -1141,10 +1246,18 @@ export class AgencWallet {
       terms: row.terms,
       details: row.details,
       price: money(row.priceLamports, rate),
-      rating: row.rating,
-      ratingCount: row.ratingCount,
-      jobsDone: row.jobsDone,
+      marketFee:
+        feeBps === null
+          ? null
+          : { bps: feeBps, amount: money((row.priceLamports * BigInt(feeBps)) / 10_000n, rate) },
+      rating: listing.rating,
+      ratingCount: listing.ratings,
+      jobsDone: listing.jobs,
+      paid: money(listing.paidLamports, rate),
+      buyers: listing.buyers,
+      record: record !== null ? "ready" : context.known.reading ? "loading" : "unavailable",
       provider: row.providerAgent,
+      offeredBy,
       deliverySecs: row.deliverySecs,
     };
   }
@@ -1182,6 +1295,7 @@ export class AgencWallet {
   }): Promise<{ services: ServiceView[]; total: number }> {
     const [listed, rate] = await Promise.all([this.#services.listServices(), this.#displayRate()]);
     const rows = [...listed, ...(await this.#ownServices(listed))];
+    const context = await this.#serviceContext(rows, RECORD_WAIT_MS);
     const words = searchWords(params.query ?? "");
     const limit = Math.min(MAX_FIND_LIMIT, Math.max(1, Math.trunc(params.limit ?? 8)));
     const offset = Math.max(0, Math.trunc(params.offset ?? 0));
@@ -1226,17 +1340,19 @@ export class AgencWallet {
     // One stray word in a long description does not make a match.
     const most = matched.reduce((best, entry) => Math.max(best, entry.hits), 0);
     const scored = matched.filter((entry) => words.length === 0 || (most > 0 && entry.hits === most));
+    // Then by what buyers really paid and said, weighed by money: many good
+    // paid jobs rank above one excellent cheap one (trust.ts).
+    const recordOf = (row: CatalogRow): TrustRecord => knownRecord(context.known, row) ?? EMPTY_RECORD;
     scored.sort(
       (a, b) =>
         b.inName - a.inName ||
         // A service nobody can read about goes below the ones that say what they do.
         Number(a.row.details === "unavailable") - Number(b.row.details === "unavailable") ||
-        (b.row.rating ?? 0) - (a.row.rating ?? 0) ||
-        b.row.jobsDone - a.row.jobsDone ||
+        compareRecords(recordOf(a.row), recordOf(b.row)) ||
         (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
     );
     return {
-      services: scored.slice(offset, offset + limit).map((entry) => this.#serviceView(entry.row, rate)),
+      services: scored.slice(offset, offset + limit).map((entry) => this.#serviceView(entry.row, context)),
       total: scored.length,
     };
   }
@@ -1273,8 +1389,9 @@ export class AgencWallet {
         priceLamports: BigInt(offer.priceLamports),
         rating: null,
         ratingCount: 0,
-        jobsDone: agent.earn.jobsDone,
+        jobsDone: 0,
         deliverySecs: offer.deliverySecs,
+        specHashHex: offer.specHashHex,
       });
     }
     return own;
@@ -1340,9 +1457,8 @@ export class AgencWallet {
 
     const now = this.#now();
     const jobId = newId("job");
-    const catalogRow = (await this.#services.listServices().catch(() => [])).find(
-      (row) => row.listing === listing,
-    );
+    const catalog = await this.#services.listServices().catch(() => [] as CatalogRow[]);
+    const catalogRow = catalog.find((row) => row.listing === listing);
     const service: ServiceView = this.#serviceView(
       catalogRow ?? {
         listing,
@@ -1363,8 +1479,10 @@ export class AgencWallet {
         ratingCount: terms.ratingCount,
         jobsDone: 0,
         deliverySecs: terms.deliverySecs,
+        specHashHex: values.bytesToHex(terms.specHash),
       },
-      rate,
+      // What is known of the service's record right now; a request does not wait for it.
+      await this.#serviceContext(catalog, 0),
     );
     const record: JobRecord = {
       id: jobId,
@@ -2775,6 +2893,8 @@ export class AgencWallet {
       try {
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider);
         this.#recordPaid(jobId, signature);
+        // The service's record now holds this job.
+        this.#records.invalidate();
       } catch (error) {
         if (error instanceof WalletError) throw error;
         throw new WalletError(
@@ -3028,6 +3148,7 @@ export class AgencWallet {
           this.#patchJob(jobId, (entry) => {
             entry.signatures.rate = signature;
           });
+          this.#records.invalidate();
         } catch (error) {
           throw new WalletError(
             "NETWORK",

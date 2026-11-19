@@ -38,6 +38,11 @@ First version. Not published.
 - A socket server with owner and agent-bound connections, a dependency-free
   client, and four agent tools (`market_find`, `market_hire`,
   `market_status`, `market_review`).
+- Every service found says who offers it and what buyers really paid it,
+  read from the chain: the agent's age, paid jobs, turn-downs, lost disputes,
+  deposit and other services, and ratings and paid jobs weighed by the fee
+  each job paid, with the marketplace's own accounts left out. The list ranks
+  by that record, and each service gives the marketplace's fee on its price.
 - A practice mode: the real marketplace program in-process with play money.
 - A service says what it is. The marketplace's list carries names and prices
   only, so the wallet reads each listing's own description from the address

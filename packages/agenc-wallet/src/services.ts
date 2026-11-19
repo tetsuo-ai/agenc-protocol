@@ -54,6 +54,11 @@ export interface CatalogRow {
   ratingCount: number;
   jobsDone: number;
   deliverySecs: number | null;
+  /**
+   * The hash of the description the service committed to, as lowercase hex,
+   * or null when it is not known. A finished job's own record names it.
+   */
+  specHashHex: string | null;
 }
 
 export interface AttestTaskInput {
@@ -133,6 +138,14 @@ export interface ResultUploader {
 export interface MarketServices {
   /** Services a buyer can hire right now. */
   listServices(): Promise<CatalogRow[]>;
+  /**
+   * The jobs a provider agent finished, by their task addresses, as the
+   * marketplace's own record lists them. Only the attribution is taken from
+   * here: whether each job was finished and paid, and by whom, is read from
+   * its own record on the chain (records.ts). Throws when the list cannot be
+   * read right now. Absent where the network keeps no such list.
+   */
+  finishedJobs?(provider: Address): Promise<string[]>;
   /**
    * Attestation signers this wallet accepts besides the cluster's own
    * moderation authority, most preferred first.
@@ -402,6 +415,8 @@ export interface HostedServicesOptions {
    * read before it is handed back without them. Default 2.5 seconds.
    */
   detailsWaitMs?: number;
+  /** Least time between two reads of a provider's finished jobs. Default 1.2 seconds. */
+  finishedGapMs?: number;
   now?: () => number;
 }
 
@@ -411,6 +426,16 @@ export const DEFAULT_ATTEST_URL = "https://attest.agenc.ag";
 const CATALOG_TTL_MS = 60_000;
 const INFO_TTL_MS = 10 * 60_000;
 const MAX_CATALOG_PAGES = 3;
+/** How long a provider's list of finished jobs is kept before it is read again. */
+const FINISHED_TTL_MS = 10 * 60_000;
+/** A provider's finished jobs are read in pages of this many, at most this many pages. */
+const FINISHED_PAGE = 100;
+const MAX_FINISHED_PAGES = 5;
+/**
+ * The marketplace's read routes refuse a client that asks too often, so the
+ * lists of finished jobs are read one at a time, this far apart.
+ */
+const DEFAULT_FINISHED_GAP_MS = 1_200;
 const MAX_RESULT_BYTES = 256 * 1024;
 /** A description that could not be read is tried again after this long. */
 const DETAILS_RETRY_MS = 10 * 60_000;
@@ -440,6 +465,12 @@ interface ListedService {
   specUri: string | null;
 }
 
+/** The finished jobs of one provider, as last read. */
+interface FinishedList {
+  at: number;
+  tasks: string[];
+}
+
 function describedRow(
   entry: ListedService,
   details: ListingDetails,
@@ -447,6 +478,7 @@ function describedRow(
 ): CatalogRow {
   return {
     ...entry.base,
+    specHashHex: entry.specHashHex,
     category: details.category ?? entry.listedCategory,
     summary: summarize(entry.base.name, details.description) ?? entry.listedSummary,
     description:
@@ -533,6 +565,12 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
 
   const detailsCache = options.detailsCache ?? openDetailsCache({ now });
   const detailsWaitMs = Math.max(0, options.detailsWaitMs ?? DEFAULT_DETAILS_WAIT_MS);
+  const finishedGapMs = Math.max(0, options.finishedGapMs ?? DEFAULT_FINISHED_GAP_MS);
+  const finished = new Map<string, FinishedList>();
+  /** The last read of finished jobs, which the next one waits for. */
+  let finishedTurn: Promise<unknown> = Promise.resolve();
+  /** When the marketplace was last asked for a list of finished jobs (the real clock). */
+  let finishedAskedAt = Number.NEGATIVE_INFINITY;
 
   let catalog: { at: number; listed: ListedService[] } | null = null;
   let info: { at: number; moderator: Address } | null = null;
@@ -721,7 +759,58 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     };
   }
 
+  /** Read one provider's finished jobs from the marketplace's list of tasks, every page of it. */
+  async function readFinished(provider: Address): Promise<string[]> {
+    const tasks: string[] = [];
+    for (let page = 1; page <= MAX_FINISHED_PAGES; page += 1) {
+      // The first page is asked for without a page number: the route sends
+      // "page=1" elsewhere, and a redirect is never followed.
+      const { status, body } = await requestJson(
+        fetchImpl,
+        `${siteUrl}/api/tasks?provider=${provider}&pageSize=${FINISHED_PAGE}${page > 1 ? `&page=${page}` : ""}`,
+        { method: "GET" },
+        { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
+      );
+      const data = record(body);
+      if (status !== 200 || data === null || !Array.isArray(data.items)) {
+        throw new WalletError("NETWORK", "The marketplace's record of finished jobs could not be read right now.");
+      }
+      for (const value of data.items) {
+        const item = record(value);
+        const task = safeAddress(item?.pda);
+        // Only a job this provider did and that was paid out. The chain says the rest.
+        if (task === null || item?.status !== "settled" || item.providerAgent !== provider) continue;
+        tasks.push(task);
+      }
+      const total = finite(data.total) ?? 0;
+      if (data.items.length === 0 || page * FINISHED_PAGE >= total) break;
+    }
+    return tasks;
+  }
+
   return {
+    async finishedJobs(provider) {
+      const fresh = (list: FinishedList | undefined): list is FinishedList =>
+        list !== undefined && now() - list.at < FINISHED_TTL_MS;
+      const known = finished.get(provider);
+      if (fresh(known)) return known.tasks;
+      // One read at a time, and never two closer together than the gap.
+      const turn = finishedTurn
+        .catch(() => undefined)
+        .then(async () => {
+          const again = finished.get(provider);
+          if (fresh(again)) return again.tasks;
+          const wait = finishedAskedAt + finishedGapMs - Date.now();
+          if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, wait));
+          finishedAskedAt = Date.now();
+          const tasks = await readFinished(provider);
+          finished.set(provider, { at: now(), tasks });
+          return tasks;
+        });
+      finishedTurn = turn;
+      return turn;
+    },
+
     async listServices() {
       if (catalog === null || now() - catalog.at >= CATALOG_TTL_MS) {
         const found: ListedService[] = [];
