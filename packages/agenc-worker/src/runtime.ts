@@ -49,6 +49,7 @@ import type { AccountInfoReader } from "./account-reader.js";
 import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
 import {
   assertExecutorPromptFits,
+  ExecutorError,
   preflightExecutor,
   runExecutor,
 } from "./executor.js";
@@ -207,6 +208,13 @@ export type WorkerContext = {
    * computer's clock.
    */
   clusterTime?: () => Promise<number>;
+  /**
+   * Aborted when whoever runs the worker shuts down. A job program in
+   * progress is then killed at once instead of outliving it; that is not a
+   * failed try, and the job is run again on the next start. (`runUp`'s own
+   * signal only stops it looking for work: a job in progress finishes.)
+   */
+  signal?: AbortSignal;
 };
 
 /** The worker's on-chain identity. */
@@ -1535,10 +1543,17 @@ async function executeAndSubmit(
       timeoutMs: ctx.config.executorTimeoutMs,
       envAllowlist: ctx.config.executorEnvAllowlist,
       unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     });
     stdout = result.stdout;
   } catch (error) {
     const reason = formatDiagnosticError(error);
+    if (error instanceof ExecutorError && error.detail.reason === "aborted") {
+      // Stopped from outside, not the job failing: nothing is counted and the
+      // open claim is picked up again on the next start.
+      ctx.log({ event: "task.execution-stopped", task });
+      return { status: "execution-failed", task, reason };
+    }
     ctx.log({ event: "task.execution-failed", task, reason });
     noteJobFailure(ctx, task, reason, { rewardAmount: decodedTask.rewardAmount });
     return { status: "execution-failed", task, reason };

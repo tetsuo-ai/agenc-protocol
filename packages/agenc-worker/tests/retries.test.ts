@@ -2,7 +2,7 @@
 // longer wait, and then given up with the reason kept, instead of being run
 // again every poll in silence. Several given-up jobs in a row stop the worker
 // from taking new ones until whoever runs it clears that.
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -457,6 +457,51 @@ describe("a job spec that cannot be fetched for hours", () => {
     expect(after.fetchFailingSince).toBeUndefined();
     expect(after.fetchWaits).toBeUndefined();
     expect(after.failures).toBe(1);
+  });
+});
+
+describe("a job in progress when the worker is stopped", () => {
+  it("is stopped at once, and the stop is not counted as a failed try", async () => {
+    const { stateDir, ctx, events } = await heldJob();
+    const pidFile = path.join(stateDir, "job.pid");
+    // A job program that would run for half a minute.
+    ctx.config.executor = [
+      process.execPath,
+      "-e",
+      'require("node:fs").writeFileSync(process.argv[1],String(process.pid));setTimeout(()=>{},30000)',
+      pidFile,
+      "{prompt}",
+    ];
+    const controller = new AbortController();
+    ctx.signal = controller.signal;
+    const resuming = resumeOpenClaim(ctx, agent);
+    let pid = 0;
+    try {
+      for (let waited = 0; waited < 5_000 && !existsSync(pidFile); waited += 50) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      pid = Number(readFileSync(pidFile, "utf8"));
+      controller.abort();
+      const outcome = await Promise.race([
+        resuming,
+        new Promise((resolve) => setTimeout(() => resolve("still running"), 3_000)),
+      ]);
+      expect(outcome).toMatchObject({ status: "execution-failed", task: TASK });
+      expect(() => process.kill(pid, 0)).toThrow();
+      const state = loadState(stateDir);
+      expect(state.openClaim).toMatchObject({ task: TASK, phase: "claimed" });
+      expect(state.openClaim?.failures).toBeUndefined();
+      expect(state.openClaim?.retryAt).toBeUndefined();
+      expect(state.failedJobs).toEqual([]);
+      expect(events.some((event) => event.event === "task.execution-stopped")).toBe(true);
+      expect(events.some((event) => event.event === "task.execution-failed")).toBe(false);
+    } finally {
+      try {
+        if (pid > 0) process.kill(-pid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
   });
 });
 

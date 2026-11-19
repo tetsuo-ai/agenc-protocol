@@ -155,7 +155,11 @@ agent to read it**. The worker is built around that assumption:
   drained, never reflected into the operator terminal/log, and capped at
   256 KiB. On timeout, overflow, and normal parent exit, the worker kills the
   executor's process group so ordinary background descendants cannot escape.
-  Non-zero exit, signal death, or timeout means nothing is submitted.
+  Non-zero exit, signal death, or timeout means nothing is submitted. An
+  embedder that shuts down aborts the context's `signal`: a job program in
+  progress is then killed with its process group at once (`runExecutor`'s
+  `signal`, reason `aborted`, event `task.execution-stopped`), which is not a
+  failed try; the job runs again on the next start.
 - **A failing job is tried three times, then given up.** Each failed attempt
   (the executor, a job spec that is not the one the task names) waits before
   the next one: one minute, then four (`retryDelayMs`, growing fourfold up to

@@ -3,7 +3,7 @@
 // interpretation (spawn shell:false). The stub executor is `node -e` printing
 // its own process.argv back as JSON, so the test observes precisely what the
 // OS handed the child.
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -28,6 +28,25 @@ const ECHO_ARGV: string[] = [
 // interpolated into JavaScript passed to `node -e`.
 const DESCENDANT_SCRIPT =
   'setTimeout(()=>require("node:fs").writeFileSync(process.argv[1],"escaped"),350)';
+
+/**
+ * A job program that would run for a minute: it notes its pid, starts a
+ * helper in its own process group that would leave a mark later, and waits.
+ */
+const LONG_JOB_SCRIPT =
+  'const fs=require("node:fs");fs.writeFileSync(process.argv[1],String(process.pid));' +
+  'require("node:child_process").spawn(process.execPath,["-e",' +
+  '"setTimeout(()=>require(\\"node:fs\\").writeFileSync(process.argv[1],\\"escaped\\"),1500)",' +
+  'process.argv[2]],{stdio:"ignore"});setTimeout(()=>{},60000)';
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 const DESCENDANT_PARENT_SCRIPT =
   'const {spawn}=require("node:child_process");' +
   'const c=spawn(process.execPath,["-e",process.argv[1],process.argv[2]],{stdio:"ignore"});' +
@@ -236,6 +255,53 @@ describe("runExecutor", () => {
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(existsSync(marker)).toBe(false);
     rmSync(marker, { force: true });
+  });
+
+  it("kills the program and its helpers at once when it is stopped, and says so", async () => {
+    const folder = mkdtempSync(path.join(tmpdir(), "agenc-executor-stop-"));
+    const pidFile = path.join(folder, "pid");
+    const marker = path.join(folder, "marker");
+    const controller = new AbortController();
+    const running = runExecutor({
+      argv: [process.execPath, "-e", LONG_JOB_SCRIPT, pidFile, marker, "{prompt}"],
+      prompt: "x",
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+    let pid = 0;
+    try {
+      for (let waited = 0; waited < 5_000 && !existsSync(pidFile); waited += 50) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      pid = Number(readFileSync(pidFile, "utf8"));
+      const stoppedAt = Date.now();
+      controller.abort();
+      const outcome = await Promise.race([
+        running.then(
+          () => "finished",
+          (error: unknown) => error,
+        ),
+        new Promise((resolve) => setTimeout(() => resolve("still running"), 3_000)),
+      ]);
+      expect(outcome).toBeInstanceOf(ExecutorError);
+      expect((outcome as ExecutorError).detail.reason).toBe("aborted");
+      expect(Date.now() - stoppedAt).toBeLessThan(1_000);
+      expect(alive(pid)).toBe(false);
+      // The helper in its process group went with it.
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (pid > 0 && alive(pid)) process.kill(-pid, "SIGKILL");
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start a program once it is stopped", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      runExecutor({ argv: ECHO_ARGV, prompt: "x", timeoutMs: 5_000, signal: controller.signal }),
+    ).rejects.toMatchObject({ detail: { reason: "aborted" } });
   });
 
   it("kills and fails on timeout", async () => {

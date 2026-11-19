@@ -62,7 +62,8 @@ export class ExecutorError extends Error {
         | "stderr-overflow"
         | "prompt-overflow"
         | "prompt-invalid"
-        | "spawn";
+        | "spawn"
+        | "aborted";
     },
   ) {
     super(message);
@@ -285,8 +286,21 @@ export async function runExecutor(options: {
    * Only set after an operator explicitly selected executorMode="unsafe".
    */
   unsafeInheritProcessContext?: boolean;
+  /**
+   * When this aborts, the program and everything in its process group is
+   * killed at once and the run fails with reason "aborted": whoever runs the
+   * worker is stopping, and a program left running would outlive it.
+   */
+  signal?: AbortSignal;
 }): Promise<ExecutorResult> {
-  const { argv, prompt, timeoutMs } = options;
+  const { argv, prompt, timeoutMs, signal } = options;
+  if (signal?.aborted) {
+    throw new ExecutorError("executor was stopped before it started", {
+      exitCode: null,
+      signal: null,
+      reason: "aborted",
+    });
+  }
   const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES;
   const maxStderrBytes = options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES;
   assertExecutorPromptFits(prompt);
@@ -337,6 +351,17 @@ export async function runExecutor(options: {
       );
       killExecutor(child);
     }, timeoutMs);
+    const onAbort = (): void => {
+      if (failure === null) {
+        failure = new ExecutorError("executor was stopped", {
+          exitCode: null,
+          signal: null,
+          reason: "aborted",
+        });
+      }
+      killExecutor(child);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
@@ -371,6 +396,7 @@ export async function runExecutor(options: {
 
     child.on("error", (error) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
       if (!unsafe) killExecutor(child);
@@ -384,8 +410,9 @@ export async function runExecutor(options: {
       );
     });
 
-    child.on("close", (exitCode, signal) => {
+    child.on("close", (exitCode, exitSignal) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
       // The process leader has exited. Kill any ordinary background children
@@ -396,11 +423,11 @@ export async function runExecutor(options: {
         reject(failure);
         return;
       }
-      if (signal !== null) {
+      if (exitSignal !== null) {
         reject(
-          new ExecutorError(`executor was killed by signal ${signal}`, {
+          new ExecutorError(`executor was killed by signal ${exitSignal}`, {
             exitCode,
-            signal,
+            signal: exitSignal,
             reason: "signal",
           }),
         );
