@@ -44,6 +44,7 @@ import { defaultSocketPath, serveWallet } from "./server.js";
 import { openDetailsCache } from "./listing-details.js";
 import { createHostedServices, type MarketServices } from "./services.js";
 import { restoreBackup } from "./backup.js";
+import { hideFromLog, logSafe } from "./log.js";
 import { listenForUnlock } from "./unlock-server.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 import { AgencWallet } from "./wallet.js";
@@ -208,6 +209,8 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
 /** The endpoint a host named at start-up, when it is one this service can use. */
 function ownRpcUrl(bootstrap: Bootstrap): string | undefined {
   if (bootstrap.rpcUrl === undefined) return undefined;
+  // It usually carries an API key: never in this service's own log.
+  hideFromLog(bootstrap.rpcUrl);
   let url: URL;
   try {
     url = new URL(bootstrap.rpcUrl);
@@ -222,7 +225,7 @@ function ownRpcUrl(bootstrap: Bootstrap): string | undefined {
 }
 
 function log(line: string): void {
-  process.stderr.write(`${new Date().toISOString()} ${line}\n`);
+  process.stderr.write(`${new Date().toISOString()} ${logSafe(line)}\n`);
 }
 
 /** A wallet open and served: what it takes to stop it again. */
