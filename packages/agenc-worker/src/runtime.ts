@@ -152,6 +152,13 @@ export const DEFAULT_MAX_FAILED_JOBS_IN_A_ROW = 3;
  * spec away, cannot hold the worker's one job for days.
  */
 export const DEFAULT_MAX_FETCH_WAIT_MS = 6 * 60 * 60_000;
+/**
+ * A fetch failure this long after the one before cannot come from a worker
+ * that kept running (it never waits more than {@link MAX_RETRY_DELAY_MS}
+ * between tries, plus one poll): it was stopped, or the computer slept. The
+ * waiting then starts again, so time nobody could try is not counted.
+ */
+export const FETCH_RESUME_GAP_MS = 2 * MAX_RETRY_DELAY_MS;
 
 /** Everything the worker loop needs, injected (see cli.ts for the RPC wiring). */
 export type WorkerContext = {
@@ -1073,10 +1080,20 @@ function noteJobWait(
   const state = loadState(ctx.stateDir);
   const marker = state.openClaim;
   if (marker === null || marker.task !== task) return;
-  const fetchWaits = (marker.fetchWaits ?? 0) + 1;
   const line = reasonLine(`${what} could not be fetched: ${reason}`);
   const now = Date.now();
-  const fetchFailingSince = marker.fetchFailingSince ?? new Date(now).toISOString();
+  const last =
+    marker.lastFetchFailureAt === undefined ? Number.NaN : Date.parse(marker.lastFetchFailureAt);
+  // A gap no running worker leaves: it was stopped or the computer slept.
+  // That time does not count, and the waits start short again.
+  const resumed =
+    Number.isFinite(last) && now - last > FETCH_RESUME_GAP_MS + ctx.config.pollIntervalMs;
+  const fetchWaits = resumed ? 1 : (marker.fetchWaits ?? 0) + 1;
+  const lastFetchFailureAt = new Date(now).toISOString();
+  const fetchFailingSince =
+    resumed || marker.fetchFailingSince === undefined
+      ? lastFetchFailureAt
+      : marker.fetchFailingSince;
   const limitMs = Math.max(0, ctx.config.maxFetchWaitMs ?? DEFAULT_MAX_FETCH_WAIT_MS);
   if (now - Date.parse(fetchFailingSince) >= limitMs) {
     // The detail stays in the log: a timeout in it would read as the work
@@ -1091,7 +1108,14 @@ function noteJobWait(
     return;
   }
   const retryAt = new Date(now + retryDelayMs(ctx, fetchWaits)).toISOString();
-  state.openClaim = { ...marker, fetchWaits, fetchFailingSince, retryAt, lastFailure: line };
+  state.openClaim = {
+    ...marker,
+    fetchWaits,
+    fetchFailingSince,
+    lastFetchFailureAt,
+    retryAt,
+    lastFailure: line,
+  };
   saveState(ctx.stateDir, state);
   ctx.log({
     event: "task.fetch-wait-scheduled",
@@ -1119,8 +1143,19 @@ function clearFetchWaits(ctx: WorkerContext, task: Address): void {
   const state = loadState(ctx.stateDir);
   const marker = state.openClaim;
   if (marker === null || marker.task !== task) return;
-  if (marker.fetchWaits === undefined && marker.fetchFailingSince === undefined) return;
-  const { fetchWaits: _waits, fetchFailingSince: _since, ...rest } = marker;
+  if (
+    marker.fetchWaits === undefined &&
+    marker.fetchFailingSince === undefined &&
+    marker.lastFetchFailureAt === undefined
+  ) {
+    return;
+  }
+  const {
+    fetchWaits: _waits,
+    fetchFailingSince: _since,
+    lastFetchFailureAt: _last,
+    ...rest
+  } = marker;
   state.openClaim = rest;
   saveState(ctx.stateDir, state);
 }

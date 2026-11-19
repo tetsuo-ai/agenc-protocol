@@ -22,7 +22,7 @@ import {
   type ProgramAccountsTransport,
   type TaskArgs,
 } from "@tetsuo-ai/marketplace-sdk";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   defaultPinnedRequester,
   JobSpecError,
@@ -441,6 +441,52 @@ describe("a job spec that cannot be fetched for hours", () => {
     expect(events.some((event) => event.event === "task.given-up")).toBe(true);
   });
 
+  it("does not count time the worker was stopped or the computer slept", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob();
+    ctx.fetchUri = async () => {
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+    await resumeOpenClaim(ctx, agent);
+    // That one failure, then the wallet stays closed for seven hours.
+    const closed = loadState(stateDir);
+    const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60_000).toISOString();
+    closed.openClaim!.fetchFailingSince = sevenHoursAgo;
+    closed.openClaim!.lastFetchFailureAt = sevenHoursAgo;
+    saveState(stateDir, closed);
+    waitOut();
+    // Opened again, its first fetch fails before the network is up: the job waits on.
+    await resumeOpenClaim(ctx, agent);
+    const state = loadState(stateDir);
+    expect(state.failedJobs).toEqual([]);
+    expect(state.openClaim).toMatchObject({ task: TASK, fetchWaits: 1 });
+    expect(Date.now() - Date.parse(state.openClaim!.fetchFailingSince!)).toBeLessThan(60_000);
+  });
+
+  it("is given up after six hours of failures at every wait while it runs", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob();
+    ctx.fetchUri = async () => {
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-20T00:00:00.000Z"));
+      await resumeOpenClaim(ctx, agent);
+      // A try at least every half hour (the longest wait) for six and a half hours.
+      for (let look = 0; look < 13 && loadState(stateDir).openClaim !== null; look += 1) {
+        vi.setSystemTime(new Date(Date.now() + 30 * 60_000));
+        waitOut();
+        await resumeOpenClaim(ctx, agent);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", reason: "the job spec could not be fetched for 6 hours" }),
+    ]);
+  });
+
   it("starts the six hours again after a good fetch", async () => {
     const { stateDir, ctx, waitOut } = await heldJob();
     const good = heldJobSpec;
@@ -455,6 +501,7 @@ describe("a job spec that cannot be fetched for hours", () => {
     await resumeOpenClaim(ctx, agent);
     const after = loadState(stateDir).openClaim!;
     expect(after.fetchFailingSince).toBeUndefined();
+    expect(after.lastFetchFailureAt).toBeUndefined();
     expect(after.fetchWaits).toBeUndefined();
     expect(after.failures).toBe(1);
   });

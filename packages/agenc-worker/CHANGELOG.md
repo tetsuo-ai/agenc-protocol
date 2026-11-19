@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after three attempts with its reason kept in `failedJobs`, and three
   given-up jobs in a row stop new claims until `clearWorkerPause`. A job spec
   or buyer's note that cannot be fetched (no answer, 5xx, 408, 429) only
-  waits, for at most six hours in a row (`maxFetchWaitMs`); it does not use up
-  an attempt (`JobSpecUnreachableError`). A host that refuses for good (any
+  waits, for at most six hours in a row (`maxFetchWaitMs`, counting only time
+  the worker was running); it does not use up an attempt
+  (`JobSpecUnreachableError`). A host that refuses for good (any
   other 4xx) uses one up (`isDefiniteHttpRefusal`).
 - A delivery the buyer never reviews is auto-accepted by the worker once its
   review window has passed, so the worker is paid.
