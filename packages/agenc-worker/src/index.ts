@@ -94,6 +94,7 @@ export {
   runTickOnce,
   runUp,
   shareEarnings,
+  couldBeWaitingPay,
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   workerStatus,
   type ClaimCandidate,

@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The claim of a given-up job is expired or reclaimed by the worker, returning
   its rent and freeing its active-task slot.
 - Several deliveries paid between two looks are each reported with what they
-  earned instead of no amount at all.
+  earned instead of no amount at all. Anything beyond what they pay is kept
+  back only when it could be a waiting job's whole pay.
 
 ### Added
 

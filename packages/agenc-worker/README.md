@@ -178,6 +178,9 @@ agent to read it**. The worker is built around that assumption:
 - **Earnings settled together are each counted.** When several deliveries are
   paid between two looks, the rise in the agent's on-chain `totalEarned` is
   divided by each task's own terms, so every paid job reports what it earned.
+  A rise beyond what they pay is kept back only while it could be the whole
+  pay of a job still waiting (one paid between the reads); a smaller extra,
+  such as a lower fee for a well-reviewed worker, goes to the jobs just paid.
 
 ## Run it on a timer
 

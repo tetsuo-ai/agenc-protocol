@@ -2350,6 +2350,45 @@ describe("settlement evidence coherence", () => {
       true,
     );
   });
+
+  it("counts a small extra with the job just paid while another waits on, as in a dispute", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-extra-"),
+    );
+    twoPendingJobs(stateDir);
+    // The first job paid a little over its terms (the marketplace takes a
+    // smaller fee from a well-reviewed worker); the second job is disputed
+    // and may wait for days.
+    const extra = REWARD / 1_000n;
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.Disputed, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + extra)],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+
+    const first = await checkSettlements(ctx, agent);
+    expect(first.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [TASK, FIRST_PAY + extra],
+    ]);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(
+      (50n + FIRST_PAY + extra).toString(),
+    );
+
+    // The dispute ends for the worker: that job is paid what it pays, no more.
+    accounts.set(
+      SECOND_TASK,
+      taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+    );
+    accounts.set(WORKER, agentRegistrationData(50n + FIRST_PAY + extra + SECOND_PAY));
+    const second = await checkSettlements(ctx, agent);
+    expect(second.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [SECOND_TASK, SECOND_PAY],
+    ]);
+  });
 });
 
 describe("dividing one round's earnings", () => {
@@ -2361,9 +2400,18 @@ describe("dividing one round's earnings", () => {
     expect(shareEarnings(0n, [5n, 5n])).toEqual([0n, 0n]);
   });
 
-  it("gives each job its pay and keeps the rest when asked to", () => {
-    expect(shareEarnings(130n, [60n, 40n], true)).toEqual([60n, 40n]);
-    expect(shareEarnings(90n, [60n, 40n], true)).toEqual([54n, 36n]);
+  it("keeps back only what could be a waiting job's whole pay", () => {
+    // 30 left over, and a waiting job pays 30 (or 33: a little under its terms).
+    expect(shareEarnings(130n, [60n, 40n], [30n])).toEqual([60n, 40n]);
+    expect(shareEarnings(130n, [60n, 40n], [33n, 500n])).toEqual([60n, 40n]);
+    // A job whose pay is not known could pay anything.
+    expect(shareEarnings(130n, [60n, 40n], [null])).toEqual([60n, 40n]);
+    // 30 cannot be the pay of a job that pays 100, nor of one that pays nothing.
+    expect(shareEarnings(130n, [60n, 40n], [100n])).toEqual([78n, 52n]);
+    expect(shareEarnings(130n, [60n, 40n], [0n])).toEqual([78n, 52n]);
+    expect(shareEarnings(130n, [60n, 40n])).toEqual([78n, 52n]);
+    // Less than what this round's jobs pay: nothing is left over to keep.
+    expect(shareEarnings(90n, [60n, 40n], [30n])).toEqual([54n, 36n]);
   });
 
   it("knows what a job pays by its own terms", () => {

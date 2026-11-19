@@ -2112,9 +2112,18 @@ export async function checkSettlements(
   }> = [];
   let revisionRestored = false;
   let stateChanged = false;
+  // What each tracked job adds to the agent's on-chain total once it is paid
+  // (null when its task could not be read; absent when its pay never shows
+  // there), to tell a waiting job's pay from a small extra.
+  const wouldPay = new Map<SubmissionRecord, bigint | null>();
   for (const record of pending) {
     const task = record.task as Address;
     const decodedTask = await readTask(ctx, task);
+    if (decodedTask === null) {
+      wouldPay.set(record, recordedReward(record));
+    } else if (unwrapOption(decodedTask.rewardMint) === null) {
+      wouldPay.set(record, expectedWorkerPayout(decodedTask));
+    }
     const submittedAt = Date.parse(record.submittedAt);
     const insideReconciliationGrace =
       Number.isFinite(submittedAt) &&
@@ -2325,16 +2334,21 @@ export async function checkSettlements(
   // Several jobs can be paid between two looks (a buyer approves two at
   // once, or the worker was offline). The agent's on-chain total says how
   // much came in; each job's own terms say how it divides. Earnings beyond
-  // what this round's jobs pay stay unattributed while another tracked job
-  // is still waiting, because they are most likely that job's pay landing
-  // between the reads.
-  const othersWaiting = pending.some(
-    (record) => !resolved.some((entry) => entry.record === record),
-  );
+  // what this round's jobs pay stay unattributed only when they could be the
+  // pay of a tracked job that is still waiting, landing between the reads; a
+  // smaller extra (a lower fee for a well-reviewed worker) is this round's.
+  const waiting = pending
+    .filter(
+      (record) =>
+        state.submissions.includes(record) &&
+        wouldPay.has(record) &&
+        !resolved.some((entry) => entry.record === record),
+    )
+    .map((record) => wouldPay.get(record)!);
   const shares = shareEarnings(
     delta,
     paidSolOutcomes.map((entry) => entry.payout ?? 0n),
-    othersWaiting,
+    waiting,
   );
   const shareFor = new Map(
     paidSolOutcomes.map((entry, index) => [entry.record, shares[index]!]),
@@ -2440,20 +2454,35 @@ export function expectedWorkerPayout(
   return net > 0n ? net : 0n;
 }
 
+/** The reward a submission record noted, as the best guess of its pay. */
+function recordedReward(record: SubmissionRecord): bigint | null {
+  try {
+    const reward = BigInt(record.rewardAmount);
+    return reward >= 0n ? reward : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Divide `delta` lamports among jobs paid in one round, by what each one's
- * terms pay (equal parts when nothing is known). When `keepSurplus` is set
- * and `delta` covers every job's pay, each job gets exactly its pay and the
- * rest is left over; otherwise the parts add up to exactly `delta`.
+ * terms pay (equal parts when nothing is known). `waiting` holds what each
+ * tracked job that is still waiting would pay (null: not known). When
+ * `delta` covers every paid job's pay and what is left could be a waiting
+ * job's whole pay (`couldBeWaitingPay`), each job gets exactly its pay and
+ * the rest is left for that job; otherwise the parts add up to exactly
+ * `delta`.
  */
 export function shareEarnings(
   delta: bigint,
   payouts: readonly bigint[],
-  keepSurplus = false,
+  waiting: readonly (bigint | null)[] = [],
 ): bigint[] {
   if (payouts.length === 0) return [];
   const expected = payouts.reduce((sum, payout) => sum + payout, 0n);
-  if (keepSurplus && expected > 0n && delta >= expected) return [...payouts];
+  if (expected > 0n && delta >= expected && couldBeWaitingPay(delta - expected, waiting)) {
+    return [...payouts];
+  }
   if (delta <= 0n) return payouts.map(() => 0n);
   const weights = expected > 0n ? payouts : payouts.map(() => 1n);
   const total = weights.reduce((sum, weight) => sum + weight, 0n);
@@ -2471,6 +2500,25 @@ export function shareEarnings(
     rest -= 1n;
   }
   return shares;
+}
+
+/**
+ * Whether `surplus` lamports could be the whole pay of a job still waiting:
+ * at least nine tenths of the smallest such pay (what lands can be a little
+ * under a job's terms). A job whose pay is not known could pay anything; one
+ * that pays nothing explains nothing.
+ */
+export function couldBeWaitingPay(
+  surplus: bigint,
+  waiting: readonly (bigint | null)[],
+): boolean {
+  if (surplus <= 0n) return false;
+  let smallest: bigint | null = null;
+  for (const pay of waiting) {
+    if (pay === null) return true;
+    if (pay > 0n && (smallest === null || pay < smallest)) smallest = pay;
+  }
+  return smallest !== null && surplus * 10n >= smallest * 9n;
 }
 
 /** Result of one `once` tick. */
