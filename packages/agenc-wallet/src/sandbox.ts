@@ -35,6 +35,8 @@ import {
   findTaskModerationPda,
   findTaskPda,
   getListingModerationSize,
+  getHireRecordDecoder,
+  getHireRecordDiscriminatorBytes,
   getProtocolConfigDecoder,
   getProtocolConfigEncoder,
   getServiceListingDecoder,
@@ -310,6 +312,24 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   // litesvm cannot list accounts, so remember every address a transaction
   // names and answer program-account scans from that set.
   const known = new Set<Address>();
+  // Which agent each hire was for, remembered as the hire is made: the
+  // practice marketplace's own record of who did which job (the real one
+  // keeps it from the network's history). The link on the chain is closed
+  // when the job is tidied.
+  const hiredFrom = new Map<Address, Address>();
+  const hireDiscriminator = Uint8Array.from(getHireRecordDiscriminatorBytes());
+  const rememberHire = (account: Address): void => {
+    const found = svm.getAccount(account);
+    if (!found || !found.exists || found.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return;
+    const data = Uint8Array.from(found.data);
+    if (data.length < hireDiscriminator.length || hireDiscriminator.some((byte, index) => data[index] !== byte)) return;
+    try {
+      const hire = getHireRecordDecoder().decode(data);
+      hiredFrom.set(hire.task, hire.designatedProvider);
+    } catch {
+      // Not a hire record after all; nothing to remember.
+    }
+  };
   const gpa: ProgramAccountsTransport = {
     async getProgramAccounts({ filters }) {
       const out: Array<{ address: Address; data: Uint8Array }> = [];
@@ -334,7 +354,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const result = await base.sendAndConfirm(signedTx);
       try {
         const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
-        for (const account of message.staticAccounts) known.add(account);
+        for (const account of message.staticAccounts) {
+          known.add(account);
+          rememberHire(account);
+        }
       } catch {
         // Indexing is best effort; the transaction itself succeeded.
       }
@@ -508,9 +531,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           jobsDone: Number(account.totalHires),
           deliverySecs:
             account.defaultDeadlineSecs > 0n ? Number(account.defaultDeadlineSecs) : null,
+          specHashHex: values.bytesToHex(new Uint8Array(account.specHash)),
         });
       }
       return rows;
+    },
+    async finishedJobs(provider) {
+      return [...hiredFrom].filter(([, agent]) => agent === provider).map(([task]) => task);
     },
     async trustedModerators() {
       return [];

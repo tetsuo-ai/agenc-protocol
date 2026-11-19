@@ -178,6 +178,7 @@ describe("the catalog", () => {
         ratingCount: 2,
         jobsDone: 1,
         deliverySecs: 86_400,
+        specHashHex: LIVE_ITEM.specHash,
       },
     ]);
     expect(hosts.asked).toEqual([LIVE_ITEM.specUri]);
@@ -990,5 +991,114 @@ describe("job specs", () => {
     expect(tidyText("x".repeat(50), 10)).toHaveLength(10);
     expect(tidyText(42, 10)).toBeNull();
     expect(tidyText("   ", 10)).toBeNull();
+  });
+});
+
+describe("the jobs a provider finished", () => {
+  // Two items exactly as GET https://agenc.ag/api/tasks?provider=... returned
+  // them on 2026-11-19, cut to the fields that matter.
+  const SETTLED = {
+    pda: "GRXsDCi6VA9uyNCD7TGGvADv9Uh2Pe4smn5ZArVBAbdB",
+    status: "settled",
+    rewardLamports: "100000000",
+    protocolFeeBps: 500,
+    creatorPda: "ARzC5XuXeUFRUFL3tT65zXA7HCZwVSV8AMoKvk7dCvLw",
+    providerAgent: PROVIDER,
+  };
+  const OPEN = { ...SETTLED, pda: "8yZFpHVBmgTTL1pZEnp3w1QhV39DM3fBqBEmMpJRaY8r", status: "open" };
+
+  it("keeps the paid-out jobs of that provider, and nothing else", async () => {
+    const asked: URL[] = [];
+    const { fetch } = fakeFetch({
+      "GET https://agenc.ag/api/tasks": ({ url }) => {
+        asked.push(url);
+        return json({
+          page: 1,
+          pageSize: 100,
+          total: 4,
+          items: [
+            SETTLED,
+            OPEN,
+            // Someone else's job, and a job with no address.
+            { ...SETTLED, pda: TASK, providerAgent: LISTING },
+            { ...SETTLED, pda: "not an address" },
+          ],
+        });
+      },
+    });
+    const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0 });
+    expect(await services.finishedJobs!(PROVIDER as Address)).toEqual([SETTLED.pda]);
+    // Asked for by provider, a page of a hundred, with no "page=1": the
+    // route sends that elsewhere, and a redirect is never followed.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.searchParams.get("provider")).toBe(PROVIDER);
+    expect(asked[0]!.searchParams.get("pageSize")).toBe("100");
+    expect(asked[0]!.searchParams.has("page")).toBe(false);
+    expect(asked[0]!.searchParams.has("status")).toBe(false);
+  });
+
+  it("reads every page, and keeps the list a while", async () => {
+    let now = 1_000_000;
+    const pages: Array<string | null> = [];
+    const { fetch } = fakeFetch({
+      "GET https://agenc.ag/api/tasks": ({ url }) => {
+        pages.push(url.searchParams.get("page"));
+        const page = Number(url.searchParams.get("page") ?? "1");
+        const items = Array.from({ length: page === 1 ? 100 : 20 }, (_, index) => ({
+          ...SETTLED,
+          pda: getAddressDecoder().decode(new Uint8Array(32).fill(page * 101 + index + 1)),
+        }));
+        return json({ page, pageSize: 100, total: 120, items });
+      },
+    });
+    const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0, now: () => now });
+    expect(await services.finishedJobs!(PROVIDER as Address)).toHaveLength(120);
+    expect(pages).toEqual([null, "2"]);
+    // Within ten minutes the list is not read again.
+    now += 9 * 60_000;
+    expect(await services.finishedJobs!(PROVIDER as Address)).toHaveLength(120);
+    expect(pages).toHaveLength(2);
+    now += 2 * 60_000;
+    await services.finishedJobs!(PROVIDER as Address);
+    expect(pages).toHaveLength(4);
+  });
+
+  it("asks one provider at a time, never two closer together than the gap", async () => {
+    const starts: number[] = [];
+    const { fetch } = fakeFetch({
+      "GET https://agenc.ag/api/tasks": () => {
+        starts.push(Date.now());
+        return json({ page: 1, pageSize: 100, total: 0, items: [] });
+      },
+    });
+    const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 150 });
+    const other = getAddressDecoder().decode(new Uint8Array(32).fill(7));
+    await Promise.all([services.finishedJobs!(PROVIDER as Address), services.finishedJobs!(other)]);
+    expect(starts).toHaveLength(2);
+    expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(140);
+  });
+
+  it("says so when the list cannot be read, and a refusal does not stop the next provider", async () => {
+    let refuse = true;
+    const { fetch } = fakeFetch({
+      "GET https://agenc.ag/api/tasks": () =>
+        refuse
+          ? json({ ok: false, code: "PUBLIC_READ_RATE_LIMITED", retryAfterSeconds: 33 }, 429)
+          : json({ page: 1, pageSize: 100, total: 1, items: [SETTLED] }),
+    });
+    const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0 });
+    await expect(services.finishedJobs!(PROVIDER as Address)).rejects.toMatchObject({ code: "NETWORK" });
+    refuse = false;
+    expect(await services.finishedJobs!(PROVIDER as Address)).toEqual([SETTLED.pda]);
+  });
+
+  it("does not follow the route when it sends the request elsewhere", async () => {
+    const { fetch } = fakeFetch({
+      "GET https://agenc.ag/api/tasks": () => {
+        throw new TypeError("fetch failed: unexpected redirect");
+      },
+    });
+    const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0 });
+    await expect(services.finishedJobs!(PROVIDER as Address)).rejects.toMatchObject({ code: "NETWORK" });
   });
 });

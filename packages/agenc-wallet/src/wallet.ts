@@ -1148,6 +1148,7 @@ export class AgencWallet {
         ratingCount: 0,
         jobsDone: agent.earn.jobsDone,
         deliverySecs: offer.deliverySecs,
+        specHashHex: offer.specHashHex,
       });
     }
     return own;
@@ -1256,6 +1257,7 @@ export class AgencWallet {
         ratingCount: terms.ratingCount,
         jobsDone: 0,
         deliverySecs: terms.deliverySecs,
+        specHashHex: values.bytesToHex(terms.specHash),
       },
       rate,
     );
