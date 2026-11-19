@@ -71,6 +71,37 @@ describe("earning", () => {
     expect(off.earn.state).toBe("off");
   }, 90_000);
 
+  it("is not given its registration money again when switched back on", async () => {
+    world = await startWorld({
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('Here is the finished work.')", "{prompt}"],
+          mode: "sandboxed",
+          envAllowlist: [],
+          timeoutMs: 30_000,
+        },
+        pollIntervalMs: 150,
+      },
+    });
+    const { wallet } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    // The worker registers on its first pass.
+    await eventually(async () => (await wallet.overview()).agents[0]!.earn.setAside.lamports === "10000000", 30_000);
+    await wallet.setEarn(agent.id, false);
+
+    // Its deposit is locked already; taking jobs again needs only what a job
+    // needs. At most a little for fees moves from the balance, never another
+    // deposit (before, it moved the deposit and the registration's rent again).
+    const main = await world.balance(wallet.mainAddress);
+    const seen = (await wallet.listActivity(500)).length;
+    await wallet.setEarn(agent.id, true, 10);
+    const moved = main - (await world.balance(wallet.mainAddress));
+    expect(moved).toBeLessThan(100_000n);
+    const since = (await wallet.listActivity(500)).slice(0, -seen || undefined).map((entry) => entry.text);
+    expect(since).not.toContain("Set money aside so My assistant can register to take jobs.");
+  }, 90_000);
+
   it("collects the pay itself when a buyer turns the work down and nobody rules", async () => {
     world = await startWorld({
       earn: {

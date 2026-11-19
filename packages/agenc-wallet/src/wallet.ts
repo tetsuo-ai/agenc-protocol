@@ -3388,13 +3388,19 @@ export class AgencWallet {
         );
       }
       const floor = await this.#floor();
-      const need = (await this.#earn.startupRequirement()) + floor;
+      // An agent already on the marketplace has its deposit locked there:
+      // taking jobs again needs only what one job needs.
+      const registered = (await this.#earn.registration(agentId).catch(() => null)) !== null;
+      const need =
+        (registered ? await this.#earn.jobReserve() : await this.#earn.startupRequirement()) + floor;
       const balance = await this.#chain.getBalance(agent.address as Address);
       if (balance < need) {
         await this.#mainToAgent(
           agent,
           need - balance,
-          `Set money aside so ${agent.name} can register to take jobs.`,
+          registered
+            ? `Set money aside so ${agent.name} can take jobs.`
+            : `Set money aside so ${agent.name} can register to take jobs.`,
         );
       }
     }
