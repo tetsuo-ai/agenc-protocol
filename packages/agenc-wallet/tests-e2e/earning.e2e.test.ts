@@ -71,6 +71,37 @@ describe("earning on practice money", () => {
     });
   }, 90_000);
 
+  it("is paid when the buyer goes quiet, once the review time is up", async () => {
+    world = await startWorld({ earn: earning(WORKS) });
+    const { wallet, sandbox, clock } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    const open = await sandbox.postOpenJob({
+      title: "Write a line",
+      instructions: "Write one friendly line.",
+      rewardLamports: 50n * CENT,
+    });
+    await delivered(world, open.task);
+
+    // The buyer never looks at it. Within the hour of review nothing moves.
+    sandbox.advanceClock(3_000);
+    clock.now += 3_000_000;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect((await wallet.overview()).agents[0]!.earned.lamports).toBe("0");
+
+    // After it, the agent settles its own delivery and is paid.
+    sandbox.advanceClock(700);
+    clock.now += 700_000;
+    const paid = await eventually(async () => {
+      const view = (await wallet.overview()).agents[0]!;
+      return BigInt(view.earned.lamports) > 0n ? view : null;
+    }, 30_000);
+    expect(paid.earned.lamports).toBe(NET.toString());
+    expect(paid.earn.jobsDone).toBe(1);
+    const job = await wallet.getJob(`earn_${agent.id}_${open.task}`, true);
+    expect(job.status).toBe("paid");
+  }, 90_000);
+
   it("counts two jobs paid while the agent was not looking", async () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;

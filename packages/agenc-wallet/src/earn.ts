@@ -556,6 +556,8 @@ export class EarnHost {
       getBalance: (account) => this.#chain.getBalance(account),
       getMinimumBalanceForRentExemption: (space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),
+      // Review windows and claim times run on the chain's clock.
+      clusterTime: () => this.#chain.clusterTime(),
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
         : {}),
