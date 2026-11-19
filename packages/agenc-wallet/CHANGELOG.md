@@ -19,7 +19,9 @@ First version. Not published.
   after several failed jobs in a row says so and its services come off
   offer until earning is switched on again.
 - A job's price or deposits coming back to the main balance are no longer
-  reported as money that arrived.
+  reported as money that arrived, even when the connection still shows the
+  balance from before for a moment: what came back is counted in only by a
+  look a minute or more later.
 
 - A local wallet service: an encrypted key vault, one main balance, one
   wallet per agent, and a crash-safe journal of every job.

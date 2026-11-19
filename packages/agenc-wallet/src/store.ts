@@ -216,6 +216,11 @@ export interface JobRecord {
    * that arrived. Absent on jobs from before this existed: counted.
    */
   balanceSettled?: boolean;
+  /**
+   * When it gave that money back (ms). Only a balance read a minute or more
+   * later counts it in: a connection can answer with an older balance.
+   */
+  returnedAt?: number;
   signatures: {
     hire?: string;
     /** The buyer's payment for the safety check of the request. */

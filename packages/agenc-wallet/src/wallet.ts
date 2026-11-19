@@ -192,6 +192,12 @@ function found(word: SearchWord, place: { text: string; words: Set<string> }): b
   return word.forms.some((form) => (word.whole ? place.words.has(form) : place.text.includes(form)));
 }
 const BALANCE_CACHE_MS = 4_000;
+/**
+ * How long after a job gives money back to the main balance a read of that
+ * balance may still be from before: a connection can lag a little. Only a
+ * read this much later counts the money in.
+ */
+const BALANCE_SETTLE_MS = 60_000;
 const STALE_PRICE_MS = 6 * 60 * 60_000;
 /** The marketplace's catalog hides a service priced below this. */
 const MIN_OFFER_PRICE_LAMPORTS = 1_000n;
@@ -2026,7 +2032,10 @@ export class AgencWallet {
         if (entry === undefined) return;
         entry.tidied = true;
         // What came back to the main balance is not money that arrived.
-        if (entry.payer === "main") entry.balanceSettled = false;
+        if (entry.payer === "main") {
+          entry.balanceSettled = false;
+          entry.returnedAt = this.#now();
+        }
       });
       return sent;
     };
@@ -3195,9 +3204,15 @@ export class AgencWallet {
         return;
       }
       const previous = BigInt(last);
-      // Jobs whose returned money this look counts in, whatever it shows.
-      const settling = Object.values(this.#store.state.jobs)
-        .filter((job) => job.payer === "main" && job.balanceSettled === false)
+      // Jobs that gave money back which is not counted in yet. A read soon
+      // after may still show the balance from before, so only a look well
+      // after counts it in, whatever it shows; until then a rise is theirs.
+      const now = this.#now();
+      const unsettled = Object.values(this.#store.state.jobs).filter(
+        (job) => job.payer === "main" && job.balanceSettled === false,
+      );
+      const settling = unsettled
+        .filter((job) => now - (job.returnedAt ?? 0) >= BALANCE_SETTLE_MS)
         .map((job) => job.id);
       const markSettled = (draft: WalletState): void => {
         for (const id of settling) {
@@ -3213,7 +3228,7 @@ export class AgencWallet {
       // no running job explains is reported as money added. A job that just
       // ended gave its price or deposits back, and that is no arrival either.
       const mainJobsMoving =
-        settling.length > 0 ||
+        unsettled.length > 0 ||
         Object.values(this.#store.state.jobs).some(
           (job) => job.payer === "main" && !(job.phase === "done" && job.tidied) && job.phase !== "failed" && job.phase !== "declined",
         );
