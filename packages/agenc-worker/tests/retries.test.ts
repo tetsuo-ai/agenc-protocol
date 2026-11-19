@@ -223,6 +223,8 @@ describe("a job whose work keeps failing", () => {
         cause: "attempts",
         attempts: 3,
         title: "Write a line",
+        // What the job would have paid, so its owner sees what was lost.
+        rewardAmount: REWARD.toString(),
         claimReleased: false,
         reason: expect.stringMatching(/exited with code 3/),
       }),

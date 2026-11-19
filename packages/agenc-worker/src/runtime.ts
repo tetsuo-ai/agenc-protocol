@@ -1000,7 +1000,7 @@ function noteJobFailure(
   ctx: WorkerContext,
   task: Address,
   reason: string,
-  options: { finishedWork?: boolean } = {},
+  options: { finishedWork?: boolean; rewardAmount?: bigint } = {},
 ): void {
   const state = loadState(ctx.stateDir);
   const marker = state.openClaim;
@@ -1015,6 +1015,9 @@ function noteJobFailure(
     giveUpJob(ctx, state, { ...marker, failures, lastFailure: line }, {
       cause: "attempts",
       reason: line,
+      ...(options.rewardAmount !== undefined
+        ? { rewardAmount: options.rewardAmount.toString() }
+        : {}),
       claimReleased: false,
     });
     return;
@@ -1455,7 +1458,7 @@ async function executeAndSubmit(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.execution-failed", task, reason });
-    noteJobFailure(ctx, task, reason);
+    noteJobFailure(ctx, task, reason, { rewardAmount: decodedTask.rewardAmount });
     return { status: "execution-failed", task, reason };
   }
 
@@ -2033,7 +2036,9 @@ export async function resumeOpenClaim(
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.revision-feedback-unavailable", task, reason });
-      noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`);
+      noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`, {
+        rewardAmount: decodedTask.rewardAmount,
+      });
       return { status: "execution-failed", task, reason };
     }
   }
@@ -2050,7 +2055,9 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.job-spec-rejected", task, reason });
-    noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`);
+    noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
+      rewardAmount: decodedTask.rewardAmount,
+    });
     return { status: "execution-failed", task, reason };
   }
   let prompt: string;
@@ -2063,7 +2070,9 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.prompt-rejected", task, reason });
-    noteJobFailure(ctx, task, `the job is too large to run: ${reason}`);
+    noteJobFailure(ctx, task, `the job is too large to run: ${reason}`, {
+      rewardAmount: decodedTask.rewardAmount,
+    });
     return { status: "execution-failed", task, reason };
   }
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
