@@ -29,12 +29,15 @@ import {
   createMarketplaceClient,
   facade,
   findAgentPda,
+  findClaimPda,
   findHireRecordPda,
   findListingModerationPda,
   findProtocolConfigPda,
   findTaskModerationPda,
   findTaskPda,
   getListingModerationSize,
+  getHireRecordDecoder,
+  getHireRecordDiscriminatorBytes,
   getProtocolConfigDecoder,
   getProtocolConfigEncoder,
   getServiceListingDecoder,
@@ -122,8 +125,13 @@ export interface OpenJob {
   task: Address;
   /** The house buyer approves the delivery, paying whoever did the job. */
   approve(): Promise<void>;
-  /** The house buyer turns the delivery down, which puts the price on hold for review. */
-  turnDown(): Promise<void>;
+  /**
+   * The house buyer turns the delivery down, which puts the price on hold for
+   * review. Like any wallet it counts the turn-down only in a record the
+   * provider already has; with `payForRecord` it is a buyer who pays to start
+   * that record, which the marketplace lets anyone do.
+   */
+  turnDown(options?: { payForRecord?: boolean }): Promise<void>;
   /** True once someone has delivered and the job waits for approval. */
   delivered(): Promise<boolean>;
 }
@@ -310,6 +318,24 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   // litesvm cannot list accounts, so remember every address a transaction
   // names and answer program-account scans from that set.
   const known = new Set<Address>();
+  // Which agent each hire was for, remembered as the hire is made: the
+  // practice marketplace's own record of who did which job (the real one
+  // keeps it from the network's history). The link on the chain is closed
+  // when the job is tidied.
+  const hiredFrom = new Map<Address, Address>();
+  const hireDiscriminator = Uint8Array.from(getHireRecordDiscriminatorBytes());
+  const rememberHire = (account: Address): void => {
+    const found = svm.getAccount(account);
+    if (!found || !found.exists || found.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return;
+    const data = Uint8Array.from(found.data);
+    if (data.length < hireDiscriminator.length || hireDiscriminator.some((byte, index) => data[index] !== byte)) return;
+    try {
+      const hire = getHireRecordDecoder().decode(data);
+      hiredFrom.set(hire.task, hire.designatedProvider);
+    } catch {
+      // Not a hire record after all; nothing to remember.
+    }
+  };
   const gpa: ProgramAccountsTransport = {
     async getProgramAccounts({ filters }) {
       const out: Array<{ address: Address; data: Uint8Array }> = [];
@@ -334,7 +360,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const result = await base.sendAndConfirm(signedTx);
       try {
         const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
-        for (const account of message.staticAccounts) known.add(account);
+        for (const account of message.staticAccounts) {
+          known.add(account);
+          rememberHire(account);
+        }
       } catch {
         // Indexing is best effort; the transaction itself succeeded.
       }
@@ -363,6 +392,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const info = readInfo(account);
       return info === null ? null : { data: info.data, owner: info.owner, lamports: info.lamports };
     },
+    readRawAccounts: async (accounts) =>
+      accounts.map((account) => {
+        const info = readInfo(account);
+        return info === null ? null : { data: info.data, owner: info.owner, lamports: info.lamports };
+      }),
     readAccountInfo: async (account) => {
       const info = readInfo(account);
       return info === null
@@ -482,8 +516,6 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           moderator: market.moderator.address,
         });
         if (readInfo(approval)?.owner !== AGENC_COORDINATION_PROGRAM_ADDRESS) continue;
-        const average =
-          account.ratingCount > 0 ? Number(account.totalRating) / account.ratingCount : null;
         rows.push({
           listing: entry.listing,
           providerAgent: account.providerAgent,
@@ -498,14 +530,21 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           // The practice marketplace keeps the words itself; nothing is fetched.
           details: "ready",
           priceLamports: account.price,
-          rating: average !== null && average >= 1 && average <= 5 ? average : null,
-          ratingCount: account.ratingCount,
-          jobsDone: Number(account.totalHires),
+          // What a buyer is shown of a service's record is read from the
+          // chain and weighed by money (records.ts). The listing's own
+          // counters are not: its hire count includes hires never paid for.
+          rating: null,
+          ratingCount: 0,
+          jobsDone: 0,
           deliverySecs:
             account.defaultDeadlineSecs > 0n ? Number(account.defaultDeadlineSecs) : null,
+          specHashHex: values.bytesToHex(new Uint8Array(account.specHash)),
         });
       }
       return rows;
+    },
+    async finishedJobs(provider) {
+      return [...hiredFrom].filter(([, agent]) => agent === provider).map(([task]) => task);
     },
     async trustedModerators() {
       return [];
@@ -852,8 +891,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           await sendApproval(chain, buyer, task, claim.worker);
         },
-        async turnDown() {
-          const { sendRejectAndFreeze } = await import("./market.js");
+        async turnDown(options = {}) {
+          const { providerRecordAddress, sendRejectAndFreeze } = await import("./market.js");
           const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
             "@tetsuo-ai/marketplace-sdk"
           );
@@ -866,13 +905,22 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .map((entry) => getTaskClaimDecoder().decode(entry.data))
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
-          await sendRejectAndFreeze(
-            chain,
-            buyer,
-            task,
-            claim.worker,
-            (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array,
-          );
+          const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
+          if (options.payForRecord !== true) {
+            await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
+            return;
+          }
+          const [claimAddress] = await findClaimPda({ task, bidder: claim.worker });
+          await chain.clientFor(buyer).send([
+            await facade.rejectAndFreeze({
+              task,
+              claim: claimAddress,
+              creator: buyer,
+              rejectionHash: reason,
+              agentStats: await providerRecordAddress(claim.worker),
+              systemProgram: SYSTEM_PROGRAM_ADDRESS,
+            }),
+          ]);
         },
       };
     },

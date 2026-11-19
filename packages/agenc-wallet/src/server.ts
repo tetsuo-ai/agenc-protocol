@@ -131,6 +131,14 @@ function handlers(wallet: AgencWallet): Handlers {
         // An agent can only ever hire as itself.
         agentId: session.agentId ?? text(params.agentId, "agent"),
       }),
+    "market.post": (params, session) =>
+      wallet.post({
+        ...params,
+        // An agent can only ever post as itself, from its own money.
+        agentId: session.agentId ?? text(params.agentId, "agent"),
+      }),
+    // Not an agent method: the main balance pays with no one asked.
+    "wallet.post": async (params) => ({ job: await wallet.postFromBalance(params) }),
     "approvals.list": async () => ({ approvals: await wallet.listApprovals() }),
     "approvals.decide": async (params) => ({
       job: await wallet.decideApproval(text(params.approvalId, "request"), params.approve === true),

@@ -147,17 +147,34 @@ export type ChainTaskStatus =
 export interface JobRecord {
   id: string;
   role: "buying" | "working";
+  /**
+   * "hire": a service was hired. "request": a request was posted for anyone
+   * to take; it has no listing, and no provider until someone takes it.
+   * Absent in journals written before requests existed: a hire.
+   */
+  kind?: "hire" | "request";
+  /** The agent that pays, or "" for a request the person posted from the main balance. */
   agentId: string;
   createdAt: number;
   updatedAt: number;
   idempotencyKey: string | null;
 
+  /** The service hired; "" for a request. */
   listing: string;
+  /** The provider agent; for a request, "" until someone takes it. */
   providerAgent: string;
   title: string;
   request: string;
   acceptance: string[];
+  /** What the provider is paid: the service's price, or a request's reward. */
   priceLamports: string;
+  /** A request only: how long whoever takes it has to deliver, in seconds. */
+  deliverWithinSecs?: number;
+  /**
+   * A request only: unix seconds by which the work must be delivered, fixed
+   * when posting starts. Nobody can take it after that.
+   */
+  requestDeadline?: number | null;
 
   /** Listing terms the hire is pinned to (compare-and-swap on-chain). */
   expectedVersion: string;
@@ -206,6 +223,13 @@ export interface JobRecord {
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
+  /**
+   * Whether the provider has a marketplace record of turn-downs, read while
+   * the job is delivered until it has one (a record is never removed). A
+   * turn-down is counted only in a record that exists: starting one would
+   * cost the buyer. Absent until read.
+   */
+  providerRecorded?: boolean;
   rating: number | null;
   /** The finished job's deposits were collected and its slot released. */
   tidied: boolean;
@@ -249,7 +273,10 @@ export interface ApprovalRecord {
   id: string;
   jobId: string;
   agentId: string;
-  service: ServiceView;
+  /** What the agent asks to do. Absent in journals written before requests existed: a hire. */
+  kind?: "hire" | "request";
+  /** The service to hire; null for a request posted for anyone to take. */
+  service: ServiceView | null;
   request: string;
   priceLamports: string;
   depositsLamports: string;
@@ -283,6 +310,11 @@ export interface WalletState {
   lastSolUsd: { value: number; ts: number } | null;
   /** Main-balance lamports last seen, to notice money arriving. */
   lastMainLamports: string | null;
+  /**
+   * Lifetime lamports the main balance paid out for requests the person
+   * posted from it. What agents pay is counted on each agent.
+   */
+  mainSpentLamports?: string;
   /**
    * The last balance read for each wallet (the main one and every agent's),
    * by id. Only for showing something true when the network cannot be reached.

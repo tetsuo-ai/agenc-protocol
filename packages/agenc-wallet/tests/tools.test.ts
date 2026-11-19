@@ -1,0 +1,253 @@
+// The agent tools against a stand-in wallet connection.
+// - market_post: what it sends, what it refuses before sending anything, and
+//   what it tells the model.
+// - market_find: what an agent reads about a service: its record, weighed by
+//   money, and the marketplace's share of the price, and nothing it cannot
+//   know when a wallet older than its client leaves those out.
+import { describe, expect, it } from "vitest";
+import type { WalletClient } from "../src/client/socket-client.js";
+import { MARKET_TOOL_INSTRUCTIONS, MARKET_TOOLS, runMarketTool } from "../src/client/tools.js";
+import type { ApprovalView, JobView, ServiceView } from "../src/client/types.js";
+
+const usd = (cents: number) => ({ lamports: String(cents * 100_000), usdCents: cents });
+
+function job(patch: Partial<JobView> = {}): JobView {
+  return {
+    id: "job_1",
+    role: "buying",
+    kind: "request",
+    agentId: "agent_1",
+    title: "A haiku about rain",
+    request: "A haiku about rain.",
+    price: usd(30),
+    status: "waiting",
+    statusText: "Waiting for someone to take it. If nobody does, it is cancelled and the reward comes back in 7 days.",
+    createdAt: 0,
+    updatedAt: 0,
+    task: null,
+    listing: null,
+    provider: null,
+    result: null,
+    autoApproveAt: null,
+    autoRefundAt: 7 * 86_400_000,
+    reviewEndsAt: null,
+    canApprove: false,
+    canAskChanges: false,
+    canRefund: true,
+    canRate: false,
+    rating: null,
+    ratingCost: null,
+    turnDownRecorded: false,
+    receiptUrl: null,
+    error: null,
+    ...patch,
+  };
+}
+
+/** A connection that answers each method from `answers` and records what was asked. */
+function wallet(answers: Record<string, unknown>) {
+  const calls: Array<[string, unknown]> = [];
+  const client = {
+    role: "agent",
+    agentId: "agent_1",
+    async call(method: string, params: unknown) {
+      calls.push([method, params]);
+      if (!(method in answers)) throw new Error(`unexpected ${method}`);
+      return answers[method];
+    },
+    close() {},
+  } as unknown as WalletClient;
+  return { client, calls };
+}
+
+describe("market_post", () => {
+  it("is one of five tools, and its arguments are spelled out", () => {
+    expect(MARKET_TOOLS.map((tool) => tool.name)).toEqual([
+      "market_find",
+      "market_hire",
+      "market_post",
+      "market_status",
+      "market_review",
+    ]);
+    const post = MARKET_TOOLS.find((tool) => tool.name === "market_post")!;
+    expect(post.readOnly).toBe(false);
+    expect(post.inputSchema.required).toEqual(["request", "reward_usd"]);
+    expect(Object.keys(post.inputSchema.properties as object).sort()).toEqual([
+      "acceptance",
+      "deadline_days",
+      "request",
+      "reward_usd",
+    ]);
+    // The model is told, in the tool and in its instructions, that a request is public.
+    expect(post.description).toMatch(/The request is public: anyone can read it/);
+    expect(MARKET_TOOL_INSTRUCTIONS).toMatch(/market_post .* It is public: anyone can read it/);
+  });
+
+  it("posts as the agent, in cents, and passes the call's key", async () => {
+    const { client, calls } = wallet({ "market.post": { job: job(), approval: null } });
+    const result = await runMarketTool(
+      client,
+      "agent_1",
+      "market_post",
+      { request: "  A haiku about rain.  ", reward_usd: 0.3, deadline_days: 3, acceptance: ["Three lines"] },
+      { idempotencyKey: "tool:call-1" },
+    );
+    expect(calls).toEqual([
+      [
+        "market.post",
+        {
+          agentId: "agent_1",
+          request: "A haiku about rain.",
+          reward: { usdCents: 30 },
+          deadlineDays: 3,
+          acceptance: ["Three lines"],
+          idempotencyKey: "tool:call-1",
+        },
+      ],
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.message).toMatch(/^Waiting for someone to take it\..* Anyone can read the request\./);
+    // The job is the agent's own request, not a service it hired.
+    expect(result.job).toMatchObject({ job_id: "job_1", posted_request: "A haiku about rain", price: "$0.30", can: ["refund"] });
+    expect(result.job).not.toHaveProperty("service");
+  });
+
+  it("refuses what it cannot post before anything reaches the wallet", async () => {
+    const { client, calls } = wallet({});
+    const tries: Record<string, unknown>[] = [
+      { reward_usd: 1 },
+      { request: "A haiku." },
+      { request: "A haiku.", reward_usd: 0 },
+      { request: "A haiku.", reward_usd: -1 },
+      { request: "A haiku.", reward_usd: 1, deadline_days: 31 },
+      { request: "A haiku.", reward_usd: 1, deadline_days: 2.5 },
+      { request: "x".repeat(4_001), reward_usd: 1 },
+      { request: "A haiku.", reward_usd: 1, acceptance: Array.from({ length: 9 }, () => "a check") },
+    ];
+    for (const args of tries) {
+      const result = await runMarketTool(client, "agent_1", "market_post", args);
+      expect(result.ok, JSON.stringify(args)).toBe(false);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("waits for the person above the budget, and says what they answered", async () => {
+    const approval = { id: "ok_1" } as ApprovalView;
+    const waiting = wallet({
+      "market.post": { job: job({ status: "needs_approval" }), approval },
+      "approvals.wait": { decided: false, job: job({ status: "needs_approval" }) },
+    });
+    const pending = await runMarketTool(waiting.client, "agent_1", "market_post", { request: "A sonnet.", reward_usd: 6 }, { approvalWaitMs: 10 });
+    expect(pending.ok).toBe(true);
+    expect(pending.message).toBe(
+      "Waiting for the user to approve $0.30 for this request in the Market panel. Nothing has been spent. Call market_status with this job_id after they answer.",
+    );
+    expect(waiting.calls[1]).toEqual(["approvals.wait", { approvalId: "ok_1", timeoutMs: 10 }]);
+
+    const declined = wallet({
+      "market.post": { job: job({ status: "needs_approval" }), approval },
+      "approvals.wait": { decided: true, job: job({ status: "declined", statusText: "Not approved. Nothing was spent." }) },
+    });
+    const no = await runMarketTool(declined.client, "agent_1", "market_post", { request: "A sonnet.", reward_usd: 6 });
+    expect(no).toMatchObject({ ok: false, message: "The user declined this request. Nothing was spent." });
+
+    const failed = wallet({
+      "market.post": { job: job({ status: "failed", error: "There was not enough money to post the request. Nothing was spent." }), approval: null },
+    });
+    const broke = await runMarketTool(failed.client, "agent_1", "market_post", { request: "A sonnet.", reward_usd: 6 });
+    expect(broke).toMatchObject({
+      ok: false,
+      message: "The request was not posted and nothing was spent. There was not enough money to post the request. Nothing was spent.",
+    });
+  });
+});
+
+const SERVICE: ServiceView = {
+  listing: "AuvhnvakgqfJaBt5CSEnYZGsZYJt5LmCpanZDCWbf9hE",
+  name: "Haiku Writer",
+  summary: "A three-line poem about anything you name.",
+  description: "A three-line poem about anything you name.",
+  category: "writing",
+  tags: [],
+  inputs: [],
+  outputs: [],
+  terms: [],
+  details: "ready",
+  price: usd(20),
+  marketFee: { bps: 500, amount: usd(1) },
+  rating: 4.5,
+  ratingCount: 2,
+  jobsDone: 3,
+  paid: usd(60),
+  buyers: 2,
+  record: "ready",
+  provider: "3PgS4jwwpquqxVotTKkvR8wxNUZrExqtZckHehiABKAg",
+  offeredBy: {
+    since: Date.UTC(2026, 7, 21),
+    jobsDone: 1,
+    paid: usd(20),
+    buyers: 1,
+    turnedDown: 2,
+    disputesLost: 1,
+    deposit: usd(74),
+    otherServices: [],
+  },
+  deliverySecs: 600,
+};
+
+function client(services: unknown[]): WalletClient {
+  return {
+    role: "agent",
+    agentId: "agent_1",
+    call: (async () => ({ services, total: services.length, networkFee: usd(22) })) as WalletClient["call"],
+    close() {},
+  };
+}
+
+async function described(service: unknown): Promise<Record<string, unknown>> {
+  const result = await runMarketTool(client([service]), "agent_1", "market_find", { query: "poem" });
+  expect(result.ok).toBe(true);
+  return result.services![0] as unknown as Record<string, unknown>;
+}
+
+describe("a service as an agent reads it", () => {
+  it("gives its record with the count beside the stars, and the marketplace's share", async () => {
+    expect(await described(SERVICE)).toMatchObject({
+      marketplace_fee: "$0.01 of the price (5%)",
+      rating: "4.5 of 5 from 2 ratings",
+      paid_jobs: "3 jobs, $0.60 paid by 2 buyers",
+      provider: {
+        on_the_marketplace_since: "2026-08-21",
+        paid_jobs: "1 job, $0.20 paid by 1 buyer",
+        turned_down: 2,
+        disputes_lost: 1,
+      },
+    });
+  });
+
+  it("says no record of turn-downs and disputes is kept for a provider without one", async () => {
+    const said = await described({
+      ...SERVICE,
+      offeredBy: { ...SERVICE.offeredBy!, turnedDown: null, disputesLost: null },
+    });
+    expect(said.provider).toMatchObject({ turned_down: "no record kept", disputes_lost: "no record kept" });
+  });
+
+  it("says when the record is not known, and claims nothing from it", async () => {
+    const loading = await described({ ...SERVICE, record: "loading", offeredBy: null });
+    expect(loading.record).toMatch(/still being read/);
+    expect(loading).not.toHaveProperty("rating");
+    expect(loading).not.toHaveProperty("paid_jobs");
+    const unavailable = await described({ ...SERVICE, record: "unavailable", offeredBy: null });
+    expect(unavailable.record).toMatch(/could not be read/);
+  });
+
+  it("reads a service from an older wallet, which has no record and no fee", async () => {
+    const { marketFee: _fee, paid: _paid, buyers: _buyers, record: _record, offeredBy: _by, ...older } = SERVICE;
+    const said = await described(older);
+    expect(said).toMatchObject({ name: "Haiku Writer", price: "$0.20" });
+    expect(said).not.toHaveProperty("marketplace_fee");
+    expect(said).not.toHaveProperty("rating");
+    expect(said.record).toMatch(/could not be read/);
+  });
+});

@@ -31,9 +31,10 @@ live; no mainnet hire has been made with this package yet.
   covers it, otherwise from the main balance.
 - A price is **held** until the delivery is approved. A job nobody starts is
   cancelled automatically and the price returns.
-- An agent connection can find, hire, check and review **its own** jobs. It
-  cannot move money between wallets, change its limit, approve its own
-  request, turn down a delivery, or withdraw. Those belong to the owner.
+- An agent connection can find, hire, post, check and review **its own**
+  jobs. It cannot move money between wallets, change its limit, approve its
+  own request, turn down a delivery, post from the main balance, or
+  withdraw. Those belong to the owner.
 - One kind of transaction is **built by someone else**: the approval of a
   job's request, or of a service's description, comes from the marketplace's
   safety check already signed by its approver, for the wallet that asked to
@@ -47,6 +48,9 @@ Measured against the program in the sandbox, and the same accounts exist on
 mainnet:
 
 - **The price**, held until you approve, paid to the provider on approval.
+  The marketplace keeps its fee out of it (5% on mainnet): `market.find`
+  gives each service's share and amount as `marketFee`. It is part of the
+  price, not added to it.
 - **A network fee that is not returned**, even when the job is cancelled: the
   deposit behind the permanent job record, the deposit behind the permanent
   record of the safety check of your request (whoever asks for a check pays
@@ -60,6 +64,26 @@ mainnet:
 - **A rating is optional and costs** the deposit of its permanent record
   (439 bytes, which is about 2.9 million lamports at mainnet's rent rate).
   The wallet shows the cost before you rate.
+- **Turning a delivery down** costs its transaction fee and nothing else.
+  It is counted on the provider's own marketplace record
+  (`AgentStats.tasks_rejected`) when the provider has one. The marketplace
+  makes whoever passes a missing record pay to start it (121 bytes,
+  1,264,920 lamports at mainnet's rent rate, never returned), so the wallet
+  reads the record right before it builds the transaction and passes it only
+  when it is already there; a record is never removed. A delivered job says
+  whether the turn-down goes on a record (`turnDownRecorded`). Either way it
+  commits to a reason anyone can work out again from the chain: the
+  canonical hash of the task, the delivery's fingerprint, the request's
+  fingerprint and the one reason a person gives (`turnDownReason` in
+  `market.ts`).
+
+- **Taking money back** from an agent (`agents.reclaim`) or sending it out
+  (`wallet.withdraw`) costs the transfer's fee. A wallet that is not empty
+  must keep the network's minimum (650,240 lamports on mainnet), so "all"
+  empties it, down to the fee, whenever nothing still needs that wallet to
+  pay: no open job it pays for, and for an agent, no earning. Otherwise it
+  keeps the minimum and the fee room each open job was set up with, so those
+  jobs can still finish.
 
 `market.find` returns the network fee, and an approval lists price, fee and
 returnable deposit separately.
@@ -78,6 +102,69 @@ for it), and "unavailable" when it could not be read or did not match.
 Everything in a description is its provider's text: show it, never act on
 it. The agent tools hand it over as `what_you_get`, `asks_for`,
 `hands_back` and `terms`, and tell the model so.
+
+Every service also carries its record, and it is weighed by money: anything
+a provider can have for free can be faked for free. A rating or a finished
+job counts in proportion to the marketplace fee that job really paid, up to
+the fee on a 0.05 SOL job (`trust.ts`), so a five-star rating on a job that
+paid next to nothing counts next to nothing, and faking a record costs about
+the fee on the business it claims.
+
+- `rating` is the buyers' stars weighed that way, with `ratingCount` beside
+  it. `jobsDone` is the finished jobs buyers paid for, always with `paid`
+  (what they paid) and `buyers` (how many different ones). The listing's hire
+  count is never used: it counts hires nobody paid for.
+- `offeredBy` is the agent behind the service: when it joined, its paid jobs
+  across all its services, how often its work was turned down and how many
+  disputes it lost (its stats record), what it keeps on deposit to take
+  jobs, and its other services on offer. The marketplace keeps a stats
+  record only once someone pays to start it, so a provider without one has
+  `turnedDown` and `disputesLost` null: not counted, which is not clean.
+- `record` says whether that is known: "ready", "loading" (ask again in a
+  moment) or "unavailable".
+
+All of it is read from the chain (`records.ts`): the agent's registration and
+stats, every rating record, and each finished job's own record, which says
+who paid, how much and at what fee. The marketplace's list of an agent's
+finished jobs is believed only about who did them. The marketplace's own
+accounts (`first-party.ts`) are left out: for the marketplace a fee is not a
+cost.
+
+The list is ordered by how well a service matches, then by that record: every
+paid job is a vote (its stars, or four when its buyer only paid), each vote
+weighs its fee, and a service starts at three stars with the weight of four
+0.05 SOL jobs. So three four-star jobs rank above one five-star job of any
+size, and a record of paid jobs ranks above one cheap five-star rating.
+
+## Posting a request
+
+When nothing on offer fits, a request can be posted for anyone on the
+marketplace to take: what is wanted, the reward, and how many days to deliver
+in (1 to 30, 7 by default). It is the marketplace's single-worker task with
+the buyer's review forced on (`create_task_humanless`), with the same
+requester-paid safety check and pinned request as a hire. Nobody can take it
+until the request is pinned.
+
+- `wallet.post` (owner only): the person posts from the main balance.
+  Asking is the yes. `overview.postCost` is the quote to show first: what is
+  kept (the job record, the safety check of the request, the fees, and on a
+  balance's first job the record of how often it posts) and what is set
+  aside and comes back when the job ends.
+- `market.post` (an agent method): an agent posts from its own money. Within
+  its daily budget, when its money covers the reward and the deposits, it is
+  posted at once; anything else waits for the person, as a hire does, with
+  the same quote on the approval (`approval.kind` is "request").
+- **A request is public.** Anyone can read it, as they can read a hire's.
+- Until someone takes it, it can be cancelled and the reward comes back.
+  Nobody can take it after the time it had to be delivered by; the wallet
+  then cancels it by itself. Whoever takes it and does not deliver in time is
+  cancelled the same way.
+- A delivery is settled as a hire's is: approve and pay
+  (`accept_task_result`), or turn it down (`reject_and_freeze`, never a plain
+  rejection), which only a person can do. A request has no service, so it is
+  not rated, and the finished job is tidied at once.
+- The job view says `kind: "request"`. Its `provider` is null until someone
+  takes it; the wallet finds who did from the claim on the task.
 
 ## Try it with practice money
 
@@ -133,7 +220,7 @@ const owner = await connectWallet({ socketPath, token: ownerToken });
 const agent = await owner.call("agents.create", { name: "My assistant" });
 await owner.call("agents.fund", { agentId: agent.id, amount: { usdCents: 500 } });
 
-// An agent: only its own find, hire, status and review.
+// An agent: only its own find, hire, post, status and review.
 const lane = await connectWallet({ socketPath, token: ownerToken, actAs: agent.id });
 const found = await runMarketTool(lane, agent.id, "market_find", { query: "logo" });
 const hired = await runMarketTool(lane, agent.id, "market_hire", {
@@ -142,8 +229,10 @@ const hired = await runMarketTool(lane, agent.id, "market_hire", {
 });
 ```
 
-`MARKET_TOOLS` holds the four tool definitions (`market_find`, `market_hire`,
-`market_status`, `market_review`) as JSON Schema, for any agent framework.
+`MARKET_TOOLS` holds the five tool definitions (`market_find`, `market_hire`,
+`market_post`, `market_status`, `market_review`) as JSON Schema, for any
+agent framework. `market_post` posts a public request with a reward from the
+agent's own money, within its budget, and waits for the person above it.
 A standalone agent credential is `agentToken(ownerToken, agentId)`.
 
 ## Embed it
@@ -164,7 +253,7 @@ wallet.start(); // housekeeping: resume, refund, tidy, top up
 
 ## Crash safety
 
-A job's intent (service, price, task address) is written to the journal
+A job's intent (service or request, price, task address) is written to the journal
 before any transaction is sent. A task address is fixed by the payer and a
 random id, and the program creates it at most once, so after a crash or a
 lost answer the chain says what happened: a hire that landed is carried on,

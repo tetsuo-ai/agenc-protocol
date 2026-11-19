@@ -23,7 +23,8 @@ describe("approvals", () => {
     });
     expect(job.status).toBe("needs_approval");
     expect(approval).not.toBeNull();
-    expect(approval!.service.name).toBe("Haiku Writer");
+    expect(approval!.kind).toBe("hire");
+    expect(approval!.service?.name).toBe("Haiku Writer");
     expect(approval!.price).toEqual({ lamports: (20n * CENT).toString(), usdCents: 20 });
     expect(BigInt(approval!.fromMain.lamports)).toBeGreaterThan(20n * CENT);
     expect(BigInt(approval!.fees.lamports)).toBeGreaterThan(0n);
@@ -110,10 +111,8 @@ describe("approvals", () => {
     const twice = await wallet.fundAgent(agent.id, { usdCents: 500 });
     expect(twice.balance.usdCents).toBe(1_000);
     const back = await wallet.reclaimFromAgent(agent.id, "all");
-    // A wallet keeps a tiny minimum so it stays open; everything else left.
-    expect(BigInt(back.balance.lamports)).toBe(
-      await world.sandbox.chain.getMinimumBalanceForRentExemption(0),
-    );
+    // Nothing still needs this agent's money, so all of it came back.
+    expect(back.balance.lamports).toBe("0");
     const out = await wallet.withdraw("11111111111111111111111111111112", { usdCents: 100 });
     expect(out.signature.length).toBeGreaterThan(40);
     await expect(wallet.fundAgent(agent.id, { usdCents: 999_999_999 })).rejects.toMatchObject({
@@ -137,13 +136,12 @@ describe("approvals", () => {
     // to what is left of today's limit.
     await wallet.reclaimFromAgent(agent.id, "all");
     await wallet.tick();
-    // What stays behind after "take it all back" is the wallet's small minimum.
-    const minimum = await world.sandbox.chain.getMinimumBalanceForRentExemption(0);
+    // "Take it all back" leaves nothing behind in an agent with nothing to pay for.
     const afterSecond = BigInt((await wallet.overview()).agents[0]!.balance.lamports);
-    expect(afterSecond).toBe(minimum + 100n * CENT);
+    expect(afterSecond).toBe(100n * CENT);
     await wallet.reclaimFromAgent(agent.id, "all");
     await wallet.tick();
-    expect(BigInt((await wallet.overview()).agents[0]!.balance.lamports)).toBe(minimum);
+    expect(BigInt((await wallet.overview()).agents[0]!.balance.lamports)).toBe(0n);
 
     // A day later the limit is fresh.
     clock.now += 25 * 60 * 60_000;

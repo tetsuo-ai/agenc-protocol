@@ -13,6 +13,7 @@ export type {
   JobView,
   Lamports,
   Money,
+  ProviderView,
   ServiceView,
   WalletErrorCode,
   WalletErrorShape,

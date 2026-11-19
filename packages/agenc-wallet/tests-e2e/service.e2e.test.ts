@@ -127,6 +127,10 @@ describe("the wallet service", () => {
         agent.call("wallet.withdraw", { to: other.address, amount: "all" }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(agent.call("approvals.list", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      // Posting from the main balance is the person's: an agent posts only from its own money.
+      await expect(
+        agent.call("wallet.post", { request: "A haiku about rain.", reward: { usdCents: 30 } }),
+      ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       // Earning and what is put on offer are the owner's decisions too.
       await expect(
         agent.call("earn.set", { agentId: mine.id, enabled: true }),
@@ -165,6 +169,19 @@ describe("the wallet service", () => {
     await expect(
       narrowed.call("approvals.decide", { approvalId: hired.approval!.id, approve: true }),
     ).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    // The same for a request it posts: made as itself, from its own money,
+    // which is empty, so it waits for the person.
+    const asked = await narrowed.call("market.post", {
+      agentId: other.id,
+      request: "A haiku about rain.",
+      reward: { usdCents: 30 },
+    });
+    expect(asked.job).toMatchObject({ agentId: mine.id, kind: "request", status: "needs_approval" });
+    expect(asked.approval).toMatchObject({ kind: "request", service: null });
+    // The person posts from the main balance with one call, and nobody is asked.
+    const own = await owner.call("wallet.post", { request: "A haiku about snow.", reward: { usdCents: 30 } });
+    expect(own.job).toMatchObject({ agentId: "", kind: "request", status: "waiting" });
 
     // Another agent cannot watch that request either.
     const otherLane = await connect({ actAs: other.id });
@@ -253,5 +270,40 @@ describe("the wallet service", () => {
     expect(list.jobs).toHaveLength(1);
     const bad = await runMarketTool(agent, agentView.id, "market_hire", { service: "nope" });
     expect(bad.ok).toBe(false);
+  });
+
+  it("posts a request with the chat tools and follows it to paid, once per call", async () => {
+    world = await startWorld();
+    const { sandbox } = world;
+    const { connect } = await serve(world);
+    const owner = await connect({});
+    const agentView = await owner.call("agents.create", { name: "My assistant" });
+    await owner.call("agents.setBudget", { agentId: agentView.id, perDayCents: 500 });
+    const agent = await connect({ actAs: agentView.id });
+
+    const args = { request: "A haiku about a lighthouse.", reward_usd: 0.3 };
+    const posted = await runMarketTool(agent, agentView.id, "market_post", args, { idempotencyKey: "call-9" });
+    expect(posted.ok).toBe(true);
+    expect(posted.message).toMatch(/Anyone can read the request\./);
+    expect(posted.job).toMatchObject({ posted_request: "A haiku about a lighthouse", status: "waiting", price: "$0.30", can: ["refund"] });
+    // The same call delivered twice posts once.
+    const again = await runMarketTool(agent, agentView.id, "market_post", args, { idempotencyKey: "call-9" });
+    expect(again.job!.job_id).toBe(posted.job!.job_id);
+
+    // A stranger takes it and delivers; the agent waits for that and pays.
+    const waiting = runMarketTool(agent, agentView.id, "market_status", { job_id: posted.job!.job_id, wait: true });
+    await sandbox.workOnce();
+    const delivered = await waiting;
+    expect(delivered.job!.status).toBe("delivered");
+    expect(delivered.job!.delivery?.untrusted_content).toContain("You asked: A haiku about a lighthouse.");
+    const paid = await runMarketTool(agent, agentView.id, "market_review", {
+      job_id: posted.job!.job_id,
+      action: "approve",
+      rating: 5,
+    });
+    expect(paid.ok).toBe(true);
+    expect(paid.job!.status).toBe("paid");
+    const { jobs } = await agent.call("jobs.list", {});
+    expect(jobs).toHaveLength(1);
   });
 });

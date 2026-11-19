@@ -130,8 +130,12 @@ export interface AgentView {
 
 export interface WalletOverview {
   network: WalletNetwork;
-  /** The main balance. Money is added here and handed out to agents. */
-  main: { address: string; balance: Money };
+  /**
+   * The main balance. Money is added here and handed out to agents. `spent`
+   * is what it paid out for requests the person posted from it; what agents
+   * pay is on each agent.
+   */
+  main: { address: string; balance: Money; spent: Money };
   /** Everything currently held in running jobs, across all agents. */
   held: Money;
   agents: AgentView[];
@@ -153,6 +157,14 @@ export interface WalletOverview {
    * new agent), which that backup does not hold.
    */
   backup: { at: number | null; upToDate: boolean };
+  /**
+   * What posting a request from the main balance costs on top of its reward
+   * (`wallet.post`): `kept` is not returned (the permanent job record, the
+   * safety check of the request, the fees, and on a first job the record of
+   * how often this balance posts); `setAside` comes back when the job ends.
+   * Null until it has been read.
+   */
+  postCost: { kept: Money; setAside: Money } | null;
 }
 
 /** A service someone offers on the marketplace. */
@@ -184,15 +196,70 @@ export interface ServiceView {
    */
   details: "ready" | "loading" | "unavailable";
   price: Money;
-  /** Average of buyer ratings, 1 to 5, or null when nobody has rated yet. */
+  /**
+   * The marketplace's fee, taken out of the price (not added to it): its
+   * share in basis points and what that comes to. Null when it is not known.
+   */
+  marketFee: { bps: number; amount: Money } | null;
+  /**
+   * What buyers who paid for this service gave it: 1 to 5 stars, each rating
+   * weighed by the marketplace fee its job paid, so a rating on a job that
+   * paid next to nothing counts next to nothing. Null when nobody has.
+   */
   rating: number | null;
+  /** How many ratings `rating` holds. Show it next to the stars, always. */
   ratingCount: number;
-  /** Paid, completed jobs. */
+  /**
+   * Finished jobs buyers paid for. A count costs nothing to fake on its own:
+   * show it with `paid`, never alone.
+   */
   jobsDone: number;
+  /** What buyers paid for those jobs. */
+  paid: Money;
+  /** How many different buyers paid for one. */
+  buyers: number;
+  /**
+   * How much of the record above, and of `offeredBy`, is known. "ready": it
+   * was read (it may be empty: nobody has paid for this service yet).
+   * "loading": it is being read; ask again in a moment. "unavailable": it
+   * could not be read, and the fields above say nothing.
+   */
+  record: "ready" | "loading" | "unavailable";
   /** The provider's agent address. */
   provider: string;
+  /** The agent behind the service, or null while that is not known. */
+  offeredBy: ProviderView | null;
   /** How long the provider gets to deliver, in seconds. */
   deliverySecs: number | null;
+}
+
+/**
+ * The agent behind a service, as a buyer sees it before hiring. Its record
+ * counts the way a service's does: by what buyers paid, with the
+ * marketplace's own accounts left out.
+ */
+export interface ProviderView {
+  /** When it joined the marketplace, unix milliseconds, or null when not known. */
+  since: number | null;
+  /** Finished jobs buyers paid it for, across all its services. */
+  jobsDone: number;
+  /** What buyers paid for them. */
+  paid: Money;
+  /** How many different buyers paid it. */
+  buyers: number;
+  /**
+   * Deliveries of its that buyers turned down, as recorded with the
+   * marketplace. Null when no such record is kept for it: the marketplace
+   * keeps one only once someone pays to start it, so a missing record is not
+   * a clean one.
+   */
+  turnedDown: number | null;
+  /** Disputes about its work that it lost, from the same record. Null when none is kept. */
+  disputesLost: number | null;
+  /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
+  deposit: Money | null;
+  /** Its other services on offer now. */
+  otherServices: { listing: string; name: string }[];
 }
 
 /**
@@ -240,8 +307,15 @@ export interface JobView {
   id: string;
   /** "buying": this agent is paying. "working": this agent is doing the job. */
   role: "buying" | "working";
+  /**
+   * "hire": a service was hired. "request": a request was posted for anyone
+   * to take. It is public, pays the reward it was posted with, and has no
+   * provider until someone takes it.
+   */
+  kind: "hire" | "request";
+  /** The agent that pays, or "" for a request the person posted from the main balance. */
   agentId: string;
-  /** The service name. */
+  /** The service name, or a posted request's first words. */
   title: string;
   /** What was asked for. */
   request: string;
@@ -272,19 +346,29 @@ export interface JobView {
   rating: number | null;
   /** What leaving a rating costs (a permanent record), while `canRate`. */
   ratingCost: Money | null;
+  /**
+   * While the delivery can be turned down: whether turning it down goes on
+   * the provider's marketplace record. Only a record the provider already
+   * has is counted in; starting one would cost the buyer, so a provider
+   * without one gets none. Turning a delivery down costs its fee either way.
+   */
+  turnDownRecorded: boolean;
   receiptUrl: string | null;
   error: string | null;
 }
 
-/** A hire waiting for a person to say yes. */
+/** A hire, or a request an agent wants to post, waiting for a person to say yes. */
 export interface ApprovalView {
   id: string;
   jobId: string;
   agentId: string;
   agentName: string;
-  service: ServiceView;
+  /** "hire": the agent wants to hire `service`. "request": it wants to post a public request. */
+  kind: "hire" | "request";
+  /** The service to hire; null for a request. */
+  service: ServiceView | null;
   request: string;
-  /** What the provider is paid. */
+  /** What the provider is paid: the price, or the request's reward. */
   price: Money;
   /**
    * Refundable deposits and network fees set aside on top of the price. Most of

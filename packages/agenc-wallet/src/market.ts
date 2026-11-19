@@ -7,11 +7,12 @@
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
-import { type Address, type KeyPairSigner } from "@solana/kit";
+import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   facade,
   findAgentPda,
+  findAgentStatsPda,
   findClaimPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
@@ -29,6 +30,7 @@ import {
   findWorkerCompletionBondPda,
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
+  getAgentStatsDiscriminatorBytes,
   getAuthorityRateLimitSize,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
@@ -51,11 +53,15 @@ import {
   getTaskModerationDecoder,
   getTaskModerationDiscriminatorBytes,
   getTaskModerationSize,
+  getTaskClaimDecoder,
+  getTaskClaimDiscriminatorBytes,
   getTaskSubmissionDecoder,
   getTaskSubmissionDiscriminatorBytes,
   getTaskValidationConfigDiscriminatorBytes,
   getTaskValidationConfigSize,
+  resolveProgramAccountsTransport,
   SubmissionStatus,
+  TASK_CLAIM_TASK_OFFSET,
   TaskStatus,
   values,
   type AgentRegistration,
@@ -399,16 +405,35 @@ export async function findTaskGate(
  * finished job is tidied. Two never do: the task record's own, and the one
  * behind the safety check of the job's request, which the buyer pays for.
  */
-export async function purchaseDeposits(
+export function purchaseDeposits(
   chain: Chain,
   buyer: Address,
+): Promise<{ total: bigint; kept: bigint }> {
+  return jobDeposits(chain, buyer, true);
+}
+
+/**
+ * The same for a request posted for anyone to take: the accounts are those
+ * of a hire without the record that ties a hire to its service.
+ */
+export function requestDeposits(
+  chain: Chain,
+  creator: Address,
+): Promise<{ total: bigint; kept: bigint }> {
+  return jobDeposits(chain, creator, false);
+}
+
+async function jobDeposits(
+  chain: Chain,
+  payer: Address,
+  hired: boolean,
 ): Promise<{ total: bigint; kept: bigint }> {
   const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
   const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent] =
     await Promise.all([
       rent(TASK_ACCOUNT_SPACE),
       rent(getTaskEscrowSize()),
-      rent(getHireRecordSize()),
+      hired ? rent(getHireRecordSize()) : Promise.resolve(0n),
       rent(getTaskValidationConfigSize()),
       rent(TASK_JOB_SPEC_SPACE),
       rent(getTaskModerationSize()),
@@ -422,7 +447,9 @@ export async function purchaseDeposits(
     approvalRent +
     FEE_HEADROOM_LAMPORTS;
   let kept = taskRent + approvalRent;
-  const [rateLimit] = await findCreateTaskHumanlessAuthorityRateLimitPda({ creator: buyer });
+  // The marketplace keeps one record per paying wallet of how often it posts:
+  // made, and kept, on that wallet's first job of either kind.
+  const [rateLimit] = await findCreateTaskHumanlessAuthorityRateLimitPda({ creator: payer });
   if ((await chain.readAccountInfo(rateLimit)) === null) {
     const once = await rent(getAuthorityRateLimitSize());
     total += once;
@@ -506,6 +533,102 @@ export async function hireLanded(
   return true;
 }
 
+// ------------------------------------------------- posting a request
+//
+// A request is a job nobody was hired for: anyone may take it. It is the
+// marketplace's single-worker task with the buyer's review forced on, the
+// door a wallet with no registered agent uses.
+
+export interface RequestIntent {
+  taskId: Uint8Array;
+  /** Canonical hash of the published request. The task commits to it. */
+  jobSpecHash: Uint8Array;
+  rewardLamports: bigint;
+  /** Unix seconds: when the work must be delivered by. */
+  deadline: bigint;
+  reviewWindowSecs: bigint;
+}
+
+/** The 64-byte description a request's task carries: the request's hash, then zeros. */
+export function requestDescription(jobSpecHash: Uint8Array): Uint8Array {
+  const description = new Uint8Array(64);
+  description.set(jobSpecHash.subarray(0, 32), 0);
+  return description;
+}
+
+/**
+ * Post the request: creates the task for one worker with the buyer's review
+ * on, and puts the reward in escrow.
+ */
+export async function sendRequest(
+  chain: Chain,
+  creator: KeyPairSigner,
+  intent: RequestIntent,
+): Promise<string> {
+  const client = chain.clientFor(creator);
+  const result = await client.send([
+    await facade.createTaskHumanless({
+      creator,
+      taskId: intent.taskId,
+      requiredCapabilities: 1n,
+      description: requestDescription(intent.jobSpecHash),
+      rewardAmount: intent.rewardLamports,
+      deadline: intent.deadline,
+      minReputation: 0,
+      reviewWindowSecs: intent.reviewWindowSecs,
+    }),
+  ]);
+  return result.signature;
+}
+
+/**
+ * True when the task at the journaled address is exactly the request that
+ * was meant: created by this wallet, for this reward and this request, and
+ * not tied to any service.
+ */
+export async function requestLanded(
+  chain: Chain,
+  creator: Address,
+  task: Address,
+  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash">,
+): Promise<boolean> {
+  const account = await readTask(chain, task);
+  if (account === null) return false;
+  const mismatch = (): never => {
+    throw new WalletError("INTERNAL", "A job on the marketplace does not match the wallet's records.");
+  };
+  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports) mismatch();
+  if (!bytesEqual(new Uint8Array(account.description), requestDescription(intent.jobSpecHash))) mismatch();
+  if ((await readHireRecord(chain, task)) !== null) mismatch();
+  return true;
+}
+
+/**
+ * The agent that took a request, found by its claim on the task. Null while
+ * nobody holds one. Needs a program-account scan, so it is asked only once
+ * the task says someone took it.
+ */
+export async function requestWorker(chain: Chain, task: Address): Promise<Address | null> {
+  const found = await resolveProgramAccountsTransport(chain.gpa).getProgramAccounts({
+    filters: [
+      { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskClaimDiscriminatorBytes()) } },
+      { memcmp: { offset: TASK_CLAIM_TASK_OFFSET, bytes: Uint8Array.from(getAddressEncoder().encode(task)) } },
+    ],
+  });
+  for (const entry of found) {
+    try {
+      const claim = getTaskClaimDecoder().decode(entry.data);
+      if (claim.task !== task) continue;
+      // The claim's address proves which worker it belongs to.
+      const [expected] = await findClaimPda({ task, bidder: claim.worker });
+      if (expected === entry.address) return claim.worker;
+    } catch {
+      // Not a claim this wallet can read; keep looking.
+    }
+  }
+  return null;
+}
+
 /** True once the job spec is pinned and providers can start. */
 export async function isActivated(chain: Chain, task: Address): Promise<boolean> {
   const [pda] = await findTaskJobSpecPda({ task });
@@ -579,11 +702,15 @@ async function readSubmission(
   return { address: submission, claim, account };
 }
 
-/** Where a job stands on the chain, or null when its task does not exist. */
+/**
+ * Where a job stands on the chain, or null when its task does not exist.
+ * `providerAgent` is null for a request nobody is known to have taken: there
+ * is then no delivery to read.
+ */
 export async function inspectJob(
   chain: Chain,
   task: Address,
-  providerAgent: Address,
+  providerAgent: Address | null,
 ): Promise<JobOnChain | null> {
   const account = await readTask(chain, task);
   if (account === null) return null;
@@ -591,7 +718,7 @@ export async function inspectJob(
   if (status === undefined) {
     throw new WalletError("INTERNAL", "The marketplace reported a job state this wallet does not know.");
   }
-  const submission = await readSubmission(chain, task, providerAgent);
+  const submission = providerAgent === null ? null : await readSubmission(chain, task, providerAgent);
   return {
     status,
     deadline: Number(account.deadline),
@@ -725,12 +852,70 @@ export async function sendReject(
   return result.signature;
 }
 
+/** The one reason a person gives by turning a delivery down. */
+export const TURN_DOWN_REASON = "The delivery does not do what was asked.";
+
+/**
+ * What a turn-down commits to: which job, which delivery, the request it
+ * answered, and why it was turned down. Each part is public (the task, the
+ * delivery's fingerprint and the request's are all recorded with the job), so
+ * anyone, the reviewer first, can work the hash out again and see exactly
+ * what was turned down and for what.
+ */
+export async function turnDownReason(input: {
+  task: Address;
+  /** The fingerprint the provider recorded for the delivery. */
+  deliveryHashHex: string;
+  /** The fingerprint of the request the job was posted with. */
+  requestHashHex: string;
+}): Promise<{ document: Record<string, unknown>; hash: Uint8Array; hex: string }> {
+  const document = {
+    kind: "agenc.marketplace.turnDown",
+    v: 1,
+    task: input.task,
+    delivery: input.deliveryHashHex,
+    request: input.requestHashHex,
+    reason: TURN_DOWN_REASON,
+  };
+  const { bytes, hex } = await values.canonicalJobSpecHash(document);
+  return { document, hash: bytes, hex };
+}
+
+/** Where a provider agent's record of turn-downs, expired claims and disputes lives. */
+export async function providerRecordAddress(providerAgent: Address): Promise<Address> {
+  const [stats] = await findAgentStatsPda({ creatorAgent: providerAgent });
+  return stats;
+}
+
+/**
+ * Whether the marketplace keeps that record for the provider agent. Nobody
+ * has to keep one: it exists only once someone paid to start it, and it is
+ * never removed.
+ */
+export async function providerHasRecord(chain: Chain, providerAgent: Address): Promise<boolean> {
+  const info = await chain.readAccountInfo(await providerRecordAddress(providerAgent));
+  return (
+    info !== null &&
+    info.owner === AGENC_COORDINATION_PROGRAM_ADDRESS &&
+    startsWith(info.data, getAgentStatsDiscriminatorBytes())
+  );
+}
+
 /**
  * Turn a delivery down and hold the price for review. Unlike a plain
  * rejection, this does not hand the money back: the job stays with the
  * provider, a reviewer decides who gets the price, and if nobody rules before
  * the review time runs out the provider is paid. A buyer cannot read the work
  * and then walk away with both it and the price.
+ *
+ * The turn-down goes on the provider's own record when it has one, with a
+ * reason that says what was turned down (see {@link turnDownReason}). A
+ * provider without a record gets none: the marketplace makes whoever passes a
+ * missing record pay to start it, and turning work down must never cost the
+ * buyer more than the transaction. So the record is read right before the
+ * transaction is built and passed only when it is already there, where
+ * counting costs nothing; a record is never removed, so it is still there
+ * when the transaction lands. `recorded` says which it was.
  */
 export async function sendRejectAndFreeze(
   chain: Chain,
@@ -738,13 +923,22 @@ export async function sendRejectAndFreeze(
   task: Address,
   providerAgent: Address,
   rejectionHash: Uint8Array,
-): Promise<string> {
+): Promise<{ signature: string; recorded: boolean }> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
+  const recorded = await providerHasRecord(chain, providerAgent);
   const client = chain.clientFor(buyer);
   const result = await client.send([
-    await facade.rejectAndFreeze({ task, claim, creator: buyer, rejectionHash }),
+    await facade.rejectAndFreeze({
+      task,
+      claim,
+      creator: buyer,
+      rejectionHash,
+      ...(recorded
+        ? { agentStats: await providerRecordAddress(providerAgent), systemProgram: SYSTEM_PROGRAM_ADDRESS }
+        : {}),
+    }),
   ]);
-  return result.signature;
+  return { signature: result.signature, recorded };
 }
 
 /**
@@ -830,7 +1024,7 @@ export async function sendCancel(
   chain: Chain,
   buyer: KeyPairSigner,
   task: Address,
-  providerAgent: Address,
+  providerAgent: Address | null,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -844,17 +1038,18 @@ export async function sendCancel(
     return result.signature;
   }
   if (Number(account.status) === TaskStatus.InProgress && account.completions === 0) {
-    const agent = await readAgent(chain, providerAgent);
+    const agent = providerAgent === null ? null : await readAgent(chain, providerAgent);
     if (agent === null) {
       throw new WalletError("NOT_AVAILABLE", "This job cannot be cancelled from here yet.");
     }
-    const [claim] = await findClaimPda({ task, bidder: providerAgent });
+    const worker = providerAgent as Address;
+    const [claim] = await findClaimPda({ task, bidder: worker });
     const config = await readProtocolConfig(chain);
     const result = await client.cancelTask({
       task,
       authority: buyer,
       workerBondAuthority: agent.authority,
-      workerAccounts: [{ claim, workerAgent: providerAgent, workerAuthority: agent.authority }],
+      workerAccounts: [{ claim, workerAgent: worker, workerAuthority: agent.authority }],
       treasury: config.treasury,
     });
     return result.signature;
@@ -871,7 +1066,7 @@ export async function sendTidy(
   chain: Chain,
   buyer: KeyPairSigner,
   task: Address,
-  providerAgent: Address,
+  providerAgent: Address | null,
 ): Promise<string | null> {
   const account = await readTask(chain, task);
   if (account === null) return null;
@@ -893,8 +1088,9 @@ export async function sendTidy(
     children.push({ kind: "creatorFunded", account: validationConfig });
   }
 
-  const submission = await readSubmission(chain, task, providerAgent);
+  const submission = providerAgent === null ? null : await readSubmission(chain, task, providerAgent);
   if (
+    providerAgent !== null &&
     submission !== null &&
     (submission.account.status === SubmissionStatus.Accepted ||
       submission.account.status === SubmissionStatus.Rejected)
