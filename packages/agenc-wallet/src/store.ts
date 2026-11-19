@@ -187,6 +187,12 @@ export interface JobRecord {
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
+  /**
+   * Whether the provider already has its marketplace record of turn-downs,
+   * read once the job is delivered. Turning down a provider's first delivery
+   * also pays for that record. Absent until read.
+   */
+  providerRecorded?: boolean;
   rating: number | null;
   /** The finished job's deposits were collected and its slot released. */
   tidied: boolean;

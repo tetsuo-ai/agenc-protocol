@@ -127,6 +127,8 @@ export function jobView(
     isOwner: boolean;
     /** Lamports a rating costs, when known. */
     ratingCostLamports?: bigint | null;
+    /** Lamports the deposit behind a provider's record costs, when known. */
+    recordCostLamports?: bigint | null;
     /**
      * Whether a note saying what to change can reach the provider. Sending a
      * delivery back records only the note's fingerprint; the words travel
@@ -139,6 +141,8 @@ export function jobView(
   const price = money(job.priceLamports, context.usdPerSol);
   const buying = job.role === "buying";
   const canRate = buying && status === "paid" && job.rating === null && !job.tidied;
+  // Turning a delivery down is a person's call.
+  const canTurnDown = buying && status === "delivered" && context.isOwner;
   return {
     id: job.id,
     role: job.role,
@@ -169,12 +173,16 @@ export function jobView(
       (status === "needs_approval" ||
         status === "waiting" ||
         // Turning down a delivery is a person's call, not an agent's.
-        (status === "delivered" && context.isOwner)),
+        canTurnDown),
     canRate,
     rating: job.rating,
     ratingCost:
       canRate && context.ratingCostLamports != null
         ? money(context.ratingCostLamports, context.usdPerSol)
+        : null,
+    turnDownCost:
+      canTurnDown && job.providerRecorded === false && context.recordCostLamports != null
+        ? money(context.recordCostLamports, context.usdPerSol)
         : null,
     receiptUrl: receiptUrlFor(job, context.network),
     error: job.error,

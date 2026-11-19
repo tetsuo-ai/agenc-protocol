@@ -2,7 +2,18 @@
 // starts and never delivers is cancelled after the deadline. A delivery is
 // different: the buyer has read it, so turning it down (a person's call, not
 // an agent's) holds the price for review instead of handing it back.
+import type { Address } from "@solana/kit";
+import {
+  findClaimPda,
+  findTaskJobSpecPda,
+  findTaskSubmissionPda,
+  getAgentStatsDecoder,
+  getTaskJobSpecDecoder,
+  getTaskSubmissionDecoder,
+  values,
+} from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
+import { providerRecordAddress, providerRecordDeposit, turnDownReason } from "../src/market.js";
 import { CENT, checkCost, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
@@ -10,6 +21,40 @@ afterEach(async () => {
   await world?.wallet.close();
   world = null;
 });
+
+/** How many of a provider's deliveries were turned down, as its marketplace record says. */
+async function turnDowns(current: World, provider: string): Promise<bigint | null> {
+  const data = await current.sandbox.chain.readAccount(await providerRecordAddress(provider as Address));
+  return data === null ? null : getAgentStatsDecoder().decode(data).tasksRejected;
+}
+
+async function submissionOf(current: World, task: string, provider: string) {
+  const [claim] = await findClaimPda({ task: task as Address, bidder: provider as Address });
+  const [submission] = await findTaskSubmissionPda({ claim });
+  return getTaskSubmissionDecoder().decode((await current.sandbox.chain.readAccount(submission))!);
+}
+
+/** The reason the chain holds for a delivery that was turned down. */
+async function recordedReason(current: World, task: string, provider: string): Promise<string> {
+  return values.bytesToHex(new Uint8Array((await submissionOf(current, task, provider)).rejectionHash));
+}
+
+/**
+ * The reason as a reviewer works it out with nothing but the chain: the
+ * delivery's fingerprint from the submission, the request's from the pinned
+ * job spec, and the one reason a person gives.
+ */
+async function reasonFromChain(current: World, task: string, provider: string): Promise<string> {
+  const [spec] = await findTaskJobSpecPda({ task: task as Address });
+  const pinned = getTaskJobSpecDecoder().decode((await current.sandbox.chain.readAccount(spec))!);
+  const submission = await submissionOf(current, task, provider);
+  const reason = await turnDownReason({
+    task: task as Address,
+    deliveryHashHex: values.bytesToHex(new Uint8Array(submission.proofHash)),
+    requestHashHex: values.bytesToHex(new Uint8Array(pinned.jobSpecHash)),
+  });
+  return reason.hex;
+}
 
 async function fundedAgent(current: World, cents = 300) {
   const agent = await current.wallet.createAgent("My assistant");
@@ -101,11 +146,26 @@ describe("refunds", () => {
     await expect(wallet.refundJob(job.id, false, agent.id)).rejects.toMatchObject({
       code: "NOT_ALLOWED",
     });
-    expect((await wallet.getJob(job.id, true)).canRefund).toBe(true);
+    const looked = await wallet.getJob(job.id, true);
+    expect(looked.canRefund).toBe(true);
+    // This provider has never been turned down, so turning it down also pays
+    // for its record, and the person is told so before the click. An agent,
+    // who cannot turn it down, is not.
+    const recordDeposit = await providerRecordDeposit(sandbox.chain);
+    expect(looked.turnDownCost?.lamports).toBe(recordDeposit.toString());
+    expect(delivered.turnDownCost).toBeNull();
+    expect(await turnDowns(world, looked.provider!)).toBeNull();
 
     const beforeTurnDown = await world.balance(agent.address);
     const turnedDown = await wallet.refundJob(job.id, true);
     expect(turnedDown.status).toBe("in_review");
+    expect(turnedDown.turnDownCost).toBeNull();
+    // It is on the provider's record now, with a reason anyone can work out
+    // again from what the chain holds: this delivery, this request, and why.
+    expect(await turnDowns(world, looked.provider!)).toBe(1n);
+    expect(await recordedReason(world, looked.task!, looked.provider!)).toBe(
+      await reasonFromChain(world, looked.task!, looked.provider!),
+    );
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
     expect(held.status).toBe("in_review");
@@ -118,8 +178,9 @@ describe("refunds", () => {
     expect(held.canRefund).toBe(false);
     await expect(wallet.refundJob(job.id, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
     // The buyer has read the work, so the price did NOT come back: turning it
-    // down cost one transaction fee and nothing else.
-    expect(beforeTurnDown - (await world.balance(agent.address))).toBe(5_000n);
+    // down cost one transaction fee and the provider's new record, exactly
+    // what the screen said, and nothing else.
+    expect(beforeTurnDown - (await world.balance(agent.address))).toBe(5_000n + recordDeposit);
     expect((await wallet.overview()).agents[0]!.held.lamports).toBe(job.price.lamports);
     expect((await wallet.listActivity()).some((entry) => /turned down/.test(entry.text))).toBe(true);
 
@@ -189,6 +250,35 @@ describe("refunds", () => {
     const paid = await wallet.getJob(job.id, true);
     expect(paid.status).toBe("paid");
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe(job.price.lamports);
+  });
+
+  it("counts every turn-down on the provider's record, and pays for the record only once", async () => {
+    world = await startWorld();
+    const { wallet, sandbox, listing } = world;
+    const agent = await fundedAgent(world, 500);
+    const turnDown = async (request: string) => {
+      const { job } = await wallet.hire({ agentId: agent.id, listing, request });
+      await sandbox.workOnce();
+      const looked = await wallet.getJob(job.id, true);
+      expect(looked.status).toBe("delivered");
+      const before = await world!.balance(agent.address);
+      await wallet.refundJob(job.id, true);
+      return { looked, cost: before - (await world!.balance(agent.address)) };
+    };
+    const first = await turnDown("A haiku about rain.");
+    const second = await turnDown("A haiku about snow.");
+    expect(first.cost).toBe(5_000n + (await providerRecordDeposit(sandbox.chain)));
+    // The record exists now: the second turn-down costs its fee only, and the
+    // screen asks for nothing more.
+    expect(second.looked.turnDownCost).toBeNull();
+    expect(second.cost).toBe(5_000n);
+    expect(await turnDowns(world, second.looked.provider!)).toBe(2n);
+    // Each reason names its own delivery.
+    const reasons = new Set([
+      await recordedReason(world, first.looked.task!, first.looked.provider!),
+      await recordedReason(world, second.looked.task!, second.looked.provider!),
+    ]);
+    expect(reasons.size).toBe(2);
   });
 
   it("does not let one agent touch another agent's job", async () => {

@@ -60,6 +60,15 @@ mainnet:
 - **A rating is optional and costs** the deposit of its permanent record
   (439 bytes, which is about 2.9 million lamports at mainnet's rent rate).
   The wallet shows the cost before you rate.
+- **Turning a delivery down** costs its fee, and goes on the provider's own
+  marketplace record (`AgentStats.tasks_rejected`). The first time a provider
+  is turned down that record is made, and whoever turns it down pays its
+  deposit (121 bytes, 1,264,920 lamports at mainnet's rent rate), which is
+  not returned. A delivered job says so before the click (`turnDownCost`).
+  The turn-down commits to a reason anyone can work out again from the
+  chain: the canonical hash of the task, the delivery's fingerprint, the
+  request's fingerprint and the one reason a person gives
+  (`turnDownReason` in `market.ts`).
 
 `market.find` returns the network fee, and an approval lists price, fee and
 returnable deposit separately.

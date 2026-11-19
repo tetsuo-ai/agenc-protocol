@@ -12,6 +12,7 @@ import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   facade,
   findAgentPda,
+  findAgentStatsPda,
   findClaimPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
@@ -29,6 +30,8 @@ import {
   findWorkerCompletionBondPda,
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
+  getAgentStatsDiscriminatorBytes,
+  getAgentStatsSize,
   getAuthorityRateLimitSize,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
@@ -725,12 +728,70 @@ export async function sendReject(
   return result.signature;
 }
 
+/** The one reason a person gives by turning a delivery down. */
+export const TURN_DOWN_REASON = "The delivery does not do what was asked.";
+
+/**
+ * What a turn-down commits to: which job, which delivery, the request it
+ * answered, and why it was turned down. Each part is public (the task, the
+ * delivery's fingerprint and the request's are all recorded with the job), so
+ * anyone, the reviewer first, can work the hash out again and see exactly
+ * what was turned down and for what.
+ */
+export async function turnDownReason(input: {
+  task: Address;
+  /** The fingerprint the provider recorded for the delivery. */
+  deliveryHashHex: string;
+  /** The fingerprint of the request the job was posted with. */
+  requestHashHex: string;
+}): Promise<{ document: Record<string, unknown>; hash: Uint8Array; hex: string }> {
+  const document = {
+    kind: "agenc.marketplace.turnDown",
+    v: 1,
+    task: input.task,
+    delivery: input.deliveryHashHex,
+    request: input.requestHashHex,
+    reason: TURN_DOWN_REASON,
+  };
+  const { bytes, hex } = await values.canonicalJobSpecHash(document);
+  return { document, hash: bytes, hex };
+}
+
+/** Where a provider agent's record of turn-downs, expired claims and disputes lives. */
+export async function providerRecordAddress(providerAgent: Address): Promise<Address> {
+  const [stats] = await findAgentStatsPda({ creatorAgent: providerAgent });
+  return stats;
+}
+
+/** Whether the provider agent already has that record. The first turn-down creates it. */
+export async function providerHasRecord(chain: Chain, providerAgent: Address): Promise<boolean> {
+  const info = await chain.readAccountInfo(await providerRecordAddress(providerAgent));
+  return (
+    info !== null &&
+    info.owner === AGENC_COORDINATION_PROGRAM_ADDRESS &&
+    startsWith(info.data, getAgentStatsDiscriminatorBytes())
+  );
+}
+
+/**
+ * The deposit behind a provider's record, which whoever turns down its first
+ * delivery pays. The record stays on the marketplace, so it is never returned.
+ */
+export function providerRecordDeposit(chain: Chain): Promise<bigint> {
+  return chain.getMinimumBalanceForRentExemption(getAgentStatsSize());
+}
+
 /**
  * Turn a delivery down and hold the price for review. Unlike a plain
  * rejection, this does not hand the money back: the job stays with the
  * provider, a reviewer decides who gets the price, and if nobody rules before
  * the review time runs out the provider is paid. A buyer cannot read the work
  * and then walk away with both it and the price.
+ *
+ * The turn-down goes on the provider's own record (made here when it has
+ * none), with a reason that says what was turned down (see
+ * {@link turnDownReason}). The marketplace leaves that record to whoever sends
+ * this; a wallet that leaves it out keeps the provider's record clean for free.
  */
 export async function sendRejectAndFreeze(
   chain: Chain,
@@ -742,7 +803,14 @@ export async function sendRejectAndFreeze(
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
   const client = chain.clientFor(buyer);
   const result = await client.send([
-    await facade.rejectAndFreeze({ task, claim, creator: buyer, rejectionHash }),
+    await facade.rejectAndFreeze({
+      task,
+      claim,
+      creator: buyer,
+      rejectionHash,
+      agentStats: await providerRecordAddress(providerAgent),
+      systemProgram: SYSTEM_PROGRAM_ADDRESS,
+    }),
   ]);
   return result.signature;
 }

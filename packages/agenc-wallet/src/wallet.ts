@@ -50,6 +50,8 @@ import {
   LISTING_ACCOUNT_SPACE,
   LISTING_NAME_MAX_BYTES,
   listingAddressFor,
+  providerHasRecord,
+  providerRecordDeposit,
   purchaseDeposits,
   ratingCost,
   readAgent,
@@ -69,6 +71,7 @@ import {
   sendUpdateListing,
   TASK_ACCOUNT_SPACE,
   taskAddressFor,
+  turnDownReason,
   type ListingTerms,
 } from "./market.js";
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
@@ -681,6 +684,19 @@ export class AgencWallet {
     return this.#ratingCostLamports;
   }
 
+  #recordCostLamports: bigint | null = null;
+
+  /**
+   * What turning down a provider's first delivery costs on top of the fee:
+   * the deposit behind its record. Read once and remembered.
+   */
+  async #recordCost(): Promise<bigint | null> {
+    if (this.#recordCostLamports === null) {
+      this.#recordCostLamports = await providerRecordDeposit(this.#chain).catch(() => null);
+    }
+    return this.#recordCostLamports;
+  }
+
   async #jobView(job: JobRecord, isOwner: boolean): Promise<JobView> {
     return jobView(job, {
       usdPerSol: await this.#displayRate(),
@@ -688,6 +704,7 @@ export class AgencWallet {
       network: this.#chain.network,
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
+      recordCostLamports: await this.#recordCost(),
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
     });
   }
@@ -1930,9 +1947,14 @@ export class AgencWallet {
     }
 
     let result = job.result;
+    let providerRecorded = job.providerRecorded;
     if (seen.status === "pending_validation" && seen.submission !== null) {
       if (result === null || result.hash !== seen.submission.proofHashHex) {
         result = await this.#loadResult(seen.submission.proofHashHex, seen.submission.resultData);
+      }
+      // Whether turning this down would also pay for the provider's record.
+      if (providerRecorded === undefined) {
+        providerRecorded = await providerHasRecord(this.#chain, provider).catch(() => undefined);
       }
     }
     const reviewDeadlineAt =
@@ -1944,13 +1966,15 @@ export class AgencWallet {
       job.chainStatus !== seen.status ||
       job.deadline !== seen.deadline ||
       job.reviewDeadlineAt !== reviewDeadlineAt ||
-      job.result !== result;
+      job.result !== result ||
+      job.providerRecorded !== providerRecorded;
     if (!changed) return;
     this.#patchJob(job.id, (entry) => {
       entry.chainStatus = seen.status;
       entry.deadline = seen.deadline;
       entry.reviewDeadlineAt = reviewDeadlineAt;
       entry.result = result;
+      if (providerRecorded !== undefined) entry.providerRecorded = providerRecorded;
       if (seen.status === "pending_validation") entry.changesRequested = false;
       if (seen.status !== "open") entry.autoRefundAt = null;
     });
@@ -2158,6 +2182,7 @@ export class AgencWallet {
       network: this.#chain.network,
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
+      recordCostLamports: await this.#recordCost(),
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
     };
     return records.slice(0, limit).map((job) => jobView(job, context));
@@ -2399,11 +2424,29 @@ export class AgencWallet {
             "The provider has delivered. Turning a delivery down is the user's decision: they can do it from the Market panel.",
           );
         }
+        // What is turned down is exactly the delivery on the chain right now.
+        const delivery =
+          job.result?.hash ?? (await inspectJob(this.#chain, task, provider))?.submission?.proofHashHex ?? null;
+        if (delivery === null) {
+          throw new WalletError("NOT_ALLOWED", "There is no delivery to turn down yet.");
+        }
         let signature: string;
         try {
-          const reason = await values.sha256(`declined:${job.id}:${this.#now()}`);
-          signature = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason);
+          const reason = await turnDownReason({
+            task,
+            deliveryHashHex: delivery,
+            requestHashHex: job.jobSpecHashHex,
+          });
+          signature = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash);
         } catch (error) {
+          if (hireFailureText(error).code === "NOT_ENOUGH_MONEY") {
+            // The provider's record is paid for by whoever turns its first delivery down.
+            throw new WalletError(
+              "NOT_ENOUGH_MONEY",
+              "There is not enough money to turn this down. Nothing changed.",
+              { cause: error },
+            );
+          }
           throw new WalletError(
             isNetworkTrouble(error) ? "NETWORK" : "NOT_ALLOWED",
             isNetworkTrouble(error)
@@ -2415,6 +2458,7 @@ export class AgencWallet {
         this.#patchJob(jobId, (entry, draft) => {
           entry.chainStatus = "reject_frozen";
           entry.signatures.reject = signature;
+          entry.providerRecorded = true;
           // The review clock is read back from the chain on the next look.
           entry.reviewDeadlineAt = null;
           this.#note(draft, {

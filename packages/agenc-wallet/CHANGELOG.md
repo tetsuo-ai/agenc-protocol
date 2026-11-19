@@ -45,6 +45,12 @@ First version. Not published.
   committed to, tidies it to plain text (what it is, what to send, what comes
   back, the provider's terms) and remembers it. `market.find` searches all of
   that, and answers one page with the total.
+- A delivery that is turned down goes on the provider's marketplace record,
+  with a reason anyone can work out again: the wallet passes the provider's
+  `AgentStats` to `reject_and_freeze` (paying for the record the first time)
+  and commits to the hash of the task, the delivery, the request and why,
+  instead of a fingerprint of its own clock. The job says what the record
+  costs before the click (`turnDownCost`).
 - Asking for changes is offered only where the note can reach the provider
   (`canAskChanges`): on a network with no message host the job does not
   offer it, to a person or to an agent.
