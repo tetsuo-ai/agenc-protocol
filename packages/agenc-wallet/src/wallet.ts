@@ -82,6 +82,7 @@ import {
   sendRejectAndFreeze,
   sendRequest,
   sendRetireAgent,
+  sendRetireListings,
   sendTidy,
   sendUpdateListing,
   TASK_ACCOUNT_SPACE,
@@ -3528,19 +3529,8 @@ export class AgencWallet {
     for (const entry of await listingsOf(this.#chain, providerAgent)) {
       listings.set(entry.address, Number(entry.listing.state));
     }
-    for (const [listing, state] of listings) {
-      if (state === LISTING_STATE_RETIRED) continue;
-      const signature = await sendListingState(this.#chain, signer, {
-        listing,
-        providerAgent,
-        state: "Retired",
-      });
-      this.#store.update((draft) => {
-        const owner = draft.agents[agentId];
-        const offer = owner === undefined ? undefined : agentOffers(owner).find((entry) => entry.listing === listing);
-        if (offer !== undefined) offer.signatures.state = signature;
-      });
-    }
+    const toRetire = [...listings].filter(([, state]) => state !== LISTING_STATE_RETIRED).map(([listing]) => listing);
+    const sent = await sendRetireListings(this.#chain, signer, providerAgent, toRetire);
     this.#store.update((draft) => {
       const owner = draft.agents[agentId];
       if (owner === undefined) return;
@@ -3548,6 +3538,8 @@ export class AgencWallet {
         offer.wanted = false;
         offer.status = "paused";
         offer.error = null;
+        const signature = offer.listing === null ? undefined : sent.get(offer.listing as Address);
+        if (signature !== undefined) offer.signatures.state = signature;
       }
     });
 

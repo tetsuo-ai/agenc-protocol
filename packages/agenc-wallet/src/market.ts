@@ -1274,6 +1274,35 @@ export async function sendListingState(
 
 // ------------------------------------------------- stopping for good
 
+/** Listings taken off for good in one transaction: well inside its size limit. */
+const RETIRE_PER_TRANSACTION = 12;
+
+/**
+ * Take a provider's listings off the marketplace for good (state Retired,
+ * which cannot be undone), several in one transaction, so the agent pays
+ * one fee for all of them instead of one each. Returns each listing's
+ * transaction.
+ */
+export async function sendRetireListings(
+  chain: Chain,
+  provider: KeyPairSigner,
+  providerAgent: Address,
+  listings: readonly Address[],
+): Promise<Map<Address, string>> {
+  const sent = new Map<Address, string>();
+  for (let start = 0; start < listings.length; start += RETIRE_PER_TRANSACTION) {
+    const batch = listings.slice(start, start + RETIRE_PER_TRANSACTION);
+    const instructions = await Promise.all(
+      batch.map((listing) =>
+        facade.setServiceListingState({ listing, authority: provider, providerAgent, state: "Retired" }),
+      ),
+    );
+    const { signature } = await chain.clientFor(provider).send(instructions);
+    for (const listing of batch) sent.set(listing, signature);
+  }
+  return sent;
+}
+
 /** `AgentRegistration._reserved` of an agent that was retired (`deregister_agent`). */
 const RETIRED_IDENTITY_MARKER = [0x52, 0x45, 0x54, 0x44]; // "RETD"
 

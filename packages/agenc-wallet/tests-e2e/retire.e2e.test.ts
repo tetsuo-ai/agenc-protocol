@@ -116,10 +116,10 @@ describe("stopping an agent's earning for good", () => {
 
     const retired = await wallet.retireAgent(worker.id);
 
-    // Two services taken off for good, then the agent retired: three
-    // transactions the agent paid the fee of, and its deposit came back.
+    // Both services taken off for good in one transaction, then the agent
+    // retired: two fees, and its whole deposit came back.
     const fee = sandbox.chain.transferFeeLamports;
-    expect(await world.balance(worker.address)).toBe(own + registration.stake - 3n * fee);
+    expect(await world.balance(worker.address)).toBe(own + registration.stake - 2n * fee);
     expect((await sandbox.chain.readRawAccount(provider))!.lamports).toBe(floor);
     const after = (await readAgent(sandbox.chain, provider))!;
     expect(after.stake).toBe(0n);
@@ -128,7 +128,7 @@ describe("stopping an agent's earning for good", () => {
 
     expect(retired.earn).toMatchObject({ enabled: false, state: "off", retired: true, retire: null });
     expect(retired.earn.setAside.lamports).toBe("0");
-    expect(retired.balance.lamports).toBe((own + registration.stake - 3n * fee).toString());
+    expect(retired.balance.lamports).toBe((own + registration.stake - 2n * fee).toString());
     const [latest] = await wallet.listActivity(1);
     expect(latest).toMatchObject({
       kind: "returned",

@@ -384,7 +384,8 @@ open it does three things, in this order:
    since the loop last ran, a delivery whose buyer let the review time pass,
    the hold on a job it gave up once that job's time is over.
 2. Takes every service it has on the marketplace off for good (listing state
-   Retired, which cannot be undone), so nobody can hire it from then on.
+   Retired, which cannot be undone), so nobody can hire it from then on. They
+   go in one transaction, so the agent pays one fee for all of them.
 3. Retires the agent on the marketplace (`deregister_agent`). Every lamport its
    record holds above the network's minimum, the deposit, goes back to the
    agent's own wallet, where it stays until the person takes it back
