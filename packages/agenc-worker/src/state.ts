@@ -94,6 +94,12 @@ export type OpenClaim = {
   /** Attempts at this job that failed so far (the work, its upload, its job spec). */
   failures?: number;
   /**
+   * Set once one of the job's tries ran its work and the work failed. Only a
+   * given-up job whose work ran (this, or a result already made) counts
+   * toward stopping after several in a row.
+   */
+  ranWork?: true;
+  /**
    * Times in a row the job's job spec or the buyer's note could not be
    * fetched. These waits are not failed attempts: a host or the network was
    * down, which says nothing about the job.
@@ -388,6 +394,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "title",
       "listing",
       "failures",
+      "ranWork",
       "fetchWaits",
       "fetchFailingSince",
       "lastFetchFailureAt",
@@ -450,6 +457,9 @@ function openClaim(value: unknown, label: string): OpenClaim {
     ...(parsed.failures !== undefined
       ? { failures: count(parsed.failures, `${label}.failures`, 1) }
       : {}),
+    ...(parsed.ranWork !== undefined
+      ? { ranWork: onlyTrue(parsed.ranWork, `${label}.ranWork`) }
+      : {}),
     ...(parsed.fetchWaits !== undefined
       ? { fetchWaits: count(parsed.fetchWaits, `${label}.fetchWaits`, 1) }
       : {}),
@@ -466,6 +476,11 @@ function openClaim(value: unknown, label: string): OpenClaim {
       ? { lastFailure: reasonLine(parsed.lastFailure, `${label}.lastFailure`) }
       : {}),
   };
+}
+
+function onlyTrue(value: unknown, label: string): true {
+  if (value !== true) fail(`${label} must be true when present`);
+  return true;
 }
 
 function count(value: unknown, label: string, minimum = 0): number {

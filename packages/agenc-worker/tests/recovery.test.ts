@@ -2007,6 +2007,100 @@ describe("transaction-boundary recovery", () => {
     expect(held.openClaim?.failures).toBeUndefined();
   });
 
+  it("does not count toward the pause a revision whose buyer's note makes it too large to run", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-too-large-"),
+    );
+    // A long job spec that fits on its own, and a long note that tips it over.
+    const payload = { title: "Long brief", instructions: "Read all of this. ".repeat(2_300) };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: { algorithm: "sha256", canonicalization: "json-stable-v1", payloadHash: digest.hex },
+        payload,
+      }),
+    );
+    const changesEnvelope: taskThread.TaskThreadEnvelope = {
+      v: 1,
+      taskPda: TASK,
+      parentHash: null,
+      role: "buyer",
+      body: "Please also cover this. ".repeat(680),
+      attachments: [],
+      ts: 1_700_000_200,
+    };
+    const changesHash = (await taskThread.envelopeHash(changesEnvelope)).bytes;
+    const state = emptyState();
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-18T00:00:00.000Z",
+      phase: "claimed",
+      revisionSubmissionCount: 1,
+    };
+    // Two jobs given up in a row already.
+    state.consecutiveFailures = 2;
+    saveState(stateDir, state);
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda)],
+      [
+        submissionPda,
+        submissionData(
+          claimPda,
+          new Uint8Array(32).fill(3),
+          SubmissionStatus.Rejected,
+          changesHash,
+        ),
+      ],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+    ]);
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, {}, events);
+    ctx.fetchUri = async () => body;
+    ctx.taskThreadTransport = {
+      baseUrl: "https://threads.example",
+      get: async () => ({ messages: [changesEnvelope] }),
+      post: async () => {
+        throw new Error("not used");
+      },
+    };
+    ctx.config.executor = ["/must/not/execute", "{prompt}"];
+    for (let look = 0; look < 3 && loadState(stateDir).openClaim !== null; look += 1) {
+      expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+      const waiting = loadState(stateDir);
+      if (waiting.openClaim !== null) {
+        waiting.openClaim.retryAt = new Date(Date.now() - 1_000).toISOString();
+        saveState(stateDir, waiting);
+      }
+    }
+    const after = loadState(stateDir);
+    expect(after.openClaim).toBeNull();
+    expect(after.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", reason: expect.stringMatching(/too large to run/) }),
+    ]);
+    // No work ran, so the worker keeps taking jobs.
+    expect(after.consecutiveFailures).toBe(2);
+    expect(after.pause).toBeNull();
+    expect(events.some((event) => event.event === "worker.paused")).toBe(false);
+  });
+
   it("counts a buyer's note the host refuses for good (404) as a failed try", async () => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-revision-feedback-gone-"),

@@ -423,6 +423,27 @@ describe("a job spec host that answers with an HTTP error", () => {
     expect(runs()).toBe(0);
   });
 
+  it("counts a job whose work ran toward the pause, even when its last try met a job spec that is gone", async () => {
+    // Two jobs given up in a row already. This one's work runs and fails
+    // twice; then its job spec is taken away and the third try is refused.
+    const { stateDir, ctx, events, runs, waitOut } = await heldJob({ inARow: 2 });
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    ctx.fetchUri = download(404);
+    await resumeOpenClaim(ctx, agent);
+    const state = loadState(stateDir);
+    expect(runs()).toBe(2);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", attempts: 3, reason: expect.stringMatching(/job spec could not be checked.*404/) }),
+    ]);
+    expect(state.consecutiveFailures).toBe(3);
+    expect(state.pause).not.toBeNull();
+    expect(events.some((event) => event.event === "worker.paused")).toBe(true);
+  });
+
   it("keeps waiting while the job spec host answers that it is down (500)", async () => {
     const { stateDir, ctx, waitOut } = await heldJob();
     ctx.fetchUri = download(500);

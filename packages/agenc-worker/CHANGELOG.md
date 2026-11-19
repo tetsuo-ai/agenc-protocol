@@ -12,9 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failing job is no longer run again on every poll. Each failed attempt
   waits longer before the next (one minute, then four), the job is given up
   after three attempts with its reason kept in `failedJobs`, and three
-  given-up jobs in a row stop new claims until `clearWorkerPause` (a job
-  given up because its job spec or buyer's note could not be read, with no
-  work run, does not count). A job spec
+  given-up jobs in a row stop new claims until `clearWorkerPause` (only a
+  job one of whose tries ran its work counts). A job spec
   or buyer's note that cannot be fetched (no answer, 5xx, 408, 429) only
   waits, for at most six hours in a row (`maxFetchWaitMs`, counting only time
   the worker was running); it does not use up an attempt
