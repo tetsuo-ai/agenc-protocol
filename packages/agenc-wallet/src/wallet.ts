@@ -34,7 +34,7 @@ import {
   signApproval,
   type ApprovalTarget,
 } from "./approval.js";
-import { EarnHost, type EarnNotice, type EarnOptions } from "./earn.js";
+import { EarnHost, type EarnedJob, type EarnNotice, type EarnOptions } from "./earn.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import {
@@ -2078,6 +2078,7 @@ export class AgencWallet {
   }
 
   #earnJobs(agentId: string): JobRecord[] {
+    const agent = this.#store.state.agents[agentId];
     return this.#earn.jobs(agentId).map((entry) => ({
       id: `earn_${agentId}_${entry.task}`,
       role: "working" as const,
@@ -2085,9 +2086,9 @@ export class AgencWallet {
       createdAt: entry.at,
       updatedAt: entry.at,
       idempotencyKey: null,
-      listing: "",
+      listing: entry.listing ?? "",
       providerAgent: "",
-      title: "Job from the marketplace",
+      title: agent === undefined ? "Job from the marketplace" : this.#earnedJobName(agent, entry),
       request: "",
       acceptance: [],
       priceLamports: (entry.earnedLamports ?? entry.rewardLamports).toString(),
@@ -2524,6 +2525,10 @@ export class AgencWallet {
 
   #onEarnNotice(agentId: string, notice: EarnNotice): void {
     if (notice.type === "paid") {
+      const jobId = `earn_${agentId}_${notice.task}`;
+      const entry = this.#earn.jobs(agentId).find((job) => job.task === notice.task);
+      const record = this.#store.state.agents[agentId];
+      const name = entry === undefined || record === undefined ? null : this.#earnedJobName(record, entry);
       this.#store.update((draft) => {
         const agent = draft.agents[agentId];
         if (agent === undefined) return;
@@ -2531,16 +2536,34 @@ export class AgencWallet {
         agent.earn.jobsDone += 1;
         this.#note(draft, {
           kind: "earned",
-          text: `${agent.name} was paid for a job.`,
+          text: name === null ? `${agent.name} was paid for a job.` : `${agent.name} was paid for ${name}.`,
           lamports: notice.earnedLamports,
           agentId,
+          jobId,
           signature: notice.signature,
         });
       });
       this.#dropBalances();
       this.#emit({ type: "activity" });
+      // Hosts tell the person their agent was paid.
+      this.#emit({ type: "job", jobId });
     }
     this.#emit({ type: "overview" });
+  }
+
+  /**
+   * What an earned job is called: the agent's own service when it was a hire
+   * of it, else the title its job spec gives (the buyer's words), else a
+   * plain stand-in.
+   */
+  #earnedJobName(agent: AgentRecord, entry: EarnedJob): string {
+    if (entry.listing !== null) {
+      const offer = agent.earn.offer ?? null;
+      if (offer !== null && offer.listing === entry.listing) return offer.name;
+    }
+    // A hire made by this kind of wallet titles its request "Hire: <service>".
+    const title = entry.title?.replace(/^Hire:\s*/u, "").trim() ?? "";
+    return title.length > 0 ? title : "Job from the marketplace";
   }
 
   /** Switch "take jobs while idle" on or off for an agent. Owner only. */

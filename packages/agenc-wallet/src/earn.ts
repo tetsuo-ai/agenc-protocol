@@ -108,6 +108,10 @@ export interface EarnedJob {
   at: number;
   resultHashHex: string | null;
   settlementSignature: string | null;
+  /** What the job is called in its job spec: the buyer's words. */
+  title: string | null;
+  /** The listing a hire came from, or null for an open job. */
+  listing: string | null;
 }
 
 export type EarnNotice =
@@ -258,14 +262,18 @@ export class EarnHost {
     }
     const jobs: EarnedJob[] = [];
     if (state.openClaim !== null) {
+      const claim = state.openClaim;
+      const reward = claim.execution?.rewardAmount ?? claim.submission?.rewardAmount;
       jobs.push({
-        task: state.openClaim.task,
-        rewardLamports: 0n,
+        task: claim.task,
+        rewardLamports: reward === undefined ? 0n : BigInt(reward),
         state: "working",
         earnedLamports: null,
-        at: Date.parse(state.openClaim.claimedAt) || 0,
+        at: Date.parse(claim.claimedAt) || 0,
         resultHashHex: null,
         settlementSignature: null,
+        title: claim.title ?? null,
+        listing: claim.listing ?? null,
       });
     }
     for (const record of state.submissions) {
@@ -281,6 +289,8 @@ export class EarnHost {
         at: Date.parse(record.settledAt ?? record.submittedAt) || 0,
         resultHashHex: record.resultHashHex,
         settlementSignature: record.settlementSignature ?? null,
+        title: record.title ?? null,
+        listing: record.listing ?? null,
       });
     }
     return jobs.sort((a, b) => b.at - a.at);
