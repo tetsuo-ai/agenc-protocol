@@ -56,6 +56,8 @@ describe("a service's record", () => {
       jobsDone: 0,
       buyers: 0,
       paid: { lamports: "0", usdCents: 0 },
+      // The marketplace keeps 5% of the price: one cent of twenty.
+      marketFee: { bps: 500, amount: { lamports: (1n * CENT).toString(), usdCents: 1 } },
     });
     expect(fresh!.offeredBy).toMatchObject({
       jobsDone: 0,
