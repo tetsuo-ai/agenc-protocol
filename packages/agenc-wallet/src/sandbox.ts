@@ -363,6 +363,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const info = readInfo(account);
       return info === null ? null : { data: info.data, owner: info.owner, lamports: info.lamports };
     },
+    readRawAccounts: async (accounts) =>
+      accounts.map((account) => {
+        const info = readInfo(account);
+        return info === null ? null : { data: info.data, owner: info.owner, lamports: info.lamports };
+      }),
     readAccountInfo: async (account) => {
       const info = readInfo(account);
       return info === null
