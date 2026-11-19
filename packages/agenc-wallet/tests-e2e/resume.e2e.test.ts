@@ -153,6 +153,49 @@ describe("a busy network", () => {
     expect((await world.wallet.overview()).offline).toBe(false);
   });
 
+  it("says which balances it never read, and a balance read as 0 stays known", async () => {
+    const mode = { down: false };
+    const flaky = (base: Chain): Chain => ({
+      ...base,
+      getBalances: async (accounts) => {
+        if (mode.down) throw new Error("fetch failed");
+        return base.getBalances(accounts);
+      },
+    });
+    world = await startWorld({ chain: flaky });
+    const { wallet, clock } = world;
+    const spender = await wallet.createAgent("Spender");
+    const read = await wallet.overview();
+    expect(read.offline).toBe(false);
+    expect(read.main.balanceKnown).toBe(true);
+    expect(read.agents.find((entry) => entry.id === spender.id)).toMatchObject({ balance: { lamports: "0" }, balanceKnown: true });
+
+    // The network goes away. The 0 read before is still a known figure; an agent made since was never read.
+    mode.down = true;
+    clock.now += 60_000;
+    const newcomer = await wallet.createAgent("Newcomer");
+    const blind = await wallet.overview();
+    expect(blind.offline).toBe(true);
+    expect(blind.main.balanceKnown).toBe(true);
+    expect(blind.agents.find((entry) => entry.id === spender.id)).toMatchObject({ balance: { lamports: "0" }, balanceKnown: true });
+    expect(blind.agents.find((entry) => entry.id === newcomer.id)).toMatchObject({ balance: { lamports: "0" }, balanceKnown: false });
+
+    // After a restart nothing has been read in this run: what was read before is kept, the rest stays unknown.
+    await wallet.close();
+    world.wallet = await world.reopen();
+    const restarted = await world.wallet.overview();
+    expect(restarted.offline).toBe(true);
+    expect(restarted.agents.find((entry) => entry.id === spender.id)?.balanceKnown).toBe(true);
+    expect(restarted.agents.find((entry) => entry.id === newcomer.id)?.balanceKnown).toBe(false);
+
+    mode.down = false;
+    clock.now += 60_000;
+    const back = await world.wallet.overview();
+    expect(back.offline).toBe(false);
+    expect(back.main.balanceKnown).toBe(true);
+    expect(back.agents.every((entry) => entry.balanceKnown)).toBe(true);
+  });
+
   it("is given up on after a while, in words that say what happened", async () => {
     const mode = { busy: 1_000, tried: 0 };
     world = await startWorld({ chain: busyChain(mode) });

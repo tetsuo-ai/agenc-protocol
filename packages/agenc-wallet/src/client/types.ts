@@ -142,6 +142,13 @@ export interface AgentView {
   address: string;
   /** What the agent can still spend. */
   balance: Money;
+  /**
+   * False when the agent's balance has never been read: the network could
+   * not be reached and no earlier figure is kept, so `balance` says 0
+   * without knowing it. True for a figure read now or kept from an earlier
+   * read (`WalletOverview.offline` says whether it may be out of date).
+   */
+  balanceKnown: boolean;
   /** Money currently held in jobs this agent started. */
   held: Money;
   /** Lifetime total paid out to providers for this agent's jobs. */
@@ -160,7 +167,13 @@ export interface WalletOverview {
    * is what it paid out for requests the person posted from it; what agents
    * pay is on each agent.
    */
-  main: { address: string; balance: Money; spent: Money };
+  main: {
+    address: string;
+    balance: Money;
+    /** False when the main balance has never been read; see `AgentView.balanceKnown`. */
+    balanceKnown: boolean;
+    spent: Money;
+  };
   /** Everything currently held in running jobs, across all agents. */
   held: Money;
   agents: AgentView[];

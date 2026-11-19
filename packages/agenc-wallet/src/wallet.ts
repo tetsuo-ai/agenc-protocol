@@ -848,7 +848,8 @@ export class AgencWallet {
 
   #agentView(
     agent: AgentRecord,
-    balance: bigint,
+    /** Null when the agent's balance has never been read. */
+    balance: bigint | null,
     rate: number | null,
     facts: RegistrationFacts | null,
     costs: ServiceCosts,
@@ -864,7 +865,8 @@ export class AgencWallet {
       scope: agent.scope ?? null,
       budgetCents: agent.policy.refill.enabled ? agent.policy.refill.perDayCents : 0,
       address: agent.address,
-      balance: money(balance, rate),
+      balance: money(balance ?? 0n, rate),
+      balanceKnown: balance !== null,
       held: money(this.#heldBy(agent.id), rate),
       spent: money(agent.spentLamports, rate),
       earned: money(agent.earnedLamports, rate),
@@ -895,7 +897,7 @@ export class AgencWallet {
     const agent = this.#agentRecord(agentId);
     return this.#agentView(
       agent,
-      balances.values.get(agentId) ?? 0n,
+      balances.values.get(agentId) ?? null,
       rate,
       await this.#registrationFacts(agent),
       await this.#serviceCosts(),
@@ -1006,11 +1008,13 @@ export class AgencWallet {
       main: {
         address: this.mainAddress,
         balance: money(balances.values.get(MAIN_KEY) ?? 0n, rate),
+        // Offline with no figure kept from an earlier read, the 0 above is not known to be the balance.
+        balanceKnown: balances.values.has(MAIN_KEY),
         spent: money(state.mainSpentLamports ?? "0", rate),
       },
       held: money(this.#heldBy(null), rate),
       agents: ordered.map((agent, index) =>
-        this.#agentView(agent, balances.values.get(agent.id) ?? 0n, rate, facts[index] ?? null, costs),
+        this.#agentView(agent, balances.values.get(agent.id) ?? null, rate, facts[index] ?? null, costs),
       ),
       solUsd: rate,
       pendingApprovals: Object.values(state.approvals).filter(

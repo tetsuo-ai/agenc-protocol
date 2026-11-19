@@ -9,6 +9,11 @@ and this package follows [Semantic Versioning](https://semver.org/).
 
 First version. Not published.
 
+- `AgentView.balanceKnown` and `WalletOverview.main.balanceKnown` say
+  whether a balance was ever read. Offline the wallet still shows the last
+  figure it read; one it never read says 0, and these say that 0 is not
+  known.
+
 - `AgentView.earn.wordsCost` says what saving new words for a service
   already on the marketplace costs, before the person saves them: the
   deposit behind a new safety check of its description and the fees, which
