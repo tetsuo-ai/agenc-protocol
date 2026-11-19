@@ -54,6 +54,15 @@ export class JobSpecError extends Error {
   override name = "JobSpecError";
 }
 
+/**
+ * The job spec could not be reached: reading its account, looking up its
+ * host or downloading it failed, took too long or was answered with an HTTP
+ * error. Unlike a job spec that was read and is wrong, this can pass.
+ */
+export class JobSpecUnreachableError extends JobSpecError {
+  override name = "JobSpecUnreachableError";
+}
+
 /** A verified job spec, ready to feed the executor prompt. */
 export type VerifiedJobSpec = {
   /** The on-chain 32-byte commitment. */
@@ -296,7 +305,7 @@ function defaultPinnedRequester(options: {
         if (status < 200 || status >= 300) {
           response.resume();
           reject(
-            new JobSpecError(
+            new JobSpecUnreachableError(
               `job-spec download failed: ${status} ${response.statusMessage ?? ""}`.trim(),
             ),
           );
@@ -374,8 +383,10 @@ export function createPublicUriFetcher(options: {
         address = await withAbort(resolvePublicAddress(current, resolver), signal);
       } catch (error) {
         if (error instanceof JobSpecError) throw error;
-        if (signal.aborted) throw new JobSpecError("job-spec download timed out after 30000ms");
-        throw new JobSpecError(
+        if (signal.aborted) {
+          throw new JobSpecUnreachableError("job-spec download timed out after 30000ms");
+        }
+        throw new JobSpecUnreachableError(
           `job-spec DNS lookup failed for ${current.hostname}: ${(error as Error).message}`,
         );
       }
@@ -390,9 +401,9 @@ export function createPublicUriFetcher(options: {
       } catch (error) {
         if (error instanceof JobSpecError) throw error;
         if (signal.aborted) {
-          throw new JobSpecError("job-spec download timed out after 30000ms");
+          throw new JobSpecUnreachableError("job-spec download timed out after 30000ms");
         }
-        throw new JobSpecError(
+        throw new JobSpecUnreachableError(
           `job-spec download failed: ${(error as Error).message}`,
         );
       }
@@ -559,7 +570,14 @@ export async function fetchAndVerifyJobSpec(options: {
     throw new JobSpecError("job-spec byte cap must be a positive safe integer");
   }
   const [jobSpecPda] = await findTaskJobSpecPda({ task });
-  const data = await readAccount(jobSpecPda);
+  let data: Uint8Array | null;
+  try {
+    data = await readAccount(jobSpecPda);
+  } catch (error) {
+    throw new JobSpecUnreachableError(
+      `task ${task}: the job-spec account could not be read: ${(error as Error).message}`,
+    );
+  }
   if (data === null) {
     throw new JobSpecError(`task ${task}: no TaskJobSpec pinned (nothing to claim)`);
   }
@@ -590,7 +608,7 @@ export async function fetchAndVerifyJobSpec(options: {
       envelopeBytes = await options.resolveAgencUri(spec.jobSpecUri);
     } catch (error) {
       if (error instanceof JobSpecError) throw error;
-      throw new JobSpecError(
+      throw new JobSpecUnreachableError(
         `task ${task}: AgenC URI job-spec resolution failed: ${(error as Error).message}`,
       );
     }
@@ -603,7 +621,7 @@ export async function fetchAndVerifyJobSpec(options: {
       envelopeBytes = await fetchUri(spec.jobSpecUri);
     } catch (error) {
       if (error instanceof JobSpecError) throw error;
-      throw new JobSpecError(
+      throw new JobSpecUnreachableError(
         `task ${task}: job-spec download failed: ${(error as Error).message}`,
       );
     }

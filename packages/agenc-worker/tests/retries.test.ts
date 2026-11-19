@@ -101,6 +101,9 @@ function claimData(): Uint8Array {
   );
 }
 
+/** The job spec of the last `heldJob`, as its host serves it. */
+let heldJobSpec: () => Promise<Uint8Array> = async () => new Uint8Array();
+
 /** A worker holding a claim on TASK, whose work exits with an error every time. */
 async function heldJob(options: { task?: Uint8Array; inARow?: number } = {}) {
   const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-retries-"));
@@ -169,6 +172,7 @@ async function heldJob(options: { task?: Uint8Array; inARow?: number } = {}) {
     log: (event) => events.push(event),
     fetchUri: async () => body,
   };
+  heldJobSpec = async () => body;
   const runs = () => events.filter((event) => event.event === "task.execution-failed").length;
   /** Pretend the wait before the next attempt is over. */
   const waitOut = () => {
@@ -276,6 +280,60 @@ describe("a job whose work keeps failing", () => {
     ]);
     // Somebody else ending a job is not the worker failing.
     expect(state.consecutiveFailures).toBe(0);
+  });
+});
+
+describe("a job whose job spec cannot be fetched", () => {
+  it("waits for it while there is time, without using up the job's attempts", async () => {
+    const { stateDir, ctx, events, runs, waitOut } = await heldJob();
+    let downloads = 0;
+    // The host that keeps the job spec is down for a while.
+    ctx.fetchUri = async () => {
+      downloads += 1;
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+
+    const before = Date.now();
+    await resumeOpenClaim(ctx, agent);
+    const first = loadState(stateDir).openClaim!;
+    const firstWait = Date.parse(first.retryAt!) - before;
+    expect(firstWait).toBeGreaterThanOrEqual(DEFAULT_RETRY_DELAY_MS - 1_000);
+    for (let look = 1; look < 6; look += 1) {
+      waitOut();
+      await resumeOpenClaim(ctx, agent);
+    }
+    expect(downloads).toBe(6);
+    const held = loadState(stateDir);
+    expect(held.failedJobs).toEqual([]);
+    expect(held.consecutiveFailures).toBe(0);
+    expect(held.openClaim).toMatchObject({ task: TASK, phase: "claimed", fetchWaits: 6 });
+    expect(held.openClaim?.failures).toBeUndefined();
+    expect(held.openClaim?.lastFailure).toMatch(/could not be fetched/);
+    // The waits still grow.
+    expect(Date.parse(held.openClaim!.retryAt!) - Date.now()).toBeGreaterThan(firstWait * 2);
+    expect(events.filter((event) => event.event === "task.fetch-wait-scheduled")).toHaveLength(6);
+    expect(runs()).toBe(0);
+
+    // The host is back: the job is done as asked.
+    ctx.fetchUri = heldJobSpec;
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    expect(runs()).toBe(1);
+  });
+
+  it("uses up an attempt when it is fetched but is not the job spec the task names", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob();
+    ctx.fetchUri = async () => new TextEncoder().encode(JSON.stringify({ payload: { title: "Something else" } }));
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", attempts: 3, reason: expect.stringMatching(/job spec could not be checked/) }),
+    ]);
   });
 });
 

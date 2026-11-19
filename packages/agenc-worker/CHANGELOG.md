@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failing job is no longer run again on every poll. Each failed attempt
   waits longer before the next (one minute, then four), the job is given up
   after three attempts with its reason kept in `failedJobs`, and three
-  given-up jobs in a row stop new claims until `clearWorkerPause`.
+  given-up jobs in a row stop new claims until `clearWorkerPause`. A job spec
+  or buyer's note that cannot be fetched only waits; it does not use up an
+  attempt (`JobSpecUnreachableError`).
 - A delivery the buyer never reviews is auto-accepted by the worker once its
   review window has passed, so the worker is paid.
 - The claim of a given-up job is expired or reclaimed by the worker, returning

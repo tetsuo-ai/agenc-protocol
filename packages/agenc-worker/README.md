@@ -157,12 +157,15 @@ agent to read it**. The worker is built around that assumption:
   executor's process group so ordinary background descendants cannot escape.
   Non-zero exit, signal death, or timeout means nothing is submitted.
 - **A failing job is tried three times, then given up.** Each failed attempt
-  (the executor, the job spec on a resumed claim) waits before the next one:
-  one minute, then four (`retryDelayMs`, growing fourfold up to 30 minutes);
-  after `maxJobAttempts` (3) the job is given up and kept in the state file's
-  `failedJobs` with the reason, and the event `task.given-up` says so. A job
-  whose time to deliver runs out is given up the same way. A failed upload of
-  finished work only waits and is sent again; the work is not run again.
+  (the executor, a job spec that is not the one the task names) waits before
+  the next one: one minute, then four (`retryDelayMs`, growing fourfold up to
+  30 minutes); after `maxJobAttempts` (3) the job is given up and kept in the
+  state file's `failedJobs` with the reason, and the event `task.given-up`
+  says so. A job whose time to deliver runs out is given up the same way. A
+  failed upload of finished work only waits and is sent again; the work is
+  not run again. A job spec or buyer's note that cannot be fetched (its host
+  or the network is down) also only waits, with the same growing waits
+  (`task.fetch-wait-scheduled`), until it arrives or the time runs out.
   After `maxFailedJobsInARow` (3) given-up jobs in a row the worker takes no
   new job (`worker.paused`) until `clearWorkerPause(stateDir)` is called. A
   delivered job resets the count.

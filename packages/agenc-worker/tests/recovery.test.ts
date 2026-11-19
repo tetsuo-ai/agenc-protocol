@@ -1944,6 +1944,68 @@ describe("transaction-boundary recovery", () => {
     );
   });
 
+  it("waits for a buyer's note that cannot be fetched, without using up the job's attempts", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-feedback-down-"),
+    );
+    const state = emptyState();
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-18T00:00:00.000Z",
+      phase: "claimed",
+      revisionSubmissionCount: 1,
+    };
+    saveState(stateDir, state);
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda)],
+      [
+        submissionPda,
+        submissionData(
+          claimPda,
+          new Uint8Array(32).fill(3),
+          SubmissionStatus.Rejected,
+          new Uint8Array(32).fill(4),
+        ),
+      ],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+    ctx.config.executor = ["/must/not/execute", "{prompt}"];
+    // The host that keeps the buyer's notes cannot be reached for a while.
+    ctx.taskThreadTransport = {
+      baseUrl: "https://threads.example",
+      get: async () => {
+        throw new taskThread.ContentTransportError(
+          "content host at https://threads.example could not be reached",
+          { status: 0 },
+        );
+      },
+      post: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    for (let look = 0; look < 5; look += 1) {
+      expect((await resumeOpenClaim(ctx, agent))?.status).toBe(
+        "execution-failed",
+      );
+      const waiting = loadState(stateDir);
+      waiting.openClaim!.retryAt = new Date(Date.now() - 1_000).toISOString();
+      saveState(stateDir, waiting);
+    }
+    const held = loadState(stateDir);
+    expect(held.failedJobs).toEqual([]);
+    expect(held.openClaim).toMatchObject({
+      task: TASK,
+      phase: "claimed",
+      fetchWaits: 5,
+      lastFailure: expect.stringMatching(/buyer's note could not be fetched/),
+    });
+    expect(held.openClaim?.failures).toBeUndefined();
+  });
+
   it("recovers executed/uploading phases from private stdout without rerunning the executor", async () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-executed-"));
     const resultBytes = new TextEncoder().encode("persisted executor stdout");

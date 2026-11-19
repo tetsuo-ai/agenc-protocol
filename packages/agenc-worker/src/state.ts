@@ -93,6 +93,12 @@ export type OpenClaim = {
   listing?: string;
   /** Attempts at this job that failed so far (the work, its upload, its job spec). */
   failures?: number;
+  /**
+   * Times in a row the job's job spec or the buyer's note could not be
+   * fetched. These waits are not failed attempts: a host or the network was
+   * down, which says nothing about the job.
+   */
+  fetchWaits?: number;
   /** ISO timestamp before which the job is not tried again. */
   retryAt?: string;
   /** Why the last attempt failed (redacted, one line). */
@@ -371,6 +377,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "title",
       "listing",
       "failures",
+      "fetchWaits",
       "retryAt",
       "lastFailure",
     ],
@@ -429,6 +436,9 @@ function openClaim(value: unknown, label: string): OpenClaim {
     ...jobLabels(parsed, label),
     ...(parsed.failures !== undefined
       ? { failures: count(parsed.failures, `${label}.failures`, 1) }
+      : {}),
+    ...(parsed.fetchWaits !== undefined
+      ? { fetchWaits: count(parsed.fetchWaits, `${label}.fetchWaits`, 1) }
       : {}),
     ...(parsed.retryAt !== undefined
       ? { retryAt: iso(parsed.retryAt, `${label}.retryAt`) }

@@ -47,6 +47,7 @@ export {
   createPublicUriFetcher,
   isPublicIpAddress,
   JobSpecError,
+  JobSpecUnreachableError,
   DEFAULT_MAX_JOB_SPEC_BYTES,
   DEFAULT_MAX_JOB_SPEC_REDIRECTS,
   type AccountReader,

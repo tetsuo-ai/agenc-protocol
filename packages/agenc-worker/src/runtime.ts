@@ -55,6 +55,7 @@ import {
 import {
   fetchAndVerifyJobSpec,
   JobSpecError,
+  JobSpecUnreachableError,
   type AccountReader,
   type UriFetcher,
   type VerifiedJobSpec,
@@ -1033,6 +1034,38 @@ function noteJobFailure(
     retryAt,
     reason: line,
   });
+}
+
+/**
+ * What a job needs from elsewhere (its job spec, the buyer's note) could not
+ * be fetched: a host or the network is down, which says nothing about the
+ * job. Wait, longer each time, without using up one of its attempts; the job
+ * is still given up once its time to deliver runs out.
+ */
+function noteJobWait(ctx: WorkerContext, task: Address, reason: string): void {
+  const state = loadState(ctx.stateDir);
+  const marker = state.openClaim;
+  if (marker === null || marker.task !== task) return;
+  const fetchWaits = (marker.fetchWaits ?? 0) + 1;
+  const line = reasonLine(reason);
+  const retryAt = new Date(Date.now() + retryDelayMs(ctx, fetchWaits)).toISOString();
+  state.openClaim = { ...marker, fetchWaits, retryAt, lastFailure: line };
+  saveState(ctx.stateDir, state);
+  ctx.log({
+    event: "task.fetch-wait-scheduled",
+    task,
+    waits: fetchWaits,
+    retryAt,
+    reason: line,
+  });
+}
+
+/** Whether the buyer's note failed to arrive, rather than arriving wrong. */
+function noteUnreachable(error: unknown): boolean {
+  return (
+    error instanceof taskThread.ContentTransportError &&
+    (error.status < 200 || error.status >= 300)
+  );
 }
 
 /**
@@ -2036,9 +2069,13 @@ export async function resumeOpenClaim(
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.revision-feedback-unavailable", task, reason });
-      noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`, {
-        rewardAmount: decodedTask.rewardAmount,
-      });
+      if (noteUnreachable(error)) {
+        noteJobWait(ctx, task, `the buyer's note could not be fetched: ${reason}`);
+      } else {
+        noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`, {
+          rewardAmount: decodedTask.rewardAmount,
+        });
+      }
       return { status: "execution-failed", task, reason };
     }
   }
@@ -2055,9 +2092,13 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.job-spec-rejected", task, reason });
-    noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
-      rewardAmount: decodedTask.rewardAmount,
-    });
+    if (error instanceof JobSpecUnreachableError) {
+      noteJobWait(ctx, task, `the job spec could not be fetched: ${reason}`);
+    } else {
+      noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
+        rewardAmount: decodedTask.rewardAmount,
+      });
+    }
     return { status: "execution-failed", task, reason };
   }
   let prompt: string;
