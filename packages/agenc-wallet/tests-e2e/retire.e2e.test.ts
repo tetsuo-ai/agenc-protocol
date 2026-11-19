@@ -2,11 +2,13 @@
 // marketplace when it registered. Retiring it there brings that deposit back,
 // to the lamport, once its services are off the marketplace for good. It is
 // refused while the agent still takes jobs or has a job that is not finished.
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Address } from "@solana/kit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentView, OfferView } from "../src/client/types.js";
 import type { EarnOptions } from "../src/earn.js";
-import { isRetiredAgent, readAgent, readListing } from "../src/market.js";
+import { isRetiredAgent, listingsOf, readAgent, readListing } from "../src/market.js";
 import { CENT, eventually, startWorld, type World } from "./harness.js";
 
 function earning(script: string, extra: Partial<EarnOptions> = {}): EarnOptions {
@@ -172,7 +174,9 @@ describe("stopping an agent's earning for good", () => {
     const provider = await providerOf(world, live.earn.offers[0]!);
     const stake = (await readAgent(sandbox.chain, provider))!.stake;
     const words = "Worker is waiting to be paid for a job. Try again once it is paid.";
-    expect((await agentView(world, worker.id)).earn.retire).toEqual({ refusal: words });
+    // Asking is what may settle a job (a buyer who went quiet), so the panel
+    // is not told beforehand; asking says why.
+    expect((await agentView(world, worker.id)).earn.retire).toEqual({ refusal: null });
     await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({ code: "NOT_ALLOWED", message: words });
     // Nothing was taken off for good, and the deposit is still there.
     expect(await listingStates(world, live.earn.offers)).toEqual([PAUSED]);
@@ -211,12 +215,96 @@ describe("stopping an agent's earning for good", () => {
       code: "NOT_ALLOWED",
       message: "Someone hired Worker and is waiting for the work. Switch on Earns so it gets done, then try again.",
     });
-    // Its service is off the marketplace for good, so nobody else can hire
-    // it, but the agent is still there to do the job it was paid for.
-    expect(await listingStates(world, live.earn.offers)).toEqual([RETIRED]);
+    // Nothing for good happened: the service is only off offer, still wanted,
+    // and the agent is still there to do the job it was paid for.
+    expect(await listingStates(world, live.earn.offers)).toEqual([PAUSED]);
     const registration = (await readAgent(sandbox.chain, provider))!;
     expect(registration.stake).toBe(stake);
     expect(isRetiredAgent(registration)).toBe(false);
-    expect((await agentView(world, worker.id)).earn.retired).toBe(false);
+    const view = await agentView(world, worker.id);
+    expect(view.earn.retired).toBe(false);
+    expect(view.earn.offers[0]!.wanted).toBe(true);
+
+    // As it says: with Earns on the hire is done and paid, and then it can stop.
+    await wallet.setEarn(worker.id, true, 10);
+    await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
+    await wallet.approveJob(job.id, undefined, true);
+    await wallet.setEarn(worker.id, false);
+    const retired = await wallet.retireAgent(worker.id);
+    expect(retired.earn).toMatchObject({ retired: true, jobsDone: 1 });
+    expect(await listingStates(world, live.earn.offers)).toEqual([RETIRED]);
+  }, 180_000);
+
+  it("is not held up by a hire whose time to deliver is over", async () => {
+    world = await startWorld({ earn: earning(WORKS, { pollIntervalMs: 120_000, serviceRefreshMs: 120_000 }) });
+    const { wallet, sandbox, clock } = world;
+    const worker = await wallet.createAgent("Worker");
+    const buyer = await wallet.createAgent("Buyer");
+    await wallet.fundAgent(buyer.id, { usdCents: 500 });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINES);
+    const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
+    const { job } = await wallet.hire({ agentId: buyer.id, listing: live.earn.offers[0]!.listing!, request: "A line about tea." });
+    await eventually(async () => (await wallet.getJob(job.id, true)).status === "waiting", 30_000);
+    await wallet.setEarn(worker.id, false);
+    await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    // Nobody can do it once its time is over (its buyer gets the price back).
+    sandbox.advanceClock(2 * 24 * 3_600);
+    clock.now += 2 * 24 * 3_600_000;
+    const retired = await wallet.retireAgent(worker.id);
+    expect(retired.earn.retired).toBe(true);
+  }, 180_000);
+
+  it("pays itself for a delivery whose buyer went quiet, then stops", async () => {
+    world = await startWorld({ earn: earning(WORKS) });
+    const { wallet, sandbox, clock } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    const open = await sandbox.postOpenJob({ title: "Write a line", instructions: "Write one friendly line.", rewardLamports: 50n * CENT });
+    await eventually(async () => {
+      const jobs = await wallet.listJobs({ role: "working" }, true);
+      return jobs.some((entry) => entry.task === open.task && entry.status === "delivered");
+    }, 30_000);
+    await wallet.setEarn(agent.id, false);
+
+    // The buyer never looks at it, and Earns is off: nothing else would collect it.
+    await expect(wallet.retireAgent(agent.id)).rejects.toMatchObject({
+      code: "NOT_ALLOWED",
+      message: "My assistant is waiting to be paid for a job. Try again once it is paid.",
+    });
+    sandbox.advanceClock(3_700);
+    clock.now += 3_700_000;
+    const retired = await wallet.retireAgent(agent.id);
+    expect(retired.earn).toMatchObject({ retired: true, jobsDone: 1 });
+    expect(BigInt(retired.earned.lamports)).toBeGreaterThan(0n);
+    expect((await wallet.getJob(`earn_${agent.id}_${open.task}`, true)).status).toBe("paid");
+  }, 180_000);
+
+  it("stays retired when its records are put back from before it stopped", async () => {
+    world = await startWorld({ earn: earning(WORKS) });
+    const { wallet, sandbox, dataDir } = world;
+    const worker = await wallet.createAgent("Worker");
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINES);
+    const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
+    const provider = await providerOf(world, live.earn.offers[0]!);
+    // Records from while it earned, with its service wanted on offer.
+    const journal = path.join(dataDir, "state.json");
+    const beforeStopping = readFileSync(journal);
+    await wallet.setEarn(worker.id, false);
+    await wallet.retireAgent(worker.id);
+    await wallet.close();
+    writeFileSync(journal, beforeStopping);
+
+    world.wallet = await world.reopen();
+    const view = await agentView(world, worker.id);
+    expect(view.earn).toMatchObject({ enabled: false, state: "off", retired: true, retire: null });
+    await world.wallet.tick();
+    // It offers nothing again (no new listing) and cannot be switched on.
+    expect((await listingsOf(sandbox.chain, provider)).map((entry) => Number(entry.listing.state))).toEqual([RETIRED]);
+    await expect(world.wallet.setEarn(worker.id, true, 10)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    expect((await agentView(world, worker.id)).earn.offers[0]!.wanted).toBe(false);
   }, 180_000);
 });

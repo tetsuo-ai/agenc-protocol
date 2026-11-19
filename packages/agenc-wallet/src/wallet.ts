@@ -254,6 +254,8 @@ const POST_COST_TTL_MS = 10 * 60_000;
 const LISTING_STATE_ACTIVE = 0;
 const LISTING_STATE_PAUSED = 1;
 const LISTING_STATE_RETIRED = 2;
+/** `AgentRegistration.status` of an agent the marketplace suspended. */
+const AGENT_STATUS_SUSPENDED = 3;
 
 /** What the marketplace's record of an earning agent says about stopping it for good. */
 interface RegistrationFacts {
@@ -265,6 +267,22 @@ interface RegistrationFacts {
   disputes: number;
   /** Retired already: it can never take a job again. */
   retired: boolean;
+  /** Suspended by the marketplace: it cannot be retired until that is lifted. */
+  suspended: boolean;
+}
+
+/** A marketplace step during retirement: when the network fails, plain words (it is safe to try again). */
+async function unreachable<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    if (error instanceof WalletError) throw error;
+    throw new WalletError(
+      "NETWORK",
+      "Market could not reach the marketplace right now. Try again in a moment.",
+      { cause: error },
+    );
+  }
 }
 
 function registrationFacts(account: AgentRegistration): RegistrationFacts {
@@ -273,6 +291,7 @@ function registrationFacts(account: AgentRegistration): RegistrationFacts {
     activeTasks: account.activeTasks,
     disputes: account.disputesAsDefendant + account.activeDisputeVotes,
     retired: isRetiredAgent(account),
+    suspended: Number(account.status) === AGENT_STATUS_SUSPENDED,
   };
 }
 
@@ -841,7 +860,7 @@ export class AgencWallet {
         retire:
           retired || facts === null || facts.stake === 0n
             ? null
-            : { refusal: this.#retireRefusal(agent, facts) },
+            : { refusal: this.#retireRefusal(agent, facts, false) },
       },
       createdAt: agent.createdAt,
     };
@@ -3296,6 +3315,10 @@ export class AgencWallet {
   // --------------------------------------------------------------- earn
 
   async #startEarning(agent: AgentRecord): Promise<void> {
+    // A retired agent can never take a job again, whatever older records say.
+    if (agent.earn.retiredAt != null) return;
+    const registration = await this.#earn.registration(agent.id).catch(() => null);
+    if (registration !== null && this.#noticeRetired(agent.id, registration.account)) return;
     try {
       const signer = await this.#vault.signer(agent.keyId);
       const rate = await this.#freshRate().catch(() => null);
@@ -3390,7 +3413,11 @@ export class AgencWallet {
       const floor = await this.#floor();
       // An agent already on the marketplace has its deposit locked there:
       // taking jobs again needs only what one job needs.
-      const registered = (await this.#earn.registration(agentId).catch(() => null)) !== null;
+      const registration = await this.#earn.registration(agentId).catch(() => null);
+      if (registration !== null && this.#noticeRetired(agentId, registration.account)) {
+        this.#refuseIfRetired(this.#agentRecord(agentId));
+      }
+      const registered = registration !== null;
       const need =
         (registered ? await this.#earn.jobReserve() : await this.#earn.startupRequirement()) + floor;
       const balance = await this.#chain.getBalance(agent.address as Address);
@@ -3404,9 +3431,11 @@ export class AgencWallet {
         );
       }
     }
+    // Setting money aside takes a moment; the agent may have been stopped for good meanwhile.
+    if (enabled) this.#refuseIfRetired(this.#agentRecord(agentId));
     this.#store.update((draft) => {
       const entry = draft.agents[agentId]!;
-      entry.earn.enabled = enabled;
+      entry.earn.enabled = enabled && entry.earn.retiredAt == null;
       entry.earn.lastError = null;
       if (minPayCents !== undefined) entry.earn.minPayCents = Math.round(minPayCents);
     });
@@ -3436,19 +3465,25 @@ export class AgencWallet {
   /**
    * Why the agent cannot stop earning for good right now, in plain words, or
    * null when nothing the wallet knows of stands in the way. `facts` is its
-   * record on the marketplace.
+   * record on the marketplace. Jobs it still holds are judged only when
+   * `jobs` is true: after its own jobs were brought up to date, which may
+   * have paid a delivery whose buyer went quiet or let go of a lapsed hold.
+   * Judged before that, a refusal could never clear while earning is off.
    */
-  #retireRefusal(agent: AgentRecord, facts: RegistrationFacts): string | null {
+  #retireRefusal(agent: AgentRecord, facts: RegistrationFacts, jobs: boolean): string | null {
     if (agent.earn.enabled) {
       const onOffer = agentOffers(agent).find((offer) => offer.wanted);
       return onOffer !== undefined
         ? `${agent.name} still offers “${onOffer.name}”. Switch off Earns first.`
         : `${agent.name} is still taking jobs. Switch off Earns first.`;
     }
+    if (facts.suspended) {
+      return `The marketplace has suspended ${agent.name}, so its deposit cannot come back for now.`;
+    }
     if (facts.disputes > 0) {
       return `A reviewer is still looking at a job ${agent.name} did. Try again once that is settled.`;
     }
-    if (facts.activeTasks > 0) {
+    if (jobs && facts.activeTasks > 0) {
       const jobs = this.#earn.jobs(agent.id);
       if (jobs.some((job) => job.state === "working")) {
         return `${agent.name} is still doing a job. Try again once it is paid.`;
@@ -3494,11 +3529,12 @@ export class AgencWallet {
     if (agent.earn.enabled) {
       throw new WalletError(
         "NOT_ALLOWED",
-        this.#retireRefusal(agent, { stake: 0n, activeTasks: 0, disputes: 0, retired: false })!,
+        this.#retireRefusal(agent, { stake: 0n, activeTasks: 0, disputes: 0, retired: false, suspended: false }, true)!,
       );
     }
     const providerAgent = await this.#earn.marketplaceAgent(agentId);
-    const found = providerAgent === null ? null : await readAgent(this.#chain, providerAgent);
+    const found =
+      providerAgent === null ? null : await unreachable(() => readAgent(this.#chain, providerAgent));
     if (providerAgent === null || found === null) {
       throw new WalletError(
         "NOT_ALLOWED",
@@ -3510,48 +3546,46 @@ export class AgencWallet {
       this.#markRetired(agentId, null, null);
       return;
     }
+    // Nothing is sent for an agent the marketplace would refuse anyway.
+    const first = this.#retireRefusal(agent, registrationFacts(found), false);
+    if (first !== null) throw new WalletError("NOT_ALLOWED", first);
     // Earning is off, so its loop is stopped or finishing a job; let it end,
     // then bring its own jobs up to date: what was paid meanwhile, a buyer
     // who let the review time pass, a job it gave up whose time is over.
     await this.#earn.stop(agentId);
     const signer = await this.#vault.signer(agent.keyId);
     await this.#earn.tidyUp({ agentId, signer, minRewardLamports: 0n });
-    const now = await readAgent(this.#chain, providerAgent);
+    const now = await unreachable(() => readAgent(this.#chain, providerAgent));
     if (now === null) {
-      throw new WalletError("NETWORK", "Market could not read the marketplace right now. Try again in a moment.");
+      throw new WalletError("NETWORK", "Market could not reach the marketplace right now. Try again in a moment.");
     }
-    const refusal = this.#retireRefusal(this.#agentRecord(agentId), registrationFacts(now));
+    const refusal = this.#retireRefusal(this.#agentRecord(agentId), registrationFacts(now), true);
     if (refusal !== null) throw new WalletError("NOT_ALLOWED", refusal);
 
-    // Its services first: once they are off the marketplace for good, nobody
-    // can hire it any more. Every listing it has counts, the ones this
-    // wallet replaced too.
+    // Every listing it has counts, the ones this wallet replaced too.
     const listings = new Map<Address, number>();
-    for (const offer of agentOffers(agent)) {
-      if (offer.listing === null) continue;
-      const account = await readListing(this.#chain, offer.listing as Address);
-      if (account !== null) listings.set(offer.listing as Address, Number(account.state));
-    }
-    for (const entry of await listingsOf(this.#chain, providerAgent)) {
-      listings.set(entry.address, Number(entry.listing.state));
-    }
-    const toRetire = [...listings].filter(([, state]) => state !== LISTING_STATE_RETIRED).map(([listing]) => listing);
-    const sent = await sendListingStates(this.#chain, signer, providerAgent, toRetire, "Retired");
-    this.#store.update((draft) => {
-      const owner = draft.agents[agentId];
-      if (owner === undefined) return;
-      for (const offer of agentOffers(owner)) {
-        offer.wanted = false;
-        offer.status = "paused";
-        offer.error = null;
-        const signature = offer.listing === null ? undefined : sent.get(offer.listing as Address);
-        if (signature !== undefined) offer.signatures.state = signature;
+    await unreachable(async () => {
+      for (const offer of agentOffers(agent)) {
+        if (offer.listing === null) continue;
+        const account = await readListing(this.#chain, offer.listing as Address);
+        if (account !== null) listings.set(offer.listing as Address, Number(account.state));
+      }
+      for (const entry of await listingsOf(this.#chain, providerAgent)) {
+        listings.set(entry.address, Number(entry.listing.state));
       }
     });
-
+    // One still on offer (taking it off had failed) is taken off first, which
+    // can be undone: from then on nobody can hire the agent.
+    const onOffer = [...listings].filter(([, state]) => state === LISTING_STATE_ACTIVE).map(([listing]) => listing);
+    if (onOffer.length > 0) {
+      const paused = await unreachable(() => sendListingStates(this.#chain, signer, providerAgent, onOffer, "Paused"));
+      this.#patchListingSignatures(agentId, paused);
+      for (const listing of onOffer) listings.set(listing, LISTING_STATE_PAUSED);
+    }
     // A hire made before that and not started yet: only this agent may do
     // it, so the buyer would wait out the whole time to deliver for nothing.
-    const waiting = await waitingHires(this.#chain, providerAgent);
+    // Nothing for good has happened yet; with Earns on again it gets done.
+    const waiting = await unreachable(() => waitingHires(this.#chain, providerAgent));
     if (waiting.length > 0) {
       throw new WalletError(
         "NOT_ALLOWED",
@@ -3559,14 +3593,42 @@ export class AgencWallet {
       );
     }
 
-    const before = await this.#chain.readRawAccount(providerAgent);
-    const signature = await sendRetireAgent(this.#chain, signer, providerAgent);
-    const after = await this.#chain.readRawAccount(providerAgent);
+    // Its services off the marketplace for good, then the agent.
+    const toRetire = [...listings].filter(([, state]) => state !== LISTING_STATE_RETIRED).map(([listing]) => listing);
+    const sent = await unreachable(() => sendListingStates(this.#chain, signer, providerAgent, toRetire, "Retired"));
+    this.#patchListingSignatures(agentId, sent);
+
+    const before = await unreachable(() => this.#chain.readRawAccount(providerAgent));
+    const signature = await unreachable(() => sendRetireAgent(this.#chain, signer, providerAgent));
+    const after = await this.#chain.readRawAccount(providerAgent).catch(() => null);
     const returned =
       before !== null && after !== null && before.lamports > after.lamports
         ? before.lamports - after.lamports
         : found.stake;
     this.#markRetired(agentId, signature, returned);
+  }
+
+  #patchListingSignatures(agentId: string, sent: ReadonlyMap<Address, string>): void {
+    this.#store.update((draft) => {
+      const owner = draft.agents[agentId];
+      if (owner === undefined) return;
+      for (const offer of agentOffers(owner)) {
+        const signature = offer.listing === null ? undefined : sent.get(offer.listing as Address);
+        if (signature !== undefined) offer.signatures.state = signature;
+      }
+    });
+  }
+
+  /**
+   * The marketplace says the agent is retired but this wallet's records do
+   * not (a journal restored from before, or a retirement whose answer was
+   * lost): record it, and stop anything still running for it.
+   */
+  #noticeRetired(agentId: string, account: AgentRegistration): boolean {
+    const agent = this.#store.state.agents[agentId];
+    if (agent === undefined || !isRetiredAgent(account)) return false;
+    if (agent.earn.retiredAt == null) this.#markRetired(agentId, null, null);
+    return true;
   }
 
   /** Record that the agent was retired on the marketplace. */
@@ -3582,17 +3644,18 @@ export class AgencWallet {
         offer.status = "paused";
         offer.error = null;
       }
+      // Retiring always returns the deposit; the amount is known when this wallet saw it happen.
       this.#note(draft, {
-        kind: returned === null ? "note" : "returned",
-        text:
-          returned === null
-            ? `${agent.name} stopped earning for good.`
-            : `${agent.name} stopped earning for good. Its deposit came back to its own money.`,
+        kind: "returned",
+        text: `${agent.name} stopped earning for good. Its deposit came back to its own money.`,
         lamports: returned,
         agentId,
         ...(signature === null ? {} : { signature }),
       });
     });
+    // Whatever may still run for it ends (a switch that raced this one).
+    void this.#earn.stop(agentId);
+    this.#emit({ type: "overview" });
   }
 
   // -------------------------------------------------------------- offer
@@ -3896,10 +3959,17 @@ export class AgencWallet {
         resume.push(listing);
       }
     }
-    for (const [listings, state] of [
+    for (const [found, state] of [
       [pause, "Paused"],
       [resume, "Active"],
     ] as const) {
+      // The reads above took a while: only what is still wanted that way goes.
+      const now = this.#store.state.agents[agentId];
+      if (now === undefined) return;
+      const listings = found.filter((listing) => {
+        const offer = agentOffers(now).find((entry) => entry.listing === listing);
+        return offer !== undefined && this.#wantsLive(now, offer) === (state === "Active");
+      });
       if (listings.length < 2) continue;
       const sent = await sendListingStates(
         this.#chain,
@@ -3908,14 +3978,7 @@ export class AgencWallet {
         listings,
         state,
       );
-      this.#store.update((draft) => {
-        const owner = draft.agents[agentId];
-        if (owner === undefined) return;
-        for (const offer of agentOffers(owner)) {
-          const signature = offer.listing === null ? undefined : sent.get(offer.listing as Address);
-          if (signature !== undefined) offer.signatures.state = signature;
-        }
-      });
+      this.#patchListingSignatures(agentId, sent);
       this.#dropBalances();
     }
   }
@@ -3940,9 +4003,12 @@ export class AgencWallet {
     // The worker registers the agent on the marketplace on its first pass.
     // Nothing can be listed before that, and nothing is on offer either.
     const providerAgent = await this.#earn.marketplaceAgent(agentId);
-    if (providerAgent === null || (await readAgent(this.#chain, providerAgent)) === null) {
+    const registration = providerAgent === null ? null : await readAgent(this.#chain, providerAgent);
+    if (providerAgent === null || registration === null) {
       return settle(wantLive ? "getting_ready" : "paused");
     }
+    // Retired there for good, whatever these records said.
+    if (this.#noticeRetired(agentId, registration)) return settle("paused");
     const listingId = values.hexToBytes(offer.listingIdHex);
     const listing = await listingAddressFor(providerAgent, listingId);
     const account = await readListing(this.#chain, listing);

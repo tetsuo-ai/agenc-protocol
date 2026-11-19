@@ -392,12 +392,18 @@ open it does three things, in this order:
    (`agents.reclaim`). The record itself stays, as the marketplace keeps it.
 
 It is refused, with a sentence that says why, while the agent still takes jobs
-(earning on, a service on offer: switch earning off first), has a job that is
-not finished (working, delivered and not paid, in review) or still holds a job
-it gave up. `AgentView.earn.retire.refusal` says the same before anyone asks.
-A hire of the agent that nobody started stops it after step 2: the agent is
-the only one who may do it, so the buyer would wait out the time to deliver
-for nothing. Switch earning on so it gets done, then retire again.
+(earning on, a service on offer: switch earning off first), the marketplace has
+suspended it, or a reviewer has not settled one of its jobs; these are in
+`AgentView.earn.retire.refusal` before anyone asks. After step 1 it is also
+refused while a job is not finished (working, or delivered and not paid) or a
+job it gave up is still held. A service still on offer is first taken off
+(paused, which can be undone); then a hire of the agent that nobody started
+and that can still be done stops it, before anything is for good: the agent
+is the only one who may do it, so the buyer would wait out the time to deliver
+for nothing. Switch earning on so it gets done, then retire again. A hire
+whose time to deliver is over does not stop it (its buyer gets the price
+back). The marketplace's own record wins: an agent retired there is taken
+as retired even when older records (a restored journal) say otherwise.
 
 Afterwards `AgentView.earn.retired` is true, and `earn.set` and `earn.offer`
 are refused for that agent. Its money, budget and hires are as before.

@@ -1272,8 +1272,12 @@ export async function sendListingState(
   return result.signature;
 }
 
-/** Listings set in one transaction: well inside its size limit. */
-const LISTINGS_PER_TRANSACTION = 12;
+/**
+ * Listings set in one transaction. Measured in litesvm: 15,871 compute units
+ * to pause or retire one, 21,397 to put one back on offer; 8 stay well inside
+ * the 250,000 a transaction gets when a priority fee is set.
+ */
+const LISTINGS_PER_TRANSACTION = 8;
 
 /**
  * Set several of a provider's listings to one state, as few transactions as
@@ -1344,10 +1348,11 @@ export async function listingsOf(
 const HIRE_DESIGNATED_PROVIDER_OFFSET = 8 + 32 + 32 + 32 + 2 + 1;
 
 /**
- * Hires of a provider's services that nobody has started yet: the buyer
- * paid and waits, and only this provider may take them. A provider that
- * stopped for good could never do them, so the buyer would wait out the
- * whole time to deliver for nothing.
+ * Hires of a provider's services that nobody has started yet and that can
+ * still be done: the buyer paid and waits, and only this provider may take
+ * them. A provider that stopped for good could never do them, so the buyer
+ * would wait out the whole time to deliver for nothing. One whose time to
+ * deliver is over can be done by nobody; its buyer gets the price back.
  */
 export async function waitingHires(chain: Chain, providerAgent: Address): Promise<Address[]> {
   const found = await resolveProgramAccountsTransport(chain.gpa).getProgramAccounts({
@@ -1362,6 +1367,7 @@ export async function waitingHires(chain: Chain, providerAgent: Address): Promis
     ],
   });
   const waiting: Address[] = [];
+  let now: number | null = null;
   for (const entry of found) {
     let hire: HireRecord;
     try {
@@ -1371,7 +1377,10 @@ export async function waitingHires(chain: Chain, providerAgent: Address): Promis
     }
     if (hire.designatedProvider !== providerAgent) continue;
     const task = await readTask(chain, hire.task);
-    if (task !== null && Number(task.status) === TaskStatus.Open) waiting.push(hire.task);
+    if (task === null || Number(task.status) !== TaskStatus.Open) continue;
+    now ??= await chain.clusterTime();
+    if (task.deadline > 0n && Number(task.deadline) <= now) continue;
+    waiting.push(hire.task);
   }
   return waiting;
 }

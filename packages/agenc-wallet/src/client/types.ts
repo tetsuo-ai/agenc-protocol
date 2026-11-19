@@ -108,9 +108,12 @@ export interface EarnView {
    * Whether the agent can be stopped earning for good, which brings its
    * deposit for taking jobs (`setAside`) back to its own money. Null when
    * there is no deposit to bring back: it never took jobs, or it was stopped
-   * already. `refusal` is the sentence `agents.retire` would refuse with
-   * right now (it still takes jobs, or a job of its is not finished), else
-   * null.
+   * already. `refusal` is the sentence `agents.retire` refuses with whatever
+   * happens first (it still takes jobs, the marketplace suspended it, a
+   * reviewer has not settled one of its jobs), else null. Jobs it holds are
+   * judged only when asked, since asking first collects what it can (a
+   * delivery whose buyer went quiet, a lapsed hold): `agents.retire` can
+   * still refuse then.
    */
   retire: { refusal: string | null } | null;
 }
