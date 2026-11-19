@@ -400,9 +400,11 @@ job it gave up is still held. A service still on offer is first taken off
 (paused, which can be undone); then a hire of the agent that nobody started
 and that can still be done stops it, before anything is for good: the agent
 is the only one who may do it, so the buyer would wait out the time to deliver
-for nothing. Switch earning on so it gets done, then retire again. A hire
-whose time to deliver is over does not stop it (its buyer gets the price
-back). The marketplace's own record wins: an agent retired there is taken
+for nothing. Switch earning on so it gets done (the loop then takes it
+whatever the agent's smallest pay), then retire again. A hire whose time to
+deliver is over does not stop it (its buyer gets the price back). A job the
+agent had not finished when its wallet last closed goes on only with earning
+on, and the refusal says so. The marketplace's own record wins: an agent retired there is taken
 as retired even when older records (a restored journal) say otherwise.
 
 Afterwards `AgentView.earn.retired` is true, and `earn.set` and `earn.offer`

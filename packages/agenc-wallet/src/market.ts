@@ -1354,7 +1354,10 @@ const HIRE_DESIGNATED_PROVIDER_OFFSET = 8 + 32 + 32 + 32 + 2 + 1;
  * would wait out the whole time to deliver for nothing. One whose time to
  * deliver is over can be done by nobody; its buyer gets the price back.
  */
-export async function waitingHires(chain: Chain, providerAgent: Address): Promise<Address[]> {
+export async function waitingHires(
+  chain: Chain,
+  providerAgent: Address,
+): Promise<Array<{ task: Address; rewardLamports: bigint }>> {
   const found = await resolveProgramAccountsTransport(chain.gpa).getProgramAccounts({
     filters: [
       { memcmp: { offset: 0, bytes: Uint8Array.from(getHireRecordDiscriminatorBytes()) } },
@@ -1366,7 +1369,7 @@ export async function waitingHires(chain: Chain, providerAgent: Address): Promis
       },
     ],
   });
-  const waiting: Address[] = [];
+  const waiting: Array<{ task: Address; rewardLamports: bigint }> = [];
   let now: number | null = null;
   for (const entry of found) {
     let hire: HireRecord;
@@ -1380,7 +1383,7 @@ export async function waitingHires(chain: Chain, providerAgent: Address): Promis
     if (task === null || Number(task.status) !== TaskStatus.Open) continue;
     now ??= await chain.clusterTime();
     if (task.deadline > 0n && Number(task.deadline) <= now) continue;
-    waiting.push(hire.task);
+    waiting.push({ task: hire.task, rewardLamports: task.rewardAmount });
   }
   return waiting;
 }

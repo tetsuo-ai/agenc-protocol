@@ -235,6 +235,31 @@ describe("stopping an agent's earning for good", () => {
     expect(await listingStates(world, live.earn.offers)).toEqual([RETIRED]);
   }, 180_000);
 
+  it("does a waiting hire of a service it took off offer, whatever its smallest pay, so it can stop", async () => {
+    world = await startWorld({ earn: earning(WORKS, { pollIntervalMs: 120_000, serviceRefreshMs: 120_000 }) });
+    const { wallet } = world;
+    const worker = await wallet.createAgent("Worker");
+    const buyer = await wallet.createAgent("Buyer");
+    await wallet.fundAgent(buyer.id, { usdCents: 500 });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await wallet.setEarn(worker.id, true, 10);
+    await wallet.setOffer(worker.id, LINES);
+    const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
+    const { job } = await wallet.hire({ agentId: buyer.id, listing: live.earn.offers[0]!.listing!, request: "A line about tea." });
+    await eventually(async () => (await wallet.getJob(job.id, true)).status === "waiting", 30_000);
+    // The person takes the service off offer, then switches Earns off.
+    await wallet.setOffer(worker.id, null, live.earn.offers[0]!.id);
+    await wallet.setEarn(worker.id, false);
+    await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+
+    // Earns on with a smallest pay above the service's price: the hire it owes is still done.
+    await wallet.setEarn(worker.id, true, 50);
+    await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
+    await wallet.approveJob(job.id, undefined, true);
+    await wallet.setEarn(worker.id, false);
+    expect((await wallet.retireAgent(worker.id)).earn.retired).toBe(true);
+  }, 180_000);
+
   it("is not held up by a hire whose time to deliver is over", async () => {
     world = await startWorld({ earn: earning(WORKS, { pollIntervalMs: 120_000, serviceRefreshMs: 120_000 }) });
     const { wallet, sandbox, clock } = world;

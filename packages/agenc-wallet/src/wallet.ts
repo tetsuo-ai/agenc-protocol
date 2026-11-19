@@ -271,12 +271,20 @@ interface RegistrationFacts {
   suspended: boolean;
 }
 
-/** A marketplace step during retirement: when the network fails, plain words (it is safe to try again). */
+/**
+ * A marketplace step during retirement, in plain words when it fails: the
+ * marketplace refusing it is said as such; anything else is the network,
+ * and every step is safe to try again.
+ */
 async function unreachable<T>(step: () => Promise<T>): Promise<T> {
   try {
     return await step();
   } catch (error) {
     if (error instanceof WalletError) throw error;
+    const text = error instanceof Error ? `${error.message} ${String(error.cause ?? "")}` : String(error);
+    if (/custom program error|Error Code:|InstructionError|Transaction failed|Program failed/i.test(text)) {
+      throw new WalletError("NOT_ALLOWED", "The marketplace refused this step right now.", { cause: error });
+    }
     throw new WalletError(
       "NETWORK",
       "Market could not reach the marketplace right now. Try again in a moment.",
@@ -503,6 +511,12 @@ export class AgencWallet {
   readonly #retiring = new Set<string>();
   /** The smallest pay each running earn loop was started with. */
   readonly #earnFloor = new Map<string, bigint>();
+  /**
+   * What the least of an agent's waiting hires pays, found when stopping it
+   * for good was refused for them: its loop takes them whatever its smallest
+   * pay says, or it could never stop.
+   */
+  readonly #owedFloor = new Map<string, bigint>();
   /** Who offers each service and what buyers paid them, read in the background. */
   readonly #records: RecordKeeper;
   /** The marketplace's fee rate in basis points, as last read (null: it could not be). */
@@ -3331,6 +3345,8 @@ export class AgencWallet {
           minRewardLamports = BigInt(offer.priceLamports);
         }
       }
+      const owed = this.#owedFloor.get(agent.id);
+      if (owed !== undefined && owed < minRewardLamports) minRewardLamports = owed;
       this.#earnFloor.set(agent.id, minRewardLamports);
       this.#earn.start({
         agentId: agent.id,
@@ -3481,12 +3497,13 @@ export class AgencWallet {
       return `The marketplace has suspended ${agent.name}, so its deposit cannot come back for now.`;
     }
     if (facts.disputes > 0) {
-      return `A reviewer is still looking at a job ${agent.name} did. Try again once that is settled.`;
+      return `A job ${agent.name} did is in a dispute on the marketplace. Try again once that is settled.`;
     }
     if (jobs && facts.activeTasks > 0) {
       const jobs = this.#earn.jobs(agent.id);
       if (jobs.some((job) => job.state === "working")) {
-        return `${agent.name} is still doing a job. Try again once it is paid.`;
+        // With Earns off its loop is not running, so the job goes on only with it.
+        return `${agent.name} has a job it has not finished. Switch on Earns so it can, then try again.`;
       }
       if (jobs.some((job) => job.state === "delivered")) {
         return `${agent.name} is waiting to be paid for a job. Try again once it is paid.`;
@@ -3587,6 +3604,10 @@ export class AgencWallet {
     // Nothing for good has happened yet; with Earns on again it gets done.
     const waiting = await unreachable(() => waitingHires(this.#chain, providerAgent));
     if (waiting.length > 0) {
+      this.#owedFloor.set(
+        agentId,
+        waiting.reduce((least, hire) => (hire.rewardLamports < least ? hire.rewardLamports : least), waiting[0]!.rewardLamports),
+      );
       throw new WalletError(
         "NOT_ALLOWED",
         `Someone hired ${agent.name} and is waiting for the work. Switch on Earns so it gets done, then try again.`,
@@ -3655,6 +3676,7 @@ export class AgencWallet {
     });
     // Whatever may still run for it ends (a switch that raced this one).
     void this.#earn.stop(agentId);
+    this.#owedFloor.delete(agentId);
     this.#emit({ type: "overview" });
   }
 
