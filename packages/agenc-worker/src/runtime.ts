@@ -965,6 +965,12 @@ function giveUpJob(
     reason: string;
     rewardAmount?: string;
     claimReleased: boolean;
+    /**
+     * False when no work was run because the job itself could not be read
+     * (its job spec or the buyer's note): that says nothing about this
+     * worker, so it does not count toward stopping after several in a row.
+     */
+    countsTowardPause?: boolean;
   },
 ): FailedJob {
   const reason = reasonLine(details.reason);
@@ -989,8 +995,9 @@ function giveUpJob(
     ...state.failedJobs.filter((entry) => entry.task !== job.task),
     job,
   ];
-  // A buyer cancelling is not the worker failing; anything else counts.
-  if (details.cause !== "cancelled") {
+  // A buyer cancelling is not the worker failing, and neither is a job that
+  // could not be read; anything else counts.
+  if (details.cause !== "cancelled" && details.countsTowardPause !== false) {
     state.consecutiveFailures += 1;
     const limit = Math.max(
       1,
@@ -1029,7 +1036,12 @@ function noteJobFailure(
   ctx: WorkerContext,
   task: Address,
   reason: string,
-  options: { finishedWork?: boolean; rewardAmount?: bigint } = {},
+  options: {
+    finishedWork?: boolean;
+    rewardAmount?: bigint;
+    /** See `giveUpJob`: false for a job whose description could not be read. */
+    countsTowardPause?: boolean;
+  } = {},
 ): void {
   const state = loadState(ctx.stateDir);
   const marker = state.openClaim;
@@ -1048,6 +1060,7 @@ function noteJobFailure(
         ? { rewardAmount: options.rewardAmount.toString() }
         : {}),
       claimReleased: false,
+      ...(options.countsTowardPause === false ? { countsTowardPause: false } : {}),
     });
     return;
   }
@@ -1104,6 +1117,8 @@ function noteJobWait(
       reason: `${what} could not be fetched for ${hours} hour${hours === 1 ? "" : "s"}`,
       rewardAmount: rewardAmount.toString(),
       claimReleased: false,
+      // No work was run: the job could not be read.
+      countsTowardPause: false,
     });
     return;
   }
@@ -2173,6 +2188,7 @@ export async function resumeOpenClaim(
       } else {
         noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`, {
           rewardAmount: decodedTask.rewardAmount,
+          countsTowardPause: false,
         });
       }
       return { status: "execution-failed", task, reason };
@@ -2196,6 +2212,7 @@ export async function resumeOpenClaim(
     } else {
       noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
         rewardAmount: decodedTask.rewardAmount,
+        countsTowardPause: false,
       });
     }
     return { status: "execution-failed", task, reason };

@@ -179,7 +179,8 @@ agent to read it**. The worker is built around that assumption:
   failed attempt.
   After `maxFailedJobsInARow` (3) given-up jobs in a row the worker takes no
   new job (`worker.paused`) until `clearWorkerPause(stateDir)` is called. A
-  delivered job resets the count.
+  delivered job resets the count. A job given up because its job spec or the
+  buyer's note could not be read does not count: no work was run.
 - **It looks after its own jobs.** Once a delivery's review window has passed
   with no review, the worker sends `auto_accept_task_result` itself, so it is
   paid when a buyer goes quiet (never for contests, which cannot be

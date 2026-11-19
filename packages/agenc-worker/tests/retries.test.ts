@@ -402,6 +402,27 @@ describe("a job spec host that answers with an HTTP error", () => {
     expect(runs()).toBe(0);
   });
 
+  it("does not stop taking jobs for jobs whose description could not be read", async () => {
+    // Two jobs given up in a row already; a third that is given up because its
+    // job spec is gone ran no work, so it does not stop the worker.
+    const { stateDir, ctx, events, runs, waitOut } = await heldJob({ inARow: 2 });
+    ctx.fetchUri = download(404);
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", reason: expect.stringMatching(/job spec could not be checked.*404/) }),
+    ]);
+    expect(state.consecutiveFailures).toBe(2);
+    expect(state.pause).toBeNull();
+    expect(events.some((event) => event.event === "worker.paused")).toBe(false);
+    expect(runs()).toBe(0);
+  });
+
   it("keeps waiting while the job spec host answers that it is down (500)", async () => {
     const { stateDir, ctx, waitOut } = await heldJob();
     ctx.fetchUri = download(500);
@@ -485,6 +506,24 @@ describe("a job spec that cannot be fetched for hours", () => {
     expect(state.failedJobs).toEqual([
       expect.objectContaining({ cause: "attempts", reason: "the job spec could not be fetched for 6 hours" }),
     ]);
+  });
+
+  it("does not stop taking jobs when a job is given up after six hours of failed fetches", async () => {
+    const { stateDir, ctx, waitOut } = await heldJob({ inARow: 2 });
+    ctx.fetchUri = async () => {
+      throw new Error("connect ECONNREFUSED specs.example");
+    };
+    await resumeOpenClaim(ctx, agent);
+    const later = loadState(stateDir);
+    later.openClaim!.fetchFailingSince = new Date(Date.now() - DEFAULT_MAX_FETCH_WAIT_MS - 1_000).toISOString();
+    saveState(stateDir, later);
+    waitOut();
+    await resumeOpenClaim(ctx, agent);
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toHaveLength(1);
+    expect(state.consecutiveFailures).toBe(2);
+    expect(state.pause).toBeNull();
   });
 
   it("starts the six hours again after a good fetch", async () => {
