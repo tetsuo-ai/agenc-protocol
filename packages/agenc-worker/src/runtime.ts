@@ -2342,6 +2342,9 @@ export async function checkSettlements(
   const attributed = shares.reduce((sum, share) => sum + share, 0n);
 
   const reports: SettlementReport[] = [];
+  // Told only once the ledger says so, so whoever reacts to an event and
+  // reads the state back finds the job settled.
+  const observed: WorkerLogEvent[] = [];
   for (const { record, outcome, solDenominated } of resolved) {
     const paid = outcome === "accepted" || outcome === "closed";
     const earnedLamports = !paid
@@ -2379,7 +2382,7 @@ export async function checkSettlements(
       receiptUrl,
     };
     reports.push(report);
-    ctx.log({
+    observed.push({
       event: "settlement.observed",
       task: record.task,
       outcome,
@@ -2400,6 +2403,7 @@ export async function checkSettlements(
     state.totalEarnedBaseline = (baseline + attributed).toString();
   }
   saveState(ctx.stateDir, state);
+  for (const event of observed) ctx.log(event);
   return reports;
 }
 

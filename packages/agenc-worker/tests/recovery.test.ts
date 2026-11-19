@@ -2246,8 +2246,21 @@ describe("settlement evidence coherence", () => {
     ]);
     const events: WorkerLogEvent[] = [];
     const ctx = context(stateDir, accounts, {}, events);
+    // Whoever hears of a paid job and reads the ledger finds it settled.
+    const settledWhenTold: boolean[] = [];
+    const log = ctx.log;
+    ctx.log = (event) => {
+      if (event.event === "settlement.observed") {
+        settledWhenTold.push(
+          loadState(stateDir).submissions.find((record) => record.task === event.task)
+            ?.settled === true,
+        );
+      }
+      log(event);
+    };
 
     const reports = await checkSettlements(ctx, agent);
+    expect(settledWhenTold).toEqual([true, true]);
     expect(
       reports.map(({ task, outcome, earnedLamports }) => ({
         task,
