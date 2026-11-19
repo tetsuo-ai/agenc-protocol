@@ -642,6 +642,45 @@ export class AgencWallet {
     return this.#chain.getMinimumBalanceForRentExemption(0);
   }
 
+  /**
+   * The jobs that may still have this payer send a transaction: waiting for
+   * a yes, under way, or finished and not yet tidied. A job whose payer is
+   * not chosen yet counts for both its agent and the main balance.
+   */
+  #openJobsPaidBy(payer: "main" | AgentRecord): number {
+    return Object.values(this.#store.state.jobs).filter((job) => {
+      if (job.role !== "buying") return false;
+      const open =
+        job.phase === "needs_approval" ||
+        job.phase === "cleared" ||
+        job.phase === "hiring" ||
+        job.phase === "hired" ||
+        job.phase === "active" ||
+        (job.phase === "done" && !job.tidied);
+      if (!open) return false;
+      if (payer === "main") return job.payer !== "agent";
+      return job.agentId === payer.id && job.payer !== "main";
+    }).length;
+  }
+
+  /**
+   * What "all" leaves behind in a wallet, besides the fee of this very
+   * transfer. A wallet with nothing left to pay for is emptied: nothing of
+   * the person's stays where it can never be used. One that may still pay
+   * keeps the network's minimum, below which it could pay nothing at all,
+   * and the room for fees each of its open jobs was set up with.
+   */
+  async #keepOnAll(payer: "main" | AgentRecord): Promise<bigint> {
+    const fee = this.#chain.transferFeeLamports;
+    const open = this.#openJobsPaidBy(payer);
+    const earning =
+      payer !== "main" &&
+      (payer.earn.enabled ||
+        this.#earn.jobs(payer.id).some((entry) => entry.state === "working" || entry.state === "delivered"));
+    if (open === 0 && !earning) return fee;
+    return (await this.#floor()) + fee + BigInt(open) * FEE_HEADROOM_LAMPORTS;
+  }
+
   // ---------------------------------------------------------- activity
 
   #note(
@@ -1093,8 +1132,10 @@ export class AgencWallet {
   async reclaimFromAgent(agentId: string, amount: AmountInput | "all"): Promise<AgentView> {
     const agent = this.#agentRecord(agentId);
     await this.#lock(`wallet:${agentId}`, async () => {
-      // The wallet keeps its minimum and the fee of this very transfer.
-      const keep = (await this.#floor()) + this.#chain.transferFeeLamports;
+      // A part leaves the network's minimum and the fee of this very
+      // transfer; all of it leaves nothing once the agent pays for nothing.
+      const keep =
+        amount === "all" ? await this.#keepOnAll(agent) : (await this.#floor()) + this.#chain.transferFeeLamports;
       const balance = await this.#chain.getBalance(agent.address as Address);
       const available = balance > keep ? balance - keep : 0n;
       const lamports = amount === "all" ? available : await this.#toLamports(amount);
@@ -1131,7 +1172,8 @@ export class AgencWallet {
     }
     return this.#lock(MAIN_KEY, async () => {
       const floor = await this.#floor();
-      const keep = floor + this.#chain.transferFeeLamports;
+      // As for an agent: everything leaves when nothing may still need it.
+      const keep = amount === "all" ? await this.#keepOnAll("main") : floor + this.#chain.transferFeeLamports;
       const balance = await this.#chain.getBalance(this.mainAddress);
       const available = balance > keep ? balance - keep : 0n;
       const lamports = amount === "all" ? available : await this.#toLamports(amount);

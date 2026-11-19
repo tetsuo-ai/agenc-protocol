@@ -68,6 +68,12 @@ First version. Not published.
   `AgentStats` right before building `reject_and_freeze` and passes it only
   when it exists. It never starts one, which would cost the buyer. The job
   says whether the turn-down goes on a record (`turnDownRecorded`).
+- "All" leaves nothing of the person's behind: taking an agent's money back
+  or sending the balance out empties the wallet, less the transfer's fee,
+  when nothing still needs it to pay, instead of keeping the network's
+  minimum there for good. A wallet with open jobs keeps the minimum and the
+  fee room of each, so they can still finish (a wallet left at exactly the
+  minimum could pay no fee at all).
 - Asking for changes is offered only where the note can reach the provider
   (`canAskChanges`): on a network with no message host the job does not
   offer it, to a person or to an agent.

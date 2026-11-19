@@ -77,6 +77,14 @@ mainnet:
   fingerprint and the one reason a person gives (`turnDownReason` in
   `market.ts`).
 
+- **Taking money back** from an agent (`agents.reclaim`) or sending it out
+  (`wallet.withdraw`) costs the transfer's fee. A wallet that is not empty
+  must keep the network's minimum (650,240 lamports on mainnet), so "all"
+  empties it, down to the fee, whenever nothing still needs that wallet to
+  pay: no open job it pays for, and for an agent, no earning. Otherwise it
+  keeps the minimum and the fee room each open job was set up with, so those
+  jobs can still finish.
+
 `market.find` returns the network fee, and an approval lists price, fee and
 returnable deposit separately.
 
