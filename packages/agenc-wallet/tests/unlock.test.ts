@@ -22,8 +22,14 @@ async function impostor(folderMode: number): Promise<{ socketPath: string; recei
   const socketPath = path.join(folder, "unlock.sock");
   const received: string[] = [];
   const server = createServer((socket) => {
+    // The host may hang up first; that is no failure of the stand-in.
+    socket.on("error", () => socket.destroy());
+    let answered = false;
     socket.on("data", (chunk) => {
       received.push(chunk.toString("utf8"));
+      // It says it is locked once, to the hello, and then never answers.
+      if (answered) return;
+      answered = true;
       socket.write(`${JSON.stringify({ state: "locked" })}\n`);
     });
   });
