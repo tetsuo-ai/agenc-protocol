@@ -71,6 +71,10 @@ First version. Not published.
   by that record, and each service gives the marketplace's fee on its price.
   A provider with no stats record has its turn-downs and lost disputes null
   (no record kept), never zero.
+  A paid job nobody rated stays on the record after it is tidied: the
+  marketplace's list forgets a job once its link to the service is closed,
+  so such jobs are found on the chain by the description they name, and the
+  transaction that paid for each one says which agent did it.
 - A practice mode: the real marketplace program in-process with play money.
 - A service says what it is. The marketplace's list carries names and prices
   only, so the wallet reads each listing's own description from the address
