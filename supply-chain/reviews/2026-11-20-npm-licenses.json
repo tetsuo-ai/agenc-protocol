@@ -1,0 +1,289 @@
+{
+  "reviewedOn": "2026-11-20",
+  "expiresOn": "2026-12-20",
+  "tracking": "SUPPLY-ASSURANCE-001",
+  "owners": [
+    "@7etsuo",
+    "@signerless"
+  ],
+  "previousReviews": [
+    "supply-chain/reviews/2026-10-19-npm-licenses.json",
+    "supply-chain/reviews/2026-10-19-sharp-security-update.json"
+  ],
+  "scope": "Renewal of the three npm license exception groups that expired on 2026-11-18: npm-missing-or-non-spdx-metadata, rpc-websockets-lgpl and next-sharp-optional-platform-binaries. The same 19 exact archives, lockfiles, paths and approved licenses; no new package, version or scope.",
+  "method": [
+    "Downloaded all 19 exact archives from their lockfile resolved URLs and verified each full archive against its lockfile SRI hash. No lifecycle scripts executed; members were read from the archives without extracting them.",
+    "Recomputed the SHA-256 of every license and metadata member the earlier records list (5 packages in 2026-10-19-npm-licenses.json, 14 in 2026-10-19-sharp-security-update.json): all match.",
+    "Fetched the only@0.0.2 upstream MIT license again at its pinned commit: its SHA-256 is unchanged.",
+    "Checked every policy entry against its lockfile on main (f0056a9) and on the wallet stack head (af41a96): version, integrity and resolved URL are identical in both.",
+    "Scope is unchanged from the earlier reviews: only and spawndamnit are root development dependencies; eyes, text-encoding-utf-8 and rpc-websockets are in the deployment-only tests-integration graph; the sharp/libvips binaries are optional dependencies of the private Next SSR test fixture and are not in published AgenC package payloads."
+  ],
+  "upstreamOnlyLicense": {
+    "url": "https://raw.githubusercontent.com/tj/node-only/623bfe27bde8aaca73cf3783f3f4da3ea928f592/LICENSE",
+    "sha256": "0d324ba9b0ef09ac43b679fc1910c7756b8d8271e0a177d9900ca5a04f295704",
+    "unchangedSince": "2026-10-19"
+  },
+  "relatedChange": "The private Next SSR test fixture moves from next 15.5.28 to 15.5.29 for GHSA-7qx7-33qx-rqx2 (SVG rejection bypass in image optimization, medium; patched in 15.5.29). Only next, @next/env and the @next/swc-* binaries change in its lock; sharp stays at 0.35.5, so the 14 sharp entries above are untouched. Every locked graph audits clean afterwards.",
+  "packages": [
+    {
+      "group": "npm-missing-or-non-spdx-metadata",
+      "package": "only",
+      "version": "0.0.2",
+      "lockfile": "package-lock.json",
+      "path": "node_modules/only",
+      "integrity": "sha512-Fvw+Jemq5fjjyWz6CpKx6w9s7xxqo3+JCyM0WXWeCSOboZ8ABkyvP8ID4CZuChA/wxSx+XSJmdOm8rGVyJ1hdQ==",
+      "archiveBytes": 1580,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "dev": true
+      }
+    },
+    {
+      "group": "npm-missing-or-non-spdx-metadata",
+      "package": "spawndamnit",
+      "version": "3.0.1",
+      "lockfile": "package-lock.json",
+      "path": "node_modules/spawndamnit",
+      "integrity": "sha512-MmnduQUuHCoFckZoWnXsTg7JaiLBJrKFj9UI2MbRPGaJeVpsLcVBu6P/IGZovziM/YBsellCmsprgNA+w0CzVg==",
+      "archiveBytes": 2208,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {
+        "dev": true
+      }
+    },
+    {
+      "group": "npm-missing-or-non-spdx-metadata",
+      "package": "eyes",
+      "version": "0.1.8",
+      "lockfile": "tests-integration/package-lock.json",
+      "path": "node_modules/eyes",
+      "integrity": "sha512-GipyPsXO1anza0AOZdy69Im7hGFCNB7Y/NGjDlZGJ3GJJLtwNSb2vrzYrTYJRrRloVx7pl+bhUaTB8yiccPvFQ==",
+      "archiveBytes": 5213,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {}
+    },
+    {
+      "group": "npm-missing-or-non-spdx-metadata",
+      "package": "text-encoding-utf-8",
+      "version": "1.0.2",
+      "lockfile": "tests-integration/package-lock.json",
+      "path": "node_modules/text-encoding-utf-8",
+      "integrity": "sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg==",
+      "archiveBytes": 9088,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {}
+    },
+    {
+      "group": "rpc-websockets-lgpl",
+      "package": "rpc-websockets",
+      "version": "9.3.8",
+      "lockfile": "tests-integration/package-lock.json",
+      "path": "node_modules/rpc-websockets",
+      "integrity": "sha512-7r+fm4tSJmLf9GvZfL1DJ1SJwpagpp6AazqM0FUaeV7CA+7+NYINSk1syWa4tU/6OF2CyBicLtzENGmXRJH6wQ==",
+      "archiveBytes": 62522,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {}
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-darwin-arm64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-darwin-arm64",
+      "integrity": "sha512-5R89nBYiRdUlSWJxPhO+GVtaXzXSxKnRu/xqMn3KTA3L9EB9Oy/P+Nn2f2vlhPuUdy/Zusb2DarbyTpGCfEDuw==",
+      "archiveBytes": 8341921,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-darwin-x64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-darwin-x64",
+      "integrity": "sha512-iR2OKH80yi0U+dUplyh3/xdpFvps6YkCwsXenIJxqxR1v9o+xtKTGbS9H7cps+2Vxjc8B1j96p75NmTGjIhtpQ==",
+      "archiveBytes": 8936495,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linux-arm",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-arm",
+      "integrity": "sha512-LmRtTsOHuvM2+wlO2Db37dx5MiZhB0FvSunciw48YjdOkZz9KAiRbm8ujeMOA1INqmei5NapFxYEK1D1ZSidmw==",
+      "archiveBytes": 7082055,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linux-arm64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-arm64",
+      "integrity": "sha512-Y3dgX/6lE2QhQb+Gxy0WZxfg9MEm/JBjamZpS2IklP7xIQoKN4hzAm7KcMVGtaVDt3neE9OKBC7vAfonA/Lr1A==",
+      "archiveBytes": 8485392,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linux-ppc64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-ppc64",
+      "integrity": "sha512-Le6boB8Tai0Nis+gIxIpKx68UDVVIqdR8Tin5Yf1z2LJJQLDJvCDRqRu+jC2qCoD+eIomonmOwB4smBRxfVpYQ==",
+      "archiveBytes": 8274142,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linux-riscv64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-riscv64",
+      "integrity": "sha512-aHkkIEHPRdQEegJN20MLmGtxYD9R2wQr3Cwpddnu5+YKMt6Uzax7S9h5gpZTo8wyrGuZSlfQ63OevL5mTyOC7Q==",
+      "archiveBytes": 7585547,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linux-s390x",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-s390x",
+      "integrity": "sha512-ra/mB6MikESDUO7Yg+Mi95bFBb9GsObURuhnOv3OqknjGe9sZrG8tCe9q0xSIGrtLgvgw0gKnFWcK4blSgQOuQ==",
+      "archiveBytes": 7312373,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linux-x64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linux-x64",
+      "integrity": "sha512-GJ//SSXbnwSDes02umB3nDJLFcQzw8a18V8fyhqr6tV515tOEMdImjjxj1AoafMRz56F3PHgftnj1QEKSU1zkw==",
+      "archiveBytes": 8219515,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linuxmusl-arm64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linuxmusl-arm64",
+      "integrity": "sha512-hvulFwtjUcagsis6BBxHwGFwWoNZjgYmULGVrZcyfNbjA8hKILbRxGg15/7w5HDyXHXUos/j6baAWqnCyQ2DWA==",
+      "archiveBytes": 8526011,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-libvips-linuxmusl-x64",
+      "version": "1.3.4",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-libvips-linuxmusl-x64",
+      "integrity": "sha512-6zXKeE/p39I1AmA3cJG35eyBGNqNddLnUXjhwBnsGjFPWqf5VKkDBEqaEkPDoTEtkxwi2vv8Tcr2mDyP4So7Fg==",
+      "archiveBytes": 8269018,
+      "sriVerified": true,
+      "recordedMembersVerified": 2,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-wasm32",
+      "version": "0.35.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-wasm32",
+      "integrity": "sha512-Ptsga1su4tQx+LLF1ECS9U6nz5kmrXKo6XVbtR48Ke3ZRxxgaWBu7IDtEe1quo8hiupwm6WFqxVlXaSf7IINGQ==",
+      "archiveBytes": 3646133,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-win32-arm64",
+      "version": "0.35.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-win32-arm64",
+      "integrity": "sha512-X4t7g+7ZA5DKblCBEXGjUqqemj4vczING/5viFwAL8h4N3qYeyjwdCvRLHi4EdOUI+2Z7UFlp1VM+p/AuEtm6Q==",
+      "archiveBytes": 7895045,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-win32-ia32",
+      "version": "0.35.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-win32-ia32",
+      "integrity": "sha512-5Zm82LoBc43nhwNybZlG7Y1KO//Zhsn306fQl29ZOuStHLGTo3BWL83q3cznX0poxSAMuYL1On/BHBxkBeKr6A==",
+      "archiveBytes": 8525151,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {
+        "optional": true
+      }
+    },
+    {
+      "group": "next-sharp-optional-platform-binaries",
+      "package": "@img/sharp-win32-x64",
+      "version": "0.35.5",
+      "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
+      "path": "node_modules/@img/sharp-win32-x64",
+      "integrity": "sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg==",
+      "archiveBytes": 8575353,
+      "sriVerified": true,
+      "recordedMembersVerified": 3,
+      "lockFlags": {
+        "optional": true
+      }
+    }
+  ]
+}

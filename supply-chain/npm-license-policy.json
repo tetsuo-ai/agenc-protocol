@@ -33,9 +33,9 @@
         "@signerless"
       ],
       "tracking": "SUPPLY-ASSURANCE-001",
-      "reviewedOn": "2026-10-19",
-      "expiresOn": "2026-11-18",
-      "reason": "These exact immutable package versions omit SPDX metadata or point at a bundled license file; their license evidence was reviewed independently. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-10-19-npm-licenses.json; bounded renewal for maintainer review.",
+      "reviewedOn": "2026-11-20",
+      "expiresOn": "2026-12-20",
+      "reason": "These exact immutable package versions omit SPDX metadata or point at a bundled license file; their license evidence was reviewed independently. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-11-20-npm-licenses.json; bounded renewal for maintainer review.",
       "entries": [
         {
           "lockfile": "package-lock.json",
@@ -93,9 +93,9 @@
         "@signerless"
       ],
       "tracking": "SUPPLY-ASSURANCE-001",
-      "reviewedOn": "2026-10-19",
-      "expiresOn": "2026-11-18",
-      "reason": "The exact LGPL package is dynamically consumed through the deployment-only Solana web3 dependency tree and is not copied into AgenC source artifacts. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-10-19-npm-licenses.json; bounded renewal for maintainer review.",
+      "reviewedOn": "2026-11-20",
+      "expiresOn": "2026-12-20",
+      "reason": "The exact LGPL package is dynamically consumed through the deployment-only Solana web3 dependency tree and is not copied into AgenC source artifacts. Rechecked immutable archive integrity, license evidence and scope in supply-chain/reviews/2026-11-20-npm-licenses.json; bounded renewal for maintainer review.",
       "entries": [
         {
           "lockfile": "tests-integration/package-lock.json",
@@ -117,9 +117,9 @@
         "@signerless"
       ],
       "tracking": "SUPPLY-ASSURANCE-001",
-      "reviewedOn": "2026-10-19",
-      "expiresOn": "2026-11-18",
-      "reason": "These exact optional sharp/libvips security-update artifacts remain confined to the private Next SSR test fixture and are not published in AgenC npm tarballs. Full archive SRI and bundled license/README evidence were reviewed in supply-chain/reviews/2026-10-19-sharp-security-update.json. Existing LGPL and bundled third-party obligations remain; scope and expiry are unchanged.",
+      "reviewedOn": "2026-11-20",
+      "expiresOn": "2026-12-20",
+      "reason": "These exact optional sharp/libvips security-update artifacts remain confined to the private Next SSR test fixture and are not published in AgenC npm tarballs. Full archive SRI and bundled license/README evidence were reviewed in supply-chain/reviews/2026-10-19-sharp-security-update.json and rechecked against the same exact archives in supply-chain/reviews/2026-11-20-npm-licenses.json. Existing LGPL and bundled third-party obligations remain; scope is unchanged.",
       "entries": [
         {
           "lockfile": "packages/marketplace-react/test-apps/next-ssr/package-lock.json",
