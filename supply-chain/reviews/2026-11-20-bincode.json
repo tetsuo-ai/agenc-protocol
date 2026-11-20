@@ -1,0 +1,28 @@
+{
+  "advisory": "RUSTSEC-2025-0141",
+  "source": "https://rustsec.org/advisories/RUSTSEC-2025-0141.html",
+  "reviewedOn": "2026-11-20",
+  "expiresOn": "2026-12-20",
+  "tracking": "https://github.com/tetsuo-ai/agenc-protocol/issues/277",
+  "owners": [
+    "@7etsuo",
+    "@signerless"
+  ],
+  "package": "bincode@1.3.3",
+  "checksum": "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad",
+  "lockfile": "programs/agenc-coordination/Cargo.lock",
+  "previousReview": "supply-chain/reviews/2026-10-19-bincode.json",
+  "assessment": [
+    "Renewal after the 2026-11-18 expiry. The advisory is still an unmaintained notice with no patched version: the RustSec advisory-db entry read on 2026-11-20 lists patched = [] and says the maintainers consider 1.3.3 complete. This exception accepts maintenance risk for 30 more days; it does not assert absence of undiscovered vulnerabilities.",
+    "programs/agenc-coordination/Cargo.lock still pins bincode 1.3.3 with the same checksum. cargo tree --manifest-path programs/agenc-coordination/Cargo.toml --locked -i bincode resolves it through anchor-lang 0.32.1, solana-instruction 2.3.3 and solana-sysvar 2.3.0, as on 2026-10-19. The fuzz and zkvm locks still contain no bincode.",
+    "The protocol crate still has no direct bincode dependency and no bincode API calls; its only mention is a doc comment on the upgradeable loader's discriminant in instructions/initialize_protocol.rs. The exposure notes of the 2026-10-19 review still apply; they narrow the reviewed exposure and are not a complete transitive call-graph audit.",
+    "Replacing bincode still requires an Anchor/Solana upgrade with wire-format and SBF compatibility work; no lockfile-only replacement exists for this pinned graph.",
+    "The validator still binds the exception to one exact package, checksum, lockfile, owner set and bounded date window. All other advisories remain errors, and daily CI fails again at the new expiry."
+  ],
+  "verificationCommands": [
+    "cargo tree --manifest-path programs/agenc-coordination/Cargo.toml --locked -i bincode",
+    "node --test scripts/rust-supply-chain-policy.test.mjs",
+    "node scripts/check-rust-supply-chain-policy.mjs --run-tools"
+  ],
+  "removalCondition": "Remove this exception when the supported Anchor/Solana graph eliminates bincode 1.3.3. Re-review before 2026-12-20 if that migration remains unavailable; never extend only to make CI green."
+}
