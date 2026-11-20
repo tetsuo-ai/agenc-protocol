@@ -12,7 +12,7 @@
 #![cfg(not(feature = "mainnet-canary"))]
 
 use crate::errors::CoordinationError;
-use crate::events::{CreatorRecordCounter, CreatorTrackRecordUpdated};
+use crate::events::CreatorRecordCounter;
 use crate::instructions::agent_stats_helpers::Counter;
 use crate::state::{CreatorStats, ResolutionType};
 use anchor_lang::prelude::*;
@@ -30,7 +30,7 @@ pub enum CreatorCounter {
 }
 
 impl CreatorCounter {
-    fn event_variant(self) -> CreatorRecordCounter {
+    pub(crate) fn event_variant(self) -> CreatorRecordCounter {
         match self {
             CreatorCounter::Rejections => CreatorRecordCounter::Rejections,
             CreatorCounter::RejectionsContested => CreatorRecordCounter::RejectionsContested,
@@ -62,34 +62,6 @@ pub fn bump_creator_counter(
     let new_value = *field;
     stats.last_updated = now;
     Ok(new_value)
-}
-
-/// Apply one increment to a creator record the handler already bound to
-/// `["creator_stats", wallet]` by seeds. Sets the identity on first write and
-/// emits `CreatorTrackRecordUpdated`. A record whose stored wallet differs from
-/// `wallet` is refused (seeds make that impossible; this is defense in depth).
-pub fn apply_creator_record(
-    stats: &mut Account<CreatorStats>,
-    wallet: Pubkey,
-    bump: u8,
-    counter: CreatorCounter,
-    now: i64,
-) -> Result<()> {
-    stats.init_if_fresh(wallet, bump);
-    require!(
-        stats.wallet == wallet && stats.validate_reserved_fields(),
-        CoordinationError::InvalidInput
-    );
-    let stats_key = stats.key();
-    let new_value = bump_creator_counter(stats, counter, now)?;
-    emit!(CreatorTrackRecordUpdated {
-        wallet,
-        creator_stats: stats_key,
-        counter: counter.event_variant(),
-        new_value,
-        timestamp: now,
-    });
-    Ok(())
 }
 
 /// Which side a ruling went to, for the records.

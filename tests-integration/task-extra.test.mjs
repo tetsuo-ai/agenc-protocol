@@ -19,7 +19,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   injectAgentStake, freshWorld, setProtocolPaused,
   taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
 } from "./harness.mjs";
 
 // Capability bits (state.rs::capability). COMPUTE = 1<<0, VALIDATOR = 1<<8.
@@ -635,7 +635,7 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   // AGNC-03 review-clock debt accumulates there).
   expectOk(send(w.svm, await w.providerProg.methods
     .cancelDispute()
-    .accounts({ protocolConfig: w.protocolPda, dispute, task: m.task, authority: w.provider.publicKey })
+    .accounts({ protocolConfig: w.protocolPda, dispute, task: m.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", m.task).creator) })
     .remainingAccounts([
       { pubkey: w.providerAgent, isSigner: false, isWritable: true },
       { pubkey: m.validation, isSigner: false, isWritable: true },

@@ -16,7 +16,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, hireIx, injectAgentStake, deregisterRemaining,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -131,8 +131,7 @@ test("initiator outcome counter blocks stale cancel+deregister until the loss is
     .cancelDispute()
     .accounts({
       protocolConfig: w.protocolPda, dispute: r.dispute,
-      task: r.task, authority: w.buyer.publicKey,
-    })
+      task: r.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", r.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", r.task).creator)})
     .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])
     .instruction(), [w.buyer]), "cancel active dispute");
   assert.equal(
@@ -189,8 +188,7 @@ test("legacy zero-marker cancellation cannot revive an expired penalty or consum
     .cancelDispute()
     .accounts({
       protocolConfig: w.protocolPda, dispute: r.dispute,
-      task: r.task, authority: w.buyer.publicKey,
-    })
+      task: r.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", r.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", r.task).creator)})
     .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])
     .instruction(), [w.buyer]), "cancel before simulating legacy provenance");
 

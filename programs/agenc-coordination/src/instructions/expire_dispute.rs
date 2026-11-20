@@ -13,6 +13,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeExpired;
+use crate::instructions::agent_stats_helpers::Counter;
 use crate::instructions::bid_settlement_helpers::{
     accepted_bid_no_show_bond_disposition, settle_accepted_bid, AcceptedBidBookDisposition,
 };
@@ -23,6 +24,9 @@ use crate::instructions::dispute_helpers::{
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::post_completion_bond::dependency_parent_completed;
 use crate::instructions::program_account_helpers::{remaining_account_at, remaining_account_range};
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, ensure_agent_stats, ensure_creator_stats,
+};
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_escrow_account,
     validate_unchecked_token_mint,
@@ -93,6 +97,8 @@ pub struct ExpireDispute<'info> {
     )]
     pub creator: UncheckedAccount<'info>,
 
+    /// Permissionless caller. Writable (revision 9): it pays for a missing record.
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     /// Worker's canonical claim on the disputed task.
@@ -182,6 +188,22 @@ pub struct ExpireDispute<'info> {
         bump = task_validation_config.bump
     )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
+
+    /// CHECK: revision 9 worker record `["agent_stats", dispute.defendant]`, seeds-pinned
+    /// here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", dispute.defendant.as_ref()], bump)]
+    pub worker_stats: UncheckedAccount<'info>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (`creator` is constrained
+    /// to the task creator),
+    /// seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by
+    /// `ensure_creator_stats`, paid by `authority`.
+    #[account(mut, seeds = [b"creator_stats", creator.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
+
+    /// Required by the record creation (revision 9).
+    pub system_program: Program<'info, System>,
 }
 
 /// Expires a dispute after its direct-resolver window closes.
@@ -196,6 +218,23 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         ctx.accounts.authority.is_signer,
         CoordinationError::InvalidInput
     );
+
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    ensure_agent_stats(
+        &ctx.accounts.worker_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.dispute.defendant,
+        ctx.bumps.worker_stats,
+    )?;
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.creator.key(),
+        ctx.bumps.creator_stats,
+    )?;
 
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
@@ -561,6 +600,18 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         worker_amount,
         timestamp: clock.unix_timestamp,
     });
+
+    // Revision 9 (E): an unruled expiry counts for neither side's dispute record.
+    // A no-show proven by the same objective evidence that gates the bond forfeit
+    // above counts as an expired claim on the worker's record.
+    if no_show_penalty_allowed {
+        count_agent_stats(
+            &ctx.accounts.worker_stats.to_account_info(),
+            defendant_worker_key,
+            Counter::ClaimsExpired,
+            clock.unix_timestamp,
+        )?;
+    }
 
     Ok(())
 }

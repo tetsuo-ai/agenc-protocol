@@ -17,7 +17,7 @@ import {
   makeProgram, send, expectOk, decode, isClosed,
   freshWorld, hireIx,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -94,8 +94,7 @@ async function expireIx(w, r, crank) {
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond,
-      taskSubmission: r.submission, taskValidationConfig: null,
-    })
+      taskSubmission: r.submission, taskValidationConfig: null, workerStats: agentStatsPda(w.providerAgent)})
     .instruction();
 }
 
@@ -145,6 +144,12 @@ test("expire_dispute: unresolved principal returns to the creator while a proven
   assert.ok(decode(w.svm, "Task", r.task).status.Cancelled !== undefined, "task Cancelled");
   assert.ok(isClosed(w.svm, r.claim), "claim closed with rent returned");
   assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).disputes_as_defendant, 0, "defendant counter cleared");
+  // Revision 9: the proven no-show is counted on the worker's required record,
+  // and the unruled expiry counts as neither side's dispute win or loss.
+  const workerRecord = decode(w.svm, "AgentStats", agentStatsPda(w.providerAgent));
+  assert.equal(workerRecord.claims_expired.toString(), "1", "proven no-show counts claims_expired");
+  assert.equal(workerRecord.disputes_won.toString(), "0", "expiry is no dispute win");
+  assert.equal(workerRecord.disputes_lost.toString(), "0", "expiry is no dispute loss");
 
   // Expiry is a no-fault initiator outcome, but it must still pass through the
   // permissionless finalizer to release the ABI-preserving pending counter.

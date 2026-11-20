@@ -16,7 +16,7 @@
 
 use crate::errors::CoordinationError;
 #[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+use crate::instructions::agent_stats_helpers::Counter;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     accepted_bid_no_show_bond_disposition, bid_settlement_offset, settle_accepted_bid,
@@ -29,12 +29,12 @@ use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::post_completion_bond::dependency_parent_completed;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::program_account_helpers::remaining_account_at;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::record_account_helpers::{count_agent_stats, ensure_agent_stats};
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, saturating_dec_counter,
     sync_task_validation_status,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::AgentStats;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -175,19 +175,16 @@ pub struct ExpireClaim<'info> {
     #[account(mut)]
     pub bond_creator: Option<UncheckedAccount<'info>>,
 
-    /// OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
-    /// no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
-    /// `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
-    /// list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+    // P6.6 made this record optional; revision 9 requires it, so the caller cannot
+    // leave a no-show off the record. Every revision 9 claim creates it, so the
+    // permissionless caller pays only for a claim made before the upgrade.
+    // Full-surface only: the frozen canary account list is unchanged.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[account(
-        init_if_needed,
-        payer = authority,
-        space = AgentStats::SIZE,
-        seeds = [b"agent_stats", worker.key().as_ref()],
-        bump
-    )]
-    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+    /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
+    /// here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", worker.key().as_ref()], bump)]
+    pub agent_stats: UncheckedAccount<'info>,
 
     /// CHECK: the protocol treasury, validated against `protocol_config.treasury`.
     /// Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
@@ -237,6 +234,16 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         ctx.accounts.authority.is_signer,
         CoordinationError::InvalidInput
     );
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    #[cfg(not(feature = "mainnet-canary"))]
+    ensure_agent_stats(
+        &ctx.accounts.agent_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.worker.key(),
+        ctx.bumps.agent_stats,
+    )?;
 
     let task = &mut ctx.accounts.task;
     let worker = &mut ctx.accounts.worker;
@@ -586,17 +593,16 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     #[cfg(not(feature = "mainnet-canary"))]
     let worker_agent_key = worker.key();
 
-    // P6.6: a pure no-show expiry folds into the worker agent's `claims_expired` track
-    // record (no-op when the optional `agent_stats` account is absent). Telemetry only.
-    // Only pure no-shows count — a PendingValidation expiry counts only when THIS
-    // claim's submission PDA is provably absent (the task pends on another entrant's
-    // work); a claim whose worker actually submitted is never charged.
+    // P6.6 / revision 9: a pure no-show expiry folds into the worker's
+    // `claims_expired` (a required record). Telemetry only. Only pure no-shows
+    // count: a PendingValidation expiry counts only when THIS claim's submission
+    // PDA is provably absent (the task pends on another entrant's work); a claim
+    // whose worker actually submitted is never charged.
     #[cfg(not(feature = "mainnet-canary"))]
     if is_pure_noshow {
-        apply_track_record(
-            &mut ctx.accounts.agent_stats,
+        count_agent_stats(
+            &ctx.accounts.agent_stats.to_account_info(),
             worker_agent_key,
-            ctx.bumps.agent_stats,
             Counter::ClaimsExpired,
             clock.unix_timestamp,
         )?;

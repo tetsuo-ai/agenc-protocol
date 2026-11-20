@@ -327,14 +327,17 @@ Cancel an active dispute. Only the initiator can cancel, and only while
 the dispute is still active. The retired voter-count byte must be
 historical zero or the current `0xff` initiator-outcome provenance marker.
 
-### Accounts (4)
+### Accounts (7)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 2 | `dispute` | yes |  |  | PDA ["dispute", account:dispute.dispute_id (Dispute)] |  |
 | 3 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 4 | `authority` |  | yes |  |  | Only the initiator's authority can cancel |
+| 4 | `authority` | yes | yes |  |  | Only the initiator's authority can cancel. Writable (revision 9): it pays for a missing record. |
+| 5 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 6 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:task.creator (Task)] | seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required by the record creation (revision 9). |
 
 ### Args (0)
 
@@ -360,7 +363,7 @@ _None._
 
 Cancel an unclaimed or expired task and reclaim funds.
 
-### Accounts (15)
+### Accounts (16)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -379,6 +382,7 @@ Cancel an unclaimed or expired task and reclaim funds.
 | 13 | `creator_agent` |  |  | yes | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the track-record aggregate. Constrained to `authority` so a caller can only attribute the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together with `agent_stats`. Full-surface only — gated so the frozen canary account list for `cancel_task` is unchanged. |
 | 14 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:creator_agent] | OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with `creator_agent`), a cancel bumps `total_cancelled`. Bound to `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only. |
 | 15 | `treasury` | yes |  | yes |  | Receives the FORFEITED contest entry-deposit surplus of every no-show claim drained by this cancel (never refunded to the squatter) — the same rule as expire_claim / reclaim_terminal_claim, so the deposit prices squatting on EVERY no-show exit. Required whenever a drained claim carries a deposit; enforced in the handler. Full-surface only — canary builds are contest-incapable, so the frozen canary account list is unchanged. |
+| 16 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:authority] | `authority` the task creator), seeds-pinned here. REQUIRED: every cancel bumps `cancels`. Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
 ### Args (0)
 
@@ -408,7 +412,7 @@ _None._
 
 Claim a task only when its content-addressed job specification pointer exists.
 
-### Accounts (10)
+### Accounts (11)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -422,6 +426,7 @@ Claim a task only when its content-addressed job specification pointer exists.
 | 8 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
 | 9 | `authority` | yes | yes |  |  | has_one → worker |
 | 10 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 11 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: created at claim; no counter moves here. Created when missing by `ensure_agent_stats`, paid by `authority`. |
 
 ### Args (0)
 
@@ -1013,7 +1018,7 @@ Can only be called after claim.expires_at has passed.
 | 9 | `rent_recipient` | yes |  |  |  |  |
 | 10 | `worker_completion_bond` | yes |  | yes |  | (InProgress expiry) its principal is forfeited to the creator. Fully validated in the handler by settle_completion_bond (owner, PDA, task, role, party). |
 | 11 | `bond_creator` | yes |  | yes |  |  |
-| 12 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:worker] | OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a no-show expiry bumps `claims_expired`. Created lazily on first write, bound to `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account list for `expire_claim` is unchanged. Paid by the (permissionless) caller. |
+| 12 | `agent_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
 | 13 | `treasury` | yes |  | yes |  | Receives the FORFEITED contest entry-deposit surplus on a no-show expiry (never the creator). Required whenever the expiring claim carries a contest deposit; enforced in the handler (non-skippable). Full-surface only — canary builds are contest-incapable (see `validate_task_supports_validation_mode`), so the frozen canary account list for `expire_claim` is unchanged. |
 | 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
@@ -1025,7 +1030,7 @@ _None._
 
 Expire a dispute after the maximum duration has passed.
 
-### Accounts (21)
+### Accounts (24)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1034,7 +1039,7 @@ Expire a dispute after the maximum duration has passed.
 | 3 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
 | 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 5 | `creator` | yes |  |  |  |  |
-| 6 | `authority` |  | yes |  |  |  |
+| 6 | `authority` | yes | yes |  |  | Permissionless caller. Writable (revision 9): it pays for a missing record. |
 | 7 | `worker_claim` | yes |  | yes | PDA ["claim", account:task, account:worker_claim.worker (TaskClaim)] | Worker's canonical claim on the disputed task. Retained as an optional ABI slot, but required by the handler on every expiry to bind the defendant and unwind the claim and worker counters. |
 | 8 | `worker` | yes |  | yes |  | Worker's AgentRegistration PDA (must be dispute defendant). |
 | 9 | `worker_wallet` | yes |  | yes |  | Receives closed-account rent and any refundable worker bond, never unresolved task principal; validated against `worker.authority` before funds can move. |
@@ -1050,6 +1055,9 @@ Expire a dispute after the maximum duration has passed.
 | 19 | `worker_completion_bond` | yes |  |  |  |  |
 | 20 | `task_submission` | yes |  | yes |  | REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the canonical TaskSubmission PDA for the defendant claim. A live record is swept before claim close; the exact system-owned empty PDA proves absence. `Option` preserves the deployed account list, but `None` fails closed. |
 | 21 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | OPTIONAL: canonical TaskValidationConfig, required when the swept manual submission is still Submitted and therefore carries counter debt. |
+| 22 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 23 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 24 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required by the record creation (revision 9). |
 
 ### Args (0)
 
@@ -1060,7 +1068,7 @@ _None._
 Permissionless timeout exit for a frozen task (Batch 3 §8): after the review
 window lapses, default to the worker (pay + refund both bonds). Exit path.
 
-### Accounts (16)
+### Accounts (18)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1076,10 +1084,12 @@ window lapses, default to the worker (pay + refund both bonds). Exit path.
 | 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | system-owned PDA. A legacy live record carries fee terms not stamped on Task. |
 | 11 | `operator` | yes |  | yes |  |  |
 | 12 | `referrer` | yes |  | yes |  |  |
-| 13 | `authority` |  | yes |  |  | Permissionless caller. |
+| 13 | `authority` | yes | yes |  |  | Permissionless caller. Writable (revision 9): it pays for a missing record. |
 | 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | refunded on this no-fault timeout exit. Making it omittable would let a caller strand a live bond into the terminal task, where reclaim_completion_bond can never reach it once the Task PDA is closed. Pass the derived PDA even for an un-bonded task (empty system account); settle_completion_bond no-ops on it. |
 | 15 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | worker authority (audit F5/F12); refunded on this no-fault exit. |
 | 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 17 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 18 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
 ### Args (0)
 
@@ -1840,7 +1850,7 @@ are advertised defaults, not enforcement.
 Terminally reject a submission and freeze the task for review (Batch 3 §8).
 Settles only via resolve_reject_frozen / expire_reject_frozen.
 
-### Accounts (8)
+### Accounts (9)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1850,8 +1860,9 @@ Settles only via resolve_reject_frozen / expire_reject_frozen.
 | 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] |  |
 | 5 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 6 | `creator` | yes | yes |  |  |  |
-| 7 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:claim.worker (TaskClaim)] | OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this freeze-rejection bumps `tasks_rejected`. Bound to `["agent_stats", claim.worker]` (the claim's worker is the worker AgentRegistration PDA), created lazily on first write. Telemetry only — never gates the freeze above. |
-| 8 | `system_program` |  |  | yes | address `11111111111111111111111111111111` | Required only when `agent_stats` is supplied (for `init_if_needed`). |
+| 7 | `agent_stats` | yes |  |  | PDA ["agent_stats", account:claim.worker (TaskClaim)] | here. REQUIRED: this freeze bumps `tasks_rejected`. Created when missing by `ensure_agent_stats`, paid by `creator`. |
+| 8 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required with the records (revision 9; optional before). |
+| 9 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | `creator` the task creator), seeds-pinned here. REQUIRED: this freeze bumps `rejections`. Created when missing by `ensure_creator_stats`, paid by `creator`. |
 
 ### Args (1)
 
@@ -1863,7 +1874,7 @@ Settles only via resolve_reject_frozen / expire_reject_frozen.
 
 Reject a creator-reviewed submission and return the task to active work.
 
-### Accounts (11)
+### Accounts (12)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1875,9 +1886,10 @@ Reject a creator-reviewed submission and return the task to active work.
 | 6 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 7 | `creator` | yes | yes |  |  |  |
 | 8 | `worker_authority` | yes |  |  |  |  |
-| 9 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:worker] | OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this rejection bumps `tasks_rejected`. Created lazily on first write (`init_if_needed`), bound to the canonical `["agent_stats", worker]` PDA. Full-surface only — gated so the frozen canary account list for `reject_task_result` is unchanged. |
-| 10 | `system_program` |  |  | yes | address `11111111111111111111111111111111` | Required only when `agent_stats` is supplied (for `init_if_needed`). |
+| 9 | `agent_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: this rejection bumps `tasks_rejected`. Created when missing by `ensure_agent_stats`, paid by `creator`. |
+| 10 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required with the records (revision 9; optional before). |
 | 11 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | The rejected worker's completion bond is refunded at the same atomic boundary that closes their claim. Leaving it alive after the worker identity disappears from the Task made later cancel/close callers unable to prove which worker bond still existed and allowed permanent stranding. |
+| 12 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | `creator` the task creator), seeds-pinned here. REQUIRED: this rejection bumps `rejections`. Created when missing by `ensure_creator_stats`, paid by `creator`. |
 
 ### Args (1)
 
@@ -1964,7 +1976,7 @@ P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a
 Both are persisted on the dispute alongside the deciding resolver, and the hash
 + resolver are emitted in `DisputeResolved`.
 
-### Accounts (26)
+### Accounts (27)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1977,7 +1989,7 @@ Both are persisted on the dispute alongside the deciding resolver, and the hash
 | 7 | `creator` | yes |  |  |  |  |
 | 8 | `worker_claim` | yes |  | yes | PDA ["claim", account:task, account:worker_claim.worker (TaskClaim)] | Worker's claim proving they worked on task (fix #59) Required for Complete/Split resolutions that pay a worker Made mutable to allow closing after dispute resolution (fix #439) |
 | 9 | `worker` | yes |  | yes |  | Worker agent account for the dispute defendant. |
-| 10 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:dispute.defendant (Dispute)] | OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied, resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was slashed). Bound to `["agent_stats", dispute.defendant]` (the handler validates `worker.key() == dispute.defendant`), created lazily on first write. The `disputes_lost` counter is the SDK slash-history signal. Telemetry only. |
+| 10 | `agent_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost` by the revision 9 outcome rule (records follow the ruling, not the filer). Created when missing by `ensure_agent_stats`, paid by `authority`. |
 | 11 | `worker_wallet` | yes |  | yes |  |  |
 | 12 | `hire_record` |  |  |  | PDA ["hire", account:task] | Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee cannot be bypassed by settling through dispute resolution. A live (program-owned) record forces the operator leg; for a non-hired task the caller passes the empty, system-owned PDA. CHECK: live-vs-absent decided by `owner` in the handler; a live record is deserialized + validated there. |
 | 13 | `dispute_operator` | yes |  | yes |  | HireRecord fallback); required only when those terms carry a non-zero operator fee. Receives the operator leg (SOL). |
@@ -1994,6 +2006,7 @@ Both are persisted on the dispute alongside the deciding resolver, and the hash
 | 24 | `bond_treasury` | yes |  |  |  |  |
 | 25 | `task_submission` | yes |  | yes |  | REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the canonical TaskSubmission PDA for the defendant claim. A live record is swept before claim close; the exact system-owned empty PDA proves absence. `Option` preserves the deployed account list, but `None` fails closed. |
 | 26 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | OPTIONAL: canonical TaskValidationConfig, required when the swept manual submission is still Submitted and therefore carries counter debt. |
+| 27 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` / `disputes_lost`, the mirror of the worker's. Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
 ### Args (3)
 
@@ -2009,7 +2022,7 @@ Multisig review decision on a frozen task (Batch 3 §8): pay the worker
 (approve_completion=true) or refund the creator (false), disposing both bonds.
 Exit path — settles even while paused (money never locks).
 
-### Accounts (16)
+### Accounts (18)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2025,10 +2038,12 @@ Exit path — settles even while paused (money never locks).
 | 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | system-owned PDA. A legacy live record carries fee terms not stamped on Task. |
 | 11 | `operator` | yes |  | yes |  |  |
 | 12 | `referrer` | yes |  | yes |  |  |
-| 13 | `authority` |  | yes |  |  | Multisig review authority; `remaining_accounts` carries the co-signers. |
+| 13 | `authority` | yes | yes |  |  | Multisig review authority; `remaining_accounts` carries the co-signers. Writable (revision 9): it pays for a missing record. |
 | 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury). |
 | 15 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] |  |
 | 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 17 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 18 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
 ### Args (1)
 

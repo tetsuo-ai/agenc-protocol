@@ -36,6 +36,52 @@ export const arr = (buf) => Array.from(buf);
 export const pda = (seeds) => PublicKey.findProgramAddressSync(seeds, PID);
 export const id32 = () => crypto.randomBytes(32);
 
+// Revision 9 record PDAs: the worker record keyed by its AgentRegistration PDA,
+// and the creator record keyed by the task creator's wallet.
+export const agentStatsPda = (agent) => pda([enc("agent_stats"), agent.toBuffer()])[0];
+export const creatorStatsPda = (wallet) => pda([enc("creator_stats"), wallet.toBuffer()])[0];
+
+// Read a revision 9 CreatorStats record by its fixed 129-byte layout (8
+// discriminator, 32 wallet, six u64 counters, i64 last_updated, u8 bump, 32
+// reserved). Returns null when no record exists. Layout-based so it works with
+// any IDL, including one that does not list the account type.
+// Lamports a payer spends right now to create the record: its rent-exempt
+// minimum when the record is missing, 0 when it exists (or its shortfall when
+// the address was pre-funded). For exact-delta assertions.
+export function recordCreationCost(svm, address, size) {
+  const acct = svm.getAccount(address);
+  const rent = BigInt(svm.minimumBalanceForRentExemption(BigInt(size)));
+  if (acct && acct.data.length > 0) return 0n;
+  const held = acct ? BigInt(acct.lamports) : 0n;
+  return rent > held ? rent - held : 0n;
+}
+export const agentStatsCreationCost = (svm, agent) => recordCreationCost(svm, agentStatsPda(agent), 121);
+export const creatorStatsCreationCost = (svm, wallet) => recordCreationCost(svm, creatorStatsPda(wallet), 129);
+
+export const CREATOR_STATS_DISCRIMINATOR = crypto
+  .createHash("sha256").update("account:CreatorStats").digest().subarray(0, 8);
+export function readCreatorStats(svm, address) {
+  const acct = svm.getAccount(address);
+  if (!acct || Number(acct.lamports) === 0 || acct.data.length === 0) return null;
+  const d = Buffer.from(acct.data);
+  if (d.length !== 129 || !d.subarray(0, 8).equals(CREATOR_STATS_DISCRIMINATOR)) {
+    throw new Error(`not a CreatorStats record: ${address.toBase58()}`);
+  }
+  const u64 = (offset) => d.readBigUInt64LE(offset);
+  return {
+    wallet: new PublicKey(d.subarray(8, 40)),
+    rejections: u64(40),
+    rejectionsContested: u64(48),
+    disputesWon: u64(56),
+    disputesLost: u64(64),
+    cancels: u64(72),
+    depositsReceived: u64(80),
+    lastUpdated: d.readBigInt64LE(88),
+    bump: d[96],
+    lamports: BigInt(acct.lamports),
+  };
+}
+
 // The two remaining_accounts deregister_agent requires (audit, 2026-07 swarm):
 // [0] the canonical ["bidder_market", agent] PDA (read-only — deregistration is
 // refused while it reports live bids) and [1] the canonical

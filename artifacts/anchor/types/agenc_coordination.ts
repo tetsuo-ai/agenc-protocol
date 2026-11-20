@@ -1759,9 +1759,86 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Only the initiator's authority can cancel"
+            "Only the initiator's authority can cancel. Writable (revision 9): it pays for",
+            "a missing record."
           ],
+          "writable": true,
           "signer": true
+        },
+        {
+          "name": "workerStats",
+          "docs": [
+            "here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute.defendant",
+                "account": "dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by",
+            "`ensure_creator_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "docs": [
+            "Required by the record creation (revision 9)."
+          ],
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": []
@@ -2113,6 +2190,41 @@ export type AgencCoordination = {
           ],
           "writable": true,
           "optional": true
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "`authority` the task creator),",
+            "seeds-pinned here. REQUIRED: every cancel bumps `cancels`. Created when missing by",
+            "`ensure_creator_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -2440,6 +2552,38 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "workerStats",
+          "docs": [
+            "here. REQUIRED: created at claim; no counter moves here. Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -6485,13 +6629,10 @@ export type AgencCoordination = {
         {
           "name": "agentStats",
           "docs": [
-            "OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a",
-            "no-show expiry bumps `claims_expired`. Created lazily on first write, bound to",
-            "`[\"agent_stats\", worker]`. Full-surface only — gated so the frozen canary account",
-            "list for `expire_claim` is unchanged. Paid by the (permissionless) caller."
+            "here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
           ],
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -6654,6 +6795,10 @@ export type AgencCoordination = {
         },
         {
           "name": "authority",
+          "docs": [
+            "Permissionless caller. Writable (revision 9): it pays for a missing record."
+          ],
+          "writable": true,
           "signer": true
         },
         {
@@ -6830,6 +6975,81 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "workerStats",
+          "docs": [
+            "here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute.defendant",
+                "account": "dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "to the task creator),",
+            "seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by",
+            "`ensure_creator_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "docs": [
+            "Required by the record creation (revision 9)."
+          ],
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": []
@@ -7052,8 +7272,9 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Permissionless caller."
+            "Permissionless caller. Writable (revision 9): it pays for a missing record."
           ],
+          "writable": true,
           "signer": true
         },
         {
@@ -7140,6 +7361,73 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "workerStats",
+          "docs": [
+            "here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "to the task creator),",
+            "seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by",
+            "`ensure_creator_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -11782,13 +12070,10 @@ export type AgencCoordination = {
         {
           "name": "agentStats",
           "docs": [
-            "OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this",
-            "freeze-rejection bumps `tasks_rejected`. Bound to `[\"agent_stats\", claim.worker]`",
-            "(the claim's worker is the worker AgentRegistration PDA), created lazily on first",
-            "write. Telemetry only — never gates the freeze above."
+            "here. REQUIRED: this freeze bumps `tasks_rejected`. Created when missing by `ensure_agent_stats`, paid by",
+            "`creator`."
           ],
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -11818,10 +12103,44 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "docs": [
-            "Required only when `agent_stats` is supplied (for `init_if_needed`)."
+            "Required with the records (revision 9; optional before)."
           ],
-          "optional": true,
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "`creator` the task creator),",
+            "seeds-pinned here. REQUIRED: this freeze bumps `rejections`. Created when missing by",
+            "`ensure_creator_stats`, paid by `creator`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -12025,13 +12344,10 @@ export type AgencCoordination = {
         {
           "name": "agentStats",
           "docs": [
-            "OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this",
-            "rejection bumps `tasks_rejected`. Created lazily on first write (`init_if_needed`),",
-            "bound to the canonical `[\"agent_stats\", worker]` PDA. Full-surface only — gated so",
-            "the frozen canary account list for `reject_task_result` is unchanged."
+            "here. REQUIRED: this rejection bumps `tasks_rejected`. Created when missing by `ensure_agent_stats`, paid by",
+            "`creator`."
           ],
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -12060,9 +12376,8 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "docs": [
-            "Required only when `agent_stats` is supplied (for `init_if_needed`)."
+            "Required with the records (revision 9; optional before)."
           ],
-          "optional": true,
           "address": "11111111111111111111111111111111"
         },
         {
@@ -12103,6 +12418,41 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "workerAuthority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "`creator` the task creator),",
+            "seeds-pinned here. REQUIRED: this rejection bumps `rejections`. Created when missing by",
+            "`ensure_creator_stats`, paid by `creator`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
               }
             ]
           }
@@ -12757,14 +13107,11 @@ export type AgencCoordination = {
         {
           "name": "agentStats",
           "docs": [
-            "OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,",
-            "resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was",
-            "slashed). Bound to `[\"agent_stats\", dispute.defendant]` (the handler validates",
-            "`worker.key() == dispute.defendant`), created lazily on first write. The",
-            "`disputes_lost` counter is the SDK slash-history signal. Telemetry only."
+            "here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost` by the",
+            "revision 9 outcome rule (records follow the ruling, not the filer). Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
           ],
           "writable": true,
-          "optional": true,
           "pda": {
             "seeds": [
               {
@@ -12951,6 +13298,42 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "to the task creator),",
+            "seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` /",
+            "`disputes_lost`, the mirror of the worker's. Created when missing by",
+            "`ensure_creator_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
               }
             ]
           }
@@ -13195,8 +13578,10 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Multisig review authority; `remaining_accounts` carries the co-signers."
+            "Multisig review authority; `remaining_accounts` carries the co-signers.",
+            "Writable (revision 9): it pays for a missing record."
           ],
+          "writable": true,
           "signer": true
         },
         {
@@ -13278,6 +13663,73 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "workerStats",
+          "docs": [
+            "here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by",
+            "`authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "to the task creator),",
+            "seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by",
+            "`ensure_creator_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         }
       ],
       "args": [

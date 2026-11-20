@@ -26,7 +26,7 @@ import {
   moderationBlockPda,
   BN,
   Keypair,
-  SystemProgram,
+  SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -403,8 +403,7 @@ function expireIx(w, r, crank) {
         w.provider.publicKey.toBuffer(),
       ])[0],
       taskSubmission: r.subA,
-      taskValidationConfig: r.validation,
-    })
+      taskValidationConfig: r.validation, workerStats: agentStatsPda(w.providerAgent)})
     .instruction();
 }
 
@@ -524,9 +523,7 @@ async function resolveIx(w, r, { resolutionType = 0, approve = true } = {}) {
       worker: w.providerAgent,
       workerWallet: w.provider.publicKey,
       agentStats:
-        resolutionType === 2 && approve
-          ? null
-          : pda([enc("agent_stats"), w.providerAgent.toBuffer()])[0],
+        agentStatsPda(w.providerAgent),
       hireRecord: r.hireRecord,
       disputeOperator: null,
       disputeReferrer: null,
@@ -549,8 +546,7 @@ async function resolveIx(w, r, { resolutionType = 0, approve = true } = {}) {
       ])[0],
       bondTreasury: w.admin.publicKey,
       taskSubmission: r.subA,
-      taskValidationConfig: r.validation,
-    })
+      taskValidationConfig: r.validation})
     .instruction();
   return { ix, resolver };
 }

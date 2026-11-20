@@ -12,6 +12,8 @@ use crate::instructions::launch_controls::require_task_type_enabled;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::record_account_helpers::ensure_agent_stats;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::set_task_job_spec::validate_hired_spec_commitment;
 use crate::instructions::task_validation_helpers::{
     is_contest_configured_task, is_manual_validation_task,
@@ -132,6 +134,17 @@ pub struct ClaimTaskWithJobSpec<'info> {
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    // Revision 9: the worker's record is created here on its first claim and paid
+    // by the worker, so later rejections, rulings and expiries never charge a
+    // buyer or a cranker for it. No counter moves at claim. Full-surface only:
+    // the frozen canary account list is unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
+    /// here. REQUIRED: created at claim; no counter moves here. Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", worker.key().as_ref()], bump)]
+    pub worker_stats: UncheckedAccount<'info>,
 }
 
 pub fn handler(_ctx: Context<ClaimTask>) -> Result<()> {
@@ -183,6 +196,16 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
         worker_key,
         ctx.accounts.worker.as_mut(),
         ctx.bumps.claim,
+    )?;
+
+    // Revision 9: create the worker's record on its first claim.
+    #[cfg(not(feature = "mainnet-canary"))]
+    ensure_agent_stats(
+        &ctx.accounts.worker_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        worker_key,
+        ctx.bumps.worker_stats,
     )?;
 
     // FIX 4 (anti-slop contest entry deposit): a contest-configured claim carries

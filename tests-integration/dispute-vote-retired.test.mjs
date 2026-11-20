@@ -45,7 +45,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode,
   freshWorld, hireIx, injectAgentStake, setProtocolPaused, configureTestMultisig,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 
 // Roster PDA for a dispute resolver wallet ["dispute_resolver", resolver].
@@ -129,15 +129,14 @@ async function resolveAsAssigned(w, r, { resolver, resolverEntry, approve, ratio
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
       authority: resolver.publicKey, resolverAssignment: resolverEntry, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
-      agentStats: null,
+      agentStats: agentStatsPda(w.providerAgent),
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
       // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
       taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
-      taskValidationConfig: null,
-    })
+      taskValidationConfig: null})
     .instruction(); // NOTE: no .remainingAccounts() — there are no (vote, arbiter) pairs.
 }
 

@@ -24,7 +24,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake, configureTestMultisig,
   taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -140,15 +140,14 @@ async function resolveIx(w, r, { resolver, resolverEntry, approve }) {
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
       authority: resolver.publicKey, resolverAssignment: resolverEntry, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
-      agentStats: null,
+      agentStats: agentStatsPda(w.providerAgent),
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
       // Mandatory live evidence also supplies the validation counter it owes.
       taskSubmission: r.submission,
-      taskValidationConfig: r.validation,
-    })
+      taskValidationConfig: r.validation})
     .instruction();
 }
 

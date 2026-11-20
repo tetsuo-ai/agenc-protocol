@@ -11,12 +11,16 @@ use crate::instructions::bid_settlement_helpers::{
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::post_completion_bond::dependency_parent_completed;
 use crate::instructions::program_account_helpers::{
     close_program_account, deserialize_program_account,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::record_account_helpers::{count_creator_stats, ensure_creator_stats};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::task_validation_helpers::is_contest_configured_task;
 #[cfg(feature = "spl-token-rewards")]
@@ -174,6 +178,17 @@ pub struct CancelTask<'info> {
         constraint = treasury.key() == protocol_config.treasury @ CoordinationError::ContestForfeitTreasuryRequired
     )]
     pub treasury: Option<UncheckedAccount<'info>>,
+
+    // Revision 9: every cancel counts on the creator's wallet-keyed record, for
+    // bare-wallet and agent creators alike. The optional `creator_agent` /
+    // `agent_stats` pair above stays for agent creators. Full-surface only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (the task constraint makes
+    /// `authority` the task creator),
+    /// seeds-pinned here. REQUIRED: every cancel bumps `cancels`. Created when missing by
+    /// `ensure_creator_stats`, paid by `authority`.
+    #[account(mut, seeds = [b"creator_stats", authority.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
 }
 
 pub fn process_cancel_task<'info>(
@@ -183,6 +198,16 @@ pub fn process_cancel_task<'info>(
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedTaskAction
     );
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    #[cfg(not(feature = "mainnet-canary"))]
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.authority.key(),
+        ctx.bumps.creator_stats,
+    )?;
     process_cancel_task_impl(ctx.accounts, ctx.remaining_accounts)?;
 
     // P6.6: fold a successful cancel into the creator agent's `total_cancelled` track
@@ -197,17 +222,25 @@ pub fn process_cancel_task<'info>(
             ctx.accounts.agent_stats.is_none() || ctx.accounts.creator_agent.is_some(),
             CoordinationError::UnauthorizedAgent
         );
+        let clock = Clock::get()?;
         if let Some(creator_agent) = ctx.accounts.creator_agent.as_ref() {
             let creator_agent_key = creator_agent.key();
-            let now = Clock::get()?.unix_timestamp;
             apply_track_record(
                 &mut ctx.accounts.agent_stats,
                 creator_agent_key,
                 ctx.bumps.agent_stats,
                 Counter::TotalCancelled,
-                now,
+                clock.unix_timestamp,
             )?;
         }
+        // Revision 9: the wallet-keyed creator record is required, so every cancel
+        // counts, whoever the creator is.
+        count_creator_stats(
+            &ctx.accounts.creator_stats.to_account_info(),
+            ctx.accounts.authority.key(),
+            CreatorCounter::Cancels,
+            clock.unix_timestamp,
+        )?;
     }
 
     Ok(())

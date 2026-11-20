@@ -15,7 +15,7 @@ import {
   makeProgram, send, expectOk, decode, isClosed,
   freshWorld, hireIx,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -112,8 +112,7 @@ test("expire_dispute: a drifted active_tasks == 0 cannot brick the unwind (satur
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond,
-      taskSubmission: r.submission, taskValidationConfig: null,
-    })
+      taskSubmission: r.submission, taskValidationConfig: null, workerStats: agentStatsPda(w.providerAgent)})
     .instruction(), [crank]), "expire_dispute over a drifted counter");
 
   // The unwind completed and the counter saturated at 0 (no underflow revert).

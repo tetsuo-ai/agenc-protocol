@@ -27,7 +27,7 @@ import {
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake, configureTestMultisig,
   taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -172,8 +172,7 @@ async function expireIx(w, r, crank) {
       rewardMint: null, tokenProgram: null,
       creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0],
       workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
-      taskSubmission: r.submission, taskValidationConfig: r.validation,
-    })
+      taskSubmission: r.submission, taskValidationConfig: r.validation, workerStats: agentStatsPda(w.providerAgent)})
     .instruction();
 }
 
@@ -419,7 +418,7 @@ test("a cancelled stranded outcome keeps its loss policy after the repair", asyn
   // The initiator cancels the incident dispute instead of letting it expire.
   expectOk(send(w.svm, await w.providerProg.methods
     .cancelDispute()
-    .accounts({ protocolConfig: w.protocolPda, dispute: h.incident.dispute, task: h.incident.task, authority: w.provider.publicKey })
+    .accounts({ protocolConfig: w.protocolPda, dispute: h.incident.dispute, task: h.incident.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", h.incident.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", h.incident.task).creator) })
     .remainingAccounts([
       { pubkey: w.providerAgent, isSigner: false, isWritable: true },
       { pubkey: h.incident.validation, isSigner: false, isWritable: true },

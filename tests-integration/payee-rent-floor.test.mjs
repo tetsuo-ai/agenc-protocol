@@ -24,7 +24,7 @@ import {
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed,
   freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 
 const PROTOCOL_FEE_BPS = 100; // harness injectProtocolConfig
@@ -258,7 +258,7 @@ test("resolve_dispute: an unfunded referrer's leg stays with the worker on Compl
       .accounts({
         dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey,
         resolverAssignment: resolver, creator: w.buyer.publicKey, workerClaim: r.claim,
-        worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null,
+        worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: agentStatsPda(w.providerAgent),
         hireRecord: r.hireRecord, disputeOperator: operator, disputeReferrer: referrer,
         systemProgram: SystemProgram.programId,
         tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
@@ -267,8 +267,7 @@ test("resolve_dispute: an unfunded referrer's leg stays with the worker on Compl
         workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
         bondTreasury: w.admin.publicKey,
         taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
-        taskValidationConfig: null,
-      })
+        taskValidationConfig: null})
       .instruction(), [w.admin]), `${label}: resolve`);
 
     // Disputes take no protocol fee; the legs are carved from the worker's gross

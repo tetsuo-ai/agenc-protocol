@@ -16,7 +16,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake, configureTestMultisig,
   taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, agentStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -118,13 +118,12 @@ test("F-9: resolve_dispute sweeps the defendant's live submission (counters + re
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
       authority: resolver.publicKey, resolverAssignment: resolverEntry, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
-      agentStats: null,
+      agentStats: agentStatsPda(w.providerAgent),
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      taskSubmission: r.submission, taskValidationConfig: r.validation,
-    })
+      taskSubmission: r.submission, taskValidationConfig: r.validation})
     .instruction(), [resolver]), "resolve with the F-9 sweep accounts");
 
   // The submission is closed and its rent went to the WORKER (not the crank/creator).
@@ -153,13 +152,12 @@ test("F-9: resolve_dispute refuses omitted mandatory submission evidence", async
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
       authority: resolver.publicKey, resolverAssignment: resolverEntry, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
-      agentStats: null,
+      agentStats: agentStatsPda(w.providerAgent),
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      taskSubmission: null, taskValidationConfig: null,
-    })
+      taskSubmission: null, taskValidationConfig: null})
     .instruction(), [resolver]), "TaskSubmissionRequired", "resolve without submission evidence fails closed");
 
   assert.ok(!isClosed(w.svm, r.submission), "submission remains live after rejected resolve");
