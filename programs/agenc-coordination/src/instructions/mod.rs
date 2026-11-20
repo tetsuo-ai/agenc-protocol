@@ -25,8 +25,14 @@ pub mod agent_stats_helpers;
 pub mod bid_settlement_helpers;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod bond_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod claim_deposit_helpers;
 pub mod completion_helpers;
 pub mod constants;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod creator_stats_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod dispute_bond_helpers;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod dispute_helpers;
 pub mod lamport_transfer;

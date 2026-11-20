@@ -50,6 +50,23 @@ pub fn require_multisig_threshold(
     config: &ProtocolConfig,
     remaining_accounts: &[AccountInfo],
 ) -> Result<()> {
+    require_unconflicted_multisig_threshold(config, remaining_accounts, &[])
+}
+
+/// Revision 9: the conflicted-approver threshold. Identical to
+/// `require_multisig_threshold` (same checks, same errors, same order), except
+/// that an owner listed in `conflicted` never counts toward the threshold, even
+/// when it signs. Duplicate signers count once (the signer set is a set).
+///
+/// Callers list every party with a stake in the ruling: the task creator, the
+/// worker wallet, and each live operator or referrer payee. If fewer than the
+/// threshold of unconflicted owners can sign, the ruling cannot be made and the
+/// unruled default applies.
+pub fn require_unconflicted_multisig_threshold(
+    config: &ProtocolConfig,
+    remaining_accounts: &[AccountInfo],
+    conflicted: &[Pubkey],
+) -> Result<()> {
     let owners_len = config.multisig_owners_len as usize;
     let threshold = config.multisig_threshold as usize;
 
@@ -77,7 +94,7 @@ pub fn require_multisig_threshold(
         if owner == &Pubkey::default() {
             return Err(error!(CoordinationError::MultisigDefaultSigner));
         }
-        if signer_keys.contains(owner) {
+        if signer_keys.contains(owner) && !conflicted.contains(owner) {
             approvals += 1;
         }
     }
@@ -87,4 +104,95 @@ pub fn require_multisig_threshold(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_2_of_3(owners: [Pubkey; 3]) -> ProtocolConfig {
+        let mut multisig_owners = [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS];
+        multisig_owners[..3].copy_from_slice(&owners);
+        ProtocolConfig {
+            multisig_threshold: 2,
+            multisig_owners_len: 3,
+            multisig_owners,
+            ..ProtocolConfig::default()
+        }
+    }
+
+    fn signer<'a>(key: &'a Pubkey, lamports: &'a mut u64, owner: &'a Pubkey) -> AccountInfo<'a> {
+        AccountInfo::new(key, true, false, lamports, &mut [], owner, false, 0)
+    }
+
+    fn threshold_with(
+        owners: [Pubkey; 3],
+        signers: &[Pubkey],
+        conflicted: &[Pubkey],
+    ) -> Result<()> {
+        let config = config_2_of_3(owners);
+        let system = system_program::ID;
+        let mut lamports: Vec<u64> = vec![1; signers.len()];
+        let infos: Vec<AccountInfo> = signers
+            .iter()
+            .zip(lamports.iter_mut())
+            .map(|(k, l)| signer(k, l, &system))
+            .collect();
+        require_unconflicted_multisig_threshold(&config, &infos, conflicted)
+    }
+
+    #[test]
+    fn unconflicted_threshold_matches_the_plain_threshold_when_nothing_is_conflicted() {
+        let owners = [
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        ];
+        assert!(threshold_with(owners, &[owners[0], owners[1]], &[]).is_ok());
+        assert!(threshold_with(owners, &[owners[0]], &[]).is_err());
+    }
+
+    // Revert-sensitive: dropping the `!conflicted.contains` term lets a
+    // conflicted owner's signature carry a ruling it has a stake in.
+    #[test]
+    fn conflicted_owners_never_count_even_when_they_sign() {
+        let owners = [
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        ];
+        // Owner 0 is the creator: owners 0 and 1 signing is only one approval.
+        assert!(threshold_with(owners, &[owners[0], owners[1]], &[owners[0]]).is_err());
+        // The two unconflicted owners still carry it.
+        assert!(threshold_with(owners, &[owners[1], owners[2]], &[owners[0]]).is_ok());
+        // All three sign, two conflicted: not enough.
+        assert!(threshold_with(
+            owners,
+            &[owners[0], owners[1], owners[2]],
+            &[owners[0], owners[2]]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn duplicate_signers_count_once() {
+        let owners = [
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        ];
+        assert!(threshold_with(owners, &[owners[1], owners[1]], &[]).is_err());
+        assert!(threshold_with(owners, &[owners[1], owners[1], owners[2]], &[owners[0]]).is_ok());
+    }
+
+    #[test]
+    fn a_non_owner_conflict_entry_changes_nothing() {
+        let owners = [
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        ];
+        let stranger = Pubkey::new_unique();
+        assert!(threshold_with(owners, &[owners[0], owners[1]], &[stranger]).is_ok());
+    }
 }

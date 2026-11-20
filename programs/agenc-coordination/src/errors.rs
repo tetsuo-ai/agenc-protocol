@@ -1226,4 +1226,38 @@ pub enum CoordinationError {
     DisputeCounterRepairNotApplicable,
     #[msg("Initiator counter still holds a unit; finalize the outcomes that own one first")]
     DisputeCounterNotDeficient,
+    // Appended (revision 9, accountable review): codes 6418 to 6433 in this
+    // exact order. Append-only: preserve every existing Anchor error code.
+    #[msg("A single-worker review task must be refused with reject_and_freeze")]
+    SingleWorkerRejectMustFreeze,
+    #[msg("The window to dispute this rejection has closed")]
+    RejectionDisputeWindowClosed,
+    #[msg("Only a revision 9 freeze can be disputed")]
+    RejectionNotDisputable,
+    #[msg("Ruling on this freeze needs a filed dispute")]
+    RejectionDisputeRequired,
+    #[msg("The dispute or ruling window is still open")]
+    RejectionWindowStillOpen,
+    #[msg("The ruling window has closed")]
+    RulingWindowClosed,
+    #[msg("Dispute bond account is missing or does not match")]
+    InvalidDisputeBond,
+    #[msg("Disputes are refused on single-worker review tasks")]
+    DisputeRefusedOnReviewTask,
+    #[msg("The task creator account must receive the claim deposit")]
+    ClaimDepositRecipientRequired,
+    #[msg("This claim cannot be released")]
+    ClaimNotReleasable,
+    #[msg("This validation mode is closed for new tasks")]
+    ValidationModeClosed,
+    #[msg("Creator review needs a SOL reward and a non-bid task")]
+    CreatorReviewUnsupportedForTask,
+    #[msg("Task cannot be compacted yet")]
+    TaskNotCompactable,
+    #[msg("Account is neither a Task nor a TaskMarker")]
+    InvalidTaskMarker,
+    #[msg("A task creator cannot moderate its own task")]
+    ModeratorIsTaskCreator,
+    #[msg("Moderation rent payer must be the task creator or the moderator")]
+    InvalidModerationRentPayer,
 }
