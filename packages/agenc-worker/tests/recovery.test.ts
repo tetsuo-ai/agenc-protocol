@@ -36,10 +36,13 @@ import {
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   FEE_HEADROOM_LAMPORTS,
   checkSettlements,
+  expectedWorkerPayout,
   listClaimCandidates,
   processCandidate,
   resumeOpenClaim,
   runTickOnce,
+  runUp,
+  shareEarnings,
   SUBMISSION_ACCOUNT_SIZE,
   type WorkerAgent,
   type WorkerContext,
@@ -1942,6 +1945,212 @@ describe("transaction-boundary recovery", () => {
     );
   });
 
+  it("waits for a buyer's note that cannot be fetched, without using up the job's attempts", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-feedback-down-"),
+    );
+    const state = emptyState();
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-18T00:00:00.000Z",
+      phase: "claimed",
+      revisionSubmissionCount: 1,
+    };
+    saveState(stateDir, state);
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda)],
+      [
+        submissionPda,
+        submissionData(
+          claimPda,
+          new Uint8Array(32).fill(3),
+          SubmissionStatus.Rejected,
+          new Uint8Array(32).fill(4),
+        ),
+      ],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+    ctx.config.executor = ["/must/not/execute", "{prompt}"];
+    // The host that keeps the buyer's notes cannot be reached for a while.
+    ctx.taskThreadTransport = {
+      baseUrl: "https://threads.example",
+      get: async () => {
+        throw new taskThread.ContentTransportError(
+          "content host at https://threads.example could not be reached",
+          { status: 0 },
+        );
+      },
+      post: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    for (let look = 0; look < 5; look += 1) {
+      expect((await resumeOpenClaim(ctx, agent))?.status).toBe(
+        "execution-failed",
+      );
+      const waiting = loadState(stateDir);
+      waiting.openClaim!.retryAt = new Date(Date.now() - 1_000).toISOString();
+      saveState(stateDir, waiting);
+    }
+    const held = loadState(stateDir);
+    expect(held.failedJobs).toEqual([]);
+    expect(held.openClaim).toMatchObject({
+      task: TASK,
+      phase: "claimed",
+      fetchWaits: 5,
+      lastFailure: expect.stringMatching(/buyer's note could not be fetched/),
+    });
+    expect(held.openClaim?.failures).toBeUndefined();
+  });
+
+  it("does not count toward the pause a revision whose buyer's note makes it too large to run", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-too-large-"),
+    );
+    // A long job spec that fits on its own, and a long note that tips it over.
+    const payload = { title: "Long brief", instructions: "Read all of this. ".repeat(2_300) };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: { algorithm: "sha256", canonicalization: "json-stable-v1", payloadHash: digest.hex },
+        payload,
+      }),
+    );
+    const changesEnvelope: taskThread.TaskThreadEnvelope = {
+      v: 1,
+      taskPda: TASK,
+      parentHash: null,
+      role: "buyer",
+      body: "Please also cover this. ".repeat(680),
+      attachments: [],
+      ts: 1_700_000_200,
+    };
+    const changesHash = (await taskThread.envelopeHash(changesEnvelope)).bytes;
+    const state = emptyState();
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-18T00:00:00.000Z",
+      phase: "claimed",
+      revisionSubmissionCount: 1,
+    };
+    // Two jobs given up in a row already.
+    state.consecutiveFailures = 2;
+    saveState(stateDir, state);
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda)],
+      [
+        submissionPda,
+        submissionData(
+          claimPda,
+          new Uint8Array(32).fill(3),
+          SubmissionStatus.Rejected,
+          changesHash,
+        ),
+      ],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+    ]);
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, {}, events);
+    ctx.fetchUri = async () => body;
+    ctx.taskThreadTransport = {
+      baseUrl: "https://threads.example",
+      get: async () => ({ messages: [changesEnvelope] }),
+      post: async () => {
+        throw new Error("not used");
+      },
+    };
+    ctx.config.executor = ["/must/not/execute", "{prompt}"];
+    for (let look = 0; look < 3 && loadState(stateDir).openClaim !== null; look += 1) {
+      expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+      const waiting = loadState(stateDir);
+      if (waiting.openClaim !== null) {
+        waiting.openClaim.retryAt = new Date(Date.now() - 1_000).toISOString();
+        saveState(stateDir, waiting);
+      }
+    }
+    const after = loadState(stateDir);
+    expect(after.openClaim).toBeNull();
+    expect(after.failedJobs).toEqual([
+      expect.objectContaining({ cause: "attempts", reason: expect.stringMatching(/too large to run/) }),
+    ]);
+    // No work ran, so the worker keeps taking jobs.
+    expect(after.consecutiveFailures).toBe(2);
+    expect(after.pause).toBeNull();
+    expect(events.some((event) => event.event === "worker.paused")).toBe(false);
+  });
+
+  it("counts a buyer's note the host refuses for good (404) as a failed try", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-feedback-gone-"),
+    );
+    const state = emptyState();
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-18T00:00:00.000Z",
+      phase: "claimed",
+      revisionSubmissionCount: 1,
+    };
+    saveState(stateDir, state);
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda)],
+      [
+        submissionPda,
+        submissionData(
+          claimPda,
+          new Uint8Array(32).fill(3),
+          SubmissionStatus.Rejected,
+          new Uint8Array(32).fill(4),
+        ),
+      ],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+    ctx.config.executor = ["/must/not/execute", "{prompt}"];
+    // The host answers that the note is not there: waiting will not bring it.
+    ctx.taskThreadTransport = {
+      baseUrl: "https://threads.example",
+      get: async () => {
+        throw new taskThread.ContentTransportError("content host answered 404", { status: 404 });
+      },
+      post: async () => {
+        throw new Error("not used");
+      },
+    };
+
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    const counted = loadState(stateDir);
+    expect(counted.openClaim).toMatchObject({
+      task: TASK,
+      failures: 1,
+      lastFailure: expect.stringMatching(/buyer's note could not be read/),
+    });
+    expect(counted.openClaim?.fetchWaits).toBeUndefined();
+  });
+
   it("recovers executed/uploading phases from private stdout without rerunning the executor", async () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-executed-"));
     const resultBytes = new TextEncoder().encode("persisted executor stdout");
@@ -1982,6 +2191,8 @@ describe("transaction-boundary recovery", () => {
     const ctx = context(stateDir, accounts, { submitTaskResult }, events);
     ctx.config.executor = ["/must/not/execute", "{prompt}"];
     ctx.config.resultUploader = "https://uploads.example/private-token";
+    // Retry the upload at once (a failed upload otherwise waits its turn).
+    ctx.config.retryDelayMs = 0;
     ctx.uploadFetch = uploadFetch as unknown as typeof fetch;
 
     expect((await resumeOpenClaim(ctx, agent))?.status).toBe(
@@ -2203,6 +2414,334 @@ describe("settlement evidence coherence", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0]?.earnedLamports).toBe(100n);
     expect(loadState(stateDir).totalEarnedBaseline).toBe("150");
+  });
+
+  // A second job, paid 2,000,000 with the same 1% fee as TASK.
+  const SECOND_TASK = address("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin");
+  const SECOND_REWARD = 2_000_000n;
+  // What each job pays after the 1% marketplace fee in `taskArgs`.
+  const FIRST_PAY = REWARD - REWARD / 100n;
+  const SECOND_PAY = SECOND_REWARD - SECOND_REWARD / 100n;
+
+  function twoPendingJobs(stateDir: string): void {
+    pendingState(stateDir, "2000-01-01T00:00:00.000Z");
+    const state = loadState(stateDir);
+    state.submissions.push({
+      task: SECOND_TASK,
+      submissionSignature: "second-signature",
+      resultUri: "agenc://result/sha256/second",
+      resultHashHex: sha256Hex(new TextEncoder().encode("second result")),
+      rewardAmount: SECOND_REWARD.toString(),
+      submittedAt: "2000-01-01T00:00:00.000Z",
+      settled: false,
+    });
+    saveState(stateDir, state);
+  }
+
+  it("counts two jobs paid in one round, each with what it paid", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-two-paid-"),
+    );
+    twoPendingJobs(stateDir);
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + SECOND_PAY)],
+    ]);
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, {}, events);
+    // Whoever hears of a paid job and reads the ledger finds it settled.
+    const settledWhenTold: boolean[] = [];
+    const log = ctx.log;
+    ctx.log = (event) => {
+      if (event.event === "settlement.observed") {
+        settledWhenTold.push(
+          loadState(stateDir).submissions.find((record) => record.task === event.task)
+            ?.settled === true,
+        );
+      }
+      log(event);
+    };
+
+    const reports = await checkSettlements(ctx, agent);
+    expect(settledWhenTold).toEqual([true, true]);
+    expect(
+      reports.map(({ task, outcome, earnedLamports }) => ({
+        task,
+        outcome,
+        earnedLamports,
+      })),
+    ).toEqual([
+      { task: TASK, outcome: "accepted", earnedLamports: FIRST_PAY },
+      { task: SECOND_TASK, outcome: "accepted", earnedLamports: SECOND_PAY },
+    ]);
+    const state = loadState(stateDir);
+    expect(state.submissions.map((record) => record.earnedLamports)).toEqual([
+      FIRST_PAY.toString(),
+      SECOND_PAY.toString(),
+    ]);
+    expect(state.totalEarnedBaseline).toBe(
+      (50n + FIRST_PAY + SECOND_PAY).toString(),
+    );
+    // Each paid job says what it earned, so a host can tell the person.
+    expect(
+      events
+        .filter(({ event }) => event === "settlement.observed")
+        .map(({ earnedLamports }) => earnedLamports),
+    ).toEqual([FIRST_PAY.toString(), SECOND_PAY.toString()]);
+  });
+
+  it("divides what came in by each job's terms when it is not what they pay", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-two-paid-short-"),
+    );
+    twoPendingJobs(stateDir);
+    // 101 lamports short of both jobs' pay (a stale read, a discount, a leg).
+    const cameIn = FIRST_PAY + SECOND_PAY - 101n;
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + cameIn)],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+
+    const reports = await checkSettlements(ctx, agent);
+    const earned = reports.map((report) => report.earnedLamports!);
+    expect(earned[0]! + earned[1]!).toBe(cameIn);
+    expect(earned[0]! > earned[1]!).toBe(true);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(
+      (50n + cameIn).toString(),
+    );
+  });
+
+  it("leaves a still-waiting job's pay for that job when it lands between the reads", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-late-pay-"),
+    );
+    twoPendingJobs(stateDir);
+    // The second job's pay is already in the agent's total, but its task was
+    // still read as waiting for review.
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.PendingValidation, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + SECOND_PAY)],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+
+    const first = await checkSettlements(ctx, agent);
+    expect(first.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [TASK, FIRST_PAY],
+    ]);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(
+      (50n + FIRST_PAY).toString(),
+    );
+
+    accounts.set(
+      SECOND_TASK,
+      taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+    );
+    const second = await checkSettlements(ctx, agent);
+    expect(second.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [SECOND_TASK, SECOND_PAY],
+    ]);
+    expect(loadState(stateDir).submissions.every((record) => record.settled)).toBe(
+      true,
+    );
+  });
+
+  it("counts a small extra with the job just paid while another waits on, as in a dispute", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-extra-"),
+    );
+    twoPendingJobs(stateDir);
+    // The first job paid a little over its terms (the marketplace takes a
+    // smaller fee from a well-reviewed worker); the second job is disputed
+    // and may wait for days.
+    const extra = REWARD / 1_000n;
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [
+        SECOND_TASK,
+        taskData(TaskStatus.Disputed, { rewardAmount: SECOND_REWARD }),
+      ],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + extra)],
+    ]);
+    const ctx = context(stateDir, accounts, {}, []);
+
+    const first = await checkSettlements(ctx, agent);
+    expect(first.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [TASK, FIRST_PAY + extra],
+    ]);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(
+      (50n + FIRST_PAY + extra).toString(),
+    );
+
+    // The dispute ends for the worker: that job is paid what it pays, no more.
+    accounts.set(
+      SECOND_TASK,
+      taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD }),
+    );
+    accounts.set(WORKER, agentRegistrationData(50n + FIRST_PAY + extra + SECOND_PAY));
+    const second = await checkSettlements(ctx, agent);
+    expect(second.map((report) => [report.task, report.earnedLamports])).toEqual([
+      [SECOND_TASK, SECOND_PAY],
+    ]);
+  });
+});
+
+describe("upkeep that cannot read the chain", () => {
+  const GIVEN_UP = address("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin");
+
+  /**
+   * A registered worker holding a landed claim it can finish, and a given-up
+   * job whose claim cannot be read right now (the connection fails).
+   */
+  async function workerWithUpkeepDown() {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-upkeep-down-"));
+    const agentId = new Uint8Array(32).fill(9);
+    const [agentPda] = await findAgentPda({ agentId });
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: agentPda });
+    const [givenUpClaim] = await findClaimPda({ task: GIVEN_UP, bidder: agentPda });
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const payload = { title: "finish the landed claim", summary: "do it" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const state = emptyState();
+    state.agentIdHex = bytesToHex(agentId);
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-19T00:00:00.000Z",
+      phase: "claiming",
+    };
+    state.failedJobs = [
+      {
+        task: GIVEN_UP,
+        claimedAt: "2026-07-18T00:00:00.000Z",
+        failedAt: "2026-07-18T01:00:00.000Z",
+        cause: "attempts",
+        reason: "the program that does the work kept failing",
+        attempts: 3,
+        claimReleased: false,
+      },
+    ];
+    saveState(stateDir, state);
+    const accounts = new Map<Address, Uint8Array>([
+      [agentPda, agentRegistrationData(0n)],
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda, agentPda)],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+    ]);
+    const submitTaskResult = vi.fn(async () => ({ signature: "submit-signature" }));
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, { submitTaskResult }, events);
+    ctx.fetchUri = async () => body;
+    ctx.readAccount = async (account) => {
+      if (account === givenUpClaim) throw new Error("rpc answered 503");
+      return accounts.get(account) ?? null;
+    };
+    return { stateDir, ctx, events, submitTaskResult };
+  }
+
+  it("does not stop a tick: the rest of its work is done and the failure is logged", async () => {
+    const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
+    const result = await runTickOnce(ctx);
+    expect(result.outcome?.status).toBe("submitted");
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.event === "upkeep.failed")).toMatchObject({
+      reason: expect.stringMatching(/rpc answered 503/),
+    });
+  });
+
+  it("does not stop a long run when the first upkeep fails", async () => {
+    const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 300);
+    await expect(runUp(ctx, { signal: controller.signal })).resolves.toBeUndefined();
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
+    expect(events.map(({ event }) => event)).toContain("upkeep.failed");
+  });
+});
+
+describe("dividing one round's earnings", () => {
+  it("adds up to exactly what came in", () => {
+    expect(shareEarnings(100n, [60n, 40n])).toEqual([60n, 40n]);
+    expect(shareEarnings(101n, [60n, 40n])).toEqual([61n, 40n]);
+    expect(shareEarnings(10n, [1n, 1n, 1n])).toEqual([4n, 3n, 3n]);
+    expect(shareEarnings(9n, [0n, 0n])).toEqual([5n, 4n]);
+    expect(shareEarnings(0n, [5n, 5n])).toEqual([0n, 0n]);
+  });
+
+  it("keeps back only what could be a waiting job's whole pay", () => {
+    // 30 left over, and a waiting job pays 30 (or 33: a little under its terms).
+    expect(shareEarnings(130n, [60n, 40n], [30n])).toEqual([60n, 40n]);
+    expect(shareEarnings(130n, [60n, 40n], [33n, 500n])).toEqual([60n, 40n]);
+    // A job whose pay is not known could pay anything.
+    expect(shareEarnings(130n, [60n, 40n], [null])).toEqual([60n, 40n]);
+    // 30 cannot be the pay of a job that pays 100, nor of one that pays nothing.
+    expect(shareEarnings(130n, [60n, 40n], [100n])).toEqual([78n, 52n]);
+    expect(shareEarnings(130n, [60n, 40n], [0n])).toEqual([78n, 52n]);
+    expect(shareEarnings(130n, [60n, 40n])).toEqual([78n, 52n]);
+    // Less than what this round's jobs pay: nothing is left over to keep.
+    expect(shareEarnings(90n, [60n, 40n], [30n])).toEqual([54n, 36n]);
+  });
+
+  it("knows what a job pays by its own terms", () => {
+    expect(
+      expectedWorkerPayout({
+        rewardAmount: 1_000_000n,
+        taskType: TaskType.Exclusive,
+        requiredCompletions: 1,
+        protocolFeeBps: 500,
+        operator: WALLET,
+        operatorFeeBps: 1_000,
+        referrer: PARENT,
+        referrerFeeBps: 2_000,
+      }),
+    ).toBe(850_000n);
+    expect(
+      expectedWorkerPayout({
+        rewardAmount: 1_000_001n,
+        taskType: TaskType.Collaborative,
+        requiredCompletions: 2,
+        protocolFeeBps: 500,
+        operator: PARENT,
+        operatorFeeBps: 0,
+        referrer: PARENT,
+        referrerFeeBps: 0,
+      }),
+    ).toBe(475_000n);
   });
 });
 

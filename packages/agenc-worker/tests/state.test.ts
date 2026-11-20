@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   statSync,
   symlinkSync,
   truncateSync,
@@ -20,6 +21,7 @@ import {
   emptyState,
   loadState,
   MAX_WORKER_STATE_BYTES,
+  pruneFailedJobs,
   pruneSettledSubmissions,
   saveState,
   SETTLED_SUBMISSION_RETENTION,
@@ -454,5 +456,62 @@ describe("exclusive state directory lock", () => {
     expect(
       readdirSync(stateDir).filter((name) => name.startsWith(".active.lock")),
     ).toEqual([]);
+  });
+});
+
+describe("given-up jobs in the state file", () => {
+  const failed = {
+    task: TASK,
+    claimedAt: "2026-11-19T00:00:00.000Z",
+    failedAt: "2026-11-19T00:10:00.000Z",
+    cause: "attempts" as const,
+    reason: "executor exited with code 3",
+    attempts: 3,
+    claimReleased: false,
+  };
+
+  it("writes the earlier format until a job is given up", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-failed-"));
+    saveState(stateDir, emptyState());
+    const plain = JSON.parse(readFileSync(path.join(stateDir, "state.json"), "utf8"));
+    expect(Object.keys(plain).sort()).toEqual(
+      ["agentIdHex", "openClaim", "submissions", "totalEarnedBaseline", "version"],
+    );
+
+    const state = emptyState();
+    state.failedJobs.push(failed);
+    state.consecutiveFailures = 1;
+    state.pause = { since: failed.failedAt, reason: failed.reason };
+    saveState(stateDir, state);
+    expect(loadState(stateDir)).toEqual(state);
+  });
+
+  it("refuses a given-up job it does not understand", () => {
+    for (const job of [
+      { ...failed, cause: "bored" },
+      { ...failed, reason: "two\nlines" },
+      { ...failed, attempts: -1 },
+      { ...failed, claimReleased: "no" },
+      { ...failed, extra: true },
+    ]) {
+      const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-failed-bad-"));
+      writeRaw(stateDir, { ...emptyState(), failedJobs: [job] });
+      expect(() => loadState(stateDir)).toThrow(WorkerStateError);
+    }
+  });
+
+  it("keeps every job whose claim is still out and only the newest others", () => {
+    const state = emptyState();
+    for (let index = 0; index < 250; index += 1) {
+      state.failedJobs.push({
+        ...failed,
+        claimReleased: index % 50 !== 0,
+        failedAt: new Date(Date.UTC(2026, 10, 19, 0, 0, index)).toISOString(),
+      });
+    }
+    pruneFailedJobs(state);
+    expect(state.failedJobs.filter((job) => !job.claimReleased)).toHaveLength(5);
+    expect(state.failedJobs.filter((job) => job.claimReleased)).toHaveLength(200);
+    expect(state.failedJobs.at(-1)?.failedAt).toBe("2026-11-19T00:04:09.000Z");
   });
 });

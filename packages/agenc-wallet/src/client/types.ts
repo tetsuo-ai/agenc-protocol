@@ -50,6 +50,8 @@ export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" 
 
 /** A service this agent offers for others to hire. */
 export interface OfferView {
+  /** Names this service in `earn.offer`; it stays the same for as long as the service is kept. */
+  id: string;
   /** The listing address once it exists. */
   listing: string | null;
   name: string;
@@ -82,15 +84,45 @@ export interface EarnView {
    * locked while the agent is registered.
    */
   setAside: Money;
-  /** The service this agent offers, or null when it only takes open jobs. */
+  /**
+   * The services this agent offers, oldest first. One the person took off
+   * offer stays here (`wanted` false) so it can be offered again. Empty when
+   * it only takes open jobs.
+   */
+  offers: OfferView[];
+  /** The first wanted service (else the first one), or null: for hosts that show one. */
   offer: OfferView | null;
   /**
-   * What putting a service on offer costs once: the deposits behind its
-   * permanent marketplace record and behind the safety check of its
-   * description, which are not returned. Null once this agent's service
-   * exists, or when the cost could not be read.
+   * What putting one more service on offer costs once: the deposits behind
+   * its permanent marketplace record and behind the safety check of its
+   * description, which are not returned. Null when it could not be read.
    */
   offerCost: Money | null;
+  /**
+   * What saving new words for a service already on the marketplace costs:
+   * the deposit behind a new safety check of its description and the fees,
+   * which are not returned. Paid each time the words change; a new price
+   * alone pays for no check. Null when it could not be read.
+   */
+  wordsCost: Money | null;
+  /**
+   * True once the person stopped this agent earning for good
+   * (`agents.retire`). It takes no jobs and offers nothing again; its money
+   * stays its own until the person takes it back.
+   */
+  retired: boolean;
+  /**
+   * Whether the agent can be stopped earning for good, which brings its
+   * deposit for taking jobs (`setAside`) back to its own money. Null when
+   * there is no deposit to bring back: it never took jobs, or it was stopped
+   * already. `refusal` is the sentence `agents.retire` refuses with whatever
+   * happens first (it still takes jobs, the marketplace suspended it, a
+   * reviewer has not settled one of its jobs), else null. Jobs it holds are
+   * judged only when asked, since asking first collects what it can (a
+   * delivery whose buyer went quiet, a lapsed hold): `agents.retire` can
+   * still refuse then.
+   */
+  retire: { refusal: string | null } | null;
 }
 
 export interface AgentView {
@@ -110,6 +142,13 @@ export interface AgentView {
   address: string;
   /** What the agent can still spend. */
   balance: Money;
+  /**
+   * False when the agent's balance has never been read: the network could
+   * not be reached and no earlier figure is kept, so `balance` says 0
+   * without knowing it. True for a figure read now or kept from an earlier
+   * read (`WalletOverview.offline` says whether it may be out of date).
+   */
+  balanceKnown: boolean;
   /** Money currently held in jobs this agent started. */
   held: Money;
   /** Lifetime total paid out to providers for this agent's jobs. */
@@ -123,8 +162,18 @@ export interface AgentView {
 
 export interface WalletOverview {
   network: WalletNetwork;
-  /** The main balance. Money is added here and handed out to agents. */
-  main: { address: string; balance: Money };
+  /**
+   * The main balance. Money is added here and handed out to agents. `spent`
+   * is what it paid out for requests the person posted from it; what agents
+   * pay is on each agent.
+   */
+  main: {
+    address: string;
+    balance: Money;
+    /** False when the main balance has never been read; see `AgentView.balanceKnown`. */
+    balanceKnown: boolean;
+    spent: Money;
+  };
   /** Everything currently held in running jobs, across all agents. */
   held: Money;
   agents: AgentView[];
@@ -146,6 +195,14 @@ export interface WalletOverview {
    * new agent), which that backup does not hold.
    */
   backup: { at: number | null; upToDate: boolean };
+  /**
+   * What posting a request from the main balance costs on top of its reward
+   * (`wallet.post`): `kept` is not returned (the permanent job record, the
+   * safety check of the request, the fees, and on a first job the record of
+   * how often this balance posts); `setAside` comes back when the job ends.
+   * Null until it has been read.
+   */
+  postCost: { kept: Money; setAside: Money } | null;
 }
 
 /** A service someone offers on the marketplace. */
@@ -228,10 +285,15 @@ export interface ProviderView {
   paid: Money;
   /** How many different buyers paid it. */
   buyers: number;
-  /** Deliveries of its that buyers turned down, as recorded with the marketplace. */
-  turnedDown: number;
-  /** Disputes about its work that it lost. */
-  disputesLost: number;
+  /**
+   * Deliveries of its that buyers turned down, as recorded with the
+   * marketplace. Null when no such record is kept for it: the marketplace
+   * keeps one only once someone pays to start it, so a missing record is not
+   * a clean one.
+   */
+  turnedDown: number | null;
+  /** Disputes about its work that it lost, from the same record. Null when none is kept. */
+  disputesLost: number | null;
   /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
   deposit: Money | null;
   /** Its other services on offer now. */
@@ -283,8 +345,15 @@ export interface JobView {
   id: string;
   /** "buying": this agent is paying. "working": this agent is doing the job. */
   role: "buying" | "working";
+  /**
+   * "hire": a service was hired. "request": a request was posted for anyone
+   * to take. It is public, pays the reward it was posted with, and has no
+   * provider until someone takes it.
+   */
+  kind: "hire" | "request";
+  /** The agent that pays, or "" for a request the person posted from the main balance. */
   agentId: string;
-  /** The service name. */
+  /** The service name, or a posted request's first words. */
   title: string;
   /** What was asked for. */
   request: string;
@@ -315,19 +384,29 @@ export interface JobView {
   rating: number | null;
   /** What leaving a rating costs (a permanent record), while `canRate`. */
   ratingCost: Money | null;
+  /**
+   * While the delivery can be turned down: whether turning it down goes on
+   * the provider's marketplace record. Only a record the provider already
+   * has is counted in; starting one would cost the buyer, so a provider
+   * without one gets none. Turning a delivery down costs its fee either way.
+   */
+  turnDownRecorded: boolean;
   receiptUrl: string | null;
   error: string | null;
 }
 
-/** A hire waiting for a person to say yes. */
+/** A hire, or a request an agent wants to post, waiting for a person to say yes. */
 export interface ApprovalView {
   id: string;
   jobId: string;
   agentId: string;
   agentName: string;
-  service: ServiceView;
+  /** "hire": the agent wants to hire `service`. "request": it wants to post a public request. */
+  kind: "hire" | "request";
+  /** The service to hire; null for a request. */
+  service: ServiceView | null;
   request: string;
-  /** What the provider is paid. */
+  /** What the provider is paid: the price, or the request's reward. */
   price: Money;
   /**
    * Refundable deposits and network fees set aside on top of the price. Most of

@@ -288,6 +288,10 @@ describe("e2e: one worker tick against the real program", () => {
       `agenc://result/sha256/${expectedHashHex}`,
     );
     expect(state.submissions[0]!.settled).toBe(false);
+    // The ledger names the job by its verified job spec; a direct task has
+    // no listing.
+    expect(state.submissions[0]!.title).toBe("haiku");
+    expect(state.submissions[0]!.listing).toBeUndefined();
 
     // Before acceptance no settlement is observed.
     expect(tick.settlements).toHaveLength(0);

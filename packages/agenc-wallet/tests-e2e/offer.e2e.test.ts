@@ -79,7 +79,9 @@ describe("offering a service", () => {
     // service and has it checked.
     const live = await offerReaches(world, worker.id, "live");
     expect(live.earn.offer!.statusText).toBe("On offer. Other agents can hire it.");
-    expect(live.earn.offerCost).toBeNull();
+    // What one more service would cost is still shown: an agent can offer several.
+    expect(live.earn.offerCost).not.toBeNull();
+    expect(live.earn.offers).toEqual([live.earn.offer]);
     const listing = live.earn.offer!.listing as Address;
     const onChain = (await readListing(sandbox.chain, listing))!;
     expect(onChain.price).toBe(30n * CENT);
@@ -306,11 +308,13 @@ describe("offering a service", () => {
     expect(found.summary).toBe("Two friendly lines about anything you name.");
     expect(found.price.usdCents).toBe(45);
 
+    const offerId = (await agentView(current, worker.id)).earn.offer!.id;
     await expect(
-      current.wallet.setOffer(worker.id, { ...LINE_WRITER, name: "Poem Writer" }),
+      current.wallet.setOffer(worker.id, { ...LINE_WRITER, name: "Poem Writer" }, offerId),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     // Still the same listing: nothing was created a second time.
-    expect((await agentView(current, worker.id)).earn.offer!.listing).toBe(listing);
+    const still = await agentView(current, worker.id);
+    expect(still.earn.offers.map((offer) => offer.listing)).toEqual([listing]);
   }, 120_000);
 
   it("can be withdrawn and offered again", async () => {
@@ -412,7 +416,7 @@ describe("offering a service", () => {
     await current.wallet.close();
     const file = path.join(current.dataDir, "state.json");
     const journal = JSON.parse(readFileSync(file, "utf8"));
-    delete journal.agents[created.id].earn.offer.specUri;
+    delete journal.agents[created.id].earn.offers[0].specUri;
     writeFileSync(file, JSON.stringify(journal));
     store.base = "https://descriptions.example/job-specs";
 

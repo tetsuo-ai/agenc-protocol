@@ -5,6 +5,42 @@ All notable changes to `@tetsuo-ai/agenc-worker` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- A failing job is no longer run again on every poll. Each failed attempt
+  waits longer before the next (one minute, then four), the job is given up
+  after three attempts with its reason kept in `failedJobs`, and three
+  given-up jobs in a row stop new claims until `clearWorkerPause` (only a
+  job one of whose tries ran its work counts). A job spec
+  or buyer's note that cannot be fetched (no answer, 5xx, 408, 429) only
+  waits, for at most six hours in a row (`maxFetchWaitMs`, counting only time
+  the worker was running); it does not use up an attempt
+  (`JobSpecUnreachableError`). A host that refuses for good (any
+  other 4xx) uses one up (`isDefiniteHttpRefusal`).
+- A delivery the buyer never reviews is auto-accepted by the worker once its
+  review window has passed, so the worker is paid.
+- The claim of a given-up job is expired or reclaimed by the worker, returning
+  its rent and freeing its active-task slot. An expiry is counted in the
+  agent's `AgentStats` only when that record already exists: the worker no
+  longer pays to start it.
+- Several deliveries paid between two looks are each reported with what they
+  earned instead of no amount at all. Anything beyond what they pay is kept
+  back only when it could be a waiting job's whole pay.
+
+### Added
+
+- Each job keeps its name (from its verified job spec) and, for a hire, its
+  listing from claim to ledger.
+- Runtime options `maxJobAttempts`, `retryDelayMs`, `maxFailedJobsInARow`,
+  `upkeepIntervalMs` and `maxFetchWaitMs`, and optional `clusterTime` and
+  `signal` context hooks. Aborting `signal` asks a job program in progress to
+  end with its process group (SIGTERM, so it can clean up after itself) and
+  kills what is left `ABORT_GRACE_MS` (2 s) later (`runExecutor`'s new
+  `signal` option, reason `aborted`), without counting a failed try, so a job
+  program no longer outlives a worker host that shuts down.
+
 ## 0.3.0
 
 This release depends on `@tetsuo-ai/marketplace-sdk@^0.13.0` and belongs to

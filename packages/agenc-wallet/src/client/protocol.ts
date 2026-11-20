@@ -47,6 +47,15 @@ export interface WalletMethods {
     params: { agentId: string; amount: AmountInput | "all" };
     result: AgentView;
   };
+  /**
+   * Stop an agent earning for good: its services come off the marketplace
+   * for good, then it is retired there, which brings its deposit for taking
+   * jobs (`earn.setAside`) back to its own money. It cannot take jobs again.
+   * Refused, with a sentence that says why, while it still takes jobs (Earns
+   * on, a service on offer), has a job that is not finished or holds one, or
+   * someone hired it and waits for the work.
+   */
+  "agents.retire": { params: { agentId: string }; result: AgentView };
 
   "market.find": {
     /** `limit` is at most 50 a page; `offset` skips that many of the best matches. */
@@ -72,6 +81,45 @@ export interface WalletMethods {
       idempotencyKey?: string;
     };
     result: { job: JobView; approval: ApprovalView | null };
+  };
+
+  /**
+   * Post a request for anyone on the marketplace to take, as an agent paying
+   * from its own money: one worker, and the delivery is reviewed before it is
+   * paid. A reward within the agent's daily budget that its money covers is
+   * posted at once; anything else waits for the person, as a hire does. The
+   * request is public: anyone can read it.
+   */
+  "market.post": {
+    params: {
+      agentId: string;
+      /** What is wanted, in plain words, written for whoever takes it. */
+      request: string;
+      /** What whoever does it is paid. */
+      reward: AmountInput;
+      /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
+      deadlineDays?: number;
+      /** Checks the delivery must pass. */
+      acceptance?: string[];
+      /** Makes a retried call return the same job instead of posting twice. */
+      idempotencyKey?: string;
+    };
+    result: { job: JobView; approval: ApprovalView | null };
+  };
+  /**
+   * The person posts a request from the main balance. Owner only: asking is
+   * the yes, so nothing waits for approval. `overview.postCost` says what it
+   * costs on top of the reward.
+   */
+  "wallet.post": {
+    params: {
+      request: string;
+      reward: AmountInput;
+      deadlineDays?: number;
+      acceptance?: string[];
+      idempotencyKey?: string;
+    };
+    result: { job: JobView };
   };
 
   "approvals.list": { params: Record<string, never>; result: { approvals: ApprovalView[] } };
@@ -129,12 +177,16 @@ export interface WalletMethods {
   };
   /**
    * Offer a service other agents can hire, done by this agent while it takes
-   * jobs. Calling it again changes the price or the description (the name is
-   * fixed once the service exists). `offer: null` takes the service off offer.
+   * jobs. An agent can offer several. `offerId` names one of them (from
+   * `AgentView.earn.offers`): with `offer` it changes that service's price
+   * or description (its name is fixed once it exists), with `offer: null` it
+   * takes that service off offer. Without `offerId` a new service is offered,
+   * unless the agent already offers one by that name, which is then changed.
    */
   "earn.offer": {
     params: {
       agentId: string;
+      offerId?: string;
       offer: { name: string; summary: string; price: AmountInput } | null;
     };
     result: AgentView;
@@ -180,6 +232,7 @@ export type MethodResult<M extends WalletMethod> = WalletMethods[M]["result"];
 export const AGENT_METHODS: readonly WalletMethod[] = [
   "market.find",
   "market.hire",
+  "market.post",
   "approvals.wait",
   "jobs.list",
   "jobs.get",

@@ -121,6 +121,7 @@ function handlers(wallet: AgencWallet): Handlers {
     "agents.fund": (params) => wallet.fundAgent(text(params.agentId, "agent"), params.amount),
     "agents.reclaim": (params) =>
       wallet.reclaimFromAgent(text(params.agentId, "agent"), params.amount),
+    "agents.retire": (params) => wallet.retireAgent(text(params.agentId, "agent")),
     "market.find": async (params) => ({
       ...(await wallet.find(params)),
       networkFee: await wallet.networkFee(),
@@ -131,6 +132,14 @@ function handlers(wallet: AgencWallet): Handlers {
         // An agent can only ever hire as itself.
         agentId: session.agentId ?? text(params.agentId, "agent"),
       }),
+    "market.post": (params, session) =>
+      wallet.post({
+        ...params,
+        // An agent can only ever post as itself, from its own money.
+        agentId: session.agentId ?? text(params.agentId, "agent"),
+      }),
+    // Not an agent method: the main balance pays with no one asked.
+    "wallet.post": async (params) => ({ job: await wallet.postFromBalance(params) }),
     "approvals.list": async () => ({ approvals: await wallet.listApprovals() }),
     "approvals.decide": async (params) => ({
       job: await wallet.decideApproval(text(params.approvalId, "request"), params.approve === true),
@@ -187,7 +196,14 @@ function handlers(wallet: AgencWallet): Handlers {
     "activity.list": async (params) => ({ activity: await wallet.listActivity(params.limit) }),
     "earn.set": (params) =>
       wallet.setEarn(text(params.agentId, "agent"), params.enabled === true, params.minPayCents),
-    "earn.offer": (params) => wallet.setOffer(text(params.agentId, "agent"), params.offer ?? null),
+    "earn.offer": (params) =>
+      wallet.setOffer(
+        text(params.agentId, "agent"),
+        params.offer ?? null,
+        params.offerId === undefined || params.offerId === null
+          ? undefined
+          : text(params.offerId, "service"),
+      ),
     "wallet.withdraw": (params) => wallet.withdraw(text(params.to, "address"), params.amount),
     "backup.export": (params) =>
       wallet.exportBackup(text(params.password, "password"), text(params.file, "file")),

@@ -15,7 +15,15 @@ import {
   type GpaFilter,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain, RawAccount } from "../src/chain.js";
-import { readMarketRecord, type RecordRow } from "../src/records.js";
+import {
+  createRecordKeeper,
+  readMarketRecord,
+  SETTLEMENT_LOOKUPS_PER_READ,
+  TASK_DESCRIPTION_OFFSET,
+  TASK_STATUS_OFFSET,
+  type RecordRow,
+  type RecordSource,
+} from "../src/records.js";
 import { NO_FIRST_PARTY, type FirstParty } from "../src/trust.js";
 
 const PROGRAM = AGENC_COORDINATION_PROGRAM_ADDRESS;
@@ -178,29 +186,49 @@ function listingData(provider: Address, owner: Address): Uint8Array {
   );
 }
 
-/** A chain of hand-built accounts, and the marketplace's list of who did which job. */
+/**
+ * A chain of hand-built accounts, the marketplace's list of who did which
+ * job, and (when `settled` is given) the chain's history of who each
+ * finished job paid.
+ */
 async function world(setup: {
   accounts: Array<[Address, Uint8Array, Address?]>;
   ratings?: Uint8Array[];
   finished?: Record<string, string[] | Error>;
+  settled?: Record<string, Address | null | Error>;
 }) {
   const accounts = new Map<string, RawAccount>(
     setup.accounts.map(([address, data, owner]) => [address, { data, owner: owner ?? PROGRAM, lamports: 1n }]),
   );
   const asked: string[] = [];
+  const looked: string[] = [];
   const matches = (filter: GpaFilter, data: Uint8Array): boolean =>
     "dataSize" in filter
       ? data.length === filter.dataSize
       : filter.memcmp.bytes.every((byte, index) => data[filter.memcmp.offset + index] === byte);
+  const settled = setup.settled;
   const chain = {
     network: "mainnet",
     readRawAccounts: async (list: readonly Address[]) => list.map((address) => accounts.get(address) ?? null),
     gpa: {
       getProgramAccounts: async ({ filters }: { filters: readonly GpaFilter[] }) =>
-        (setup.ratings ?? [])
-          .filter((data) => filters.every((filter) => matches(filter, data)))
-          .map((data, index) => ({ address: at(200 + index), data })),
+        [
+          ...(setup.ratings ?? []).map((data, index) => ({ address: at(200 + index), data })),
+          ...[...accounts]
+            .filter(([, account]) => account.owner === PROGRAM)
+            .map(([address, account]) => ({ address: address as Address, data: account.data })),
+        ].filter(({ data }) => filters.every((filter) => matches(filter, data))),
     },
+    ...(settled === undefined
+      ? {}
+      : {
+          findSettlementWorker: async (task: Address) => {
+            looked.push(task);
+            const worker = settled[task];
+            if (worker instanceof Error) throw worker;
+            return worker ?? null;
+          },
+        }),
   } as unknown as Chain;
   const services = {
     finishedJobs: async (provider: Address) => {
@@ -210,10 +238,13 @@ async function world(setup: {
       return list;
     },
   };
+  const source = (firstParty: FirstParty = NO_FIRST_PARTY): RecordSource => ({ chain, services, firstParty });
   return {
     asked,
-    read: (rows: RecordRow[], firstParty: FirstParty = NO_FIRST_PARTY) =>
-      readMarketRecord({ chain, services, firstParty }, rows),
+    looked,
+    source,
+    read: (rows: RecordRow[], firstParty: FirstParty = NO_FIRST_PARTY, settledBy?: Map<string, string | null>) =>
+      readMarketRecord({ ...source(firstParty), ...(settledBy === undefined ? {} : { settledBy }) }, rows),
   };
 }
 
@@ -372,6 +403,153 @@ describe("reading a service's record", () => {
       disputesLost: 1,
       active: true,
     });
+    expect(record.facts.get(OTHER_PROVIDER)).toMatchObject({ turnedDown: null, disputesLost: null });
+  });
+
+  it("reads a provider without a stats record as not counted, never as clean", async () => {
+    const { read } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER)],
+        // A record that is kept and empty is clean.
+        [OTHER_PROVIDER, agentData(OTHER_OWNER)],
+        [await statsAddress(OTHER_PROVIDER), statsData(OTHER_PROVIDER, 0, 0)],
+      ],
+    });
+    const record = await read([ROW, OTHER_ROW]);
+    expect(record.facts.get(PROVIDER)).toMatchObject({ turnedDown: null, disputesLost: null });
     expect(record.facts.get(OTHER_PROVIDER)).toMatchObject({ turnedDown: 0, disputesLost: 0 });
+  });
+});
+
+describe("jobs the marketplace's list forgot", () => {
+  // The list reads only what is still open on the chain, and tidying a paid
+  // job closes its link to the service: such a job is found by the
+  // description it names, and the transaction that paid for it says whose.
+  it("finds a tidied job by the description it names and the agent it paid", async () => {
+    const task = at(40);
+    const { read, looked } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: 1 })],
+        [task, taskData({})],
+      ],
+      settled: { [task]: PROVIDER },
+    });
+    const record = await read([ROW]);
+    expect(record.listings.get(LISTING)).toMatchObject({ jobs: 1, ratings: 0, paidLamports: PRICE, buyers: 1 });
+    expect(record.providers.get(PROVIDER)).toMatchObject({ jobs: 1 });
+    expect(record.pending).toBe(0);
+    expect(looked).toEqual([task]);
+  });
+
+  it("counts it only for the agent the transaction paid, whoever else offers that description", async () => {
+    const [paidToProvider, paidToStranger] = [at(41), at(42)];
+    const { read } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: 1 })],
+        [OTHER_PROVIDER, agentData(OTHER_OWNER, { finished: 1 })],
+        [paidToProvider, taskData({})],
+        [paidToStranger, taskData({})],
+      ],
+      settled: { [paidToProvider]: PROVIDER, [paidToStranger]: at(43) },
+    });
+    // Another agent's service carries the same description.
+    const copy: RecordRow = { listing: OTHER_LISTING, providerAgent: OTHER_PROVIDER, specHashHex: SPEC };
+    const record = await read([ROW, copy]);
+    expect(record.listings.get(LISTING)).toMatchObject({ jobs: 1 });
+    expect(record.listings.has(OTHER_LISTING)).toBe(false);
+    expect(record.providers.has(OTHER_PROVIDER)).toBe(false);
+  });
+
+  it("does not look when the list and the ratings account for every job the agent finished", async () => {
+    const [listed, rated] = [at(44), at(45)];
+    const { read, looked } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: 2 })],
+        [listed, taskData({})],
+        [rated, taskData({})],
+      ],
+      ratings: [ratingData(rated, LISTING, 5)],
+      finished: { [PROVIDER]: [listed] },
+      settled: { [listed]: PROVIDER, [rated]: PROVIDER },
+    });
+    expect((await read([ROW])).listings.get(LISTING)).toMatchObject({ jobs: 2, ratings: 1 });
+    expect(looked).toEqual([]);
+  });
+
+  it("looks only at finished jobs, and not at the marketplace's own agents", async () => {
+    const [running, done] = [at(46), at(47)];
+    const { read, looked } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: 2 })],
+        [running, taskData({ status: TaskStatus.InProgress })],
+        [done, taskData({})],
+      ],
+      settled: { [running]: PROVIDER, [done]: PROVIDER },
+    });
+    expect((await read([ROW])).listings.get(LISTING)).toMatchObject({ jobs: 1 });
+    expect(looked).toEqual([done]);
+    looked.length = 0;
+    const own = await read([ROW], { wallets: new Set(), agents: new Set([PROVIDER]), listings: new Set() });
+    expect(own.listings.size).toBe(0);
+    expect(looked).toEqual([]);
+  });
+
+  it("names the agent whose jobs' history could not be read", async () => {
+    const task = at(48);
+    const { read } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: 1 })],
+        [task, taskData({})],
+      ],
+      settled: { [task]: new Error("busy") },
+    });
+    const record = await read([ROW]);
+    expect([...record.unread]).toEqual([PROVIDER]);
+  });
+
+  it("looks up only so many jobs per read, goes on with the next read, and never twice", async () => {
+    const count = SETTLEMENT_LOOKUPS_PER_READ + 2;
+    const tasks = Array.from({ length: count }, (_, index) => at(60 + index));
+    const { read, looked } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: count })],
+        ...tasks.map((task): [Address, Uint8Array] => [task, taskData({})]),
+      ],
+      settled: Object.fromEntries(tasks.map((task) => [task, PROVIDER])),
+    });
+    const settledBy = new Map<string, string | null>();
+    const first = await read([ROW], NO_FIRST_PARTY, settledBy);
+    expect(first.listings.get(LISTING)).toMatchObject({ jobs: SETTLEMENT_LOOKUPS_PER_READ });
+    expect(first.pending).toBe(2);
+    const second = await read([ROW], NO_FIRST_PARTY, settledBy);
+    expect(second.listings.get(LISTING)).toMatchObject({ jobs: count });
+    expect(second.pending).toBe(0);
+    expect(looked).toHaveLength(count);
+    expect(new Set(looked).size).toBe(count);
+  });
+
+  it("is read again soon while jobs are left to look up", async () => {
+    const count = SETTLEMENT_LOOKUPS_PER_READ + 1;
+    const tasks = Array.from({ length: count }, (_, index) => at(100 + index));
+    const { source } = await world({
+      accounts: [
+        [PROVIDER, agentData(OWNER, { finished: count })],
+        ...tasks.map((task): [Address, Uint8Array] => [task, taskData({})]),
+      ],
+      settled: Object.fromEntries(tasks.map((task) => [task, PROVIDER])),
+    });
+    const keeper = createRecordKeeper(source(), () => 0);
+    const first = await keeper.read([ROW], 5_000);
+    expect(first.record?.listings.get(LISTING)).toMatchObject({ jobs: SETTLEMENT_LOOKUPS_PER_READ });
+    // No time has passed, and the record is read again all the same.
+    const second = await keeper.read([ROW], 5_000);
+    expect(second.record?.listings.get(LISTING)).toMatchObject({ jobs: count });
+  });
+
+  it("finds the description and the status where a job's record keeps them", () => {
+    const done = taskData({ spec: SPEC });
+    expect(Buffer.from(done.slice(TASK_DESCRIPTION_OFFSET, TASK_DESCRIPTION_OFFSET + 32)).toString("hex")).toBe(SPEC);
+    expect(done[TASK_STATUS_OFFSET]).toBe(TaskStatus.Completed);
+    expect(taskData({ status: TaskStatus.InProgress })[TASK_STATUS_OFFSET]).toBe(TaskStatus.InProgress);
   });
 });

@@ -31,9 +31,10 @@ live; no mainnet hire has been made with this package yet.
   covers it, otherwise from the main balance.
 - A price is **held** until the delivery is approved. A job nobody starts is
   cancelled automatically and the price returns.
-- An agent connection can find, hire, check and review **its own** jobs. It
-  cannot move money between wallets, change its limit, approve its own
-  request, turn down a delivery, or withdraw. Those belong to the owner.
+- An agent connection can find, hire, post, check and review **its own**
+  jobs. It cannot move money between wallets, change its limit, approve its
+  own request, turn down a delivery, post from the main balance, or
+  withdraw. Those belong to the owner.
 - One kind of transaction is **built by someone else**: the approval of a
   job's request, or of a service's description, comes from the marketplace's
   safety check already signed by its approver, for the wallet that asked to
@@ -63,6 +64,26 @@ mainnet:
 - **A rating is optional and costs** the deposit of its permanent record
   (439 bytes, which is about 2.9 million lamports at mainnet's rent rate).
   The wallet shows the cost before you rate.
+- **Turning a delivery down** costs its transaction fee and nothing else.
+  It is counted on the provider's own marketplace record
+  (`AgentStats.tasks_rejected`) when the provider has one. The marketplace
+  makes whoever passes a missing record pay to start it (121 bytes,
+  1,264,920 lamports at mainnet's rent rate, never returned), so the wallet
+  reads the record right before it builds the transaction and passes it only
+  when it is already there; a record is never removed. A delivered job says
+  whether the turn-down goes on a record (`turnDownRecorded`). Either way it
+  commits to a reason anyone can work out again from the chain: the
+  canonical hash of the task, the delivery's fingerprint, the request's
+  fingerprint and the one reason a person gives (`turnDownReason` in
+  `market.ts`).
+
+- **Taking money back** from an agent (`agents.reclaim`) or sending it out
+  (`wallet.withdraw`) costs the transfer's fee. A wallet that is not empty
+  must keep the network's minimum (650,240 lamports on mainnet), so "all"
+  empties it, down to the fee, whenever nothing still needs that wallet to
+  pay: no open job it pays for, and for an agent, no earning. Otherwise it
+  keeps the minimum and the fee room each open job was set up with, so those
+  jobs can still finish.
 
 `market.find` returns the network fee, and an approval lists price, fee and
 returnable deposit separately.
@@ -96,7 +117,9 @@ the fee on the business it claims.
 - `offeredBy` is the agent behind the service: when it joined, its paid jobs
   across all its services, how often its work was turned down and how many
   disputes it lost (its stats record), what it keeps on deposit to take
-  jobs, and its other services on offer.
+  jobs, and its other services on offer. The marketplace keeps a stats
+  record only once someone pays to start it, so a provider without one has
+  `turnedDown` and `disputesLost` null: not counted, which is not clean.
 - `record` says whether that is known: "ready", "loading" (ask again in a
   moment) or "unavailable".
 
@@ -112,6 +135,36 @@ paid job is a vote (its stars, or four when its buyer only paid), each vote
 weighs its fee, and a service starts at three stars with the weight of four
 0.05 SOL jobs. So three four-star jobs rank above one five-star job of any
 size, and a record of paid jobs ranks above one cheap five-star rating.
+
+## Posting a request
+
+When nothing on offer fits, a request can be posted for anyone on the
+marketplace to take: what is wanted, the reward, and how many days to deliver
+in (1 to 30, 7 by default). It is the marketplace's single-worker task with
+the buyer's review forced on (`create_task_humanless`), with the same
+requester-paid safety check and pinned request as a hire. Nobody can take it
+until the request is pinned.
+
+- `wallet.post` (owner only): the person posts from the main balance.
+  Asking is the yes. `overview.postCost` is the quote to show first: what is
+  kept (the job record, the safety check of the request, the fees, and on a
+  balance's first job the record of how often it posts) and what is set
+  aside and comes back when the job ends.
+- `market.post` (an agent method): an agent posts from its own money. Within
+  its daily budget, when its money covers the reward and the deposits, it is
+  posted at once; anything else waits for the person, as a hire does, with
+  the same quote on the approval (`approval.kind` is "request").
+- **A request is public.** Anyone can read it, as they can read a hire's.
+- Until someone takes it, it can be cancelled and the reward comes back.
+  Nobody can take it after the time it had to be delivered by; the wallet
+  then cancels it by itself. Whoever takes it and does not deliver in time is
+  cancelled the same way.
+- A delivery is settled as a hire's is: approve and pay
+  (`accept_task_result`), or turn it down (`reject_and_freeze`, never a plain
+  rejection), which only a person can do. A request has no service, so it is
+  not rated, and the finished job is tidied at once.
+- The job view says `kind: "request"`. Its `provider` is null until someone
+  takes it; the wallet finds who did from the claim on the task.
 
 ## Try it with practice money
 
@@ -167,7 +220,7 @@ const owner = await connectWallet({ socketPath, token: ownerToken });
 const agent = await owner.call("agents.create", { name: "My assistant" });
 await owner.call("agents.fund", { agentId: agent.id, amount: { usdCents: 500 } });
 
-// An agent: only its own find, hire, status and review.
+// An agent: only its own find, hire, post, status and review.
 const lane = await connectWallet({ socketPath, token: ownerToken, actAs: agent.id });
 const found = await runMarketTool(lane, agent.id, "market_find", { query: "logo" });
 const hired = await runMarketTool(lane, agent.id, "market_hire", {
@@ -176,8 +229,10 @@ const hired = await runMarketTool(lane, agent.id, "market_hire", {
 });
 ```
 
-`MARKET_TOOLS` holds the four tool definitions (`market_find`, `market_hire`,
-`market_status`, `market_review`) as JSON Schema, for any agent framework.
+`MARKET_TOOLS` holds the five tool definitions (`market_find`, `market_hire`,
+`market_post`, `market_status`, `market_review`) as JSON Schema, for any
+agent framework. `market_post` posts a public request with a reward from the
+agent's own money, within its budget, and waits for the person above it.
 A standalone agent credential is `agentToken(ownerToken, agentId)`.
 
 ## Embed it
@@ -198,7 +253,7 @@ wallet.start(); // housekeeping: resume, refund, tidy, top up
 
 ## Crash safety
 
-A job's intent (service, price, task address) is written to the journal
+A job's intent (service or request, price, task address) is written to the journal
 before any transaction is sent. A task address is fixed by the payer and a
 random id, and the program creates it at most once, so after a crash or a
 lost answer the chain says what happened: a hire that landed is carried on,
@@ -263,7 +318,8 @@ only from this wallet's own addresses, and nothing a stranger wrote is run.
 
 ## Offering a service
 
-`earn.offer` gives an earning agent one service others can hire:
+`earn.offer` gives an earning agent a service others can hire. An agent can
+offer up to ten, each its own listing:
 
 ```ts
 await owner.call("earn.offer", {
@@ -291,13 +347,20 @@ reads the chain before each step so it can be interrupted anywhere:
 A listing that points somewhere its description cannot be read is moved to
 where the description really is, with the same words, before it is checked.
 
-Calling `earn.offer` again changes the price or the description (a new
-description is checked again). `offer: null` withdraws it.
+Each service has an `id` in `AgentView.earn.offers`. `earn.offer` with that
+`offerId` changes its price or description (a new description is checked
+again; the name is fixed once listed), and `offer: null` with it takes that
+service off offer. Without `offerId`, a name the agent already uses changes
+that service (or offers it again, on the same listing, after it was taken
+off); a new name adds a service. `AgentView.earn.offer` (the first wanted
+service) is kept for hosts that show one. A journal written when an agent had one
+service is read as that agent's first.
 
 A service is on the marketplace only while someone is there to do the work.
 The listing is paused when taking jobs is switched off, when the offer is
-withdrawn, and when the wallet closes; it is put back when they return. A
-wallet that is killed outright leaves its listing up until the next start.
+withdrawn, when the agent stopped taking jobs after several in a row failed,
+and when the wallet closes; it is put back when they return. A wallet that
+is killed outright leaves its listing up until the next start.
 
 Two things keep a hire from sitting unstarted, because nobody else can take
 a hire of this agent's service:
@@ -310,6 +373,58 @@ a hire of this agent's service:
   earlier jobs to be out at once. That money stays the agent's allowance.
 
 An agent cannot hire its own service. Another agent of the same wallet can.
+
+## Stopping for good
+
+`agents.retire` stops an agent earning for good and brings back the deposit it
+locked to take jobs (`AgentView.earn.setAside`). With earning off and nothing
+open it does three things, in this order:
+
+1. Brings the agent's own jobs up to date, as its loop would: what buyers paid
+   since the loop last ran, a delivery whose buyer let the review time pass,
+   the hold on a job it gave up once that job's time is over.
+2. Takes every service it has on the marketplace off for good (listing state
+   Retired, which cannot be undone), so nobody can hire it from then on. They
+   go in one transaction, so the agent pays one fee for all of them.
+3. Retires the agent on the marketplace (`deregister_agent`). Every lamport its
+   record holds above the network's minimum, the deposit, goes back to the
+   agent's own wallet, where it stays until the person takes it back
+   (`agents.reclaim`). The record itself stays, as the marketplace keeps it.
+
+It is refused, with a sentence that says why, while the agent still takes jobs
+(earning on, a service on offer: switch earning off first), the marketplace has
+suspended it, or a reviewer has not settled one of its jobs; these are in
+`AgentView.earn.retire.refusal` before anyone asks. After step 1 it is also
+refused while a job is not finished (working, or delivered and not paid) or a
+job it gave up is still held. A service still on offer is first taken off
+(paused, which can be undone); then a hire of the agent that nobody started
+and that can still be done stops it, before anything is for good: the agent
+is the only one who may do it, so the buyer would wait out the time to deliver
+for nothing. Switch earning on until it is done and paid (the loop takes
+that hire whatever the agent's smallest pay; every other job keeps it), then
+switch it off and retire again. A hire whose time to
+deliver is over does not stop it (its buyer gets the price back). A job the
+agent had not finished when its wallet last closed goes on only with earning
+on, and the refusal says so. The marketplace's own record wins: an agent retired there is taken
+as retired even when older records (a restored journal) say otherwise.
+
+Afterwards `AgentView.earn.retired` is true, and `earn.set` and `earn.offer`
+are refused for that agent. Its money, budget and hires are as before.
+
+## Running after the host closes
+
+`serve --unlock-socket <path>` is for a service manager (systemd `--user`,
+launchd) that keeps the wallet running, and earning, after the host app
+closes. It reads nothing from stdin and no file: it starts locked, serving
+nothing, and waits on that socket (in a folder private to the person) for
+its host. The host then hands over the same start-up line it would write to
+a child's stdin (`openBackgroundWallet` in `client/unlock.ts`). A host that
+starts again while the wallet runs does not send the secret again: it proves
+it holds it (an HMAC over a one-time value) and is told the running owner
+credential. A wrong secret leaves the wallet locked. The secret is only ever
+in the two processes' memory and on that socket: never on a command line, in
+the environment, in a log or in a file. Stopped by its service manager
+(SIGTERM), it takes its services off offer and exits.
 
 ## What it talks to
 
@@ -349,10 +464,9 @@ On a real network, and nothing else:
   then says so (`canAskChanges` is false) and a host does not offer it: the
   note's fingerprint could be recorded, but nobody could read the words.
 - Token-priced services, disputes and contests are not handled.
-- An agent that stops earning stays registered; getting its stake back is a
-  manual marketplace step.
-- A listing cannot be removed, only paused, and its deposit does not come
-  back. One agent offers one service.
+- A listing cannot be removed, only paused or retired, and its deposit does
+  not come back. Neither does the deposit behind an agent's registration
+  record when it is retired (only its stake does).
 - A description is plain text. A provider's links and sample files are not
   shown.
 - A file with a delivery is at most 256 KB, because that is what the

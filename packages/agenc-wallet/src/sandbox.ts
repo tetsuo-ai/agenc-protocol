@@ -29,6 +29,7 @@ import {
   createMarketplaceClient,
   facade,
   findAgentPda,
+  findClaimPda,
   findHireRecordPda,
   findListingModerationPda,
   findProtocolConfigPda,
@@ -66,6 +67,7 @@ import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
+import { settlementOf } from "./settlement.js";
 import {
   buildJobSpec,
   decodeResultPointer,
@@ -124,8 +126,13 @@ export interface OpenJob {
   task: Address;
   /** The house buyer approves the delivery, paying whoever did the job. */
   approve(): Promise<void>;
-  /** The house buyer turns the delivery down, which puts the price on hold for review. */
-  turnDown(): Promise<void>;
+  /**
+   * The house buyer turns the delivery down, which puts the price on hold for
+   * review. Like any wallet it counts the turn-down only in a record the
+   * provider already has; with `payForRecord` it is a buyer who pays to start
+   * that record, which the marketplace lets anyone do.
+   */
+  turnDown(options?: { payForRecord?: boolean }): Promise<void>;
   /** True once someone has delivered and the job waits for approval. */
   delivered(): Promise<boolean>;
 }
@@ -312,24 +319,34 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   // litesvm cannot list accounts, so remember every address a transaction
   // names and answer program-account scans from that set.
   const known = new Set<Address>();
-  // Which agent each hire was for, remembered as the hire is made: the
-  // practice marketplace's own record of who did which job (the real one
-  // keeps it from the network's history). The link on the chain is closed
-  // when the job is tidied.
-  const hiredFrom = new Map<Address, Address>();
+  // Which agent each hire was for, and the hire's link on the chain,
+  // remembered as the hire is made: the practice marketplace's own list of
+  // who did which job. Like the real one, which reads only what is still
+  // open on the chain, it no longer names a job once that link is closed
+  // (when the job is tidied).
+  const hiredFrom = new Map<Address, { provider: Address; link: Address }>();
   const hireDiscriminator = Uint8Array.from(getHireRecordDiscriminatorBytes());
-  const rememberHire = (account: Address): void => {
+  /** The account's bytes when it is a live hire record, else null. */
+  const hireRecordData = (account: Address): Uint8Array | null => {
     const found = svm.getAccount(account);
-    if (!found || !found.exists || found.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return;
+    if (!found || !found.exists || found.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return null;
     const data = Uint8Array.from(found.data);
-    if (data.length < hireDiscriminator.length || hireDiscriminator.some((byte, index) => data[index] !== byte)) return;
+    if (data.length < hireDiscriminator.length || hireDiscriminator.some((byte, index) => data[index] !== byte)) return null;
+    return data;
+  };
+  const rememberHire = (account: Address): void => {
+    const data = hireRecordData(account);
+    if (data === null) return;
     try {
       const hire = getHireRecordDecoder().decode(data);
-      hiredFrom.set(hire.task, hire.designatedProvider);
+      hiredFrom.set(hire.task, { provider: hire.designatedProvider, link: account });
     } catch {
       // Not a hire record after all; nothing to remember.
     }
   };
+  // The agent each settled job paid, from the transactions that settled
+  // them: the history the live network keeps and litesvm does not.
+  const settledBy = new Map<Address, Address>();
   const gpa: ProgramAccountsTransport = {
     async getProgramAccounts({ filters }) {
       const out: Array<{ address: Address; data: Uint8Array }> = [];
@@ -357,6 +374,18 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         for (const account of message.staticAccounts) {
           known.add(account);
           rememberHire(account);
+        }
+        for (const instruction of "instructions" in message ? message.instructions : []) {
+          const programAddress = message.staticAccounts[instruction.programAddressIndex];
+          if (programAddress === undefined) continue;
+          const accounts = (instruction.accountIndices ?? []).map((index: number) => message.staticAccounts[index]);
+          if (accounts.some((account: Address | undefined) => account === undefined)) continue;
+          const settled = settlementOf({
+            programAddress,
+            accounts: accounts as Address[],
+            data: Uint8Array.from(instruction.data ?? []),
+          });
+          if (settled !== null) settledBy.set(settled.task, settled.worker);
         }
       } catch {
         // Indexing is best effort; the transaction itself succeeded.
@@ -406,6 +435,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return Number(svm.getClock().unixTimestamp);
     },
     gpa,
+    findSettlementWorker: async (task) => settledBy.get(task) ?? null,
   };
 
   const moderatorClient = chain.clientFor(market.moderator.signer);
@@ -538,7 +568,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return rows;
     },
     async finishedJobs(provider) {
-      return [...hiredFrom].filter(([, agent]) => agent === provider).map(([task]) => task);
+      return [...hiredFrom]
+        .filter(([, hire]) => hire.provider === provider && hireRecordData(hire.link) !== null)
+        .map(([task]) => task);
     },
     async trustedModerators() {
       return [];
@@ -885,8 +917,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           await sendApproval(chain, buyer, task, claim.worker);
         },
-        async turnDown() {
-          const { sendRejectAndFreeze } = await import("./market.js");
+        async turnDown(options = {}) {
+          const { providerRecordAddress, sendRejectAndFreeze } = await import("./market.js");
           const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
             "@tetsuo-ai/marketplace-sdk"
           );
@@ -899,13 +931,22 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .map((entry) => getTaskClaimDecoder().decode(entry.data))
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
-          await sendRejectAndFreeze(
-            chain,
-            buyer,
-            task,
-            claim.worker,
-            (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array,
-          );
+          const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
+          if (options.payForRecord !== true) {
+            await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
+            return;
+          }
+          const [claimAddress] = await findClaimPda({ task, bidder: claim.worker });
+          await chain.clientFor(buyer).send([
+            await facade.rejectAndFreeze({
+              task,
+              claim: claimAddress,
+              creator: buyer,
+              rejectionHash: reason,
+              agentStats: await providerRecordAddress(claim.worker),
+              systemProgram: SYSTEM_PROGRAM_ADDRESS,
+            }),
+          ]);
         },
       };
     },

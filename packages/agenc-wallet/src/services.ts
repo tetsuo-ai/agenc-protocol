@@ -93,13 +93,14 @@ export interface PublishListingInput {
 }
 
 export interface PublishJobInput {
-  /** The name of the service being hired. */
+  /** The name of the service being hired, or a posted request's own short title. */
   title: string;
   /** What the buyer wants done, in their words. */
   request: string;
   /** Checks the delivery has to pass. */
   acceptance: readonly string[];
-  listing: Address;
+  /** The service hired, or null for a request posted for anyone to take. */
+  listing: Address | null;
   /** The wallet that pays for the job. It signs the upload. */
   signer: KeyPairSigner;
 }
@@ -922,7 +923,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       const published = await publish(
         input.signer,
         {
-          title: `Hire: ${input.title}`,
+          title: jobTitle(input),
           summary: input.request,
           ...(input.request.length > JOB_SUMMARY_MAX ? { details: input.request } : {}),
           ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
@@ -1116,6 +1117,11 @@ const JOB_DELIVERABLE =
 /** The marketplace keeps this much of a request as its summary; the rest goes in the details. */
 const JOB_SUMMARY_MAX = 240;
 
+/** A hire is titled after the service; a posted request carries its own title. */
+function jobTitle(input: { title: string; listing: Address | null }): string {
+  return input.listing === null ? input.title : `Hire: ${input.title}`;
+}
+
 /**
  * A job's request in a plain shape, for a marketplace that has no publisher
  * of its own (the practice one). Deterministic for the same inputs. On a real
@@ -1126,15 +1132,16 @@ export function buildJobSpec(input: {
   title: string;
   request: string;
   acceptance: readonly string[];
-  listing: Address;
+  /** Null for a request posted for anyone to take. */
+  listing: Address | null;
 }): Record<string, unknown> {
   return {
     kind: "agenc.marketplace.jobSpec",
-    title: `Hire: ${input.title}`,
+    title: jobTitle(input),
     instructions: input.request,
     ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
     deliverable: JOB_DELIVERABLE,
-    sourceListing: input.listing,
+    ...(input.listing !== null ? { sourceListing: input.listing } : {}),
   };
 }
 

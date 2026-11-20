@@ -9,6 +9,42 @@ and this package follows [Semantic Versioning](https://semver.org/).
 
 First version. Not published.
 
+- `AgentView.balanceKnown` and `WalletOverview.main.balanceKnown` say
+  whether a balance was ever read. Offline the wallet still shows the last
+  figure it read; one it never read says 0, and these say that 0 is not
+  known.
+
+- `AgentView.earn.wordsCost` says what saving new words for a service
+  already on the marketplace costs, before the person saves them: the
+  deposit behind a new safety check of its description and the fees, which
+  are not returned. A new price alone pays for no check.
+
+- `agents.retire` stops an agent earning for good: its services leave the
+  marketplace for good, then it is retired there and its deposit for taking
+  jobs comes back to its own wallet. Refused, saying why, while it still
+  takes jobs or has a job that is not finished; `AgentView.earn.retire` says
+  so beforehand and `earn.retired` marks it afterwards.
+
+- An agent can offer several services (up to ten), each its own listing,
+  named by `id` in `AgentView.earn.offers` and changed or taken off offer one
+  at a time (`earn.offer` with `offerId`).
+- Earned jobs are named (the agent's own service, or the job's own title),
+  a paid one is announced as a `job` event, and two paid in one round are
+  both counted. An earned job's view carries a `listing` only when it came
+  through one of the agent's own services, so a host can tell the person's
+  own words from a stranger's.
+- A job the worker gave up shows as failed with why; an agent that stopped
+  after several failed jobs in a row says so and its services come off
+  offer until earning is switched on again.
+- A job's price or deposits coming back to the main balance are no longer
+  reported as money that arrived, even when the connection still shows the
+  balance from before for a moment: what came back is counted in only by a
+  look a minute or more later.
+- A job program in progress is killed when the wallet closes (stopped by its
+  host or service manager) instead of outliving it, and the job runs again on
+  the next start without a try used up. Switching an agent's earning off
+  still lets a job in progress finish.
+
 - A local wallet service: an encrypted key vault, one main balance, one
   wallet per agent, and a crash-safe journal of every job.
 - The buying side end to end: find, hire (from an allowance or after a
@@ -43,6 +79,12 @@ First version. Not published.
   deposit and other services, and ratings and paid jobs weighed by the fee
   each job paid, with the marketplace's own accounts left out. The list ranks
   by that record, and each service gives the marketplace's fee on its price.
+  A provider with no stats record has its turn-downs and lost disputes null
+  (no record kept), never zero.
+  A paid job nobody rated stays on the record after it is tidied: the
+  marketplace's list forgets a job once its link to the service is closed,
+  so such jobs are found on the chain by the description they name, and the
+  transaction that paid for each one says which agent did it.
 - A practice mode: the real marketplace program in-process with play money.
 - A service says what it is. The marketplace's list carries names and prices
   only, so the wallet reads each listing's own description from the address
@@ -50,6 +92,28 @@ First version. Not published.
   committed to, tidies it to plain text (what it is, what to send, what comes
   back, the provider's terms) and remembers it. `market.find` searches all of
   that, and answers one page with the total.
+- Posting a request for anyone to take, from the main balance (`wallet.post`,
+  owner only, with the quote in `overview.postCost`) or from an agent's own
+  money within its budget (`market.post`; above the budget the person
+  approves, as with a hire). It is a single-worker task with the buyer's
+  review on (`create_task_humanless`), the requester-paid safety check and a
+  pinned request; it appears in the jobs list like a hire
+  (`kind: "request"`), is cancelled by itself when nobody took it in time,
+  and is settled by approving or turning down the delivery. Agents post with
+  a fifth tool, `market_post`, which tells the model a request is public.
+- A delivery that is turned down commits to a reason anyone can work out
+  again (the hash of the task, the delivery, the request and why, instead of
+  a fingerprint of the wallet's own clock), and is counted on the provider's
+  marketplace record when it has one: the wallet reads the provider's
+  `AgentStats` right before building `reject_and_freeze` and passes it only
+  when it exists. It never starts one, which would cost the buyer. The job
+  says whether the turn-down goes on a record (`turnDownRecorded`).
+- "All" leaves nothing of the person's behind: taking an agent's money back
+  or sending the balance out empties the wallet, less the transfer's fee,
+  when nothing still needs it to pay, instead of keeping the network's
+  minimum there for good. A wallet with open jobs keeps the minimum and the
+  fee room of each, so they can still finish (a wallet left at exactly the
+  minimum could pay no fee at all).
 - Asking for changes is offered only where the note can reach the provider
   (`canAskChanges`): on a network with no message host the job does not
   offer it, to a person or to an agent.

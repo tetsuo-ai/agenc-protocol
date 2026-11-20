@@ -60,6 +60,7 @@ function statusText(
   now: number,
 ): string {
   const amount = formatMoney(price);
+  if (job.role === "buying" && job.kind === "request") return requestText(job, status, amount, now);
   if (job.role === "working") {
     switch (status) {
       case "working":
@@ -74,6 +75,8 @@ function statusText(
         return `Done. Your agent earned ${amount}.`;
       case "refunded":
         return "The buyer cancelled this job.";
+      case "failed":
+        return job.error ?? "Your agent could not do this job.";
       default:
         return "This job did not complete.";
     }
@@ -112,6 +115,42 @@ function statusText(
   }
 }
 
+/** The same, for a request posted for anyone to take. */
+function requestText(job: JobRecord, status: JobStatus, amount: string, now: number): string {
+  switch (status) {
+    case "needs_approval":
+      return `Waiting for you to approve ${amount}.`;
+    case "declined":
+      return "Not approved. Nothing was spent.";
+    case "starting":
+      return "Posting the request.";
+    case "waiting":
+      return job.autoRefundAt !== null
+        ? `Waiting for someone to take it. If nobody does, it is cancelled and the reward comes back ${formatWait(job.autoRefundAt, now)}.`
+        : "Waiting for someone to take it.";
+    case "working":
+      return "Someone took it and is working on it.";
+    case "changes_requested":
+      return "Changes were asked for. They are being made.";
+    case "delivered":
+      return job.reviewDeadlineAt !== null
+        ? `Delivered. Approve it to pay ${amount}. If nobody reviews it, it is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
+        : `Delivered. Approve it to pay ${amount}.`;
+    case "in_review":
+      return job.reviewDeadlineAt !== null
+        ? `You turned this down, so the reward is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, it is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
+        : "You turned this down, so the reward is on hold while it is reviewed.";
+    case "paid":
+      return `Done. ${amount} was paid for it.`;
+    case "refunded":
+      return job.error ?? "Cancelled. The reward came back.";
+    case "problem":
+      return job.error ?? "This job is in dispute on the marketplace.";
+    case "failed":
+      return job.error ?? "This did not go through. Nothing was spent.";
+  }
+}
+
 export function receiptUrlFor(job: JobRecord, network: string): string | null {
   const signature = job.signatures.accept;
   if (network !== "mainnet" || signature === undefined) return null;
@@ -138,10 +177,15 @@ export function jobView(
   const status = jobStatus(job);
   const price = money(job.priceLamports, context.usdPerSol);
   const buying = job.role === "buying";
-  const canRate = buying && status === "paid" && job.rating === null && !job.tidied;
+  const kind = job.kind ?? "hire";
+  // Only a hired service can be rated: a rating is kept on its listing.
+  const canRate = buying && kind === "hire" && status === "paid" && job.rating === null && !job.tidied;
+  // Turning a delivery down is a person's call.
+  const canTurnDown = buying && status === "delivered" && context.isOwner;
   return {
     id: job.id,
     role: job.role,
+    kind,
     agentId: job.agentId,
     title: job.title,
     request: job.request,
@@ -169,15 +213,40 @@ export function jobView(
       (status === "needs_approval" ||
         status === "waiting" ||
         // Turning down a delivery is a person's call, not an agent's.
-        (status === "delivered" && context.isOwner)),
+        canTurnDown),
     canRate,
     rating: job.rating,
     ratingCost:
       canRate && context.ratingCostLamports != null
         ? money(context.ratingCostLamports, context.usdPerSol)
         : null,
+    turnDownRecorded: canTurnDown && job.providerRecorded === true,
     receiptUrl: receiptUrlFor(job, context.network),
     error: job.error,
+  };
+}
+
+function savedService(
+  service: NonNullable<ApprovalRecord["service"]>,
+  usdPerSol: number | null,
+): ApprovalView["service"] {
+  // A request saved by an older version knows less about the service than
+  // the type says: those records are still on disk.
+  const saved: Partial<NonNullable<ApprovalRecord["service"]>> = service;
+  return {
+    ...service,
+    description: saved.description ?? null,
+    tags: saved.tags ?? [],
+    inputs: saved.inputs ?? [],
+    outputs: saved.outputs ?? [],
+    terms: saved.terms ?? [],
+    details: saved.details ?? (service.summary === null ? "unavailable" : "ready"),
+    marketFee: saved.marketFee ?? null,
+    // An older request counted its record another way: it says nothing now.
+    paid: saved.paid ?? money(0n, usdPerSol),
+    buyers: saved.buyers ?? 0,
+    record: saved.record ?? "unavailable",
+    offeredBy: saved.offeredBy ?? null,
   };
 }
 
@@ -186,29 +255,15 @@ export function approvalView(
   agentName: string,
   usdPerSol: number | null,
 ): ApprovalView {
-  // A request saved by an older version knows less about the service than
-  // the type says: those records are still on disk.
-  const saved: Partial<ApprovalRecord["service"]> = approval.service;
+  const kind = approval.kind ?? "hire";
   return {
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,
     agentName,
-    service: {
-      ...approval.service,
-      description: saved.description ?? null,
-      tags: saved.tags ?? [],
-      inputs: saved.inputs ?? [],
-      outputs: saved.outputs ?? [],
-      terms: saved.terms ?? [],
-      details: saved.details ?? (approval.service.summary === null ? "unavailable" : "ready"),
-      marketFee: saved.marketFee ?? null,
-      // An older request counted its record another way: it says nothing now.
-      paid: saved.paid ?? money(0n, usdPerSol),
-      buyers: saved.buyers ?? 0,
-      record: saved.record ?? "unavailable",
-      offeredBy: saved.offeredBy ?? null,
-    },
+    kind,
+    service:
+      kind === "request" || approval.service === null ? null : savedService(approval.service, usdPerSol),
     request: approval.request,
     price: money(approval.priceLamports, usdPerSol),
     deposits: money(approval.depositsLamports, usdPerSol),

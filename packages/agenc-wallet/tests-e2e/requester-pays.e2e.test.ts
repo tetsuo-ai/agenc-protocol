@@ -351,6 +351,60 @@ describe("the wallet pays for its own approvals", () => {
     expect(await world.balance(approver)).toBe(approverBefore);
   }, 60_000);
 
+  it("new words for a service on offer cost exactly what the view says, and a new price alone pays for no check", async () => {
+    world = await startWorld({
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('Done.')", "{prompt}"],
+          mode: "sandboxed" as const,
+          envAllowlist: [],
+          timeoutMs: 30_000,
+        },
+        pollIntervalMs: 150,
+      },
+    });
+    const { wallet, sandbox } = world;
+    const rent = (space: number) => sandbox.chain.getMinimumBalanceForRentExemption(space);
+    const worker = await wallet.createAgent("Worker");
+    const before = await wallet.setEarn(worker.id, true, 10);
+    // Known before anything is spent: a new check's deposit, its fee and the change's own fee.
+    expect(BigInt(before.earn.wordsCost!.lamports)).toBe(
+      (await rent(getListingModerationSize())) + 10_000n + BASE_FEE_LAMPORTS,
+    );
+    const words = { name: "Line Writer", summary: "One friendly line about anything you name.", price: { usdCents: 30 } };
+    await wallet.setOffer(worker.id, words);
+    const liveAgain = async (): Promise<AgentView> =>
+      eventually(async () => {
+        await wallet.tick();
+        const view = (await wallet.overview()).agents.find((entry) => entry.id === worker.id) as AgentView;
+        return view.earn.offer?.status === "live" ? view : null;
+      }, 30_000);
+    const live = await liveAgain();
+    const offerId = live.earn.offer!.id;
+    const main = (await wallet.overview()).main.address;
+    const mainBefore = await world.balance(main);
+
+    // A new price: the change's fee and nothing for a check.
+    const repricedFrom = await world.balance(worker.address);
+    await wallet.setOffer(worker.id, { ...words, price: { usdCents: 45 } }, offerId);
+    await liveAgain();
+    expect(repricedFrom - (await world.balance(worker.address))).toBe(BASE_FEE_LAMPORTS);
+
+    // The same words, tidied the same way, are not new words: nothing is sent at all.
+    const sameFrom = await world.balance(worker.address);
+    await wallet.setOffer(worker.id, { ...words, summary: `  ${words.summary}  `, price: { usdCents: 45 } }, offerId);
+    await liveAgain();
+    expect(await world.balance(worker.address)).toBe(sameFrom);
+
+    // New words: exactly the figure the view gave beforehand.
+    const rewordedFrom = await world.balance(worker.address);
+    await wallet.setOffer(worker.id, { ...words, summary: "Two friendly lines about anything you name.", price: { usdCents: 45 } }, offerId);
+    const reworded = await liveAgain();
+    expect(rewordedFrom - (await world.balance(worker.address))).toBe(BigInt(reworded.earn.wordsCost!.lamports));
+    // None of it came from the balance.
+    expect(await world.balance(main)).toBe(mainBefore);
+  }, 90_000);
+
   it("does not sign an approval that takes more than its deposit", async () => {
     const seen = { asked: 0 };
     const extra = 10n * CENT;

@@ -14,6 +14,11 @@
  * stops. The service therefore never outlives the app that owns the keys'
  * unlock secret.
  *
+ * With `--unlock-socket` the person's service manager starts `serve` instead,
+ * so it keeps running when the app closes. It then starts locked, holding
+ * nothing, until the app hands it the same line over that private socket
+ * (`client/unlock.ts`); it stops when the service manager signals it.
+ *
  * @module cli
  */
 import { randomBytes } from "node:crypto";
@@ -39,6 +44,8 @@ import { defaultSocketPath, serveWallet } from "./server.js";
 import { openDetailsCache } from "./listing-details.js";
 import { createHostedServices, type MarketServices } from "./services.js";
 import { restoreBackup } from "./backup.js";
+import { hideFromLog, logSafe } from "./log.js";
+import { listenForUnlock } from "./unlock-server.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 import { AgencWallet } from "./wallet.js";
 
@@ -47,6 +54,7 @@ const USAGE = `agenc-wallet — a wallet an agent can use but cannot drain
 USAGE
   agenc-wallet init   [--data-dir <dir>]
   agenc-wallet serve  [--data-dir <dir>] [--socket <path>] [--network <name>] [--rpc-url <url>]
+                      [--unlock-socket <path>]
   agenc-wallet status [--data-dir <dir>] [--socket <path>]
   agenc-wallet restore --file <backup> [--data-dir <dir>] [--network <name>]
 
@@ -57,6 +65,8 @@ NETWORKS
 SECRETS
   serve reads one JSON line from stdin: {"unlockSecret":"<base64>","ownerToken":"<text>"}.
   Without a pipe on stdin it reads <data-dir>/bootstrap.json, written by init.
+  With --unlock-socket it reads neither: it starts locked and waits for its
+  host to hand it that line over the socket (see client/unlock.ts).
   The unlock secret decrypts the keys; whoever holds it and the wallet folder
   holds the money. Prefer an OS keychain over the bootstrap file.
 
@@ -75,6 +85,9 @@ FLAGS
                      temp folder when that path is too long for a socket)
   --network <name>   mainnet | devnet | localnet | sandbox
   --rpc-url <url>    Solana RPC endpoint (default: the network's public one)
+  --unlock-socket <path>
+                     run under a service manager: start locked and wait for
+                     the host on this socket, in a folder private to you
   --help             this text
 `;
 
@@ -196,6 +209,8 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
 /** The endpoint a host named at start-up, when it is one this service can use. */
 function ownRpcUrl(bootstrap: Bootstrap): string | undefined {
   if (bootstrap.rpcUrl === undefined) return undefined;
+  // It usually carries an API key: never in this service's own log.
+  hideFromLog(bootstrap.rpcUrl);
   let url: URL;
   try {
     url = new URL(bootstrap.rpcUrl);
@@ -210,37 +225,26 @@ function ownRpcUrl(bootstrap: Bootstrap): string | undefined {
 }
 
 function log(line: string): void {
-  process.stderr.write(`${new Date().toISOString()} ${line}\n`);
+  process.stderr.write(`${new Date().toISOString()} ${logSafe(line)}\n`);
 }
 
-async function serve(values: Record<string, string | boolean | undefined>): Promise<number> {
-  const network = (values.network as WalletNetwork | undefined) ?? "mainnet";
-  if (!["mainnet", "devnet", "localnet", "sandbox"].includes(network)) {
-    throw new WalletError("BAD_REQUEST", `Unknown network: ${String(values.network)}`);
-  }
-  const baseDir = path.resolve((values["data-dir"] as string | undefined) ?? defaultDataDir());
-  // Each network keeps its own journal; play money never shares one with real.
-  const dataDir = path.join(baseDir, network === "sandbox" ? "practice" : network);
-  const socketPath =
-    values.socket === undefined
-      ? defaultSocketPath(baseDir)
-      : path.resolve(values.socket as string);
-  const bootstrapFile = path.join(baseDir, "bootstrap.json");
-  // A host that manages this service writes the start-up line to stdin and
-  // keeps the pipe open. Anything else (a terminal, a service manager with no
-  // stdin) uses the bootstrap file and runs until it is signalled.
-  const piped = process.stdin.isTTY ? "" : (await readStdinLine()).trim();
-  const hostManaged = piped.length > 0;
-  if (!hostManaged && !existsSync(bootstrapFile)) {
-    throw new WalletError(
-      "NOT_FOUND",
-      `No wallet has been set up in ${baseDir}. Run "agenc-wallet init" first.`,
-    );
-  }
-  const bootstrap = parseBootstrap(
-    hostManaged ? piped : readPrivateFile(bootstrapFile, 64 * 1024),
-  );
+/** A wallet open and served: what it takes to stop it again. */
+interface OpenService {
+  wallet: AgencWallet;
+  socketPath: string;
+  stop(): Promise<void>;
+}
 
+interface ServeTarget {
+  network: WalletNetwork;
+  dataDir: string;
+  socketPath: string;
+  rpcUrlFlag: string | undefined;
+}
+
+/** Open the wallet named by `bootstrap` and serve it on the target's socket. */
+async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<OpenService> {
+  const { network, dataDir } = target;
   let chain: Chain;
   let services: MarketServices;
   let prices: PriceSource;
@@ -257,7 +261,7 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
   } else {
     chain = createRpcChain({
       network,
-      rpcUrl: (values["rpc-url"] as string | undefined) ?? ownRpcUrl(bootstrap) ?? DEFAULT_RPC_URLS[network],
+      rpcUrl: target.rpcUrlFlag ?? ownRpcUrl(bootstrap) ?? DEFAULT_RPC_URLS[network],
       ...(bootstrap.computeUnitPrice !== undefined
         ? { computeUnitPrice: BigInt(bootstrap.computeUnitPrice) }
         : {}),
@@ -292,7 +296,7 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
   }
   const server = await serveWallet({
     wallet,
-    socketPath,
+    socketPath: target.socketPath,
     ownerToken: bootstrap.ownerToken,
     agentExists: (agentId) => wallet.hasAgent(agentId),
     log,
@@ -330,9 +334,57 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
         });
     }, 3_000);
   }
+  return {
+    wallet,
+    socketPath: server.socketPath,
+    stop: async () => {
+      if (houseTimer !== null) clearInterval(houseTimer);
+      await server.close();
+      // Pauses this wallet's services on the marketplace: nobody is left to
+      // do the work.
+      await wallet.close();
+    },
+  };
+}
+
+async function serve(values: Record<string, string | boolean | undefined>): Promise<number> {
+  const network = (values.network as WalletNetwork | undefined) ?? "mainnet";
+  if (!["mainnet", "devnet", "localnet", "sandbox"].includes(network)) {
+    throw new WalletError("BAD_REQUEST", `Unknown network: ${String(values.network)}`);
+  }
+  const baseDir = path.resolve((values["data-dir"] as string | undefined) ?? defaultDataDir());
+  // Each network keeps its own journal; play money never shares one with real.
+  const target: ServeTarget = {
+    network,
+    dataDir: path.join(baseDir, network === "sandbox" ? "practice" : network),
+    socketPath:
+      values.socket === undefined
+        ? defaultSocketPath(baseDir)
+        : path.resolve(values.socket as string),
+    rpcUrlFlag: values["rpc-url"] as string | undefined,
+  };
+  if (typeof values["unlock-socket"] === "string") {
+    return serveLocked(target, path.resolve(values["unlock-socket"]));
+  }
+  const bootstrapFile = path.join(baseDir, "bootstrap.json");
+  // A host that manages this service writes the start-up line to stdin and
+  // keeps the pipe open. Anything else (a terminal, a service manager with no
+  // stdin) uses the bootstrap file and runs until it is signalled.
+  const piped = process.stdin.isTTY ? "" : (await readStdinLine()).trim();
+  const hostManaged = piped.length > 0;
+  if (!hostManaged && !existsSync(bootstrapFile)) {
+    throw new WalletError(
+      "NOT_FOUND",
+      `No wallet has been set up in ${baseDir}. Run "agenc-wallet init" first.`,
+    );
+  }
+  const bootstrap = parseBootstrap(
+    hostManaged ? piped : readPrivateFile(bootstrapFile, 64 * 1024),
+  );
+  const open = await openService(target, bootstrap);
 
   process.stdout.write(
-    `${JSON.stringify({ ready: true, socket: server.socketPath, network, mainAddress: wallet.mainAddress })}\n`,
+    `${JSON.stringify({ ready: true, socket: open.socketPath, network, mainAddress: open.wallet.mainAddress })}\n`,
   );
 
   let stopping = false;
@@ -340,9 +392,7 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
     if (stopping) return;
     stopping = true;
     log(`stopping (${reason})`);
-    if (houseTimer !== null) clearInterval(houseTimer);
-    await server.close();
-    await wallet.close();
+    await open.stop();
     process.exit(0);
   };
   process.once("SIGINT", () => void stop("SIGINT"));
@@ -353,6 +403,52 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
     process.stdin.on("close", () => void stop("the host went away"));
     process.stdin.resume();
   }
+  return new Promise<number>(() => {});
+}
+
+/**
+ * Run under the person's service manager: hold nothing until the host hands
+ * over the start-up line on `unlockSocket`, then serve until signalled. The
+ * unlock secret is only ever in this process's memory.
+ */
+async function serveLocked(target: ServeTarget, unlockSocket: string): Promise<number> {
+  let open: OpenService | null = null;
+  let secret: Buffer | null = null;
+  let ownerToken: string | null = null;
+  const unlockServer = await listenForUnlock({
+    socketPath: unlockSocket,
+    unlock: async (startup) => {
+      const bootstrap = parseBootstrap(JSON.stringify(startup ?? null));
+      open = await openService(target, bootstrap);
+      secret = Buffer.from(bootstrap.unlockSecret, "base64");
+      ownerToken = bootstrap.ownerToken;
+      log("unlocked");
+      process.stdout.write(
+        `${JSON.stringify({ ready: true, socket: open.socketPath, network: target.network, mainAddress: open.wallet.mainAddress })}\n`,
+      );
+    },
+    opened: () =>
+      open === null || secret === null || ownerToken === null
+        ? null
+        : { unlockSecret: secret, ownerToken, socket: open.socketPath },
+    log,
+  });
+  process.stdout.write(
+    `${JSON.stringify({ locked: true, unlockSocket: unlockServer.socketPath, network: target.network })}\n`,
+  );
+
+  let stopping = false;
+  const stop = async (reason: string): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    log(`stopping (${reason})`);
+    await unlockServer.close();
+    if (open !== null) await open.stop();
+    secret?.fill(0);
+    process.exit(0);
+  };
+  process.once("SIGINT", () => void stop("SIGINT"));
+  process.once("SIGTERM", () => void stop("SIGTERM"));
   return new Promise<number>(() => {});
 }
 
@@ -464,6 +560,7 @@ async function main(): Promise<number> {
       socket: { type: "string" },
       network: { type: "string" },
       "rpc-url": { type: "string" },
+      "unlock-socket": { type: "string" },
       file: { type: "string" },
       help: { type: "boolean" },
     },

@@ -49,12 +49,15 @@ import type { AccountInfoReader } from "./account-reader.js";
 import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
 import {
   assertExecutorPromptFits,
+  ExecutorError,
   preflightExecutor,
   runExecutor,
 } from "./executor.js";
 import {
   fetchAndVerifyJobSpec,
+  isDefiniteHttpRefusal,
   JobSpecError,
+  JobSpecUnreachableError,
   type AccountReader,
   type UriFetcher,
   type VerifiedJobSpec,
@@ -70,17 +73,21 @@ import {
   bytesToHex,
   hexToBytes,
   loadState,
+  MAX_JOB_TITLE_CHARS,
   MAX_UNSETTLED_SUBMISSIONS,
   newAgentId,
   saveState,
   WorkerStateError,
+  MAX_FAILURE_REASON_CHARS,
   type ExecutionIntent,
+  type FailedJob,
   type OpenClaim,
   type SubmissionIntent,
   type SubmissionRecord,
   type WorkerState,
 } from "./state.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
+import { clusterNowSeconds, runUpkeep, type UpkeepMemory } from "./upkeep.js";
 
 /** One structured log event (a JSON line in the CLI). */
 export type WorkerLogEvent = { event: string } & Record<string, unknown>;
@@ -102,7 +109,57 @@ export type WorkerRuntimeConfig = Pick<
   | "endpoint"
   | "executorTimeoutMs"
   | "pollIntervalMs"
->;
+> & {
+  /**
+   * Attempts a job gets before it is given up: the work, its upload and its
+   * job spec each count when they fail. Default {@link DEFAULT_MAX_JOB_ATTEMPTS}.
+   */
+  maxJobAttempts?: number;
+  /**
+   * Wait before the second attempt; each later wait is four times longer, up
+   * to {@link MAX_RETRY_DELAY_MS}. Default {@link DEFAULT_RETRY_DELAY_MS}.
+   */
+  retryDelayMs?: number;
+  /**
+   * Jobs given up in a row before the worker stops taking new ones until
+   * {@link clearWorkerPause}. Default {@link DEFAULT_MAX_FAILED_JOBS_IN_A_ROW}.
+   */
+  maxFailedJobsInARow?: number;
+  /**
+   * How often the long-running loop auto-accepts overdue deliveries and
+   * releases unusable claims. Default every fourth poll.
+   */
+  upkeepIntervalMs?: number;
+  /**
+   * How long a job waits, in a row, for a job spec or a buyer's note that
+   * cannot be fetched before it is given up. Default
+   * {@link DEFAULT_MAX_FETCH_WAIT_MS}.
+   */
+  maxFetchWaitMs?: number;
+};
+
+/** A job is tried at most this many times before it is given up. */
+export const DEFAULT_MAX_JOB_ATTEMPTS = 3;
+/** Wait before the second attempt at a failed job. */
+export const DEFAULT_RETRY_DELAY_MS = 60_000;
+/** The longest wait between two attempts. */
+export const MAX_RETRY_DELAY_MS = 30 * 60_000;
+/** Jobs given up in a row before no new job is taken. */
+export const DEFAULT_MAX_FAILED_JOBS_IN_A_ROW = 3;
+/**
+ * How long a job waits for a job spec or a buyer's note that cannot be
+ * fetched. Bounded so a host that stays down, or a buyer who takes the job
+ * spec away, cannot hold the worker's one job for days.
+ */
+export const DEFAULT_MAX_FETCH_WAIT_MS = 6 * 60 * 60_000;
+/**
+ * A fetch failure this long after the one before cannot come from a worker
+ * that kept running (it never waits more than {@link MAX_RETRY_DELAY_MS}
+ * between tries, plus one poll): it was stopped, or the computer slept. That
+ * gap is left out of the waiting (its start moves forward by the gap), so
+ * time nobody could try is not counted and time spent trying still is.
+ */
+export const FETCH_RESUME_GAP_MS = 2 * MAX_RETRY_DELAY_MS;
 
 /** Everything the worker loop needs, injected (see cli.ts for the RPC wiring). */
 export type WorkerContext = {
@@ -153,6 +210,25 @@ export type WorkerContext = {
    * start. Static rent guesses are never used for a signed claim.
    */
   getMinimumBalanceForRentExemption?: (space: number) => Promise<bigint>;
+  /**
+   * The cluster's clock, unix seconds. Optional: without it the worker reads
+   * the Clock sysvar through `readAccount`, and failing that uses this
+   * computer's clock.
+   */
+  clusterTime?: () => Promise<number>;
+  /**
+   * Aborted when whoever runs the worker shuts down. A job program in
+   * progress is then killed at once instead of outliving it; that is not a
+   * failed try, and the job is run again on the next start. (`runUp`'s own
+   * signal only stops it looking for work: a job in progress finishes.)
+   */
+  signal?: AbortSignal;
+  /**
+   * Hires this worker owes, by task, with what each pays: taken whatever
+   * `minRewardLamports` says, since only this worker may do them and their
+   * buyers paid. Every other job still has to pay at least the floor.
+   */
+  owedTasks?: ReadonlyMap<string, bigint>;
 };
 
 /** The worker's on-chain identity. */
@@ -540,7 +616,7 @@ function passesLocalFilters(
   ) {
     return { ok: false, reason: "capabilities" };
   }
-  if (candidate.rewardAmount < config.minRewardLamports) {
+  if (candidate.rewardAmount < config.minRewardLamports && ctx.owedTasks?.has(candidate.task) !== true) {
     return { ok: false, reason: "below-min-reward" };
   }
   if (
@@ -555,11 +631,17 @@ function passesLocalFilters(
   ) {
     return { ok: false, reason: "creator-not-allowlisted" };
   }
+  if (state.pause !== null) {
+    return { ok: false, reason: "paused-after-failed-jobs" };
+  }
   if (state.openClaim !== null) {
     return { ok: false, reason: "already-holding-a-claim" };
   }
   if (state.submissions.some((record) => record.task === candidate.task)) {
     return { ok: false, reason: "already-worked" };
+  }
+  if (state.failedJobs.some((job) => job.task === candidate.task)) {
+    return { ok: false, reason: "already-given-up" };
   }
   return { ok: true };
 }
@@ -629,6 +711,8 @@ async function readTask(
  */
 type HireClaimBinding = {
   isHire: boolean;
+  /** The listing a hire was made from (null for a direct task). */
+  listing: Address | null;
   legacyListing: Address | null;
   rejection: "not-designated-provider" | null;
 };
@@ -646,12 +730,12 @@ async function hireBindingForClaim(
     // System-owned placeholder accepted by the on-chain program.
     data = await ctx.readAccount(hireRecordPda);
     if (data === null || data.byteLength === 0) {
-      return { isHire: false, legacyListing: null, rejection: null };
+      return { isHire: false, listing: null, legacyListing: null, rejection: null };
     }
   } else {
     const account = await ctx.readAccountInfo(hireRecordPda);
     if (account === null) {
-      return { isHire: false, legacyListing: null, rejection: null };
+      return { isHire: false, listing: null, legacyListing: null, rejection: null };
     }
     let accountData: unknown;
     let accountOwner: unknown;
@@ -679,7 +763,7 @@ async function hireBindingForClaim(
           `canonical hire account ${hireRecordPda} is System Program-owned but has non-empty data`,
         );
       }
-      return { isHire: false, legacyListing: null, rejection: null };
+      return { isHire: false, listing: null, legacyListing: null, rejection: null };
     }
     if (accountOwner !== AGENC_COORDINATION_PROGRAM_ADDRESS) {
       throw new Error(
@@ -711,12 +795,14 @@ async function hireBindingForClaim(
   ) {
     return {
       isHire: true,
+      listing: hireRecord.listing,
       legacyListing: null,
       rejection: "not-designated-provider",
     };
   }
   return {
     isHire: true,
+    listing: hireRecord.listing,
     legacyListing:
       hireRecord.designatedProvider === DEFAULT_ADDRESS
         ? hireRecord.listing
@@ -797,6 +883,322 @@ async function readSubmission(
 
 function hashHex(bytes: ArrayLike<number>): string {
   return Buffer.from(bytes).toString("hex");
+}
+
+/**
+ * What a job is called, from its verified job spec's `title`, as one short
+ * line of plain text: the creator's own words, so control and direction
+ * characters are dropped and it is cut to {@link MAX_JOB_TITLE_CHARS}.
+ */
+export function jobTitle(content: Uint8Array): string | undefined {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(content));
+  } catch {
+    return undefined;
+  }
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const title = (payload as { title?: unknown }).title;
+  if (typeof title !== "string") return undefined;
+  const line = title
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (line.length === 0) return undefined;
+  const characters = [...line];
+  return characters.length <= MAX_JOB_TITLE_CHARS
+    ? line
+    : `${characters.slice(0, MAX_JOB_TITLE_CHARS - 1).join("").trimEnd()}…`;
+}
+
+/** The fields of an in-flight marker that every later phase keeps. */
+function keptMarkerFields(
+  marker: OpenClaim,
+): Pick<
+  OpenClaim,
+  | "claimTransactionSignature"
+  | "revisionSubmissionCount"
+  | "title"
+  | "listing"
+  | "failures"
+  | "retryAt"
+  | "lastFailure"
+> {
+  return {
+    ...(marker.claimTransactionSignature !== undefined
+      ? { claimTransactionSignature: marker.claimTransactionSignature }
+      : {}),
+    ...(marker.revisionSubmissionCount !== undefined
+      ? { revisionSubmissionCount: marker.revisionSubmissionCount }
+      : {}),
+    ...(marker.title !== undefined ? { title: marker.title } : {}),
+    ...(marker.listing !== undefined ? { listing: marker.listing } : {}),
+    ...(marker.failures !== undefined ? { failures: marker.failures } : {}),
+    ...(marker.retryAt !== undefined ? { retryAt: marker.retryAt } : {}),
+    ...(marker.lastFailure !== undefined
+      ? { lastFailure: marker.lastFailure }
+      : {}),
+  };
+}
+
+/** A failure reason as one bounded line for the state file and the log. */
+function reasonLine(reason: string): string {
+  const line = reason
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const text = line.length === 0 ? "unknown failure" : line;
+  const characters = [...text];
+  return characters.length <= MAX_FAILURE_REASON_CHARS
+    ? text
+    : `${characters.slice(0, MAX_FAILURE_REASON_CHARS - 1).join("")}…`;
+}
+
+function retryDelayMs(ctx: WorkerContext, failures: number): number {
+  const base = Math.max(0, ctx.config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+  return Math.min(MAX_RETRY_DELAY_MS, base * 4 ** Math.max(0, failures - 1));
+}
+
+/**
+ * Move the in-flight job into the given-up ledger and free the worker for
+ * other work. The claim itself stays on the chain until it can be released.
+ */
+function giveUpJob(
+  ctx: WorkerContext,
+  state: WorkerState,
+  marker: OpenClaim,
+  details: {
+    cause: FailedJob["cause"];
+    reason: string;
+    rewardAmount?: string;
+    claimReleased: boolean;
+  },
+): FailedJob {
+  const reason = reasonLine(details.reason);
+  const rewardAmount =
+    details.rewardAmount ??
+    marker.execution?.rewardAmount ??
+    marker.submission?.rewardAmount;
+  const job: FailedJob = {
+    task: marker.task,
+    claimedAt: marker.claimedAt,
+    failedAt: new Date().toISOString(),
+    cause: details.cause,
+    reason,
+    attempts: marker.failures ?? 0,
+    ...(rewardAmount !== undefined ? { rewardAmount } : {}),
+    ...(marker.title !== undefined ? { title: marker.title } : {}),
+    ...(marker.listing !== undefined ? { listing: marker.listing } : {}),
+    claimReleased: details.claimReleased,
+  };
+  state.openClaim = null;
+  state.failedJobs = [
+    ...state.failedJobs.filter((entry) => entry.task !== job.task),
+    job,
+  ];
+  // Only a job whose work ran says something about this worker: one whose
+  // description could not be read, or that was too large to run, ran
+  // nothing, and a buyer cancelling is not the worker failing. A job counts
+  // when any of its tries ran its work, whatever its last failure was.
+  const ranWork =
+    marker.ranWork === true || marker.execution !== undefined || marker.submission !== undefined;
+  if (details.cause !== "cancelled" && ranWork) {
+    state.consecutiveFailures += 1;
+    const limit = Math.max(
+      1,
+      ctx.config.maxFailedJobsInARow ?? DEFAULT_MAX_FAILED_JOBS_IN_A_ROW,
+    );
+    if (state.pause === null && state.consecutiveFailures >= limit) {
+      state.pause = { since: job.failedAt, reason };
+    }
+  }
+  saveState(ctx.stateDir, state);
+  ctx.log({
+    event: "task.given-up",
+    task: job.task,
+    cause: job.cause,
+    attempts: job.attempts,
+    reason,
+    ...(job.title !== undefined ? { title: job.title } : {}),
+  });
+  if (state.pause !== null && state.pause.since === job.failedAt) {
+    ctx.log({
+      event: "worker.paused",
+      reason,
+      failedJobsInARow: state.consecutiveFailures,
+    });
+  }
+  return job;
+}
+
+/**
+ * Count one failed attempt at the in-flight job. Below the cap the next
+ * attempt waits (longer each time); at the cap the job is given up. A failed
+ * upload of finished work is never given up for: sending it again costs
+ * nothing, so it only waits, until the time to deliver runs out.
+ */
+function noteJobFailure(
+  ctx: WorkerContext,
+  task: Address,
+  reason: string,
+  options: {
+    finishedWork?: boolean;
+    rewardAmount?: bigint;
+    /** The work itself ran and failed (see `giveUpJob`). */
+    ranWork?: true;
+  } = {},
+): void {
+  const state = loadState(ctx.stateDir);
+  const found = state.openClaim;
+  if (found === null || found.task !== task) return;
+  const marker: OpenClaim = options.ranWork === true ? { ...found, ranWork: true } : found;
+  const failures = (marker.failures ?? 0) + 1;
+  const maxAttempts = Math.max(
+    1,
+    ctx.config.maxJobAttempts ?? DEFAULT_MAX_JOB_ATTEMPTS,
+  );
+  const line = reasonLine(reason);
+  if (failures >= maxAttempts && options.finishedWork !== true) {
+    giveUpJob(ctx, state, { ...marker, failures, lastFailure: line }, {
+      cause: "attempts",
+      reason: line,
+      ...(options.rewardAmount !== undefined
+        ? { rewardAmount: options.rewardAmount.toString() }
+        : {}),
+      claimReleased: false,
+    });
+    return;
+  }
+  const retryAt = new Date(Date.now() + retryDelayMs(ctx, failures)).toISOString();
+  state.openClaim = { ...marker, failures, retryAt, lastFailure: line };
+  saveState(ctx.stateDir, state);
+  ctx.log({
+    event: "task.retry-scheduled",
+    task,
+    attempt: failures,
+    maxAttempts,
+    retryAt,
+    reason: line,
+  });
+}
+
+/**
+ * What a job needs from elsewhere (its job spec, the buyer's note) could not
+ * be fetched: a host or the network is down, which says nothing about the
+ * job. Wait, longer each time, without using up one of its attempts; the job
+ * is still given up once its time to deliver runs out.
+ */
+function noteJobWait(
+  ctx: WorkerContext,
+  task: Address,
+  what: "the job spec" | "the buyer's note",
+  reason: string,
+  rewardAmount: bigint,
+): void {
+  const state = loadState(ctx.stateDir);
+  const marker = state.openClaim;
+  if (marker === null || marker.task !== task) return;
+  const line = reasonLine(`${what} could not be fetched: ${reason}`);
+  const now = Date.now();
+  const last =
+    marker.lastFetchFailureAt === undefined ? Number.NaN : Date.parse(marker.lastFetchFailureAt);
+  // A gap no running worker leaves: it was stopped or the computer slept.
+  // That time does not count (the start of the waiting moves forward by it,
+  // so the time spent trying before it still does), and the waits start
+  // short again.
+  const resumed =
+    Number.isFinite(last) && now - last > FETCH_RESUME_GAP_MS + ctx.config.pollIntervalMs;
+  const fetchWaits = resumed ? 1 : (marker.fetchWaits ?? 0) + 1;
+  const lastFetchFailureAt = new Date(now).toISOString();
+  const since =
+    marker.fetchFailingSince === undefined ? Number.NaN : Date.parse(marker.fetchFailingSince);
+  const fetchFailingSince = Number.isFinite(since)
+    ? new Date(since + (resumed ? now - last : 0)).toISOString()
+    : lastFetchFailureAt;
+  const limitMs = Math.max(0, ctx.config.maxFetchWaitMs ?? DEFAULT_MAX_FETCH_WAIT_MS);
+  if (now - Date.parse(fetchFailingSince) >= limitMs) {
+    // The detail stays in the log: a timeout in it would read as the work
+    // taking too long.
+    const hours = Math.max(1, Math.round(limitMs / 3_600_000));
+    giveUpJob(ctx, state, { ...marker, lastFailure: line }, {
+      cause: "attempts",
+      reason: `${what} could not be fetched for ${hours} hour${hours === 1 ? "" : "s"}`,
+      rewardAmount: rewardAmount.toString(),
+      claimReleased: false,
+    });
+    return;
+  }
+  const retryAt = new Date(now + retryDelayMs(ctx, fetchWaits)).toISOString();
+  state.openClaim = {
+    ...marker,
+    fetchWaits,
+    fetchFailingSince,
+    lastFetchFailureAt,
+    retryAt,
+    lastFailure: line,
+  };
+  saveState(ctx.stateDir, state);
+  ctx.log({
+    event: "task.fetch-wait-scheduled",
+    task,
+    waits: fetchWaits,
+    retryAt,
+    reason: line,
+  });
+}
+
+/**
+ * Whether the buyer's note failed to arrive (no answer, or a host down or
+ * busy), rather than arriving wrong or being refused for good.
+ */
+function noteUnreachable(error: unknown): boolean {
+  return (
+    error instanceof taskThread.ContentTransportError &&
+    (error.status < 200 || error.status >= 300) &&
+    !isDefiniteHttpRefusal(error.status)
+  );
+}
+
+/** Everything the job needs was fetched: its fetch waits start over. */
+function clearFetchWaits(ctx: WorkerContext, task: Address): void {
+  const state = loadState(ctx.stateDir);
+  const marker = state.openClaim;
+  if (marker === null || marker.task !== task) return;
+  if (
+    marker.fetchWaits === undefined &&
+    marker.fetchFailingSince === undefined &&
+    marker.lastFetchFailureAt === undefined
+  ) {
+    return;
+  }
+  const {
+    fetchWaits: _waits,
+    fetchFailingSince: _since,
+    lastFetchFailureAt: _last,
+    ...rest
+  } = marker;
+  state.openClaim = rest;
+  saveState(ctx.stateDir, state);
+}
+
+/**
+ * Let the worker take new jobs again after it stopped because several jobs
+ * in a row failed. For whoever runs it to call once the cause is dealt with.
+ * Returns true when there was a pause to clear.
+ */
+export function clearWorkerPause(stateDir: string): boolean {
+  const releaseLock = acquireStateLock(stateDir);
+  try {
+    const state = loadState(stateDir);
+    if (state.pause === null && state.consecutiveFailures === 0) return false;
+    const paused = state.pause !== null;
+    state.pause = null;
+    state.consecutiveFailures = 0;
+    saveState(stateDir, state);
+    return paused;
+  } finally {
+    releaseLock();
+  }
 }
 
 /** Pending/accepted means the submission transaction definitively landed. */
@@ -933,6 +1335,9 @@ function restoreRevisionRound(
 ): void {
   const state = loadState(ctx.stateDir);
   const priorMarker = state.openClaim?.task === task ? state.openClaim : null;
+  const priorRecord = state.submissions.find((record) => record.task === task);
+  const title = priorMarker?.title ?? priorRecord?.title;
+  const listing = priorMarker?.listing ?? priorRecord?.listing;
   state.submissions = state.submissions.filter(
     (record) => record.task !== task,
   );
@@ -944,6 +1349,8 @@ function restoreRevisionRound(
       ? { claimTransactionSignature: priorMarker.claimTransactionSignature }
       : {}),
     revisionSubmissionCount: submission.submissionCount,
+    ...(title !== undefined ? { title } : {}),
+    ...(listing !== undefined ? { listing } : {}),
   };
   saveState(ctx.stateDir, state);
   ctx.log({
@@ -982,7 +1389,10 @@ function commitSubmission(
   }
   // Clear the WAL only after capacity has been established. A capacity error
   // leaves the exact landed-submission intent available to recovery.
+  const marker = state.openClaim?.task === task ? state.openClaim : null;
   state.openClaim = null;
+  // A delivered job ends a run of failed ones.
+  state.consecutiveFailures = 0;
   const record: SubmissionRecord = {
     task: task as string,
     submissionSignature: options.signature,
@@ -991,6 +1401,8 @@ function commitSubmission(
     rewardAmount: intent.rewardAmount,
     submittedAt: options.submittedAt ?? new Date().toISOString(),
     settled: false,
+    ...(marker?.title !== undefined ? { title: marker.title } : {}),
+    ...(marker?.listing !== undefined ? { listing: marker.listing } : {}),
   };
   state.submissions.push(record);
   saveState(ctx.stateDir, state);
@@ -1125,12 +1537,7 @@ async function continueExecutedResult(
       task: task as string,
       claimedAt: marker.claimedAt,
       phase: "uploading",
-      ...(marker.claimTransactionSignature !== undefined
-        ? { claimTransactionSignature: marker.claimTransactionSignature }
-        : {}),
-      ...(marker.revisionSubmissionCount !== undefined
-        ? { revisionSubmissionCount: marker.revisionSubmissionCount }
-        : {}),
+      ...keptMarkerFields(marker),
       execution,
     };
     saveState(ctx.stateDir, uploadingState);
@@ -1145,6 +1552,9 @@ async function continueExecutedResult(
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.upload-failed", task, reason });
+      noteJobFailure(ctx, task, `upload failed: ${reason}`, {
+        finishedWork: true,
+      });
       return { status: "execution-failed", task, reason };
     }
   } else {
@@ -1166,12 +1576,7 @@ async function continueExecutedResult(
     task: task as string,
     claimedAt: marker.claimedAt,
     phase: "submitting",
-    ...(marker.claimTransactionSignature !== undefined
-      ? { claimTransactionSignature: marker.claimTransactionSignature }
-      : {}),
-    ...(marker.revisionSubmissionCount !== undefined
-      ? { revisionSubmissionCount: marker.revisionSubmissionCount }
-      : {}),
+    ...keptMarkerFields(marker),
     submission: intent,
   };
   saveState(ctx.stateDir, submittingState);
@@ -1194,11 +1599,19 @@ async function executeAndSubmit(
       timeoutMs: ctx.config.executorTimeoutMs,
       envAllowlist: ctx.config.executorEnvAllowlist,
       unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     });
     stdout = result.stdout;
   } catch (error) {
     const reason = formatDiagnosticError(error);
+    if (error instanceof ExecutorError && error.detail.reason === "aborted") {
+      // Stopped from outside, not the job failing: nothing is counted and the
+      // open claim is picked up again on the next start.
+      ctx.log({ event: "task.execution-stopped", task });
+      return { status: "execution-failed", task, reason };
+    }
     ctx.log({ event: "task.execution-failed", task, reason });
+    noteJobFailure(ctx, task, reason, { rewardAmount: decodedTask.rewardAmount, ranWork: true });
     return { status: "execution-failed", task, reason };
   }
 
@@ -1218,12 +1631,7 @@ async function executeAndSubmit(
     task: task as string,
     claimedAt: marker.claimedAt,
     phase: "executed",
-    ...(marker.claimTransactionSignature !== undefined
-      ? { claimTransactionSignature: marker.claimTransactionSignature }
-      : {}),
-    ...(marker.revisionSubmissionCount !== undefined
-      ? { revisionSubmissionCount: marker.revisionSubmissionCount }
-      : {}),
+    ...keptMarkerFields(marker),
     execution,
   };
   saveState(ctx.stateDir, executedState);
@@ -1361,11 +1769,17 @@ export async function processCandidate(
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
   // reconciles the canonical claim PDA before considering another task.
+  const title = jobTitle(verified.content);
+  const labels = {
+    ...(title !== undefined ? { title } : {}),
+    ...(hireBinding.listing !== null ? { listing: hireBinding.listing as string } : {}),
+  };
   const claimingState = loadState(ctx.stateDir);
   claimingState.openClaim = {
     task: task as string,
     claimedAt: claimStartedAt,
     phase: "claiming",
+    ...labels,
   };
   saveState(ctx.stateDir, claimingState);
 
@@ -1391,9 +1805,10 @@ export async function processCandidate(
       task: task as string,
       claimedAt: claimStartedAt,
       phase: "claimed",
+      ...labels,
     };
     saveState(ctx.stateDir, claimedState);
-    ctx.log({ event: "task.claimed", task, signature, parentTask });
+    ctx.log({ event: "task.claimed", task, signature, parentTask, ...labels });
   } catch (error) {
     const reason = redactSensitiveText(
       error instanceof AgencError
@@ -1424,6 +1839,7 @@ export async function processCandidate(
           ...(ambiguousSignature !== undefined
             ? { claimTransactionSignature: ambiguousSignature }
             : {}),
+          ...labels,
         };
         saveState(ctx.stateDir, recoveredState);
         ctx.log({
@@ -1650,14 +2066,66 @@ export async function resumeOpenClaim(
   if (canonicalLifecycleGone) {
     ctx.log({ event: "task.open-claim-gone", task });
     const clearedState = loadState(ctx.stateDir);
-    if (clearedState.openClaim?.task === task) clearedState.openClaim = null;
-    saveState(ctx.stateDir, clearedState);
+    const current = clearedState.openClaim;
+    if (current?.task === task) {
+      if (current.phase === "claiming") {
+        // The claim never landed: this was never the worker's job.
+        clearedState.openClaim = null;
+        saveState(ctx.stateDir, clearedState);
+      } else {
+        // The worker held this job and it ended before anything was
+        // delivered: its claim ran out and the task reopened, or the task
+        // was cancelled. Keep it, with why, instead of dropping it.
+        const reopened = decodedTask?.status === TaskStatus.Open;
+        giveUpJob(ctx, clearedState, current, {
+          cause: reopened ? "expired" : "cancelled",
+          reason: reopened
+            ? "the claim ran out before the work was delivered"
+            : "the task ended before the work was delivered",
+          ...(decodedTask !== null
+            ? { rewardAmount: decodedTask.rewardAmount.toString() }
+            : {}),
+          claimReleased: true,
+        });
+      }
+    }
     return null;
   }
   if (claim === null || decodedTask === null) {
     const reason = `incoherent canonical reads: task=${decodedTask === null ? "null" : decodedTask.status}, claim=${claim === null ? "null" : "present"}`;
     ctx.log({ event: "task.chain-state-incoherent", task, reason });
     return { status: "execution-failed", task, reason };
+  }
+  if (!ctx.dryRun) {
+    // Out of time: the work can no longer be delivered, so trying again
+    // would only spend. The claim is released once it can be. A result
+    // already being submitted is given until its claim runs out, since a
+    // landed submission was handled above.
+    const now = await clusterNowSeconds(ctx);
+    const deliverBy = Number(decodedTask.deadline);
+    const claimEnds = Number(claim.expiresAt);
+    if (
+      (marker.phase !== "submitting" && deliverBy > 0 && now > deliverBy) ||
+      (claimEnds > 0 && now > claimEnds)
+    ) {
+      giveUpJob(ctx, loadState(ctx.stateDir), marker, {
+        cause: "expired",
+        reason: "the time to deliver ran out",
+        rewardAmount: decodedTask.rewardAmount.toString(),
+        claimReleased: false,
+      });
+      return null;
+    }
+    // After a failed attempt the next one waits its turn.
+    const retryAt =
+      marker.retryAt === undefined ? Number.NaN : Date.parse(marker.retryAt);
+    if (marker.phase !== "submitting" && Number.isFinite(retryAt) && Date.now() < retryAt) {
+      return {
+        status: "execution-failed",
+        task,
+        reason: `waiting to try again at ${marker.retryAt}`,
+      };
+    }
   }
   ctx.log({ event: "task.resuming-open-claim", task });
   if (ctx.dryRun) {
@@ -1721,6 +2189,13 @@ export async function resumeOpenClaim(
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.revision-feedback-unavailable", task, reason });
+      if (noteUnreachable(error)) {
+        noteJobWait(ctx, task, "the buyer's note", reason, decodedTask.rewardAmount);
+      } else {
+        noteJobFailure(ctx, task, `the buyer's note could not be read: ${reason}`, {
+          rewardAmount: decodedTask.rewardAmount,
+        });
+      }
       return { status: "execution-failed", task, reason };
     }
   }
@@ -1737,8 +2212,16 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.job-spec-rejected", task, reason });
+    if (error instanceof JobSpecUnreachableError) {
+      noteJobWait(ctx, task, "the job spec", reason, decodedTask.rewardAmount);
+    } else {
+      noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
+        rewardAmount: decodedTask.rewardAmount,
+      });
+    }
     return { status: "execution-failed", task, reason };
   }
+  clearFetchWaits(ctx, task);
   let prompt: string;
   try {
     const description = decodeTaskDescription(
@@ -1749,6 +2232,9 @@ export async function resumeOpenClaim(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.prompt-rejected", task, reason });
+    noteJobFailure(ctx, task, `the job is too large to run: ${reason}`, {
+      rewardAmount: decodedTask.rewardAmount,
+    });
     return { status: "execution-failed", task, reason };
   }
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
@@ -1767,8 +2253,9 @@ export type SettlementReport = {
 /**
  * Reconcile tracked submissions against on-chain task state. Earnings are
  * measured from the agent's on-chain `totalEarned` delta since the last
- * reconciliation — exact when one settlement landed in the window (the common
- * one-claim-at-a-time case), reported as a combined delta otherwise.
+ * reconciliation. When several settlements land in one window the delta is
+ * divided by each task's own terms (`shareEarnings`), so every paid job is
+ * reported with what it earned.
  */
 export async function checkSettlements(
   ctx: WorkerContext,
@@ -1782,12 +2269,23 @@ export async function checkSettlements(
     record: SubmissionRecord;
     outcome: NonNullable<SubmissionRecord["outcome"]>;
     solDenominated: boolean;
+    /** What the task's own terms pay this worker (paid SOL outcomes only). */
+    payout?: bigint;
   }> = [];
   let revisionRestored = false;
   let stateChanged = false;
+  // What each tracked job adds to the agent's on-chain total once it is paid
+  // (null when its task could not be read; absent when its pay never shows
+  // there), to tell a waiting job's pay from a small extra.
+  const wouldPay = new Map<SubmissionRecord, bigint | null>();
   for (const record of pending) {
     const task = record.task as Address;
     const decodedTask = await readTask(ctx, task);
+    if (decodedTask === null) {
+      wouldPay.set(record, recordedReward(record));
+    } else if (unwrapOption(decodedTask.rewardMint) === null) {
+      wouldPay.set(record, expectedWorkerPayout(decodedTask));
+    }
     const submittedAt = Date.parse(record.submittedAt);
     const insideReconciliationGrace =
       Number.isFinite(submittedAt) &&
@@ -1832,6 +2330,8 @@ export async function checkSettlements(
           claimedAt: claimTimestamp(claim, record.submittedAt),
           phase: "claimed",
           revisionSubmissionCount: submission.account.submissionCount,
+          ...(record.title !== undefined ? { title: record.title } : {}),
+          ...(record.listing !== undefined ? { listing: record.listing } : {}),
         };
         revisionRestored = true;
         stateChanged = true;
@@ -1859,6 +2359,7 @@ export async function checkSettlements(
           record,
           outcome: "accepted",
           solDenominated: unwrapOption(decodedTask.rewardMint) === null,
+          payout: expectedWorkerPayout(decodedTask),
         });
       } else if (
         submission !== null &&
@@ -1890,6 +2391,7 @@ export async function checkSettlements(
           record,
           outcome: "accepted",
           solDenominated: unwrapOption(decodedTask.rewardMint) === null,
+          payout: expectedWorkerPayout(decodedTask),
         });
       } else if (
         claim === null &&
@@ -1907,6 +2409,7 @@ export async function checkSettlements(
           record,
           outcome: "accepted",
           solDenominated: unwrapOption(decodedTask.rewardMint) === null,
+          payout: expectedWorkerPayout(decodedTask),
         });
       }
     } else if (decodedTask.status === TaskStatus.Open) {
@@ -1990,17 +2493,41 @@ export async function checkSettlements(
     totalEarned !== null && totalEarned > baseline
       ? totalEarned - baseline
       : 0n;
+  // Several jobs can be paid between two looks (a buyer approves two at
+  // once, or the worker was offline). The agent's on-chain total says how
+  // much came in; each job's own terms say how it divides. Earnings beyond
+  // what this round's jobs pay stay unattributed only when they could be the
+  // pay of a tracked job that is still waiting, landing between the reads; a
+  // smaller extra (a lower fee for a well-reviewed worker) is this round's.
+  const waiting = pending
+    .filter(
+      (record) =>
+        state.submissions.includes(record) &&
+        wouldPay.has(record) &&
+        !resolved.some((entry) => entry.record === record),
+    )
+    .map((record) => wouldPay.get(record)!);
+  const shares = shareEarnings(
+    delta,
+    paidSolOutcomes.map((entry) => entry.payout ?? 0n),
+    waiting,
+  );
+  const shareFor = new Map(
+    paidSolOutcomes.map((entry, index) => [entry.record, shares[index]!]),
+  );
+  const attributed = shares.reduce((sum, share) => sum + share, 0n);
 
   const reports: SettlementReport[] = [];
+  // Told only once the ledger says so, so whoever reacts to an event and
+  // reads the state back finds the job settled.
+  const observed: WorkerLogEvent[] = [];
   for (const { record, outcome, solDenominated } of resolved) {
     const paid = outcome === "accepted" || outcome === "closed";
     const earnedLamports = !paid
       ? 0n
       : !solDenominated
         ? null
-        : paidSolOutcomes.length === 1
-          ? delta
-          : null;
+        : (shareFor.get(record) ?? null);
     let settlementSignature: string | null = null;
     if (paid && ctx.findSettlementSignature !== undefined) {
       try {
@@ -2031,7 +2558,7 @@ export async function checkSettlements(
       receiptUrl,
     };
     reports.push(report);
-    ctx.log({
+    observed.push({
       event: "settlement.observed",
       task: record.task,
       outcome,
@@ -2049,10 +2576,111 @@ export async function checkSettlements(
     });
   }
   if (totalEarned !== null) {
-    state.totalEarnedBaseline = totalEarned.toString();
+    state.totalEarnedBaseline = (baseline + attributed).toString();
   }
   saveState(ctx.stateDir, state);
+  for (const event of observed) ctx.log(event);
   return reports;
+}
+
+/**
+ * What a settled SOL task pays this worker by the task's own terms: its share
+ * of the reward less the marketplace fee and any operator or referrer leg the
+ * task carries. Only used to divide what the agent's on-chain total says came
+ * in; it is never reported as earned on its own.
+ */
+export function expectedWorkerPayout(
+  task: Pick<
+    Task,
+    | "rewardAmount"
+    | "taskType"
+    | "requiredCompletions"
+    | "protocolFeeBps"
+    | "operator"
+    | "operatorFeeBps"
+    | "referrer"
+    | "referrerFeeBps"
+  >,
+): bigint {
+  const base =
+    task.taskType === TaskType.Collaborative && task.requiredCompletions > 0
+      ? task.rewardAmount / BigInt(task.requiredCompletions)
+      : task.rewardAmount;
+  const leg = (payee: Address, bps: number): bigint =>
+    payee === DEFAULT_ADDRESS || bps <= 0 ? 0n : (base * BigInt(bps)) / 10_000n;
+  const net =
+    base -
+    (base * BigInt(Math.max(0, task.protocolFeeBps))) / 10_000n -
+    leg(task.operator, task.operatorFeeBps) -
+    leg(task.referrer, task.referrerFeeBps);
+  return net > 0n ? net : 0n;
+}
+
+/** The reward a submission record noted, as the best guess of its pay. */
+function recordedReward(record: SubmissionRecord): bigint | null {
+  try {
+    const reward = BigInt(record.rewardAmount);
+    return reward >= 0n ? reward : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Divide `delta` lamports among jobs paid in one round, by what each one's
+ * terms pay (equal parts when nothing is known). `waiting` holds what each
+ * tracked job that is still waiting would pay (null: not known). When
+ * `delta` covers every paid job's pay and what is left could be a waiting
+ * job's whole pay (`couldBeWaitingPay`), each job gets exactly its pay and
+ * the rest is left for that job; otherwise the parts add up to exactly
+ * `delta`.
+ */
+export function shareEarnings(
+  delta: bigint,
+  payouts: readonly bigint[],
+  waiting: readonly (bigint | null)[] = [],
+): bigint[] {
+  if (payouts.length === 0) return [];
+  const expected = payouts.reduce((sum, payout) => sum + payout, 0n);
+  if (expected > 0n && delta >= expected && couldBeWaitingPay(delta - expected, waiting)) {
+    return [...payouts];
+  }
+  if (delta <= 0n) return payouts.map(() => 0n);
+  const weights = expected > 0n ? payouts : payouts.map(() => 1n);
+  const total = weights.reduce((sum, weight) => sum + weight, 0n);
+  const shares = weights.map((weight) => (delta * weight) / total);
+  let rest = delta - shares.reduce((sum, share) => sum + share, 0n);
+  // Integer division leaves fewer lamports than there are jobs; hand them
+  // out one each, largest job first.
+  const order = weights
+    .map((weight, index) => ({ weight, index }))
+    .sort((a, b) =>
+      a.weight === b.weight ? a.index - b.index : a.weight > b.weight ? -1 : 1,
+    );
+  for (let next = 0; rest > 0n; next = (next + 1) % order.length) {
+    shares[order[next]!.index]! += 1n;
+    rest -= 1n;
+  }
+  return shares;
+}
+
+/**
+ * Whether `surplus` lamports could be the whole pay of a job still waiting:
+ * at least nine tenths of the smallest such pay (what lands can be a little
+ * under a job's terms). A job whose pay is not known could pay anything; one
+ * that pays nothing explains nothing.
+ */
+export function couldBeWaitingPay(
+  surplus: bigint,
+  waiting: readonly (bigint | null)[],
+): boolean {
+  if (surplus <= 0n) return false;
+  let smallest: bigint | null = null;
+  for (const pay of waiting) {
+    if (pay === null) return true;
+    if (pay > 0n && (smallest === null || pay < smallest)) smallest = pay;
+  }
+  return smallest !== null && surplus * 10n >= smallest * 9n;
 }
 
 /** Result of one `once` tick. */
@@ -2091,6 +2719,9 @@ async function runTickOnceLocked(ctx: WorkerContext): Promise<TickResult> {
   const initialSettlements = agent.registered
     ? await checkSettlements(ctx, agent)
     : [];
+  // Be paid for overdue deliveries and get back unusable claims before
+  // looking for new work.
+  await runUpkeep(ctx, agent);
   let outcome: ProcessOutcome | null = await resumeOpenClaim(ctx, agent);
   let candidateCount = 0;
   if (outcome === null) {
@@ -2154,6 +2785,13 @@ async function runUpLocked(
   });
   const agent = await ensureRegistered(ctx);
   await checkSettlements(ctx, agent);
+  const upkeepMemory: UpkeepMemory = new Map();
+  const upkeepEveryMs = Math.max(
+    0,
+    ctx.config.upkeepIntervalMs ?? Math.max(1_000, 4 * ctx.config.pollIntervalMs),
+  );
+  let lastUpkeepAt = Date.now();
+  await runUpkeep(ctx, agent, upkeepMemory);
   await resumeOpenClaim(ctx, agent);
 
   // Serialize every state-touching step through one chain: candidate
@@ -2180,6 +2818,10 @@ async function runUpLocked(
     void enqueue(async () => {
       try {
         await checkSettlements(ctx, agent);
+        if (Date.now() - lastUpkeepAt >= upkeepEveryMs) {
+          lastUpkeepAt = Date.now();
+          await runUpkeep(ctx, agent, upkeepMemory);
+        }
         await resumeOpenClaim(ctx, agent);
       } catch (error) {
         ctx.log({
@@ -2194,7 +2836,11 @@ async function runUpLocked(
     rpc: ctx.gpa,
     filter: {
       capabilities: ctx.config.capabilities,
-      minReward: ctx.config.minRewardLamports,
+      // Low enough to see a hire it owes; the local filters keep the floor for the rest.
+      minReward: [...(ctx.owedTasks?.values() ?? [])].reduce(
+        (least, reward) => (reward < least ? reward : least),
+        ctx.config.minRewardLamports,
+      ),
     },
     pollIntervalMs: ctx.config.pollIntervalMs,
     onTask: () => {}, // consumed via the async iterator below

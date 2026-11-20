@@ -25,6 +25,18 @@ import { address } from "@solana/kit";
 
 export const WORKER_STATE_VERSION = 1 as const;
 
+/**
+ * What a job is called, from its verified job spec: the creator's own words,
+ * kept as plain display text of at most this many characters.
+ */
+export const MAX_JOB_TITLE_CHARS = 120;
+
+/** Why a job failed, kept as one line of at most this many characters. */
+export const MAX_FAILURE_REASON_CHARS = 300;
+
+/** Given-up jobs whose claim is released are kept for at most this many. */
+export const FAILED_JOB_RETENTION = 200;
+
 /** Hard resource ceilings for the hot worker WAL/state file. */
 export const MAX_WORKER_STATE_BYTES = 16 * 1024 * 1024;
 export const MAX_UNSETTLED_SUBMISSIONS = 10_000;
@@ -75,6 +87,76 @@ export type OpenClaim = {
   execution?: ExecutionIntent;
   /** Required exactly for `submitting`. */
   submission?: SubmissionIntent;
+  /** What the job is called, from its verified job spec (display text only). */
+  title?: string;
+  /** The service listing a hired job came from. */
+  listing?: string;
+  /** Attempts at this job that failed so far (the work, its upload, its job spec). */
+  failures?: number;
+  /**
+   * Set once one of the job's tries ran its work and the work failed. Only a
+   * given-up job whose work ran (this, or a result already made) counts
+   * toward stopping after several in a row.
+   */
+  ranWork?: true;
+  /**
+   * Times in a row the job's job spec or the buyer's note could not be
+   * fetched. These waits are not failed attempts: a host or the network was
+   * down, which says nothing about the job.
+   */
+  fetchWaits?: number;
+  /**
+   * ISO timestamp of the first of those fetch failures since the last good
+   * fetch. Waiting ends some hours after it: the job is then given up.
+   */
+  fetchFailingSince?: string;
+  /**
+   * ISO timestamp of the latest of those fetch failures. A gap after it
+   * longer than any wait means the worker was stopped or the computer slept,
+   * and that time does not count toward the waiting.
+   */
+  lastFetchFailureAt?: string;
+  /** ISO timestamp before which the job is not tried again. */
+  retryAt?: string;
+  /** Why the last attempt failed (redacted, one line). */
+  lastFailure?: string;
+};
+
+/**
+ * A job this worker took and then gave up, kept so whoever runs the worker
+ * can see which job it was and why. The claim stays on the chain until it
+ * expires or the task ends; `claimReleased` says when its deposit is back.
+ */
+export type FailedJob = {
+  /** Task PDA (base58). */
+  task: string;
+  /** ISO timestamp at which claiming the task began. */
+  claimedAt: string;
+  /** ISO timestamp at which the job was given up. */
+  failedAt: string;
+  /**
+   * "attempts": every allowed attempt failed. "expired": the time to deliver
+   * ran out first. "cancelled": the task ended before anything was delivered.
+   */
+  cause: "attempts" | "expired" | "cancelled";
+  /** Why, in the worker's words (redacted, one line). */
+  reason: string;
+  /** Attempts that failed. */
+  attempts: number;
+  /** Task reward when known (lamports, as a decimal string). */
+  rewardAmount?: string;
+  title?: string;
+  listing?: string;
+  /** True once this worker's claim on the task is closed and its rent is back. */
+  claimReleased: boolean;
+};
+
+/** Set when several jobs in a row were given up: no new job is taken until it is cleared. */
+export type WorkerPause = {
+  /** ISO timestamp of the pause. */
+  since: string;
+  /** Why the last of those jobs failed. */
+  reason: string;
 };
 
 /** One submitted result awaiting (or past) settlement. */
@@ -103,6 +185,10 @@ export type SubmissionRecord = {
   settlementSignature?: string | null;
   /** ISO timestamp settlement was observed. */
   settledAt?: string;
+  /** What the job is called, from its verified job spec (display text only). */
+  title?: string;
+  /** The service listing a hired job came from. */
+  listing?: string;
 };
 
 /** The whole persisted state. */
@@ -116,6 +202,12 @@ export type WorkerState = {
   totalEarnedBaseline: string;
   /** Submission ledger, oldest first. */
   submissions: SubmissionRecord[];
+  /** Jobs given up, oldest first. Absent on disk while empty. */
+  failedJobs: FailedJob[];
+  /** Jobs given up in a row; a delivered job resets it. Absent on disk while 0. */
+  consecutiveFailures: number;
+  /** No new job is taken while set. Absent on disk while null. */
+  pause: WorkerPause | null;
 };
 
 export class WorkerStateError extends Error {
@@ -199,6 +291,33 @@ function taskAddress(value: unknown, label: string): string {
   return parsed;
 }
 
+function optionalTitle(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const parsed = nonempty(value, label);
+  if ([...parsed].length > MAX_JOB_TITLE_CHARS || /\p{Cc}/u.test(parsed)) {
+    fail(`${label} must be a short line of text`);
+  }
+  return parsed;
+}
+
+function optionalListing(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  return taskAddress(value, label);
+}
+
+/** The display fields a job carries from claim to ledger. */
+function jobLabels(
+  parsed: Record<string, unknown>,
+  label: string,
+): { title?: string; listing?: string } {
+  const title = optionalTitle(parsed.title, `${label}.title`);
+  const listing = optionalListing(parsed.listing, `${label}.listing`);
+  return {
+    ...(title !== undefined ? { title } : {}),
+    ...(listing !== undefined ? { listing } : {}),
+  };
+}
+
 function optionalSignature(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined;
   return nonempty(value, label);
@@ -272,6 +391,15 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "revisionSubmissionCount",
       "execution",
       "submission",
+      "title",
+      "listing",
+      "failures",
+      "ranWork",
+      "fetchWaits",
+      "fetchFailingSince",
+      "lastFetchFailureAt",
+      "retryAt",
+      "lastFailure",
     ],
   );
   const phase = parsed.phase;
@@ -325,6 +453,92 @@ function openClaim(value: unknown, label: string): OpenClaim {
       : {}),
     ...(execution !== undefined ? { execution } : {}),
     ...(submission !== undefined ? { submission } : {}),
+    ...jobLabels(parsed, label),
+    ...(parsed.failures !== undefined
+      ? { failures: count(parsed.failures, `${label}.failures`, 1) }
+      : {}),
+    ...(parsed.ranWork !== undefined
+      ? { ranWork: onlyTrue(parsed.ranWork, `${label}.ranWork`) }
+      : {}),
+    ...(parsed.fetchWaits !== undefined
+      ? { fetchWaits: count(parsed.fetchWaits, `${label}.fetchWaits`, 1) }
+      : {}),
+    ...(parsed.fetchFailingSince !== undefined
+      ? { fetchFailingSince: iso(parsed.fetchFailingSince, `${label}.fetchFailingSince`) }
+      : {}),
+    ...(parsed.lastFetchFailureAt !== undefined
+      ? { lastFetchFailureAt: iso(parsed.lastFetchFailureAt, `${label}.lastFetchFailureAt`) }
+      : {}),
+    ...(parsed.retryAt !== undefined
+      ? { retryAt: iso(parsed.retryAt, `${label}.retryAt`) }
+      : {}),
+    ...(parsed.lastFailure !== undefined
+      ? { lastFailure: reasonLine(parsed.lastFailure, `${label}.lastFailure`) }
+      : {}),
+  };
+}
+
+function onlyTrue(value: unknown, label: string): true {
+  if (value !== true) fail(`${label} must be true when present`);
+  return true;
+}
+
+function count(value: unknown, label: string, minimum = 0): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < minimum ||
+    (value as number) > 1_000_000
+  ) {
+    fail(`${label} must be a whole number from ${minimum}`);
+  }
+  return value as number;
+}
+
+function reasonLine(value: unknown, label: string): string {
+  const parsed = nonempty(value, label);
+  if ([...parsed].length > MAX_FAILURE_REASON_CHARS || /\p{Cc}/u.test(parsed)) {
+    fail(`${label} must be one line of at most ${MAX_FAILURE_REASON_CHARS} characters`);
+  }
+  return parsed;
+}
+
+function failedJob(value: unknown, label: string): FailedJob {
+  const parsed = record(value, label);
+  exactKeys(
+    parsed,
+    label,
+    ["task", "claimedAt", "failedAt", "cause", "reason", "attempts", "claimReleased"],
+    ["rewardAmount", "title", "listing"],
+  );
+  const cause = parsed.cause;
+  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled") {
+    fail(`${label}.cause is unsupported`);
+  }
+  if (typeof parsed.claimReleased !== "boolean") {
+    fail(`${label}.claimReleased must be boolean`);
+  }
+  return {
+    task: taskAddress(parsed.task, `${label}.task`),
+    claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
+    failedAt: iso(parsed.failedAt, `${label}.failedAt`),
+    cause,
+    reason: reasonLine(parsed.reason, `${label}.reason`),
+    attempts: count(parsed.attempts, `${label}.attempts`),
+    ...(parsed.rewardAmount !== undefined
+      ? { rewardAmount: decimal(parsed.rewardAmount, `${label}.rewardAmount`) }
+      : {}),
+    ...jobLabels(parsed, label),
+    claimReleased: parsed.claimReleased,
+  };
+}
+
+function workerPause(value: unknown, label: string): WorkerPause | null {
+  if (value === undefined || value === null) return null;
+  const parsed = record(value, label);
+  exactKeys(parsed, label, ["since", "reason"]);
+  return {
+    since: iso(parsed.since, `${label}.since`),
+    reason: reasonLine(parsed.reason, `${label}.reason`),
   };
 }
 
@@ -348,6 +562,8 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       "earnedLamports",
       "settlementSignature",
       "settledAt",
+      "title",
+      "listing",
     ],
   );
   if (
@@ -440,18 +656,18 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
     ...(parsed.settledAt !== undefined
       ? { settledAt: iso(parsed.settledAt, `${label}.settledAt`) }
       : {}),
+    ...jobLabels(parsed, label),
   };
 }
 
 function currentState(value: unknown): WorkerState {
   const parsed = record(value, "root");
-  exactKeys(parsed, "root", [
-    "version",
-    "agentIdHex",
-    "openClaim",
-    "totalEarnedBaseline",
-    "submissions",
-  ]);
+  exactKeys(
+    parsed,
+    "root",
+    ["version", "agentIdHex", "openClaim", "totalEarnedBaseline", "submissions"],
+    ["failedJobs", "consecutiveFailures", "pause"],
+  );
   if (parsed.version !== WORKER_STATE_VERSION) {
     fail(`unsupported version ${String(parsed.version)}`);
   }
@@ -496,6 +712,15 @@ function currentState(value: unknown): WorkerState {
   ) {
     fail("root.openClaim task also exists in the submission ledger");
   }
+  if (parsed.failedJobs !== undefined && !Array.isArray(parsed.failedJobs)) {
+    fail("root.failedJobs must be an array");
+  }
+  const failedJobs = ((parsed.failedJobs as unknown[] | undefined) ?? []).map(
+    (item, index) => failedJob(item, `root.failedJobs[${index}]`),
+  );
+  if (failedJobs.length > MAX_PARSED_SUBMISSIONS) {
+    fail(`root.failedJobs exceeds the ${MAX_PARSED_SUBMISSIONS} record parse limit`);
+  }
   return {
     version: WORKER_STATE_VERSION,
     agentIdHex: agentIdHex as string | null,
@@ -505,6 +730,12 @@ function currentState(value: unknown): WorkerState {
       "root.totalEarnedBaseline",
     ),
     submissions,
+    failedJobs,
+    consecutiveFailures:
+      parsed.consecutiveFailures === undefined
+        ? 0
+        : count(parsed.consecutiveFailures, "root.consecutiveFailures"),
+    pause: workerPause(parsed.pause, "root.pause"),
   };
 }
 
@@ -544,7 +775,28 @@ export function emptyState(): WorkerState {
     openClaim: null,
     totalEarnedBaseline: "0",
     submissions: [],
+    failedJobs: [],
+    consecutiveFailures: 0,
+    pause: null,
   };
+}
+
+/**
+ * Bound the given-up jobs: every job whose claim is not yet released is
+ * kept (its deposit is still out), and the newest released ones up to
+ * `retention`.
+ */
+export function pruneFailedJobs(
+  state: WorkerState,
+  retention = FAILED_JOB_RETENTION,
+): void {
+  let released = state.failedJobs.filter((job) => job.claimReleased).length;
+  if (released <= retention) return;
+  state.failedJobs = state.failedJobs.filter((job) => {
+    if (!job.claimReleased || released <= retention) return true;
+    released -= 1;
+    return false;
+  });
 }
 
 /**
@@ -765,7 +1017,19 @@ function fsyncDirectory(stateDir: string): void {
 export function saveState(stateDir: string, state: WorkerState): void {
   const validated = currentState(state);
   pruneSettledSubmissions(validated);
-  const serialized = `${JSON.stringify(validated, null, 2)}\n`;
+  pruneFailedJobs(validated);
+  // The root fields for given-up jobs stay off the file at their defaults.
+  // That does not make the file readable by an older worker: its reader
+  // refuses any field it does not know, and most records now carry a job's
+  // name or listing, or a failed attempt's details.
+  const { failedJobs, consecutiveFailures, pause, ...always } = validated;
+  const onDisk = {
+    ...always,
+    ...(failedJobs.length > 0 ? { failedJobs } : {}),
+    ...(consecutiveFailures > 0 ? { consecutiveFailures } : {}),
+    ...(pause !== null ? { pause } : {}),
+  };
+  const serialized = `${JSON.stringify(onDisk, null, 2)}\n`;
   if (Buffer.byteLength(serialized, "utf8") > MAX_WORKER_STATE_BYTES) {
     throw new WorkerStateError(
       `worker state exceeds ${MAX_WORKER_STATE_BYTES} bytes`,

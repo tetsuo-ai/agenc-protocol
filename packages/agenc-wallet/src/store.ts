@@ -29,6 +29,11 @@ const MAX_FINISHED_JOBS = 500;
  * in line one step at a time, so a crash between steps loses nothing.
  */
 export interface OfferRecord {
+  /**
+   * Stable for as long as the person keeps this service, while its listing
+   * may be replaced (a retired listing starts over under a new id).
+   */
+  id: string;
   /** Random per offer; with the agent's marketplace address it fixes the listing address. */
   listingIdHex: string;
   /** The listing address, known once the agent is registered on the marketplace. */
@@ -93,9 +98,29 @@ export interface AgentRecord {
     minPayCents: number;
     jobsDone: number;
     lastError: string | null;
-    /** Absent in journals written before offers existed; treat as null. */
+    /**
+     * The services this agent offers, oldest first. A journal from before an
+     * agent could offer several holds `offer` instead; it is moved here when
+     * the journal is read.
+     */
+    offers?: OfferRecord[];
+    /** Journals written before several services: read once, then gone. */
     offer?: OfferRecord | null;
+    /**
+     * When the person stopped this agent earning for good: its services left
+     * the marketplace for good and it was retired there, which brought its
+     * deposit back. It takes no jobs again. Absent until then.
+     */
+    retiredAt?: number | null;
   };
+}
+
+/** The services an agent offers, whatever journal it came from. */
+export function agentOffers(agent: Pick<AgentRecord, "earn">): OfferRecord[] {
+  const earn = agent.earn as AgentRecord["earn"];
+  if (earn.offers !== undefined) return earn.offers;
+  const legacy = earn.offer ?? null;
+  return legacy === null ? [] : [{ ...legacy, id: legacy.id ?? legacy.listingIdHex }];
 }
 
 /**
@@ -128,17 +153,34 @@ export type ChainTaskStatus =
 export interface JobRecord {
   id: string;
   role: "buying" | "working";
+  /**
+   * "hire": a service was hired. "request": a request was posted for anyone
+   * to take; it has no listing, and no provider until someone takes it.
+   * Absent in journals written before requests existed: a hire.
+   */
+  kind?: "hire" | "request";
+  /** The agent that pays, or "" for a request the person posted from the main balance. */
   agentId: string;
   createdAt: number;
   updatedAt: number;
   idempotencyKey: string | null;
 
+  /** The service hired; "" for a request. */
   listing: string;
+  /** The provider agent; for a request, "" until someone takes it. */
   providerAgent: string;
   title: string;
   request: string;
   acceptance: string[];
+  /** What the provider is paid: the service's price, or a request's reward. */
   priceLamports: string;
+  /** A request only: how long whoever takes it has to deliver, in seconds. */
+  deliverWithinSecs?: number;
+  /**
+   * A request only: unix seconds by which the work must be delivered, fixed
+   * when posting starts. Nobody can take it after that.
+   */
+  requestDeadline?: number | null;
 
   /** Listing terms the hire is pinned to (compare-and-swap on-chain). */
   expectedVersion: string;
@@ -187,9 +229,28 @@ export interface JobRecord {
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
+  /**
+   * Whether the provider has a marketplace record of turn-downs, read while
+   * the job is delivered until it has one (a record is never removed). A
+   * turn-down is counted only in a record that exists: starting one would
+   * cost the buyer. Absent until read.
+   */
+  providerRecorded?: boolean;
   rating: number | null;
   /** The finished job's deposits were collected and its slot released. */
   tidied: boolean;
+  /**
+   * False while what this job gave back to the main balance (its price on a
+   * refund, its deposits when it was tidied) has not yet been counted into
+   * the balance the wallet compares against, so it is not taken for money
+   * that arrived. Absent on jobs from before this existed: counted.
+   */
+  balanceSettled?: boolean;
+  /**
+   * When it gave that money back (ms). Only a balance read a minute or more
+   * later counts it in: a connection can answer with an older balance.
+   */
+  returnedAt?: number;
   signatures: {
     hire?: string;
     /** The buyer's payment for the safety check of the request. */
@@ -218,7 +279,10 @@ export interface ApprovalRecord {
   id: string;
   jobId: string;
   agentId: string;
-  service: ServiceView;
+  /** What the agent asks to do. Absent in journals written before requests existed: a hire. */
+  kind?: "hire" | "request";
+  /** The service to hire; null for a request posted for anyone to take. */
+  service: ServiceView | null;
   request: string;
   priceLamports: string;
   depositsLamports: string;
@@ -252,6 +316,11 @@ export interface WalletState {
   lastSolUsd: { value: number; ts: number } | null;
   /** Main-balance lamports last seen, to notice money arriving. */
   lastMainLamports: string | null;
+  /**
+   * Lifetime lamports the main balance paid out for requests the person
+   * posted from it. What agents pay is counted on each agent.
+   */
+  mainSpentLamports?: string;
   /**
    * The last balance read for each wallet (the main one and every agent's),
    * by id. Only for showing something true when the network cannot be reached.
@@ -401,6 +470,14 @@ export class StateStore {
         "INTERNAL",
         "The wallet's records are from a version this build cannot read.",
       );
+    }
+    // An agent from a journal written before several services keeps its one
+    // service as the first of its list.
+    for (const agent of Object.values(parsed.agents)) {
+      if (agent.earn.offers === undefined) {
+        agent.earn.offers = agentOffers(agent);
+        delete agent.earn.offer;
+      }
     }
     return new StateStore(file, parsed);
   }

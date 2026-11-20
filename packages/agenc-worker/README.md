@@ -155,7 +155,54 @@ agent to read it**. The worker is built around that assumption:
   drained, never reflected into the operator terminal/log, and capped at
   256 KiB. On timeout, overflow, and normal parent exit, the worker kills the
   executor's process group so ordinary background descendants cannot escape.
-  Non-zero exit, signal death, or timeout means nothing is submitted.
+  Non-zero exit, signal death, or timeout means nothing is submitted. An
+  embedder that shuts down aborts the context's `signal`: a job program in
+  progress is then asked to end with its process group (SIGTERM), so it can
+  clean up after itself, and killed `ABORT_GRACE_MS` (2 s) later if it has not
+  (`runExecutor`'s `signal`, reason `aborted`, event `task.execution-stopped`),
+  which is not a failed try; the job runs again on the next start.
+- **A failing job is tried three times, then given up.** Each failed attempt
+  (the executor, a job spec that is not the one the task names) waits before
+  the next one: one minute, then four (`retryDelayMs`, growing fourfold up to
+  30 minutes); after `maxJobAttempts` (3) the job is given up and kept in the
+  state file's `failedJobs` with the reason, and the event `task.given-up`
+  says so. A job whose time to deliver runs out is given up the same way. A
+  failed upload of finished work only waits and is sent again; the work is
+  not run again. A job spec or buyer's note that cannot be fetched (its host
+  or the network is down, or the host answers 5xx, 408 or 429) also only
+  waits, with the same growing waits (`task.fetch-wait-scheduled`), until it
+  arrives, the time runs out, or it has waited six hours
+  (`maxFetchWaitMs`); then the job is given up. Only time the worker could
+  try counts: a gap longer than any wait (`FETCH_RESUME_GAP_MS`, the worker
+  was stopped or the computer slept) is left out, and the hours spent
+  trying before and after it add up. A
+  host that refuses for good (any other 4xx, such as 404 or 410) counts as a
+  failed attempt.
+  After `maxFailedJobsInARow` (3) given-up jobs in a row the worker takes no
+  new job (`worker.paused`) until `clearWorkerPause(stateDir)` is called. A
+  delivered job resets the count. Only a job one of whose tries ran its work
+  counts, whatever its last failure was; a job none of whose tries ran work
+  (its job spec or the buyer's note could not be read, or it was too large to
+  run) does not.
+- **It looks after its own jobs.** Once a delivery's review window has passed
+  with no review, the worker sends `auto_accept_task_result` itself, so it is
+  paid when a buyer goes quiet (never for contests, which cannot be
+  auto-accepted). The claim of a job it gave up is released: reclaimed at once
+  when the task already ended, expired by the worker once the claim's time is
+  over. Both return the claim's rent and free one of the agent's ten
+  active-task slots. Each such transaction is signed and paid (5,000 lamports)
+  by the worker's own wallet. `expire_claim` also records the expiry in the
+  agent's public `AgentStats` when that record already exists; the worker
+  never starts it, since its rent (about 0.0013 SOL, never returned) would
+  buy the worker nothing (`withoutNewRecord`). A pass
+  that cannot read the chain is logged (`upkeep.failed`) and done later; it
+  never stops a tick or `up`.
+- **Earnings settled together are each counted.** When several deliveries are
+  paid between two looks, the rise in the agent's on-chain `totalEarned` is
+  divided by each task's own terms, so every paid job reports what it earned.
+  A rise beyond what they pay is kept back only while it could be the whole
+  pay of a job still waiting (one paid between the reads); a smaller extra,
+  such as a lower fee for a well-reviewed worker, goes to the jobs just paid.
 
 ## Run it on a timer
 
@@ -259,7 +306,8 @@ Notes:
   on-chain for a fresh agent.
 - **stateDir** — holds the worker's 32-byte agent id, the at-most-one open
   claim, privately persisted executor stdout while upload/submission is in
-  flight, and the submission ledger used to report settlements. `up`/`once`
+  flight, the submission ledger used to report settlements, and the jobs it
+  gave up (each with its name, its listing when it was a hire, and why). `up`/`once`
   take an exclusive active lock, so the same state directory cannot be driven
   by two worker processes concurrently. Linux locks include boot ID and process
   start time to survive PID reuse. On platforms where that identity is not
