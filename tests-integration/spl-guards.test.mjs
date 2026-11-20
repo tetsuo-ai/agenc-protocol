@@ -27,7 +27,7 @@ import {
   enc, arr, pda, id32, coder,
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed, tokenAmount,
   freshWorld, taskModV2Pda, moderationBlockPda,
-  BN, Keypair,
+  BN, Keypair, agentStatsPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -115,7 +115,7 @@ test("F-7: reject_and_freeze is rejected on a token task (RejectFrozenSolOnly)",
   expectFail(
     send(w.svm, await w.buyerProg.methods
       .rejectAndFreeze(arr(id32()))
-      .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: null, systemProgram: null })
+      .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: agentStatsPda(w.providerAgent), systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]),
     "RejectFrozenSolOnly",
     "reject_and_freeze refuses token tasks (F-7)",

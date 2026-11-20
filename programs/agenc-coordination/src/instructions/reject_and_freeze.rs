@@ -9,14 +9,18 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskRejectFrozen;
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+use crate::instructions::agent_stats_helpers::Counter;
+use crate::instructions::creator_stats_helpers::CreatorCounter;
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
+};
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review,
 };
 use crate::state::{
-    AgentStats, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
-    TaskType, TaskValidationConfig, ValidationMode, HASH_SIZE,
+    ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission, TaskType,
+    TaskValidationConfig, ValidationMode, HASH_SIZE,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -63,27 +67,45 @@ pub struct RejectAndFreeze<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
 
-    /// OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
-    /// freeze-rejection bumps `tasks_rejected`. Bound to `["agent_stats", claim.worker]`
-    /// (the claim's worker is the worker AgentRegistration PDA), created lazily on first
-    /// write. Telemetry only — never gates the freeze above.
-    #[account(
-        init_if_needed,
-        payer = creator,
-        space = AgentStats::SIZE,
-        seeds = [b"agent_stats", claim.worker.as_ref()],
-        bump
-    )]
-    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+    // P6.6 made this record optional; revision 9 requires it. The claim's worker
+    // is the worker AgentRegistration PDA.
+    /// CHECK: revision 9 worker record `["agent_stats", claim.worker]`, seeds-pinned
+    /// here. REQUIRED: this freeze bumps `tasks_rejected`. Created when missing by `ensure_agent_stats`, paid by
+    /// `creator`.
+    #[account(mut, seeds = [b"agent_stats", claim.worker.as_ref()], bump)]
+    pub agent_stats: UncheckedAccount<'info>,
 
-    /// Required only when `agent_stats` is supplied (for `init_if_needed`).
-    pub system_program: Option<Program<'info, System>>,
+    /// Required with the records (revision 9; optional before).
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (the task constraint makes
+    /// `creator` the task creator),
+    /// seeds-pinned here. REQUIRED: this freeze bumps `rejections`. Created when missing by
+    /// `ensure_creator_stats`, paid by `creator`.
+    #[account(mut, seeds = [b"creator_stats", creator.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
 }
 
 pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -> Result<()> {
     // Review decision on an escrowed task; allowed while paused (entry-gated only).
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    ensure_agent_stats(
+        &ctx.accounts.agent_stats.to_account_info(),
+        &ctx.accounts.creator.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.claim.worker,
+        ctx.bumps.agent_stats,
+    )?;
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.creator.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.creator.key(),
+        ctx.bumps.creator_stats,
+    )?;
 
     require!(
         ctx.accounts.task.status == TaskStatus::PendingValidation,
@@ -171,14 +193,20 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
         timestamp: clock.unix_timestamp,
     });
 
-    // P6.6: a freeze-for-review is a rejection — fold it into the worker agent's
-    // `tasks_rejected` track record (no-op when the optional account is absent).
+    // P6.6 / revision 9: a freeze-for-review is a rejection. Fold it into the
+    // worker's `tasks_rejected` and the creator's `rejections`; both records are
+    // required accounts.
     let worker_agent_key = ctx.accounts.claim.worker;
-    apply_track_record(
-        &mut ctx.accounts.agent_stats,
+    count_agent_stats(
+        &ctx.accounts.agent_stats.to_account_info(),
         worker_agent_key,
-        ctx.bumps.agent_stats,
         Counter::TasksRejected,
+        clock.unix_timestamp,
+    )?;
+    count_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        ctx.accounts.creator.key(),
+        CreatorCounter::Rejections,
         clock.unix_timestamp,
     )?;
 

@@ -3,7 +3,7 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskResultRejected;
 #[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+use crate::instructions::agent_stats_helpers::Counter;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     bid_settlement_offset, settle_accepted_bid, AcceptedBidBondDisposition,
@@ -12,18 +12,24 @@ use crate::instructions::bid_settlement_helpers::{
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::creator_stats_helpers::CreatorCounter;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::program_account_helpers::remaining_account_at;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
+};
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, release_claim_slot,
     sync_task_validation_status, validate_contest_reject_window,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
     TaskSubmission, TaskValidationConfig, ValidationMode, HASH_SIZE, RESULT_DATA_SIZE,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::{AgentStats, CompletionBond};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
@@ -85,23 +91,19 @@ pub struct RejectTaskResult<'info> {
     )]
     pub worker_authority: UncheckedAccount<'info>,
 
-    /// OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
-    /// rejection bumps `tasks_rejected`. Created lazily on first write (`init_if_needed`),
-    /// bound to the canonical `["agent_stats", worker]` PDA. Full-surface only — gated so
-    /// the frozen canary account list for `reject_task_result` is unchanged.
+    // P6.6 made this record optional; revision 9 requires it, so the creator
+    // cannot leave the rejection off the worker's record. Full-surface only: the
+    // frozen canary account list for `reject_task_result` is unchanged.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[account(
-        init_if_needed,
-        payer = creator,
-        space = AgentStats::SIZE,
-        seeds = [b"agent_stats", worker.key().as_ref()],
-        bump
-    )]
-    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+    /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
+    /// here. REQUIRED: this rejection bumps `tasks_rejected`. Created when missing by `ensure_agent_stats`, paid by
+    /// `creator`.
+    #[account(mut, seeds = [b"agent_stats", worker.key().as_ref()], bump)]
+    pub agent_stats: UncheckedAccount<'info>,
 
-    /// Required only when `agent_stats` is supplied (for `init_if_needed`).
+    /// Required with the records (revision 9; optional before).
     #[cfg(not(feature = "mainnet-canary"))]
-    pub system_program: Option<Program<'info, System>>,
+    pub system_program: Program<'info, System>,
 
     /// The rejected worker's completion bond is refunded at the same atomic
     /// boundary that closes their claim. Leaving it alive after the worker
@@ -115,6 +117,14 @@ pub struct RejectTaskResult<'info> {
         bump
     )]
     pub worker_completion_bond: UncheckedAccount<'info>,
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (the task constraint makes
+    /// `creator` the task creator),
+    /// seeds-pinned here. REQUIRED: this rejection bumps `rejections`. Created when missing by
+    /// `ensure_creator_stats`, paid by `creator`.
+    #[account(mut, seeds = [b"creator_stats", creator.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(
@@ -127,6 +137,25 @@ pub fn handler<'info>(
     // Decision #4 "money never locks"); a pause must not strand escrowed funds.
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        ensure_agent_stats(
+            &ctx.accounts.agent_stats.to_account_info(),
+            &ctx.accounts.creator.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            ctx.accounts.worker.key(),
+            ctx.bumps.agent_stats,
+        )?;
+        ensure_creator_stats(
+            &ctx.accounts.creator_stats.to_account_info(),
+            &ctx.accounts.creator.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            ctx.accounts.creator.key(),
+            ctx.bumps.creator_stats,
+        )?;
+    }
 
     require!(
         ctx.accounts.task.status == TaskStatus::PendingValidation,
@@ -239,17 +268,24 @@ pub fn handler<'info>(
         rejected_at: clock.unix_timestamp,
     });
 
-    // P6.6: fold this rejection into the worker agent's track record (no-op when the
-    // optional `agent_stats` account is not supplied). Telemetry only — never gates the
-    // settlement above.
+    // P6.6 / revision 9: fold this rejection into the worker's record and the
+    // creator's record. Both are required, so neither can be omitted. Telemetry
+    // only: neither gates the settlement above.
     #[cfg(not(feature = "mainnet-canary"))]
-    apply_track_record(
-        &mut ctx.accounts.agent_stats,
-        worker_key,
-        ctx.bumps.agent_stats,
-        Counter::TasksRejected,
-        clock.unix_timestamp,
-    )?;
+    {
+        count_agent_stats(
+            &ctx.accounts.agent_stats.to_account_info(),
+            worker_key,
+            Counter::TasksRejected,
+            clock.unix_timestamp,
+        )?;
+        count_creator_stats(
+            &ctx.accounts.creator_stats.to_account_info(),
+            ctx.accounts.creator.key(),
+            CreatorCounter::Rejections,
+            clock.unix_timestamp,
+        )?;
+    }
 
     // The task reopens and this claim is about to be destroyed. Refund the
     // worker bond now, while its canonical wallet binding is still present.

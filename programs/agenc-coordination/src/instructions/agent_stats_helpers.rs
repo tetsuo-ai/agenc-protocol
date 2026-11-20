@@ -35,7 +35,7 @@ pub enum Counter {
 }
 
 impl Counter {
-    fn event_variant(self) -> TrackRecordCounter {
+    pub(crate) fn event_variant(self) -> TrackRecordCounter {
         match self {
             Counter::TasksRejected => TrackRecordCounter::TasksRejected,
             Counter::DisputesWon => TrackRecordCounter::DisputesWon,

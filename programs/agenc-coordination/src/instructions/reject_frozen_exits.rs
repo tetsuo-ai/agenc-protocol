@@ -13,6 +13,10 @@ use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition}
 use crate::instructions::completion_helpers::{
     build_marketplace_fee_legs, calculate_fee_with_reputation, execute_completion_rewards,
 };
+use crate::instructions::creator_stats_helpers::rejection_ruling_record_outcome;
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
+};
 use crate::instructions::task_validation_helpers::release_claim_slot;
 use crate::state::{
     AgentRegistration, CompletionBond, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
@@ -109,6 +113,8 @@ pub struct ResolveRejectFrozen<'info> {
     pub referrer: Option<UncheckedAccount<'info>>,
 
     /// Multisig review authority; `remaining_accounts` carries the co-signers.
+    /// Writable (revision 9): it pays for a missing record.
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     /// CHECK: creator completion bond PDA — REQUIRED + seeds-fixed so the multisig
@@ -129,6 +135,19 @@ pub struct ResolveRejectFrozen<'info> {
     pub worker_completion_bond: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
+    /// here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", worker.key().as_ref()], bump)]
+    pub worker_stats: UncheckedAccount<'info>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (`creator` is constrained
+    /// to the task creator),
+    /// seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by
+    /// `ensure_creator_stats`, paid by `authority`.
+    #[account(mut, seeds = [b"creator_stats", creator.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
 }
 
 /// Multisig review decision on a frozen task. `approve_completion`:
@@ -146,6 +165,22 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
     // Exit path: a frozen task must settle even while paused (money never locks).
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    ensure_agent_stats(
+        &ctx.accounts.worker_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.worker.key(),
+        ctx.bumps.worker_stats,
+    )?;
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.creator.key(),
+        ctx.bumps.creator_stats,
+    )?;
 
     require!(
         ctx.accounts.task.status == TaskStatus::RejectFrozen,
@@ -275,6 +310,23 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
         });
     }
 
+    // Revision 9 (E): a ruling on a freeze is recorded on both sides: approving
+    // the completion is a worker win and a creator loss, upholding the rejection
+    // the reverse.
+    let record_outcome = rejection_ruling_record_outcome(approve_completion);
+    count_agent_stats(
+        &ctx.accounts.worker_stats.to_account_info(),
+        ctx.accounts.worker.key(),
+        record_outcome.worker_counter(),
+        clock.unix_timestamp,
+    )?;
+    count_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        ctx.accounts.creator.key(),
+        record_outcome.creator_counter(),
+        clock.unix_timestamp,
+    )?;
+
     // Return both worker-funded lifecycle accounts. The task is terminal on
     // either branch, so leaving the submission alive would strand its rent and
     // force creator cooperation through a later cleanup instruction.
@@ -370,7 +422,8 @@ pub struct ExpireRejectFrozen<'info> {
     #[account(mut)]
     pub referrer: Option<UncheckedAccount<'info>>,
 
-    /// Permissionless caller.
+    /// Permissionless caller. Writable (revision 9): it pays for a missing record.
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     /// CHECK: creator completion bond PDA — REQUIRED + seeds-pinned (audit F5/F12):
@@ -394,6 +447,19 @@ pub struct ExpireRejectFrozen<'info> {
     pub worker_completion_bond: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
+    /// here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", worker.key().as_ref()], bump)]
+    pub worker_stats: UncheckedAccount<'info>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (`creator` is constrained
+    /// to the task creator),
+    /// seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by
+    /// `ensure_creator_stats`, paid by `authority`.
+    #[account(mut, seeds = [b"creator_stats", creator.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
 }
 
 /// Permissionless timeout: once the review window lapses with no multisig decision,
@@ -407,6 +473,22 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
     // Exit path: must settle even while paused.
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    ensure_agent_stats(
+        &ctx.accounts.worker_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.worker.key(),
+        ctx.bumps.worker_stats,
+    )?;
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.creator.key(),
+        ctx.bumps.creator_stats,
+    )?;
 
     require!(
         ctx.accounts.task.status == TaskStatus::RejectFrozen,

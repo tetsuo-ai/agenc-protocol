@@ -39,6 +39,8 @@ pub mod lamport_transfer;
 pub mod launch_controls;
 pub(crate) mod program_account_helpers;
 pub mod rate_limit_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod record_account_helpers;
 pub mod slash_helpers;
 pub mod task_init_helpers;
 pub mod task_parent_helpers;

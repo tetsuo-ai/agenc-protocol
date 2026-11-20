@@ -26,7 +26,7 @@ import {
   moderationBlockPda,
   BN,
   Keypair,
-  SystemProgram,
+  SystemProgram, agentStatsPda, agentStatsCreationCost, creatorStatsCreationCost,
 } from "./harness.mjs";
 import {
   createPublishedTaskFixture as createPublishedTask,
@@ -627,6 +627,8 @@ function disputeAccounts(w, b, dispute) {
     workerCompletionBond: emptyCompletionBond(b.task, w.provider.publicKey),
     taskSubmission: pda([enc("task_submission"), b.claim.toBuffer()])[0],
     taskValidationConfig: null,
+    // Revision 9 records (expire_dispute names the worker record `workerStats`).
+    workerStats: agentStatsPda(w.providerAgent),
   };
 }
 
@@ -924,6 +926,8 @@ test("cancel_task closes an accepted Proof-dependent no-show and applies only th
     { pubkey: w.provider.publicKey, isSigner: false, isWritable: true },
     ...bidSettlementSuffix(w, b, "reject"),
   ];
+  // Revision 9: the creator's first cancel also creates its wallet record.
+  const creatorRecordCost = creatorStatsCreationCost(w.svm, w.buyer.publicKey);
   expectOk(
     send(
       w.svm,
@@ -965,8 +969,8 @@ test("cancel_task closes an accepted Proof-dependent no-show and applies only th
   assert.ok(isClosed(w.svm, b.bid), "cancel: accepted bid closed to bidder");
   assert.equal(
     accountLamports(w.svm, w.buyer.publicKey) - before.creator,
-    before.escrow + slash - TX_FEE,
-    "cancel: creator receives escrow plus exact bid slash, less its tx fee",
+    before.escrow + slash - TX_FEE - creatorRecordCost,
+    "cancel: creator receives escrow plus exact bid slash, less its tx fee and its new wallet record",
   );
   assert.equal(
     accountLamports(w.svm, w.provider.publicKey) - before.provider,
@@ -997,6 +1001,8 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
     "bid:initiate-complete-dispute",
   );
   const before = snapshotCompletion(w, b);
+  // Revision 9: the resolver creates the creator wallet record if it is missing.
+  const resolverRecordCost = creatorStatsCreationCost(w.svm, w.buyer.publicKey);
 
   expectOk(
     send(
@@ -1011,7 +1017,7 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
           ...disputeAccounts(w, b, dispute),
           authority: w.admin.publicKey,
           resolverAssignment: null,
-          agentStats: null,
+          agentStats: agentStatsPda(w.providerAgent),
           systemProgram: SystemProgram.programId,
           treasuryTokenAccount: null,
           bondTreasury: w.admin.publicKey,
@@ -1050,8 +1056,8 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
   );
   assert.equal(
     accountLamports(w.svm, w.admin.publicKey) - before.treasury,
-    -TX_FEE * BigInt(directApprovals.approvers.length),
-    "resolve: dispute Complete takes no protocol fee; authority pays only the threshold-signed tx fee",
+    -TX_FEE * BigInt(directApprovals.approvers.length) - resolverRecordCost,
+    "resolve: dispute Complete takes no protocol fee; authority pays only the threshold-signed tx fee and any new record",
   );
   const protocolAfter = decode(w.svm, "ProtocolConfig", w.protocolPda);
   assert.equal(
@@ -1126,6 +1132,10 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
     "Split: worker AgentStats starts absent",
   );
   const before = snapshotCompletion(w, b);
+  // Revision 9: the worker record exists from the claim; the resolver pays only a
+  // missing creator wallet record.
+  const splitRecordCost =
+    agentStatsCreationCost(w.svm, w.providerAgent) + creatorStatsCreationCost(w.svm, w.buyer.publicKey);
   const referrerBefore = accountLamports(w.svm, referrer.publicKey);
 
   const workerGross = BigInt(bidPrice) / 2n;
@@ -1215,8 +1225,8 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
   assert.ok(agentStatsRent > 0n, "Split: supplied telemetry PDA was allocated");
   assert.equal(
     accountLamports(w.svm, w.admin.publicKey) - before.treasury,
-    -TX_FEE - agentStatsRent,
-    "Split: treasury receives no protocol fee; resolver pays only tx and telemetry rent",
+    -TX_FEE - splitRecordCost,
+    "Split: treasury receives no protocol fee; resolver pays only tx and any new record",
   );
   const protocolAfter = decode(w.svm, "ProtocolConfig", w.protocolPda);
   assert.equal(
@@ -1253,10 +1263,12 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
   );
 
   const statsAfter = decode(w.svm, "AgentStats", agentStats);
+  // Revision 9: the required record is created with its identity set, but a
+  // Split records no outcome (the counters below stay zero).
   assert.equal(
-    statsAfter.agent.toBuffer().equals(Buffer.alloc(32)),
-    true,
-    "Split: supplied AgentStats remains untouched rather than recording an outcome",
+    statsAfter.agent.toBase58(),
+    w.providerAgent.toBase58(),
+    "Split: the created AgentStats is keyed to the defendant",
   );
   assert.equal(
     statsAfter.disputes_won.toString(),

@@ -2,7 +2,6 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{dispute_outcome, DisputeResolved};
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::bid_settlement_helpers::{
     load_accepted_bid_contract_price, settle_accepted_bid, AcceptedBidBondDisposition,
     AcceptedBidBookDisposition,
@@ -13,21 +12,25 @@ use crate::instructions::completion_helpers::{
     RewardDenomination,
 };
 use crate::instructions::constants::PERCENT_BASE;
+use crate::instructions::creator_stats_helpers::task_dispute_record_outcome;
 use crate::instructions::dispute_helpers::{
     expected_peer_bundles, pay_dispute_marketplace_legs, resolve_task_marketplace_terms,
     settle_dispute_submission_evidence, validate_dispute_worker_accounts, MarketplaceTerms,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::program_account_helpers::{remaining_account_at, remaining_account_range};
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
+};
 use crate::instructions::slash_helpers::worker_lost_dispute;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_escrow_account,
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, AgentStats, CompletionBond, DependencyType, Dispute, DisputeResolver,
-    DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus,
-    TaskType, TaskValidationConfig,
+    AgentRegistration, CompletionBond, DependencyType, Dispute, DisputeResolver, DisputeStatus,
+    ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
+    TaskValidationConfig,
 };
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use crate::utils::version::check_version_compatible_for_exit;
@@ -109,19 +112,6 @@ fn completion_bond_forfeit_sides(approved: bool, resolution: ResolutionType) -> 
         ResolutionType::Complete => (true, false),
         ResolutionType::Refund => (false, true),
         ResolutionType::Split => (false, false),
-    }
-}
-
-/// Split is deliberately neutral in worker track-record telemetry. Recording it
-/// as either a win or a loss would distort the same reputation signal whose
-/// principal consequences are neutralized below.
-fn worker_track_record_outcome(approved: bool, resolution: ResolutionType) -> Option<Counter> {
-    if worker_lost_dispute(approved, resolution) {
-        Some(Counter::DisputesLost)
-    } else if approved && resolution == ResolutionType::Split {
-        None
-    } else {
-        Some(Counter::DisputesWon)
     }
 }
 
@@ -247,19 +237,15 @@ pub struct ResolveDispute<'info> {
     #[account(mut)]
     pub worker: Option<Box<Account<'info, AgentRegistration>>>,
 
-    /// OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,
-    /// resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was
-    /// slashed). Bound to `["agent_stats", dispute.defendant]` (the handler validates
-    /// `worker.key() == dispute.defendant`), created lazily on first write. The
-    /// `disputes_lost` counter is the SDK slash-history signal. Telemetry only.
-    #[account(
-        init_if_needed,
-        payer = authority,
-        space = AgentStats::SIZE,
-        seeds = [b"agent_stats", dispute.defendant.as_ref()],
-        bump
-    )]
-    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+    // P6.6 made this record optional; revision 9 requires it. The handler validates
+    // `worker.key() == dispute.defendant`. `disputes_lost` is the SDK slash-history
+    // signal.
+    /// CHECK: revision 9 worker record `["agent_stats", dispute.defendant]`, seeds-pinned
+    /// here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost` by the
+    /// revision 9 outcome rule (records follow the ruling, not the filer). Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", dispute.defendant.as_ref()], bump)]
+    pub agent_stats: UncheckedAccount<'info>,
 
     /// CHECK: Worker's wallet for receiving payment
     #[account(mut)]
@@ -348,6 +334,14 @@ pub struct ResolveDispute<'info> {
         bump = task_validation_config.bump
     )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (`creator` is constrained
+    /// to the task creator),
+    /// seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` /
+    /// `disputes_lost`, the mirror of the worker's. Created when missing by
+    /// `ensure_creator_stats`, paid by `authority`.
+    #[account(mut, seeds = [b"creator_stats", creator.key().as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(
@@ -411,6 +405,23 @@ pub fn handler<'info>(
         signer != ctx.accounts.dispute.initiator_authority,
         CoordinationError::InitiatorCannotResolve
     );
+
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    ensure_agent_stats(
+        &ctx.accounts.agent_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.dispute.defendant,
+        ctx.bumps.agent_stats,
+    )?;
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.creator.key(),
+        ctx.bumps.creator_stats,
+    )?;
 
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
@@ -1115,17 +1126,28 @@ pub fn handler<'info>(
     }
     let defendant_worker_key = worker.key();
 
-    // P6.6: record only an explicit worker win/loss. Split is neutral and leaves
-    // both counters untouched; turning it into a synthetic loss would recreate a
-    // reputation penalty after principal slashing was removed.
-    if let Some(dispute_outcome_counter) =
-        worker_track_record_outcome(approved, dispute.resolution_type)
-    {
-        apply_track_record(
-            &mut ctx.accounts.agent_stats,
+    // Revision 9 (E): records follow the ruling, not the filer's identity. The
+    // worker wins when the creator's dispute is rejected or its own Complete is
+    // approved, and loses when the creator's Refund is approved or its own dispute
+    // is rejected; the creator's counters are the mirror image. An approved Split
+    // (or any other approved filing the rule does not name) moves neither. This
+    // fixes the inverted `disputes_won` for a worker's own rejected dispute. The
+    // stake slash (`worker_lost_dispute`) is unchanged.
+    if let Some(record_outcome) = task_dispute_record_outcome(
+        dispute.initiated_by_creator,
+        approved,
+        dispute.resolution_type,
+    ) {
+        count_agent_stats(
+            &ctx.accounts.agent_stats.to_account_info(),
             defendant_worker_key,
-            ctx.bumps.agent_stats,
-            dispute_outcome_counter,
+            record_outcome.worker_counter(),
+            clock.unix_timestamp,
+        )?;
+        count_creator_stats(
+            &ctx.accounts.creator_stats.to_account_info(),
+            ctx.accounts.creator.key(),
+            record_outcome.creator_counter(),
             clock.unix_timestamp,
         )?;
     }
@@ -1410,6 +1432,7 @@ fn percentage_amount(amount: u64, percentage: u8) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instructions::creator_stats_helpers::DisputeRecordOutcome;
 
     #[test]
     fn token_slash_percentage_handles_max_u64_balance() {
@@ -1503,9 +1526,10 @@ mod tests {
             accepted_bid_dispute_bond_disposition(true, ResolutionType::Complete),
             AcceptedBidBondDisposition::Refund,
         );
+        // Records follow the ruling: the worker's own approved Complete is a win.
         assert_eq!(
-            worker_track_record_outcome(true, ResolutionType::Complete),
-            Some(Counter::DisputesWon),
+            task_dispute_record_outcome(false, true, ResolutionType::Complete),
+            Some(DisputeRecordOutcome::WorkerWon),
         );
         assert_eq!(
             completion_bond_forfeit_sides(false, ResolutionType::Complete),
@@ -1527,10 +1551,12 @@ mod tests {
             accepted_bid_dispute_bond_disposition(true, ResolutionType::Split),
             AcceptedBidBondDisposition::Refund,
         );
-        assert_eq!(
-            worker_track_record_outcome(true, ResolutionType::Split),
-            None,
-        );
+        for creator_filed in [false, true] {
+            assert_eq!(
+                task_dispute_record_outcome(creator_filed, true, ResolutionType::Split),
+                None,
+            );
+        }
         assert!(!worker_lost_dispute(true, ResolutionType::Split));
     }
 
@@ -1540,14 +1566,38 @@ mod tests {
             accepted_bid_dispute_bond_disposition(true, ResolutionType::Refund),
             AcceptedBidBondDisposition::FullSlashToCreator,
         );
+        // The creator's approved Refund is a worker loss (and still slashes).
         assert_eq!(
-            worker_track_record_outcome(true, ResolutionType::Refund),
-            Some(Counter::DisputesLost),
+            task_dispute_record_outcome(true, true, ResolutionType::Refund),
+            Some(DisputeRecordOutcome::WorkerLost),
         );
         assert!(worker_lost_dispute(true, ResolutionType::Refund));
+        // The creator's rejected Refund is a worker win.
         assert_eq!(
-            worker_track_record_outcome(false, ResolutionType::Refund),
-            Some(Counter::DisputesWon),
+            task_dispute_record_outcome(true, false, ResolutionType::Refund),
+            Some(DisputeRecordOutcome::WorkerWon),
+        );
+    }
+
+    // Revision 9 (revert-sensitive): a worker whose OWN dispute is rejected lost
+    // it. The retired `worker_track_record_outcome` counted it as `disputes_won`.
+    #[test]
+    fn worker_own_rejected_dispute_is_a_loss() {
+        for resolution in [
+            ResolutionType::Complete,
+            ResolutionType::Refund,
+            ResolutionType::Split,
+        ] {
+            assert_eq!(
+                task_dispute_record_outcome(false, false, resolution),
+                Some(DisputeRecordOutcome::WorkerLost),
+            );
+            // The stake slash rule is unchanged: a rejection never slashes the worker.
+            assert!(!worker_lost_dispute(false, resolution));
+        }
+        assert_eq!(
+            DisputeRecordOutcome::WorkerLost.creator_counter(),
+            crate::instructions::creator_stats_helpers::CreatorCounter::DisputesWon,
         );
     }
 

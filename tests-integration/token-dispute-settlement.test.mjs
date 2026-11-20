@@ -17,7 +17,7 @@ import {
   BN, Keypair, SystemProgram,
   MINT_SIZE, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
   createInitializeMintInstruction, createAssociatedTokenAccountInstruction,
-  createMintToInstruction, getAssociatedTokenAddressSync,
+  createMintToInstruction, getAssociatedTokenAddressSync, agentStatsPda,
 } from "./harness.mjs";
 
 const REWARD = 5_000_001n;
@@ -202,7 +202,7 @@ async function resolveTokenDispute(w, r, approve) {
       protocolConfig: w.protocolPda, authority: w.admin.publicKey,
       resolverAssignment: authorityResolver, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent,
-      agentStats: null, workerWallet: w.provider.publicKey,
+      agentStats: agentStatsPda(w.providerAgent), workerWallet: w.provider.publicKey,
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: r.escrowAta, creatorTokenAccount: r.creatorAta,
@@ -210,8 +210,7 @@ async function resolveTokenDispute(w, r, approve) {
       rewardMint: r.mint, tokenProgram: TOKEN_PROGRAM_ID,
       creatorCompletionBond: r.creatorBond, workerCompletionBond: r.workerBond,
       bondTreasury: w.admin.publicKey,
-      taskSubmission: r.submission, taskValidationConfig: null,
-    })
+      taskSubmission: r.submission, taskValidationConfig: null})
     .instruction();
   expectOk(send(w.svm, ix, [w.admin]), `token-dispute: resolve (${approve ? "approve" : "reject"})`);
 }
@@ -413,8 +412,7 @@ test("token dispute expiry: permissionless expiry returns all principal and clos
       workerTokenAccountAta: r.workerAta, rewardMint: r.mint,
       tokenProgram: TOKEN_PROGRAM_ID,
       creatorCompletionBond: r.creatorBond, workerCompletionBond: r.workerBond,
-      taskSubmission: r.submission, taskValidationConfig: null,
-    })
+      taskSubmission: r.submission, taskValidationConfig: null, workerStats: agentStatsPda(w.providerAgent)})
     .instruction(), [crank]), "token-dispute: expire");
 
   assertTokenConservation(w, r, {

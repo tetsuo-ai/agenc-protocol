@@ -39,7 +39,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed, coder,
   freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
-  BN, Keypair, PublicKey, SystemProgram, PID,
+  BN, Keypair, PublicKey, SystemProgram, PID, agentStatsPda,
 } from "./harness.mjs";
 
 const STORE_BOND = 50_000_000; // STORE_REGISTRATION_BOND_LAMPORTS (0.05 SOL)
@@ -293,7 +293,7 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
   const resolveAccounts = (disputeReferrer) => ({
     dispute, task, escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey,
     resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: claim,
-    worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null,
+    worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: agentStatsPda(w.providerAgent),
     hireRecord, disputeOperator: operatorKp.publicKey, disputeReferrer,
     systemProgram: SystemProgram.programId,
     tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,

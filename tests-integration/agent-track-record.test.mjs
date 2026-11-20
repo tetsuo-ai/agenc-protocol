@@ -7,9 +7,14 @@
 //   - cancel_task         -> creator_agent.total_cancelled += 1
 //   - resolve_dispute      -> defendant.disputes_lost += 1  (worker loses)
 //                          -> defendant.disputes_won  += 1  (worker prevails)
-// and asserts the counter moved by exactly one, that the AgentStats account was created
-// lazily on first write (it does not exist before the handler runs), and that the right
-// agent's record is keyed.
+// and asserts the counter moved by exactly one and that the right agent's record is keyed.
+//
+// Revision 9: records are required. The worker's AgentStats is created at its first
+// claim (paid by the worker), every creator also gets a wallet-keyed CreatorStats
+// (["creator_stats", wallet]), and dispute records follow the ruling, not the filer:
+// the worker wins when the creator's dispute is rejected or its own Complete is
+// approved, loses when the creator's Refund is approved or its own dispute is
+// rejected; an approved creator Complete or any approved Split moves neither.
 //
 // REVERT-SENSITIVE INTENT — each positive assertion pins exactly one increment added in
 // programs/agenc-coordination/src/instructions/{reject_task_result,cancel_task,
@@ -43,6 +48,7 @@ import {
   freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
+  creatorStatsPda, readCreatorStats,
 } from "./harness.mjs";
 
 // Derive the AgentStats PDA for an agent ["agent_stats", agent].
@@ -130,7 +136,11 @@ test("track-record: reject_task_result bumps the worker's tasks_rejected (AgentS
   const m = await setupSubmittedManual(w);
 
   const workerStats = agentStatsPda(w.providerAgent);
-  assert.equal(isClosed(w.svm, workerStats), true, "AgentStats does not exist before the first negative outcome");
+  // Revision 9: the worker's record is created at its first claim, counters at zero.
+  const atClaim = readStats(w.svm, workerStats);
+  assert.equal(atClaim.exists, true, "AgentStats created at the worker's first claim");
+  assert.equal(atClaim.tasks_rejected, 0n, "no counter moves at claim");
+  const creatorRecord = creatorStatsPda(w.buyer.publicKey);
 
   expectOk(send(w.svm, await w.buyerProg.methods
     .rejectTaskResult(arr(id32()))
@@ -138,14 +148,18 @@ test("track-record: reject_task_result bumps the worker's tasks_rejected (AgentS
       task: m.task, claim: m.claim, taskValidationConfig: m.validation, taskSubmission: m.submission,
       worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey,
       workerAuthority: w.provider.publicKey,
-      // P6.6 optional track-record accounts:
+      // Revision 9: required track-record accounts.
       agentStats: workerStats, systemProgram: SystemProgram.programId,
       workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
+      creatorStats: creatorRecord,
     })
     .instruction(), [w.buyer]), "reject_task_result with agent_stats");
 
+  const creatorAfter = readCreatorStats(w.svm, creatorRecord);
+  assert.equal(creatorAfter.wallet.toBase58(), w.buyer.publicKey.toBase58(), "CreatorStats keyed to the creator wallet");
+  assert.equal(creatorAfter.rejections, 1n, "creator.rejections == 1 after one reject");
   const after = readStats(w.svm, workerStats);
-  assert.equal(after.exists, true, "AgentStats created lazily on first write");
+  assert.equal(after.exists, true, "AgentStats still present");
   assert.equal(after.agent.toBase58(), w.providerAgent.toBase58(), "AgentStats keyed to the worker agent");
   assert.equal(after.tasks_rejected, 1n, "worker.tasks_rejected == 1 after one reject");
   // Other counters untouched.
@@ -192,6 +206,9 @@ test("track-record: cancel_task bumps the creator agent's total_cancelled (Agent
   assert.equal(after.agent.toBase58(), w.buyerAgent.toBase58(), "AgentStats keyed to the creator agent");
   assert.equal(after.total_cancelled, 1n, "creator.total_cancelled == 1 after one cancel");
   assert.equal(after.tasks_rejected, 0n, "tasks_rejected untouched by a cancel");
+  // Revision 9: the wallet-keyed creator record counts the cancel too.
+  const creatorAfter = readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey));
+  assert.equal(creatorAfter.cancels, 1n, "creator wallet record cancels == 1");
 });
 
 // ---------------------------------------------------------------------------
@@ -267,8 +284,8 @@ async function resolveWithStats(w, r, approve) {
       // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
       taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
       taskValidationConfig: null,
-      // P6.6 optional track-record account:
-      agentStats: defendantStats,
+      // Revision 9: required track-record accounts.
+      agentStats: defendantStats, creatorStats: creatorStatsPda(w.buyer.publicKey),
     })
     .instruction(), [w.admin]), "resolve_dispute with agent_stats");
   return defendantStats;
@@ -280,37 +297,64 @@ test("track-record: resolve_dispute (worker loses) bumps the defendant's dispute
   const r = await hireClaimDispute(w, { resolutionType: 0 }); // Refund -> worker loses on approve
 
   const defendantStats = agentStatsPda(w.providerAgent);
-  assert.equal(isClosed(w.svm, defendantStats), true, "AgentStats absent before dispute resolution");
+  // Revision 9: the defendant's record already exists from its claim.
+  assert.equal(readStats(w.svm, defendantStats).disputes_lost, 0n, "no dispute counted before the ruling");
 
   await resolveWithStats(w, r, true);
 
   assert.ok(decode(w.svm, "Dispute", r.dispute).status.Resolved !== undefined, "dispute Resolved");
   const after = readStats(w.svm, defendantStats);
-  assert.equal(after.exists, true, "AgentStats created lazily on dispute resolution");
+  assert.equal(after.exists, true, "AgentStats present after dispute resolution");
   assert.equal(after.agent.toBase58(), w.providerAgent.toBase58(), "AgentStats keyed to the defendant");
   assert.equal(after.disputes_lost, 1n, "defendant.disputes_lost == 1 (worker lost)");
   assert.equal(after.disputes_won, 0n, "disputes_won not bumped on a loss");
+  // The creator's record is the mirror image.
+  const creatorAfter = readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey));
+  assert.equal(creatorAfter.disputesWon, 1n, "creator.disputes_won == 1 (its Refund was approved)");
+  assert.equal(creatorAfter.disputesLost, 0n, "creator.disputes_lost untouched");
 });
 
-// resolution_type Complete (1) + approve -> worker WINS -> disputes_won += 1.
-test("track-record: resolve_dispute (worker prevails) bumps the defendant's disputes_won", async () => {
+// The creator's Refund REJECTED -> worker WINS -> disputes_won += 1 (creator loses).
+test("track-record: resolve_dispute (creator's dispute rejected) bumps the defendant's disputes_won", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
-  const r = await hireClaimDispute(w, { resolutionType: 1 }); // Complete -> worker wins on approve
+  const r = await hireClaimDispute(w, { resolutionType: 0 }); // Refund, rejected below
+
+  const defendantStats = agentStatsPda(w.providerAgent);
+  await resolveWithStats(w, r, false);
+
+  const after = readStats(w.svm, defendantStats);
+  assert.equal(after.exists, true, "AgentStats present after dispute resolution");
+  assert.equal(after.disputes_won, 1n, "defendant.disputes_won == 1 (worker prevailed)");
+  assert.equal(after.disputes_lost, 0n, "disputes_lost not bumped on a win");
+  const creatorAfter = readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey));
+  assert.equal(creatorAfter.disputesLost, 1n, "creator.disputes_lost == 1 (its dispute was rejected)");
+});
+
+// Revision 9 outcome rule: an APPROVED creator filing of Complete is not a ruling
+// against the creator, so it moves neither record (fed99ab counted it as a worker
+// win, like every other non-loss).
+test("track-record: resolve_dispute (creator's own Complete approved) moves neither dispute counter", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const r = await hireClaimDispute(w, { resolutionType: 1 }); // Complete, approved below
 
   const defendantStats = agentStatsPda(w.providerAgent);
   await resolveWithStats(w, r, true);
 
   const after = readStats(w.svm, defendantStats);
-  assert.equal(after.exists, true, "AgentStats created lazily on dispute resolution");
-  assert.equal(after.disputes_won, 1n, "defendant.disputes_won == 1 (worker prevailed)");
-  assert.equal(after.disputes_lost, 0n, "disputes_lost not bumped on a win");
+  assert.equal(after.disputes_won, 0n, "no worker win for the creator's own approved Complete");
+  assert.equal(after.disputes_lost, 0n, "no worker loss either");
+  const creatorAfter = readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey));
+  assert.equal(creatorAfter.disputesWon, 0n, "creator record unchanged");
+  assert.equal(creatorAfter.disputesLost, 0n, "creator record unchanged");
 });
 
 // ---------------------------------------------------------------------------
-// Back-compat: omitting the optional accounts keeps the existing flow working and
-// creates NO AgentStats (the counters are telemetry, not a settlement precondition).
+// The optional creator-agent pair stays optional: omitting it keeps the flow
+// working and writes NO AgentStats. Revision 9 still counts the cancel on the
+// creator's required wallet-keyed CreatorStats (rev9-records-deposit.test.mjs
+// proves that omitting that record account fails).
 // ---------------------------------------------------------------------------
-test("track-record: cancel_task WITHOUT the optional accounts still works and writes no AgentStats", async () => {
+test("track-record: cancel_task WITHOUT the optional agent pair still works, writes no AgentStats, counts on the wallet record", async () => {
   const w = await freshWorld({});
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
@@ -337,4 +381,6 @@ test("track-record: cancel_task WITHOUT the optional accounts still works and wr
 
   assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled without track-record accounts");
   assert.equal(isClosed(w.svm, agentStatsPda(w.buyerAgent)), true, "no AgentStats written when the optional accounts are omitted");
+  const creatorAfter = readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey));
+  assert.equal(creatorAfter.cancels, 1n, "the wallet record counts the cancel");
 });

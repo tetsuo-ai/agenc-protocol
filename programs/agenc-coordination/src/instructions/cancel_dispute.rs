@@ -13,6 +13,13 @@
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeCancelled;
+use crate::instructions::agent_stats_helpers::Counter;
+use crate::instructions::creator_stats_helpers::{
+    cancelled_dispute_charge, CancelledDisputeCharge, CreatorCounter,
+};
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
+};
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::validation::validate_account_owner;
 use crate::state::{
@@ -46,11 +53,28 @@ pub struct CancelDispute<'info> {
     )]
     pub task: Account<'info, Task>,
 
-    /// Only the initiator's authority can cancel
+    /// Only the initiator's authority can cancel. Writable (revision 9): it pays for
+    /// a missing record.
     #[account(
+        mut,
         constraint = authority.key() == dispute.initiator_authority @ CoordinationError::UnauthorizedResolver
     )]
     pub authority: Signer<'info>,
+
+    /// CHECK: revision 9 worker record `["agent_stats", dispute.defendant]`, seeds-pinned
+    /// here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by
+    /// `authority`.
+    #[account(mut, seeds = [b"agent_stats", dispute.defendant.as_ref()], bump)]
+    pub worker_stats: UncheckedAccount<'info>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]`,
+    /// seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by
+    /// `ensure_creator_stats`, paid by `authority`.
+    #[account(mut, seeds = [b"creator_stats", task.creator.as_ref()], bump)]
+    pub creator_stats: UncheckedAccount<'info>,
+
+    /// Required by the record creation (revision 9).
+    pub system_program: Program<'info, System>,
 }
 
 pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
@@ -64,6 +88,22 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
     // not the entry gate (which rejects while paused) + require_task_type_enabled
     // (an entry-only control) the way this path previously did (audit).
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
+    // Revision 9: create any missing record first. The create is a CPI, and a CPI
+    // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    ensure_agent_stats(
+        &ctx.accounts.worker_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.dispute.defendant,
+        ctx.bumps.worker_stats,
+    )?;
+    ensure_creator_stats(
+        &ctx.accounts.creator_stats.to_account_info(),
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        ctx.accounts.task.creator,
+        ctx.bumps.creator_stats,
+    )?;
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
     let clock = Clock::get()?;
@@ -186,6 +226,26 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
         initiator: dispute.initiator,
         cancelled_at: clock.unix_timestamp,
     });
+
+    // Revision 9 (E): cancelling one's own dispute is a loss for the filer only.
+    match cancelled_dispute_charge(dispute.initiated_by_creator) {
+        CancelledDisputeCharge::Worker => {
+            count_agent_stats(
+                &ctx.accounts.worker_stats.to_account_info(),
+                dispute.defendant,
+                Counter::DisputesLost,
+                clock.unix_timestamp,
+            )?;
+        }
+        CancelledDisputeCharge::Creator => {
+            count_creator_stats(
+                &ctx.accounts.creator_stats.to_account_info(),
+                task.creator,
+                CreatorCounter::DisputesLost,
+                clock.unix_timestamp,
+            )?;
+        }
+    }
 
     Ok(())
 }
