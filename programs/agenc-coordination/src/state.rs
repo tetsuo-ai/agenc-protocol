@@ -4,7 +4,7 @@ use crate::instructions::constants::{
     DEFAULT_DISPUTE_INITIATION_COOLDOWN, DEFAULT_MAX_DISPUTES_PER_24H, DEFAULT_MAX_TASKS_PER_24H,
     DEFAULT_TASK_CREATION_COOLDOWN, MAX_REPUTATION, MIN_GOVERNANCE_DISTINCT_VOTERS,
     MIN_GOVERNANCE_VOTER_REPUTATION, MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS,
-    MIN_RATING_PROTOCOL_FEE_LAMPORTS,
+    MIN_RATING_PROTOCOL_FEE_LAMPORTS, TASK_MARKER_SIZE,
 };
 use anchor_lang::prelude::*;
 
@@ -555,6 +555,11 @@ impl ProtocolConfig {
 
     /// Prospective listing/skill ratings require a recorded SOL fee floor.
     pub const SURFACE_REVISION_FEE_QUALIFIED_RATINGS: u16 = 8;
+
+    /// Revision 9 (accountable review): disputable freezes, dispute bonds,
+    /// creator records, claim deposits, compacted task markers. Not yet the
+    /// current revision: the surface-9 change stamps it.
+    pub const SURFACE_REVISION_ACCOUNTABLE_REVIEW: u16 = 9;
 
     /// Highest surface revision implemented by this binary. Deployment tooling
     /// stamps this value only after the matching artifact has been verified live.
@@ -2601,6 +2606,187 @@ impl DisputeCounterRepair {
 
 const _: () = assert!(DisputeCounterRepair::SIZE == 210);
 
+// ============================================================================
+// Revision 9 accounts (accountable review). Design Appendix A.
+// ============================================================================
+
+/// The compacted remains of a closed `Task`, written in place at the task's own
+/// PDA `["task", creator, task_id]` by `close_task`, and only over a verified
+/// Task. Owner plus this discriminator therefore prove the address held a task.
+/// A program-owned account stays at the address, so `init` of a Task with the
+/// same id keeps failing and no task id can be reused.
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskMarker {
+    /// The task's creator (the only signer allowed to sweep later children).
+    pub creator: Pubkey,
+    /// Terminal status of the task: 3 Completed or 4 Cancelled.
+    pub status: u8,
+    /// `TaskMarker::FLAG_*` bits.
+    pub flags: u8,
+    /// When the task was compacted.
+    pub closed_at: i64,
+    /// MUST stay zeroed.
+    pub _reserved: [u8; 6],
+}
+
+impl TaskMarker {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+    /// This close ended a live hire record.
+    pub const FLAG_ENDED_LIVE_HIRE: u8 = 1 << 0;
+    /// The task completed with a fee-qualified SOL settlement.
+    pub const FLAG_FEE_QUALIFIED: u8 = 1 << 1;
+    const KNOWN_FLAGS: u8 = Self::FLAG_ENDED_LIVE_HIRE | Self::FLAG_FEE_QUALIFIED;
+
+    /// Build a marker for a terminal task. Only Completed and Cancelled tasks
+    /// can be compacted; unknown flag bits are refused.
+    pub fn for_closed_task(
+        creator: Pubkey,
+        status: TaskStatus,
+        flags: u8,
+        closed_at: i64,
+    ) -> Result<Self> {
+        let status = match status {
+            TaskStatus::Completed => TaskStatus::Completed as u8,
+            TaskStatus::Cancelled => TaskStatus::Cancelled as u8,
+            _ => return Err(crate::errors::CoordinationError::TaskNotCompactable.into()),
+        };
+        require!(
+            flags & !Self::KNOWN_FLAGS == 0,
+            crate::errors::CoordinationError::InvalidTaskMarker
+        );
+        Ok(Self {
+            creator,
+            status,
+            flags,
+            closed_at,
+            _reserved: [0u8; 6],
+        })
+    }
+
+    /// Canonical-content check for a marker read back from chain.
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 6]
+            && self.flags & !Self::KNOWN_FLAGS == 0
+            && (self.status == TaskStatus::Completed as u8
+                || self.status == TaskStatus::Cancelled as u8)
+    }
+
+    /// Marker writer: overwrite `data`, which must be exactly `SIZE` bytes (the
+    /// account already resized), with the marker discriminator and fields.
+    pub fn write_to(&self, data: &mut [u8]) -> Result<()> {
+        require!(
+            data.len() == Self::SIZE,
+            crate::errors::CoordinationError::InvalidTaskMarker
+        );
+        require!(
+            self.validate_reserved_fields(),
+            crate::errors::CoordinationError::InvalidTaskMarker
+        );
+        let mut cursor: &mut [u8] = data;
+        self.try_serialize(&mut cursor)?;
+        require!(
+            cursor.is_empty(),
+            crate::errors::CoordinationError::InvalidTaskMarker
+        );
+        Ok(())
+    }
+}
+
+const _: () = assert!(TaskMarker::SIZE == 56);
+const _: () = assert!(TaskMarker::SIZE == TASK_MARKER_SIZE);
+
+/// A dispute bond: the filer's stake on a dispute, held as lamports above this
+/// account's rent. Seeds `["dispute_bond", subject]`, where `subject` is the
+/// task for a dispute of a rejection (kind 0) or the `Dispute` account for a
+/// task dispute (kind 1). The two seed spaces cannot collide because a task
+/// and a dispute never share an address. Its existence means "disputed"; it is
+/// closed (tombstoned) when settled.
+#[account]
+#[derive(Default, InitSpace)]
+pub struct DisputeBond {
+    /// The task (kind 0) or the Dispute account (kind 1). Also the seed.
+    pub subject: Pubkey,
+    /// The task the dispute is about.
+    pub task: Pubkey,
+    /// Filer wallet. Always gets the rent back.
+    pub filer: Pubkey,
+    /// Respondent wallet. Gets the principal when the filer loses.
+    pub respondent: Pubkey,
+    /// Principal held above rent.
+    pub amount: u64,
+    /// `DisputeBond::KIND_*`.
+    pub kind: u8,
+    pub filed_at: i64,
+    /// End of the ruling window (kind 0). Zero for a task dispute, whose window
+    /// lives on the Dispute account.
+    pub ruling_deadline: i64,
+    pub bump: u8,
+    /// Reserved (room for a judge fee). MUST stay zeroed.
+    pub _reserved: [u8; 24],
+}
+
+impl DisputeBond {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+    /// A worker's dispute of a revision 9 freeze. Subject = the task.
+    pub const KIND_REJECTION: u8 = 0;
+    /// A task dispute from `initiate_dispute`. Subject = the Dispute account.
+    pub const KIND_TASK_DISPUTE: u8 = 1;
+    pub const SEED: &'static [u8] = b"dispute_bond";
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 24]
+    }
+}
+
+const _: () = assert!(DisputeBond::SIZE == 186);
+
+/// Wallet-keyed track record for task creators (bare wallets and agent buyers
+/// alike, since a Task stores only the creator's wallet). Seeds
+/// `["creator_stats", wallet]`. Telemetry, never a settlement precondition.
+#[account]
+#[derive(Default, InitSpace)]
+pub struct CreatorStats {
+    /// The creator wallet these counters belong to (also the seed).
+    pub wallet: Pubkey,
+    /// Deliveries this creator refused (reject or freeze).
+    pub rejections: u64,
+    /// Refusals the worker disputed.
+    pub rejections_contested: u64,
+    /// Disputes ruled in this creator's favor.
+    pub disputes_won: u64,
+    /// Disputes ruled against this creator.
+    pub disputes_lost: u64,
+    /// Tasks this creator cancelled.
+    pub cancels: u64,
+    /// Forfeited claim deposits this creator received.
+    pub deposits_received: u64,
+    pub last_updated: i64,
+    pub bump: u8,
+    /// MUST stay zeroed.
+    pub _reserved: [u8; 32],
+}
+
+impl CreatorStats {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+    pub const SEED: &'static [u8] = b"creator_stats";
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 32]
+    }
+
+    /// Set the identity fields on first write only (idempotent).
+    pub fn init_if_fresh(&mut self, wallet: Pubkey, bump: u8) {
+        if self.wallet == Pubkey::default() {
+            self.wallet = wallet;
+            self.bump = bump;
+            self._reserved = [0u8; 32];
+        }
+    }
+}
+
+const _: () = assert!(CreatorStats::SIZE == 129);
+
 /// On-chain moderation attestation for a service listing's pinned job-spec hash.
 ///
 /// The task-bound `TaskModeration` PDA (`["task_moderation", task, hash]`) cannot
@@ -4463,5 +4649,141 @@ mod tests {
         assert_eq!(c._reserved[5], 0);
         c.set_liveness_window_secs(0);
         assert_eq!(c.liveness_window_secs(), 0);
+    }
+
+    // === Revision 9 accounts (accountable review) ===
+
+    #[test]
+    fn test_task_marker_size() {
+        test_size_constant!(TaskMarker);
+        assert_eq!(TaskMarker::SIZE, 56);
+        assert_eq!(<TaskMarker as anchor_lang::Space>::INIT_SPACE, 48);
+    }
+
+    #[test]
+    fn test_dispute_bond_size() {
+        test_size_constant!(DisputeBond);
+        assert_eq!(DisputeBond::SIZE, 186);
+        assert_eq!(<DisputeBond as anchor_lang::Space>::INIT_SPACE, 178);
+    }
+
+    #[test]
+    fn test_creator_stats_size() {
+        test_size_constant!(CreatorStats);
+        assert_eq!(CreatorStats::SIZE, 129);
+        assert_eq!(<CreatorStats as anchor_lang::Space>::INIT_SPACE, 121);
+    }
+
+    /// Design Appendix A pins the three discriminators; clients decode by them.
+    #[test]
+    fn rev9_account_discriminators_match_the_design() {
+        assert_eq!(
+            TaskMarker::DISCRIMINATOR,
+            &[0xc1, 0x0b, 0xc0, 0xc8, 0x33, 0xd0, 0x6c, 0xff]
+        );
+        assert_eq!(
+            DisputeBond::DISCRIMINATOR,
+            &[0x34, 0x66, 0x73, 0xaf, 0x6f, 0xdc, 0x08, 0x4f]
+        );
+        assert_eq!(
+            CreatorStats::DISCRIMINATOR,
+            &[0xef, 0x9e, 0x70, 0xed, 0xe3, 0x52, 0x61, 0x81]
+        );
+        // A marker must never decode as a Task (and the reverse).
+        assert_ne!(TaskMarker::DISCRIMINATOR, Task::DISCRIMINATOR);
+    }
+
+    #[test]
+    fn task_marker_writer_round_trips_and_pins_the_layout() {
+        let creator = Pubkey::new_unique();
+        let marker = TaskMarker::for_closed_task(
+            creator,
+            TaskStatus::Completed,
+            TaskMarker::FLAG_ENDED_LIVE_HIRE | TaskMarker::FLAG_FEE_QUALIFIED,
+            1_700_000_123,
+        )
+        .unwrap();
+        let mut data = vec![0xaau8; TaskMarker::SIZE];
+        marker.write_to(&mut data).unwrap();
+
+        // Exact byte layout: discriminator, creator, status, flags, closed_at, reserved.
+        assert_eq!(&data[..8], TaskMarker::DISCRIMINATOR);
+        assert_eq!(&data[8..40], creator.as_ref());
+        assert_eq!(data[40], 3);
+        assert_eq!(data[41], 0b11);
+        assert_eq!(&data[42..50], &1_700_000_123i64.to_le_bytes());
+        assert_eq!(&data[50..56], &[0u8; 6]);
+
+        let back = TaskMarker::try_deserialize(&mut &data[..]).unwrap();
+        assert_eq!(back.creator, creator);
+        assert_eq!(back.status, 3);
+        assert!(back.validate_reserved_fields());
+        // The marker bytes are not a Task.
+        assert!(Task::try_deserialize(&mut &data[..]).is_err());
+    }
+
+    #[test]
+    fn task_marker_refuses_non_terminal_status_bad_flags_and_wrong_size() {
+        let creator = Pubkey::new_unique();
+        for status in [
+            TaskStatus::Open,
+            TaskStatus::InProgress,
+            TaskStatus::PendingValidation,
+            TaskStatus::Disputed,
+            TaskStatus::RejectFrozen,
+        ] {
+            assert!(TaskMarker::for_closed_task(creator, status, 0, 1).is_err());
+        }
+        let cancelled = TaskMarker::for_closed_task(creator, TaskStatus::Cancelled, 0, 1).unwrap();
+        assert_eq!(cancelled.status, 4);
+        assert!(TaskMarker::for_closed_task(creator, TaskStatus::Completed, 0b100, 1).is_err());
+
+        // Wrong buffer sizes are refused (a resize must come first).
+        let mut short = vec![0u8; TaskMarker::SIZE - 1];
+        assert!(cancelled.write_to(&mut short).is_err());
+        let mut long = vec![0u8; Task::SIZE];
+        assert!(cancelled.write_to(&mut long).is_err());
+
+        // A tampered reserved byte or status fails the canonical check.
+        let mut bad = cancelled.clone();
+        bad._reserved[5] = 1;
+        assert!(!bad.validate_reserved_fields());
+        let mut bad = cancelled;
+        bad.status = 2;
+        assert!(!bad.validate_reserved_fields());
+    }
+
+    #[test]
+    fn dispute_bond_kinds_and_reserved_guard() {
+        assert_eq!(DisputeBond::KIND_REJECTION, 0);
+        assert_eq!(DisputeBond::KIND_TASK_DISPUTE, 1);
+        let mut b = DisputeBond::default();
+        assert!(b.validate_reserved_fields());
+        b._reserved[23] = 1;
+        assert!(!b.validate_reserved_fields());
+    }
+
+    #[test]
+    fn creator_stats_init_if_fresh_is_idempotent() {
+        let wallet = Pubkey::new_unique();
+        let mut s = CreatorStats::default();
+        s.init_if_fresh(wallet, 4);
+        assert_eq!(s.wallet, wallet);
+        assert_eq!(s.bump, 4);
+        assert!(s.validate_reserved_fields());
+        s.rejections = 2;
+        s.init_if_fresh(Pubkey::new_unique(), 9);
+        assert_eq!(s.wallet, wallet, "identity must not be overwritten");
+        assert_eq!(s.bump, 4);
+        assert_eq!(s.rejections, 2);
+    }
+
+    #[test]
+    fn rev9_surface_constant_follows_revision_8() {
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW, 9);
+        assert_eq!(
+            ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW,
+            ProtocolConfig::SURFACE_REVISION_FEE_QUALIFIED_RATINGS + 1
+        );
     }
 }

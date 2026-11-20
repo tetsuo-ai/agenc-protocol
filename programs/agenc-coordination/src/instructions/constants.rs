@@ -233,3 +233,62 @@ pub const DEFAULT_DISPUTE_INITIATION_COOLDOWN: i64 = 300;
 
 /// Default maximum disputes per agent per 24-hour window
 pub const DEFAULT_MAX_DISPUTES_PER_24H: u8 = 10;
+
+// ============================================================================
+// Revision 9 (accountable review) constants. Design Appendix B.
+// ============================================================================
+
+/// How long a worker may dispute a revision 9 freeze (`reject_and_freeze`),
+/// whatever the buyer's review window was. 72 hours.
+///
+/// Owner decision (design question 1, 2026-11-20): 72 hours. Defined only here.
+#[cfg(not(feature = "validation-timings"))]
+pub const REJECT_DISPUTE_WINDOW_SECS: i64 = 259_200;
+#[cfg(feature = "validation-timings")]
+pub const REJECT_DISPUTE_WINDOW_SECS: i64 = 300;
+
+/// How long the 2-of-3 multisig has to rule on a disputed freeze, counted from
+/// the dispute filing. 72 hours.
+///
+/// Owner decision (design question 2, 2026-11-20): 72 hours. Defined only here.
+#[cfg(not(feature = "validation-timings"))]
+pub const REJECT_RULING_WINDOW_SECS: i64 = 259_200;
+#[cfg(feature = "validation-timings")]
+pub const REJECT_RULING_WINDOW_SECS: i64 = 300;
+
+/// Floor on the resubmit window `request_changes` gives the worker, so a short
+/// review window cannot turn a change request into a no-show refund. 24 hours.
+#[cfg(not(feature = "validation-timings"))]
+pub const MIN_RESUBMIT_WINDOW_SECS: i64 = 86_400;
+#[cfg(feature = "validation-timings")]
+pub const MIN_RESUBMIT_WINDOW_SECS: i64 = 60;
+
+/// A worker that releases an undelivered claim within this many seconds of
+/// claiming gets its claim deposit back; later it goes to the buyer. 1 hour.
+#[cfg(not(feature = "validation-timings"))]
+pub const CLAIM_RELEASE_GRACE_SECS: i64 = 3_600;
+#[cfg(feature = "validation-timings")]
+pub const CLAIM_RELEASE_GRACE_SECS: i64 = 60;
+
+/// Claim deposit rate: 10% of the worker's share, in basis points.
+pub const CLAIM_DEPOSIT_BPS: u64 = 1_000;
+
+/// Claim deposit floor (0.005 SOL).
+pub const MIN_CLAIM_DEPOSIT_LAMPORTS: u64 = 5_000_000;
+
+/// Dispute bond rate: 10% of the disputed amount, in basis points.
+pub const DISPUTE_BOND_BPS: u64 = 1_000;
+
+/// Dispute bond floor (0.01 SOL).
+pub const MIN_DISPUTE_BOND_LAMPORTS: u64 = 10_000_000;
+
+/// On-chain size of a `TaskMarker` (discriminator included).
+pub const TASK_MARKER_SIZE: usize = 56;
+
+/// `TaskSubmission.freeze_kind` value for a revision 9 (disputable) freeze.
+/// Zero is a revision 8 freeze or a submission that was never frozen.
+pub const FREEZE_KIND_DISPUTABLE: u8 = 1;
+
+/// `TaskModeration.rent_payer_role` value meaning the task creator paid the
+/// record's rent. Zero means the moderator paid it.
+pub const MODERATION_RENT_PAYER_CREATOR: u8 = 1;

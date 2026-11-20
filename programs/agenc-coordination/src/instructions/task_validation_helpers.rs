@@ -17,6 +17,24 @@ pub fn is_manual_validation_task(task: &Task) -> bool {
     task.constraint_hash == MANUAL_VALIDATION_SENTINEL
 }
 
+/// Revision 9 (A): an Exclusive task with one worker and the manual-validation
+/// sentinel. This is the part of the single-worker review predicate that the
+/// Task alone can prove; callers that hold the validation config should use
+/// `is_single_worker_review_task`.
+pub fn is_single_worker_manual_task(task: &Task) -> bool {
+    task.task_type == TaskType::Exclusive
+        && task.max_workers == 1
+        && is_manual_validation_task(task)
+}
+
+/// Revision 9 (A): a single-worker review task (design section 1.2): Exclusive,
+/// `max_workers == 1`, the manual-validation sentinel and a CreatorReview
+/// config. On such a task the buyer refuses work only by freezing it, and the
+/// worker disputes the freeze instead of opening a general dispute.
+pub fn is_single_worker_review_task(task: &Task, mode: ValidationMode) -> bool {
+    is_single_worker_manual_task(task) && mode == ValidationMode::CreatorReview
+}
+
 pub fn validate_validation_mode(mode: u8) -> Result<ValidationMode> {
     match mode {
         0 => Ok(ValidationMode::Auto),
@@ -387,6 +405,62 @@ pub fn saturating_dec_counter<T: SaturatingDec>(v: T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Revision 9 (A): the single-worker review predicate truth table. Every
+    // input must hold; flipping any one makes it false.
+    #[test]
+    fn single_worker_review_predicate_truth_table() {
+        let review = Task {
+            task_type: TaskType::Exclusive,
+            max_workers: 1,
+            constraint_hash: MANUAL_VALIDATION_SENTINEL,
+            ..Task::default()
+        };
+        assert!(is_single_worker_manual_task(&review));
+        assert!(is_single_worker_review_task(
+            &review,
+            ValidationMode::CreatorReview
+        ));
+        for mode in [
+            ValidationMode::Auto,
+            ValidationMode::ValidatorQuorum,
+            ValidationMode::ExternalAttestation,
+        ] {
+            assert!(!is_single_worker_review_task(&review, mode));
+        }
+        for task_type in [
+            TaskType::Collaborative,
+            TaskType::Competitive,
+            TaskType::BidExclusive,
+        ] {
+            let t = Task {
+                task_type,
+                ..review.clone()
+            };
+            assert!(!is_single_worker_manual_task(&t));
+            assert!(!is_single_worker_review_task(
+                &t,
+                ValidationMode::CreatorReview
+            ));
+        }
+        let two_workers = Task {
+            max_workers: 2,
+            ..review.clone()
+        };
+        assert!(!is_single_worker_review_task(
+            &two_workers,
+            ValidationMode::CreatorReview
+        ));
+        let auto_task = Task {
+            constraint_hash: [0u8; 32],
+            ..review
+        };
+        assert!(!is_single_worker_manual_task(&auto_task));
+        assert!(!is_single_worker_review_task(
+            &auto_task,
+            ValidationMode::CreatorReview
+        ));
+    }
 
     #[test]
     fn test_sync_task_validation_status_prefers_pending_submission_state() {

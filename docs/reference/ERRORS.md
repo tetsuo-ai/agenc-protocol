@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**418 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**434 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -429,3 +429,19 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6415 | 0x190f | `MarketplacePayeeUnpayable` | Marketplace payee cannot receive a fee: program id or reserved account key |
 | 6416 | 0x1910 | `DisputeCounterRepairNotApplicable` | Dispute counter repair does not apply to these disputes |
 | 6417 | 0x1911 | `DisputeCounterNotDeficient` | Initiator counter still holds a unit; finalize the outcomes that own one first |
+| 6418 | 0x1912 | `SingleWorkerRejectMustFreeze` | A single-worker review task must be refused with reject_and_freeze |
+| 6419 | 0x1913 | `RejectionDisputeWindowClosed` | The window to dispute this rejection has closed |
+| 6420 | 0x1914 | `RejectionNotDisputable` | Only a revision 9 freeze can be disputed |
+| 6421 | 0x1915 | `RejectionDisputeRequired` | Ruling on this freeze needs a filed dispute |
+| 6422 | 0x1916 | `RejectionWindowStillOpen` | The dispute or ruling window is still open |
+| 6423 | 0x1917 | `RulingWindowClosed` | The ruling window has closed |
+| 6424 | 0x1918 | `InvalidDisputeBond` | Dispute bond account is missing or does not match |
+| 6425 | 0x1919 | `DisputeRefusedOnReviewTask` | Disputes are refused on single-worker review tasks |
+| 6426 | 0x191a | `ClaimDepositRecipientRequired` | The task creator account must receive the claim deposit |
+| 6427 | 0x191b | `ClaimNotReleasable` | This claim cannot be released |
+| 6428 | 0x191c | `ValidationModeClosed` | This validation mode is closed for new tasks |
+| 6429 | 0x191d | `CreatorReviewUnsupportedForTask` | Creator review needs a SOL reward and a non-bid task |
+| 6430 | 0x191e | `TaskNotCompactable` | Task cannot be compacted yet |
+| 6431 | 0x191f | `InvalidTaskMarker` | Account is neither a Task nor a TaskMarker |
+| 6432 | 0x1920 | `ModeratorIsTaskCreator` | A task creator cannot moderate its own task |
+| 6433 | 0x1921 | `InvalidModerationRentPayer` | Moderation rent payer must be the task creator or the moderator |

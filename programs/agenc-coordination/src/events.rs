@@ -1401,3 +1401,143 @@ pub struct OrphanTaskChildReclaimed {
     pub reclaimed_lamports: u64,
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Revision 9 events (accountable review). Design Appendix D.
+// ============================================================================
+
+/// `RejectionDisputeSettled.outcome` values.
+pub mod rejection_dispute_outcome {
+    /// No dispute was filed; the window ran out and the buyer was refunded.
+    pub const REFUNDED_UNDISPUTED: u8 = 0;
+    /// The multisig ruled for the buyer.
+    pub const REFUNDED_BY_RULING: u8 = 1;
+    /// The multisig ruled for the worker.
+    pub const PAID_BY_RULING: u8 = 2;
+    /// A dispute was filed but not ruled in time; the buyer was refunded and
+    /// the worker's bond came back (owner decision, design question 3).
+    pub const REFUNDED_UNRULED: u8 = 3;
+}
+
+/// A worker disputed a revision 9 freeze and posted its bond.
+#[event]
+pub struct RejectionDisputed {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker_agent: Pubkey,
+    /// Worker wallet that posted the bond.
+    pub filer: Pubkey,
+    pub bond_amount: u64,
+    pub evidence_hash: [u8; 32],
+    pub ruling_deadline: i64,
+    pub timestamp: i64,
+}
+
+/// A revision 9 freeze reached its end, disputed or not. `outcome` is one of
+/// `rejection_dispute_outcome`. `bond_amount` is 0 when no bond was posted.
+#[event]
+pub struct RejectionDisputeSettled {
+    pub task: Pubkey,
+    pub outcome: u8,
+    pub bond_amount: u64,
+    /// Who received the bond principal (default pubkey when there was no bond).
+    pub bond_recipient: Pubkey,
+    /// Proposer of the ruling (default pubkey when no ruling was made).
+    pub resolved_by: Pubkey,
+    /// Ruling rationale hash (zero when no ruling was made).
+    pub rationale_hash: [u8; 32],
+    pub timestamp: i64,
+}
+
+/// A filer posted a dispute bond. `kind` is `DisputeBond::KIND_*`.
+#[event]
+pub struct DisputeBondPosted {
+    /// The task (rejection dispute) or the Dispute account (task dispute).
+    pub subject: Pubkey,
+    pub task: Pubkey,
+    pub kind: u8,
+    pub filer: Pubkey,
+    pub respondent: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// A dispute bond was settled: its principal went to `recipient` and its rent
+/// back to the filer.
+#[event]
+pub struct DisputeBondSettled {
+    pub subject: Pubkey,
+    pub kind: u8,
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// A worker put down a claim deposit.
+#[event]
+pub struct ClaimDepositPosted {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker_agent: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// A claim deposit left the claim: back to the worker (`forfeited == false`)
+/// or to the buyer (`forfeited == true`).
+#[event]
+pub struct ClaimDepositSettled {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker_agent: Pubkey,
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub forfeited: bool,
+    pub timestamp: i64,
+}
+
+/// A worker released an undelivered claim with `release_claim`.
+#[event]
+pub struct ClaimReleased {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker_agent: Pubkey,
+    pub deposit_refunded: bool,
+    pub timestamp: i64,
+}
+
+/// `close_task` compacted a terminal Task into a TaskMarker at the same address.
+#[event]
+pub struct TaskCompacted {
+    pub task: Pubkey,
+    pub creator: Pubkey,
+    /// 3 Completed or 4 Cancelled.
+    pub status: u8,
+    /// Lamports above the marker's rent minimum returned to the creator.
+    pub refunded_lamports: u64,
+    /// Lamports kept on the marker.
+    pub marker_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Which `CreatorStats` counter was incremented.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CreatorRecordCounter {
+    Rejections,
+    RejectionsContested,
+    DisputesWon,
+    DisputesLost,
+    Cancels,
+    DepositsReceived,
+}
+
+/// A counter on a wallet-keyed `CreatorStats` record was incremented.
+#[event]
+pub struct CreatorTrackRecordUpdated {
+    pub wallet: Pubkey,
+    pub creator_stats: Pubkey,
+    pub counter: CreatorRecordCounter,
+    /// The counter's value after this increment.
+    pub new_value: u64,
+    pub timestamp: i64,
+}

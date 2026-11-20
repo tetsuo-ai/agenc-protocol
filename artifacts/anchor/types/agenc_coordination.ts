@@ -18277,6 +18277,45 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "claimDepositPosted",
+      "discriminator": [
+        175,
+        238,
+        175,
+        199,
+        29,
+        34,
+        118,
+        254
+      ]
+    },
+    {
+      "name": "claimDepositSettled",
+      "discriminator": [
+        158,
+        102,
+        54,
+        177,
+        33,
+        120,
+        190,
+        8
+      ]
+    },
+    {
+      "name": "claimReleased",
+      "discriminator": [
+        245,
+        109,
+        113,
+        221,
+        103,
+        69,
+        45,
+        93
+      ]
+    },
+    {
       "name": "contestDepositForfeited",
       "discriminator": [
         30,
@@ -18287,6 +18326,19 @@ export type AgencCoordination = {
         92,
         100,
         233
+      ]
+    },
+    {
+      "name": "creatorTrackRecordUpdated",
+      "discriminator": [
+        202,
+        63,
+        34,
+        57,
+        7,
+        183,
+        210,
+        97
       ]
     },
     {
@@ -18313,6 +18365,32 @@ export type AgencCoordination = {
         191,
         122,
         114
+      ]
+    },
+    {
+      "name": "disputeBondPosted",
+      "discriminator": [
+        98,
+        131,
+        81,
+        56,
+        65,
+        66,
+        0,
+        12
+      ]
+    },
+    {
+      "name": "disputeBondSettled",
+      "discriminator": [
+        251,
+        154,
+        122,
+        124,
+        74,
+        130,
+        177,
+        34
       ]
     },
     {
@@ -18875,6 +18953,32 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "rejectionDisputeSettled",
+      "discriminator": [
+        45,
+        108,
+        39,
+        174,
+        72,
+        189,
+        29,
+        89
+      ]
+    },
+    {
+      "name": "rejectionDisputed",
+      "discriminator": [
+        15,
+        173,
+        135,
+        103,
+        143,
+        138,
+        111,
+        168
+      ]
+    },
+    {
       "name": "releaseSurfaceStamped",
       "discriminator": [
         116,
@@ -19184,6 +19288,19 @@ export type AgencCoordination = {
         66,
         243,
         77
+      ]
+    },
+    {
+      "name": "taskCompacted",
+      "discriminator": [
+        244,
+        131,
+        65,
+        127,
+        224,
+        92,
+        131,
+        182
       ]
     },
     {
@@ -21485,6 +21602,86 @@ export type AgencCoordination = {
       "code": 6417,
       "name": "disputeCounterNotDeficient",
       "msg": "Initiator counter still holds a unit; finalize the outcomes that own one first"
+    },
+    {
+      "code": 6418,
+      "name": "singleWorkerRejectMustFreeze",
+      "msg": "A single-worker review task must be refused with reject_and_freeze"
+    },
+    {
+      "code": 6419,
+      "name": "rejectionDisputeWindowClosed",
+      "msg": "The window to dispute this rejection has closed"
+    },
+    {
+      "code": 6420,
+      "name": "rejectionNotDisputable",
+      "msg": "Only a revision 9 freeze can be disputed"
+    },
+    {
+      "code": 6421,
+      "name": "rejectionDisputeRequired",
+      "msg": "Ruling on this freeze needs a filed dispute"
+    },
+    {
+      "code": 6422,
+      "name": "rejectionWindowStillOpen",
+      "msg": "The dispute or ruling window is still open"
+    },
+    {
+      "code": 6423,
+      "name": "rulingWindowClosed",
+      "msg": "The ruling window has closed"
+    },
+    {
+      "code": 6424,
+      "name": "invalidDisputeBond",
+      "msg": "Dispute bond account is missing or does not match"
+    },
+    {
+      "code": 6425,
+      "name": "disputeRefusedOnReviewTask",
+      "msg": "Disputes are refused on single-worker review tasks"
+    },
+    {
+      "code": 6426,
+      "name": "claimDepositRecipientRequired",
+      "msg": "The task creator account must receive the claim deposit"
+    },
+    {
+      "code": 6427,
+      "name": "claimNotReleasable",
+      "msg": "This claim cannot be released"
+    },
+    {
+      "code": 6428,
+      "name": "validationModeClosed",
+      "msg": "This validation mode is closed for new tasks"
+    },
+    {
+      "code": 6429,
+      "name": "creatorReviewUnsupportedForTask",
+      "msg": "Creator review needs a SOL reward and a non-bid task"
+    },
+    {
+      "code": 6430,
+      "name": "taskNotCompactable",
+      "msg": "Task cannot be compacted yet"
+    },
+    {
+      "code": 6431,
+      "name": "invalidTaskMarker",
+      "msg": "Account is neither a Task nor a TaskMarker"
+    },
+    {
+      "code": 6432,
+      "name": "moderatorIsTaskCreator",
+      "msg": "A task creator cannot moderate its own task"
+    },
+    {
+      "code": 6433,
+      "name": "invalidModerationRentPayer",
+      "msg": "Moderation rent payer must be the task creator or the moderator"
     }
   ],
   "types": [
@@ -22913,6 +23110,108 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "claimDepositPosted",
+      "docs": [
+        "A worker put down a claim deposit."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "claimDepositSettled",
+      "docs": [
+        "A claim deposit left the claim: back to the worker (`forfeited == false`)",
+        "or to the buyer (`forfeited == true`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "forfeited",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "claimReleased",
+      "docs": [
+        "A worker released an undelivered claim with `release_claim`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "type": "pubkey"
+          },
+          {
+            "name": "depositRefunded",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "completionBond",
       "docs": [
         "Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post",
@@ -23101,6 +23400,73 @@ export type AgencCoordination = {
               "Bump seed"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "creatorRecordCounter",
+      "docs": [
+        "Which `CreatorStats` counter was incremented."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "rejections"
+          },
+          {
+            "name": "rejectionsContested"
+          },
+          {
+            "name": "disputesWon"
+          },
+          {
+            "name": "disputesLost"
+          },
+          {
+            "name": "cancels"
+          },
+          {
+            "name": "depositsReceived"
+          }
+        ]
+      }
+    },
+    {
+      "name": "creatorTrackRecordUpdated",
+      "docs": [
+        "A counter on a wallet-keyed `CreatorStats` record was incremented."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "creatorStats",
+            "type": "pubkey"
+          },
+          {
+            "name": "counter",
+            "type": {
+              "defined": {
+                "name": "creatorRecordCounter"
+              }
+            }
+          },
+          {
+            "name": "newValue",
+            "docs": [
+              "The counter's value after this increment."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -23543,6 +23909,80 @@ export type AgencCoordination = {
               "final peer settles. Only meaningful while `status == SettlementPending`."
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeBondPosted",
+      "docs": [
+        "A filer posted a dispute bond. `kind` is `DisputeBond::KIND_*`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "subject",
+            "docs": [
+              "The task (rejection dispute) or the Dispute account (task dispute)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "filer",
+            "type": "pubkey"
+          },
+          {
+            "name": "respondent",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeBondSettled",
+      "docs": [
+        "A dispute bond was settled: its principal went to `recipient` and its rent",
+        "back to the filer."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -27116,6 +27556,111 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "rejectionDisputeSettled",
+      "docs": [
+        "A revision 9 freeze reached its end, disputed or not. `outcome` is one of",
+        "`rejection_dispute_outcome`. `bond_amount` is 0 when no bond was posted."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "outcome",
+            "type": "u8"
+          },
+          {
+            "name": "bondAmount",
+            "type": "u64"
+          },
+          {
+            "name": "bondRecipient",
+            "docs": [
+              "Who received the bond principal (default pubkey when there was no bond)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "resolvedBy",
+            "docs": [
+              "Proposer of the ruling (default pubkey when no ruling was made)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rationaleHash",
+            "docs": [
+              "Ruling rationale hash (zero when no ruling was made)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rejectionDisputed",
+      "docs": [
+        "A worker disputed a revision 9 freeze and posted its bond."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "type": "pubkey"
+          },
+          {
+            "name": "filer",
+            "docs": [
+              "Worker wallet that posted the bond."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bondAmount",
+            "type": "u64"
+          },
+          {
+            "name": "evidenceHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rulingDeadline",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "releaseSurfaceStamped",
       "docs": [
         "Emitted only after the atomic release-boundary instruction has locked and",
@@ -29698,6 +30243,50 @@ export type AgencCoordination = {
               "Whether a hire link was closed (and its listing's capacity slot freed)."
             ],
             "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskCompacted",
+      "docs": [
+        "`close_task` compacted a terminal Task into a TaskMarker at the same address."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "docs": [
+              "3 Completed or 4 Cancelled."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "refundedLamports",
+            "docs": [
+              "Lamports above the marker's rent minimum returned to the creator."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "markerLamports",
+            "docs": [
+              "Lamports kept on the marker."
+            ],
+            "type": "u64"
           },
           {
             "name": "timestamp",
