@@ -16,6 +16,11 @@ An explicit development-only `private-zk` feature adds three quarantined proof
 instructions, producing a 107-instruction development build. It is not a release surface and
 the deployment preflight rejects a production build or IDL that contains it.
 
+This source is the revision-9 candidate (accountable review,
+`SURFACE_REVISION_CURRENT = 9`): 106 production instructions, 109 with
+`private-zk`, and the 25-instruction canary. It is not deployed; its client train
+is pending. See [Revision 9 notes](./PROGRAM_SURFACE.md#revision-9-notes).
+
 > **As of 2026-10-28 the full 104-instruction revision-8 surface is deployed on
 > mainnet** (`surface_revision = 8` / `SURFACE_REVISION_FEE_QUALIFIED_RATINGS`,
 > release commit `f39b383e416ec5bc511b0ffb781481a658d137d8`, deployment slot
@@ -53,6 +58,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `6` (`SURFACE_REVISION_AUTHORITY_FEED`) | **Never stamped on mainnet on its own; part of revision 8.** 102 production ix; wallet-authority feed receipts, legacy agent-vote writes retired, prospective wallet count separate from history | full-surface capabilities and `goods: true`; **`feedAuthorityVotes: true`** |
 | `7` (`SURFACE_REVISION_TASK_QUOTAS`) | **Never stamped on mainnet on its own; part of revision 8.** 103 production ix; optional multisig-approved u32 wallet task quotas preserve default limits and usage | revision-6 capabilities plus **`taskCreationQuotas: true`** |
 | `8` (`SURFACE_REVISION_FEE_QUALIFIED_RATINGS`) | **Live on mainnet since 2026-10-28.** 104 production ix; each new listing or skill rating needs a recorded SOL protocol fee of at least 100,000 lamports; adds the one-time `repair_dispute_initiator_counter` | revision-7 capabilities plus **`feeQualifiedRatings: true`** |
+| `9` (`SURFACE_REVISION_ACCOUNTABLE_REVIEW`) | **Candidate in this source; not on mainnet.** 106 production ix; disputable freezes and dispute bonds, creator records, claim deposits and `release_claim`, `hire_from_listing` v3, compacted task markers, 2-of-3 moderation and suspension | defined by the revision-9 client train; SDK 0.13 treats 9 as unknown and fails closed |
 
 > **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
 > pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
@@ -91,10 +97,10 @@ singletons, ProgramData metadata, on-chain IDL, and upgrade-custody account.
 A **fresh production deploy** initializes with `protocol_paused = true` and
 `surface_revision = 0`; initialization alone is not proof that the reviewed
 release singletons, IDL, and custody boundary are present. Production reaches
-`SURFACE_REVISION_CURRENT` (`8` in this source) only through
+`SURFACE_REVISION_CURRENT` (`9` in this source) only through
 `stamp_release_surface`. After that stamp, `update_launch_controls` may unpause
 only when the resulting stored revision is CURRENT; rolling back to revision
-`0` to `7` pauses conservatively and requires a new atomic stamp before another
+`0` to `8` pauses conservatively and requires a new atomic stamp before another
 unpause. Goods handlers are enabled at every revision `>= 4`. The restricted
 **canary** has no atomic stamp instruction, remains at revision `0`, and may be
 unpaused on that conservative surface.
@@ -108,12 +114,13 @@ unpaused on that conservative surface.
 
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
 |---|---|---|---|---|---|---|
+| full (revision 9, candidate) | **106 ix** | not deployed | `9` (ACCOUNTABLE_REVIEW) | revision-9 client train, pending (`@tetsuo-ai/marketplace-sdk` **0.14.x** planned) | `true` | `true` |
 | full (revision 8) | **104 ix** | **mainnet** (live since 2026-10-28) | `8` (FEE_QUALIFIED_RATINGS) | `@tetsuo-ai/marketplace-sdk` **0.13.x** (revision-8 client) | `true` | `true` |
 | full (revision 7) | **103 ix** | disposable local validation only; never stamped on mainnet on its own (part of revision 8) | `7` (TASK_QUOTAS) | same SDK **0.13.x** train | `true` | `true` |
 | full (revision 6) | **102 ix** | disposable local validation only; never stamped on mainnet on its own (part of revision 8) | `6` (AUTHORITY_FEED) | same SDK **0.13.x** train | `true` | `true` |
 | full (revision 5, superseded) | **101 ix** | mainnet (live 2026-07-22 to 2026-10-28) | `5` (AUDIT_HARDENING) | `@tetsuo-ai/marketplace-sdk` **0.12.x** (revision-5 client) | `true` | `true` |
 | full (revision 4, superseded) | **99 ix** | mainnet (live 2026-07-09 → 2026-07-22) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| explicit `private-zk` development build | 107 ix | local development only | not releasable | unsupported | n/a | n/a |
+| explicit `private-zk` development build | 109 ix (107 at revision 8) | local development only | not releasable | unsupported | n/a | n/a |
 | historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 

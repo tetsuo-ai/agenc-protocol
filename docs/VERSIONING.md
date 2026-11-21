@@ -74,6 +74,13 @@ The paused reviewed upgrade, IDL publication and atomic revision-8 stamp
 completed on 2026-10-28; the ceremony record is in
 [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
+Revision 9 (accountable review) is the candidate in this source and is not
+deployed. It changes the wire of existing instructions (appended accounts,
+`hire_from_listing` v3, a new `resolve_reject_frozen` discriminator) and adds
+`dispute_rejection` and `release_claim`, so revision-8 clients cannot speak it;
+its client train is pending and nothing here claims a publication. The behavior
+and its known limits are in [Revision 9 notes](./PROGRAM_SURFACE.md#revision-9-notes).
+
 ### 1.1 Current compatible set (as of 2026-10-28)
 
 The live program wire is the full 104-instruction revision-8 surface
