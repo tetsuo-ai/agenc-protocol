@@ -231,11 +231,39 @@ export interface JobRecord {
   result: JobResult | null;
   /**
    * Whether the provider has a marketplace record of turn-downs, read while
-   * the job is delivered until it has one (a record is never removed). A
-   * turn-down is counted only in a record that exists: starting one would
-   * cost the buyer. Absent until read.
+   * the job is delivered until it has one (a record is never removed). Since
+   * revision 9 every turn-down is counted; a provider whose claim predates
+   * revision 9 may have none, and the turn-down then starts it, paid by the
+   * buyer. Absent until read.
    */
   providerRecorded?: boolean;
+  /**
+   * While the job is turned down (reject_frozen): the turn-down as the chain
+   * shows it, read on every look. Absent otherwise.
+   */
+  turnDown?: {
+    /**
+     * True: a revision 9 turn-down. The provider may dispute it until
+     * `disputeUntil`, and the buyer is refunded unless a ruling pays the
+     * provider. False: one made before revision 9, which pays the provider
+     * if nobody rules by its review time (`disputeUntil` holds it).
+     */
+    disputable: boolean;
+    /** Unix seconds. */
+    disputeUntil: number;
+    /** Lamports a dispute posts as its bond. */
+    bondLamports: string;
+    /** Unix seconds: the last second a ruling may land, once disputed. Null before. */
+    rulingUntil: number | null;
+    /** Whether the provider may dispute it now, by the cluster's clock at the last look. */
+    disputeOpen: boolean;
+  };
+  /**
+   * Lamports the paying wallet lacked, at the last try, to cancel the job for
+   * its refund: a first cancel starts the wallet's marketplace record. Absent
+   * when nothing was missing.
+   */
+  refundBlockedLamports?: string;
   rating: number | null;
   /** The finished job's deposits were collected and its slot released. */
   tidied: boolean;

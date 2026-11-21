@@ -65,9 +65,13 @@ describe("taking everything back", () => {
     expect(job.status).toBe("waiting");
 
     await wallet.reclaimFromAgent(agent.id, "all");
-    // The network's minimum, and the room for fees the job was set up with.
+    // The network's minimum, the room for fees the job was set up with, and
+    // (revision 9) what a first cancel or turn-down spends on the wallet's
+    // marketplace record, so the job can still be cancelled or turned down.
     expect(await world.balance(agent.address)).toBe(
-      (await sandbox.chain.getMinimumBalanceForRentExemption(0)) + FEE_HEADROOM_LAMPORTS,
+      (await sandbox.chain.getMinimumBalanceForRentExemption(0)) +
+        FEE_HEADROOM_LAMPORTS +
+        (await sandbox.chain.getMinimumBalanceForRentExemption(129)),
     );
     // So the job still finishes: delivered, paid, and its deposits back.
     await sandbox.workOnce();
@@ -119,8 +123,12 @@ describe("taking everything back", () => {
     expect(posted.status).toBe("waiting");
 
     await wallet.withdraw(OUTSIDE, "all");
+    // Revision 9: the first cancel starts the wallet's marketplace record,
+    // so that is kept too.
     expect(await world.balance(wallet.mainAddress)).toBe(
-      (await world.sandbox.chain.getMinimumBalanceForRentExemption(0)) + FEE_HEADROOM_LAMPORTS,
+      (await world.sandbox.chain.getMinimumBalanceForRentExemption(0)) +
+        FEE_HEADROOM_LAMPORTS +
+        (await world.sandbox.chain.getMinimumBalanceForRentExemption(129)),
     );
     // So the request can still be cancelled, and its reward comes back.
     const cancelled = await wallet.refundJob(posted.id, true);

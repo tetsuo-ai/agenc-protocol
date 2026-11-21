@@ -172,24 +172,30 @@ describe("posting a request", () => {
     await expect(wallet.rateJob(posted.id, 5, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
   });
 
-  it("turns a delivered request down: the reward is held for review, and the buyer pays the fee alone", async () => {
+  it("turns a delivered request down: the reward is held, and the buyer pays the fee and starts its record once", async () => {
     world = await startWorld();
     const { wallet, sandbox } = world;
     const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 } });
     await sandbox.workOnce();
     const delivered = await wallet.getJob(posted.id, true);
     expect(delivered.status).toBe("delivered");
-    // Whoever took it has no record of turn-downs, and starting one would cost the buyer.
-    expect(delivered.turnDownRecorded).toBe(false);
+    // Revision 9: whoever took it has a record (its claim started it), and
+    // every turn-down counts there.
+    expect(delivered.turnDownRecorded).toBe(true);
+    const recordRent = await sandbox.chain.getMinimumBalanceForRentExemption(129);
+    expect(delivered.firstRecordCost?.lamports).toBe(recordRent.toString());
 
     const before = await world.balance(wallet.mainAddress);
     const held = await wallet.refundJob(posted.id, true);
     expect(held.status).toBe("in_review");
-    expect(held.statusText).toMatch(/the reward is on hold while it is reviewed/);
-    expect(before - (await world.balance(wallet.mainAddress))).toBe(5_000n);
-    // No record was started. The turn-down carries a reason anyone can
-    // rebuild from the chain alone.
-    expect(await sandbox.chain.readAccount(await providerRecordAddress(delivered.provider as Address))).toBeNull();
+    await wallet.tick();
+    expect((await wallet.getJob(posted.id, true)).statusText).toMatch(
+      /The time to dispute it ends.*the reward comes back then/,
+    );
+    expect(before - (await world.balance(wallet.mainAddress))).toBe(5_000n + recordRent);
+    // The turn-down is on the taker's record, and carries a reason anyone
+    // can rebuild from the chain alone.
+    expect(await sandbox.chain.readAccount(await providerRecordAddress(delivered.provider as Address))).not.toBeNull();
     const submission = await submissionOf(world, posted.task!, delivered.provider!);
     const [specAddress] = await findTaskJobSpecPda({ task: posted.task as Address });
     const pinned = getTaskJobSpecDecoder().decode((await sandbox.chain.readAccount(specAddress))!);
@@ -200,7 +206,12 @@ describe("posting a request", () => {
     });
     expect(values.bytesToHex(new Uint8Array(submission.rejectionHash))).toBe(expected.hex);
 
-    // The reviewer agrees: the reward comes back.
+    // The taker disputes; the reviewers agree with the buyer: the reward
+    // comes back, with the taker's bond.
+    await sandbox.disputeTurnDown({
+      task: posted.task as Address,
+      providerAgent: delivered.provider as Address,
+    });
     await sandbox.ruleOnTurnedDown({
       task: posted.task as Address,
       providerAgent: delivered.provider as Address,
@@ -210,7 +221,9 @@ describe("posting a request", () => {
     await wallet.tick();
     const refunded = await wallet.getJob(posted.id, true);
     expect(refunded.status).toBe("refunded");
-    expect((await world.balance(wallet.mainAddress)) - before).toBeGreaterThanOrEqual(30n * CENT);
+    expect((await world.balance(wallet.mainAddress)) - before).toBeGreaterThanOrEqual(
+      30n * CENT + values.MIN_DISPUTE_BOND_LAMPORTS - 5_000n - recordRent,
+    );
     expect((await wallet.overview()).main.spent.lamports).toBe("0");
   });
 
@@ -224,8 +237,11 @@ describe("posting a request", () => {
     expect(cancelled.status).toBe("refunded");
     expect(cancelled.statusText).toBe("Cancelled. The reward came back.");
     await wallet.tick();
-    // Only what the quote called kept is gone.
-    expect(before - (await world.balance(wallet.mainAddress))).toBe(BigInt(quote.kept.lamports));
+    // Only what the quote called kept is gone, and the record of turn-downs
+    // and cancels this first cancel started (revision 9).
+    expect(before - (await world.balance(wallet.mainAddress))).toBe(
+      BigInt(quote.kept.lamports) + (await sandbox.chain.getMinimumBalanceForRentExemption(129)),
+    );
     // Nobody can take it any more.
     expect(await sandbox.workOnce()).toBe(0);
     expect((await wallet.listActivity()).map((entry) => entry.text)).toContain(
@@ -293,11 +309,17 @@ describe("posting a request", () => {
         "Whoever took this request did not deliver in time, so it was cancelled and the reward came back.",
       );
       await wallet.tick();
-      // The reward came back; what is gone is what the quote called kept (and,
-      // on the practice chain, the fee of the cancel it refused above).
+      // The reward came back. What is gone is what the quote called kept
+      // (and, on the practice chain, the fee of the cancel it refused above),
+      // plus the record this first cancel started, less the taker's claim
+      // deposit, which a no-show leaves to the buyer (revision 9).
       const gone = before - (await sandbox.chain.getBalance(wallet.mainAddress));
-      expect(gone).toBeGreaterThanOrEqual(BigInt(quote.kept.lamports));
-      expect(gone).toBeLessThanOrEqual(BigInt(quote.kept.lamports) + 5_000n);
+      const expected =
+        BigInt(quote.kept.lamports) +
+        (await sandbox.chain.getMinimumBalanceForRentExemption(129)) -
+        values.MIN_CLAIM_DEPOSIT_LAMPORTS;
+      expect(gone).toBeGreaterThanOrEqual(expected);
+      expect(gone).toBeLessThanOrEqual(expected + 5_000n);
     } finally {
       await wallet.close();
     }

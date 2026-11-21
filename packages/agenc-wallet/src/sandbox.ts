@@ -65,7 +65,7 @@ import {
 } from "./chain.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
-import { sendFrozenRuling } from "./market.js";
+import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
 import { settlementOf } from "./settlement.js";
 import {
@@ -127,12 +127,12 @@ export interface OpenJob {
   /** The house buyer approves the delivery, paying whoever did the job. */
   approve(): Promise<void>;
   /**
-   * The house buyer turns the delivery down, which puts the price on hold for
-   * review. Like any wallet it counts the turn-down only in a record the
-   * provider already has; with `payForRecord` it is a buyer who pays to start
-   * that record, which the marketplace lets anyone do.
+   * The house buyer turns the delivery down, which puts the price on hold.
+   * The provider then has the dispute time (72 hours here too) to dispute
+   * it; if it does not, the house buyer is refunded when that time ends. The
+   * turn-down always counts on the provider's record.
    */
-  turnDown(options?: { payForRecord?: boolean }): Promise<void>;
+  turnDown(): Promise<void>;
   /** True once someone has delivered and the job waits for approval. */
   delivered(): Promise<boolean>;
 }
@@ -159,13 +159,21 @@ export interface Sandbox {
   advanceClock(seconds: number): void;
   /**
    * Rule on a delivery its buyer turned down, as the practice marketplace's
-   * reviewer. `payProvider` false sends the price back to the buyer.
+   * reviewers. Since revision 9 they rule only on a turn-down the provider
+   * disputed, within the ruling time. `payProvider` false sends the price
+   * back to the buyer, with the provider's bond.
    */
   ruleOnTurnedDown(input: {
     task: Address;
-    providerAgent: Address;
+    /** The claim's worker agent; found from the task's claim when omitted. */
+    providerAgent?: Address;
     payProvider: boolean;
   }): Promise<void>;
+  /**
+   * A house provider disputes the turn-down of its delivery, posting the
+   * bond, as a provider's person would. For trying a disputed turn-down.
+   */
+  disputeTurnDown(input: { task: Address; providerAgent: Address }): Promise<void>;
   /** Deliveries published so far, keyed by fingerprint (tests). */
   readonly deliveries: ReadonlyMap<string, Uint8Array>;
 }
@@ -768,7 +776,27 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       svm.setClock(clock);
     },
     async ruleOnTurnedDown({ task, providerAgent, payProvider }) {
-      await sendFrozenRuling(chain, reviewers, task, providerAgent, payProvider);
+      let worker = providerAgent;
+      if (worker === undefined) {
+        const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
+          "@tetsuo-ai/marketplace-sdk"
+        );
+        const claims = await gpa.getProgramAccounts({
+          filters: [
+            { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskClaimDiscriminatorBytes()) } },
+          ],
+        });
+        worker = claims
+          .map((entry) => getTaskClaimDecoder().decode(entry.data))
+          .find((entry) => entry.task === task)?.worker;
+        if (worker === undefined) throw new Error("nobody holds a claim on that job");
+      }
+      await sendFrozenRuling(chain, reviewers, task, worker, payProvider);
+    },
+    async disputeTurnDown({ task, providerAgent }) {
+      const provider = providers.find((entry) => entry.agent === providerAgent);
+      if (provider === undefined) throw new Error("that is not a house provider");
+      await sendDisputeTurnDown(chain, provider.signer, task, providerAgent);
     },
 
     async addService(service) {
@@ -917,8 +945,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           await sendApproval(chain, buyer, task, claim.worker);
         },
-        async turnDown(options = {}) {
-          const { providerRecordAddress, sendRejectAndFreeze } = await import("./market.js");
+        async turnDown() {
+          const { sendRejectAndFreeze } = await import("./market.js");
           const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
             "@tetsuo-ai/marketplace-sdk"
           );
@@ -932,21 +960,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
-          if (options.payForRecord !== true) {
-            await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
-            return;
-          }
-          const [claimAddress] = await findClaimPda({ task, bidder: claim.worker });
-          await chain.clientFor(buyer).send([
-            await facade.rejectAndFreeze({
-              task,
-              claim: claimAddress,
-              creator: buyer,
-              rejectionHash: reason,
-              agentStats: await providerRecordAddress(claim.worker),
-              systemProgram: SYSTEM_PROGRAM_ADDRESS,
-            }),
-          ]);
+          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
         },
       };
     },

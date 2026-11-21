@@ -185,6 +185,9 @@ function handlers(wallet: AgencWallet): Handlers {
     "jobs.refund": async (params, session) => ({
       job: await wallet.refundJob(text(params.jobId, "job"), owner(session), scope(session)),
     }),
+    "jobs.dispute": async (params, session) => ({
+      job: await wallet.disputeTurnDown(text(params.jobId, "job"), owner(session), scope(session)),
+    }),
     "jobs.rate": async (params, session) => ({
       job: await wallet.rateJob(
         text(params.jobId, "job"),

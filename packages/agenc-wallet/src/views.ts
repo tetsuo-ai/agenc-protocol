@@ -1,5 +1,5 @@
 // Turn the journal's records into what a person reads.
-import { formatMoney, formatWait } from "./client/format.js";
+import { formatMoney, formatSol, formatWait } from "./client/format.js";
 import type {
   ActivityView,
   ApprovalView,
@@ -53,13 +53,68 @@ export function jobStatus(job: JobRecord): JobStatus {
   }
 }
 
+/** A revision 9 turn-down the job is under, or null for any other job. */
+function revision9TurnDown(job: JobRecord): NonNullable<JobRecord["turnDown"]> | null {
+  return job.turnDown !== undefined && job.turnDown.disputable ? job.turnDown : null;
+}
+
+/** The provider's side of a turn-down. */
+function workingTurnDownText(job: JobRecord, now: number, usdPerSol: number | null): string {
+  const turnDown = revision9TurnDown(job);
+  if (turnDown === null) {
+    // A turn-down made before revision 9 keeps its old rule.
+    return job.reviewDeadlineAt !== null
+      ? `The buyer turned this down, so the price is on hold while it is reviewed. If nobody rules, your agent is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
+      : "The buyer turned this down, so the price is on hold while it is reviewed.";
+  }
+  if (turnDown.rulingUntil === null) {
+    if (turnDown.disputeOpen) {
+      const bond = formatMoney(money(turnDown.bondLamports, usdPerSol));
+      return `The buyer turned this down. You can dispute that for a bond of ${bond}. The time to dispute it ends ${formatWait(turnDown.disputeUntil * 1000, now)}. If you do not dispute it, the price goes back to the buyer.`;
+    }
+    return "The buyer turned this down and nobody disputed it in time, so the price goes back to the buyer.";
+  }
+  return `You disputed the buyer's turn-down. The reviewers' time to rule ends ${formatWait(turnDown.rulingUntil * 1000, now)}. If they rule for you, you are paid and your bond comes back. If they rule for the buyer, the buyer gets the bond. If nobody rules, the price goes back to the buyer and your bond comes back.`;
+}
+
+/** The buyer's side of a turn-down; `what` is "price" or "reward". */
+function buyingTurnDownText(job: JobRecord, now: number, what: "price" | "reward"): string {
+  const turnDown = revision9TurnDown(job);
+  if (turnDown === null) {
+    // A turn-down made before revision 9 keeps its old rule.
+    return job.reviewDeadlineAt !== null
+      ? `You turned this down, so the ${what} is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, ${what === "price" ? "the provider" : "it"} is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
+      : `You turned this down, so the ${what} is on hold while it is reviewed.`;
+  }
+  if (turnDown.rulingUntil === null) {
+    return turnDown.disputeOpen
+      ? `You turned this down. The time to dispute it ends ${formatWait(turnDown.disputeUntil * 1000, now)}. If nobody disputes it, the ${what} comes back then.`
+      : `You turned this down and nobody disputed it in time. The ${what} is coming back.`;
+  }
+  return `Your turn-down was disputed. The reviewers' time to rule ends ${formatWait(turnDown.rulingUntil * 1000, now)}. If they rule for you, the ${what} comes back with the bond. If nobody rules, the ${what} comes back.`;
+}
+
+/** A refund that is due but cannot be paid yet: what to add. */
+function blockedRefundText(job: JobRecord, blocked: string): string {
+  const what = job.kind === "request" ? "reward" : "price";
+  return `This job is due for its refund, which needs ${formatSol(blocked)} more in this wallet: a first cancel starts the wallet's marketplace record. Add it and the ${what} comes back.`;
+}
+
 function statusText(
   job: JobRecord,
   status: JobStatus,
   price: Money,
   now: number,
+  usdPerSol: number | null,
 ): string {
   const amount = formatMoney(price);
+  if (
+    job.role === "buying" &&
+    job.refundBlockedLamports !== undefined &&
+    (status === "waiting" || status === "working")
+  ) {
+    return blockedRefundText(job, job.refundBlockedLamports);
+  }
   if (job.role === "buying" && job.kind === "request") return requestText(job, status, amount, now);
   if (job.role === "working") {
     switch (status) {
@@ -68,13 +123,11 @@ function statusText(
       case "delivered":
         return "Delivered. Waiting for the buyer to approve it.";
       case "in_review":
-        return job.reviewDeadlineAt !== null
-          ? `The buyer turned this down, so the price is on hold while it is reviewed. If nobody rules, your agent is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
-          : "The buyer turned this down, so the price is on hold while it is reviewed.";
+        return workingTurnDownText(job, now, usdPerSol);
       case "paid":
         return `Done. Your agent earned ${amount}.`;
       case "refunded":
-        return "The buyer cancelled this job.";
+        return "This job was not paid. The price went back to the buyer.";
       case "failed":
         return job.error ?? "Your agent could not do this job.";
       default:
@@ -101,9 +154,7 @@ function statusText(
         ? `Delivered. Approve it to pay the provider. If nobody reviews it, it is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
         : "Delivered. Approve it to pay the provider.";
     case "in_review":
-      return job.reviewDeadlineAt !== null
-        ? `You turned this down, so the price is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, the provider is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
-        : "You turned this down, so the price is on hold while it is reviewed.";
+      return buyingTurnDownText(job, now, "price");
     case "paid":
       return `Done. ${amount} was paid to the provider.`;
     case "refunded":
@@ -137,9 +188,7 @@ function requestText(job: JobRecord, status: JobStatus, amount: string, now: num
         ? `Delivered. Approve it to pay ${amount}. If nobody reviews it, it is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
         : `Delivered. Approve it to pay ${amount}.`;
     case "in_review":
-      return job.reviewDeadlineAt !== null
-        ? `You turned this down, so the reward is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, it is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
-        : "You turned this down, so the reward is on hold while it is reviewed.";
+      return buyingTurnDownText(job, now, "reward");
     case "paid":
       return `Done. ${amount} was paid for it.`;
     case "refunded":
@@ -172,6 +221,12 @@ export function jobView(
      * through a message host, and not every network has one.
      */
     changesCanBeSent: boolean;
+    /**
+     * Lamports the paying wallet would spend, once, to start its marketplace
+     * record if it turned this down or cancelled it now (0 once it has one).
+     * Null when not known.
+     */
+    firstRecordCostLamports?: bigint | null;
   },
 ): JobView {
   const status = jobStatus(job);
@@ -191,7 +246,7 @@ export function jobView(
     request: job.request,
     price,
     status,
-    statusText: statusText(job, status, price, context.now),
+    statusText: statusText(job, status, price, context.now, context.usdPerSol),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     task: job.task,
@@ -204,6 +259,28 @@ export function jobView(
     autoRefundAt: status === "waiting" ? job.autoRefundAt : null,
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
+    turnDown:
+      status === "in_review"
+        ? {
+            disputable: revision9TurnDown(job) !== null,
+            disputeEndsAt:
+              revision9TurnDown(job) !== null ? revision9TurnDown(job)!.disputeUntil * 1000 : null,
+            disputed: revision9TurnDown(job)?.rulingUntil != null,
+            bond:
+              revision9TurnDown(job) !== null
+                ? money(revision9TurnDown(job)!.bondLamports, context.usdPerSol)
+                : null,
+            ifNobodyActs: revision9TurnDown(job) !== null ? "buyer_refunded" : "provider_paid",
+          }
+        : null,
+    // Disputing puts a bond at risk: a person's decision, in its window only.
+    canDispute:
+      !buying &&
+      context.isOwner &&
+      status === "in_review" &&
+      revision9TurnDown(job) !== null &&
+      revision9TurnDown(job)!.rulingUntil === null &&
+      revision9TurnDown(job)!.disputeOpen,
     canApprove: buying && status === "delivered",
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.
@@ -220,7 +297,12 @@ export function jobView(
       canRate && context.ratingCostLamports != null
         ? money(context.ratingCostLamports, context.usdPerSol)
         : null,
-    turnDownRecorded: canTurnDown && job.providerRecorded === true,
+    // Every turn-down is recorded since revision 9.
+    turnDownRecorded: canTurnDown,
+    firstRecordCost:
+      buying && context.firstRecordCostLamports != null && context.firstRecordCostLamports > 0n
+        ? money(context.firstRecordCostLamports, context.usdPerSol)
+        : null,
     receiptUrl: receiptUrlFor(job, context.network),
     error: job.error,
   };

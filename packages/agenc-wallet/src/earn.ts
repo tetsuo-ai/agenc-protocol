@@ -15,6 +15,7 @@ import type { Address, KeyPairSigner } from "@solana/kit";
 import { findAgentPda, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
   acquireStateLock,
+  AGENT_STATS_ACCOUNT_SIZE,
   checkSettlements,
   claimFundingRequirement,
   clearWorkerPause,
@@ -222,18 +223,28 @@ export class EarnHost {
   /**
    * Lamports the agent's wallet needs before it can register and take its
    * first job: the marketplace's stake, the deposits behind its registration
-   * and one job, and fee headroom. The stake and deposits come back.
+   * and one job, the job's claim deposit, its marketplace record (started at
+   * its first claim and kept), and fee headroom. The stake and deposits come
+   * back; the record does not.
    */
   async startupRequirement(): Promise<bigint> {
     const stake = await readMinAgentStake(this.#chain.readAccount);
     const rent = (space: number) => this.#chain.getMinimumBalanceForRentExemption(space);
-    const [agent, claim, submission] = await Promise.all([rent(566), rent(203), rent(273)]);
-    return registrationFundingRequirement(stake, { agent, claim, submission });
+    const [agent, claim, submission, agentStats] = await Promise.all([
+      rent(566),
+      rent(203),
+      rent(273),
+      rent(AGENT_STATS_ACCOUNT_SIZE),
+    ]);
+    return registrationFundingRequirement(stake, { agent, claim, submission, agentStats });
   }
 
   /**
    * Lamports the worker wants in the agent's wallet before it takes a job:
-   * the deposits behind the job's records (they come back) and fee headroom.
+   * the deposits behind the job's records and its claim deposit (they come
+   * back), and fee headroom. A job priced above 0.1 SOL needs a larger claim
+   * deposit (10% of its price); the worker checks that job's exact amount
+   * right before it claims.
    */
   async jobReserve(): Promise<bigint> {
     return claimFundingRequirement(

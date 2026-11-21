@@ -163,6 +163,11 @@ export interface WalletMethods {
   };
   /** Cancel and take the money back, when the job allows it. */
   "jobs.refund": { params: { jobId: string }; result: { job: JobView } };
+  /**
+   * Owner only. Dispute a buyer's turn-down of a delivery one of this wallet's
+   * agents made, posting the bond (`JobView.turnDown.bond`). Never an agent's call.
+   */
+  "jobs.dispute": { params: { jobId: string }; result: { job: JobView } };
   "jobs.rate": { params: { jobId: string; score: number }; result: { job: JobView } };
 
   "activity.list": {

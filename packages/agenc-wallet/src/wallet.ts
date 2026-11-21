@@ -74,6 +74,9 @@ import {
   sendApproval,
   sendCancel,
   sendChangesRequest,
+  cancelShortfall,
+  creatorRecordCost,
+  sendDisputeTurnDown,
   sendFrozenExpiry,
   sendCreateListing,
   sendHire,
@@ -91,6 +94,7 @@ import {
   waitingHires,
   type ListingTerms,
   type RequestIntent,
+  type TurnDownOnChain,
 } from "./market.js";
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
 import { createRecordKeeper, type KnownRecord, type RecordKeeper, type RecordRow } from "./records.js";
@@ -456,6 +460,29 @@ export function requestTitle(request: string): string {
   return tidyText(line.slice(0, end), 60) ?? "Request";
 }
 
+/** What the journal keeps of a turn-down the chain shows, or nothing. */
+function turnDownRecord(turnDown: TurnDownOnChain | null): JobRecord["turnDown"] {
+  if (turnDown === null) return undefined;
+  return {
+    disputable: turnDown.disputable,
+    disputeUntil: turnDown.disputeUntil,
+    bondLamports: turnDown.bondLamports.toString(),
+    rulingUntil: turnDown.rulingUntil,
+    disputeOpen: turnDown.disputeOpen,
+  };
+}
+
+function sameTurnDown(a: JobRecord["turnDown"], b: JobRecord["turnDown"]): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.disputable === b.disputable &&
+    a.disputeUntil === b.disputeUntil &&
+    a.bondLamports === b.bondLamports &&
+    a.rulingUntil === b.rulingUntil &&
+    a.disputeOpen === b.disputeOpen
+  );
+}
+
 function isRequest(job: Pick<JobRecord, "kind">): boolean {
   return job.kind === "request";
 }
@@ -510,7 +537,10 @@ export class AgencWallet {
    * when their review time ends, and when collecting was last tried. Rebuilt
    * from the chain on every tick, so it is not journaled.
    */
-  readonly #frozenWork = new Map<string, { reviewDeadlineAt: number; attemptAt: number | null }>();
+  readonly #frozenWork = new Map<
+    string,
+    { reviewDeadlineAt: number; attemptAt: number | null; turnDown: JobRecord["turnDown"] }
+  >();
   #timer: ReturnType<typeof setInterval> | null = null;
   #ticking: Promise<void> | null = null;
   #closed = false;
@@ -772,7 +802,16 @@ export class AgencWallet {
       (payer.earn.enabled ||
         this.#earn.jobs(payer.id).some((entry) => entry.state === "working" || entry.state === "delivered"));
     if (open === 0 && !earning) return fee;
-    return (await this.#floor()) + fee + BigInt(open) * FEE_HEADROOM_LAMPORTS;
+    // An open job may still be cancelled or turned down, and the wallet's
+    // first one starts its marketplace record: keep that too.
+    const record =
+      open === 0
+        ? 0n
+        : await creatorRecordCost(
+            this.#chain,
+            (payer === "main" ? this.mainAddress : payer.address) as Address,
+          );
+    return (await this.#floor()) + fee + BigInt(open) * FEE_HEADROOM_LAMPORTS + record;
   }
 
   // ---------------------------------------------------------- activity
@@ -997,7 +1036,46 @@ export class AgencWallet {
       isOwner,
       ratingCostLamports: await this.#ratingCost(),
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
+      firstRecordCostLamports: await this.#firstRecordCost(job),
     });
+  }
+
+  /** Per paying wallet: what its first turn-down or cancel spends on its record. */
+  readonly #recordCosts = new Map<string, { lamports: bigint; at: number }>();
+
+  /** After a turn-down or cancel the paying wallet has its record: read it again. */
+  #forgetRecordCost(job: JobRecord): void {
+    const payer =
+      job.payer === "main" ? this.mainAddress : this.#store.state.agents[job.agentId]?.address;
+    if (payer !== undefined) this.#recordCosts.delete(payer);
+  }
+
+  /**
+   * What the job's paying wallet would spend, once, to start its marketplace
+   * record if it turned the job down or cancelled it now, read from rent. Only
+   * read while a buying job can still be turned down or cancelled. A record
+   * is never removed, so once it exists the answer stays 0; a missing one is
+   * read again after a minute.
+   */
+  async #firstRecordCost(job: JobRecord): Promise<bigint | null> {
+    if (job.role !== "buying" || job.payer === null || job.outcome !== null) return null;
+    if (job.phase !== "active" && job.phase !== "hired") return null;
+    const payer =
+      job.payer === "main"
+        ? this.mainAddress
+        : (this.#store.state.agents[job.agentId]?.address as Address | undefined);
+    if (payer === undefined) return null;
+    const cached = this.#recordCosts.get(payer);
+    if (cached !== undefined && (cached.lamports === 0n || this.#now() - cached.at < 60_000)) {
+      return cached.lamports;
+    }
+    try {
+      const lamports = await creatorRecordCost(this.#chain, payer);
+      this.#recordCosts.set(payer, { lamports, at: this.#now() });
+      return lamports;
+    } catch {
+      return cached?.lamports ?? null;
+    }
   }
 
   async overview(): Promise<WalletOverview> {
@@ -2527,13 +2605,33 @@ export class AgencWallet {
     this.#recordRefund(job.id, signature, message);
   }
 
+  /**
+   * Whether the job's refund cannot be paid yet: the paying wallet's first
+   * cancel starts its marketplace record, and the wallet lacks that. The job
+   * then says how much to add, and the refund is tried again on later looks.
+   */
+  async #refundBlocked(job: JobRecord, payer: Address): Promise<boolean> {
+    const missing = await cancelShortfall(this.#chain, payer);
+    const blocked = missing > 0n ? missing.toString() : undefined;
+    if (blocked !== job.refundBlockedLamports) {
+      this.#patchJob(job.id, (entry) => {
+        if (blocked === undefined) delete entry.refundBlockedLamports;
+        else entry.refundBlockedLamports = blocked;
+      });
+    }
+    return blocked !== undefined;
+  }
+
   #recordRefund(jobId: string, signature: string | null, message: string | null): void {
+    const refunded = this.#store.state.jobs[jobId];
+    if (refunded !== undefined) this.#forgetRecordCost(refunded);
     this.#patchJob(jobId, (entry, draft) => {
       entry.phase = "done";
       entry.chainStatus = "cancelled";
       entry.outcome = "refunded";
       entry.autoRefundAt = null;
       entry.error = message;
+      delete entry.refundBlockedLamports;
       if (signature !== null) entry.signatures.cancel = signature;
       this.#note(draft, {
         kind: "refunded",
@@ -2635,6 +2733,7 @@ export class AgencWallet {
         : job.autoRefundAt !== null && this.#now() >= job.autoRefundAt;
       if (due) {
         const payer = await this.#payerSigner(job);
+        if (await this.#refundBlocked(job, payer.address)) return;
         const signature = await sendCancel(this.#chain, payer, task, null);
         this.#recordRefund(
           job.id,
@@ -2652,6 +2751,7 @@ export class AgencWallet {
       const waitingOnBuyer = seen.submission !== null && seen.submission.status === 1;
       if (!waitingOnBuyer && clock > seen.deadline + NO_SHOW_GRACE_SECS) {
         const payer = await this.#payerSigner(job);
+        if (await this.#refundBlocked(job, payer.address)) return;
         const signature = await sendCancel(this.#chain, payer, task, provider);
         this.#recordRefund(
           job.id,
@@ -2664,29 +2764,45 @@ export class AgencWallet {
       }
     }
 
-    if (seen.status === "reject_frozen" && seen.submission !== null && provider !== null) {
-      // Turned down and on hold. With no ruling by the end of the review time
-      // the provider is paid; either side may send that, and so that no job
-      // is left hanging this wallet does. One attempt at a time.
-      const clock = await this.#chain.clusterTime();
-      const due = seen.submission.reviewDeadlineAt > 0 && clock > seen.submission.reviewDeadlineAt;
+    if (seen.status === "reject_frozen" && seen.turnDown !== null && provider !== null) {
+      // Turned down and on hold. Once its time is over, either side may
+      // settle it, and so that no job is left hanging this wallet does. One
+      // attempt at a time. A revision 9 turn-down then refunds the buyer
+      // (nobody disputed it, or nobody ruled on the dispute); one made before
+      // revision 9 pays the provider. What the chain said decides how it is
+      // recorded: a refund is never recorded as a payment.
       const recently =
         job.settleAttemptAt != null && this.#now() - job.settleAttemptAt < FROZEN_SETTLE_RETRY_MS;
-      if (due && !recently) {
+      if (seen.turnDown.expiryDue !== null && !recently) {
         this.#patchJob(job.id, (entry) => {
           entry.settleAttemptAt = this.#now();
         });
         try {
           const payer = await this.#payerSigner(job);
-          const signature = await sendFrozenExpiry(this.#chain, payer, task, provider);
+          const settled = await sendFrozenExpiry(this.#chain, payer, task, provider);
           this.#patchJob(job.id, (entry) => {
-            entry.signatures.settle = signature;
+            entry.signatures.settle = settled.signature;
           });
-          this.#recordPaid(job.id, signature);
+          if (settled.paidProvider) {
+            this.#recordPaid(job.id, settled.signature);
+          } else {
+            const disputed = seen.turnDown.rulingUntil !== null;
+            this.#recordRefund(
+              job.id,
+              settled.signature,
+              request
+                ? disputed
+                  ? "Your turn-down was disputed and nobody ruled in time, so the reward came back."
+                  : "Nobody disputed your turn-down in time, so the reward came back."
+                : disputed
+                  ? "The provider disputed your turn-down and nobody ruled in time, so the price came back."
+                  : "The provider did not dispute your turn-down in time, so the price came back.",
+            );
+          }
           return;
         } catch (error) {
           // The provider's own wallet may have settled it first; the next
-          // look shows the job completed either way.
+          // look shows the job completed or cancelled either way.
           this.#log(`job ${job.id} settle after review: ${describeError(error)}`);
         }
       }
@@ -2706,23 +2822,31 @@ export class AgencWallet {
           (await providerHasRecord(this.#chain, provider).catch(() => undefined)) ?? providerRecorded;
       }
     }
+    // On hold after a turn-down, the clock that matters is the one running:
+    // the provider's time to dispute, then the reviewers' time to rule.
     const reviewDeadlineAt =
-      (seen.status === "pending_validation" || seen.status === "reject_frozen") &&
-      seen.submission !== null
-        ? seen.submission.reviewDeadlineAt
-        : null;
+      seen.status === "reject_frozen" && seen.turnDown !== null
+        ? (seen.turnDown.rulingUntil ?? seen.turnDown.disputeUntil)
+        : (seen.status === "pending_validation" || seen.status === "reject_frozen") &&
+            seen.submission !== null
+          ? seen.submission.reviewDeadlineAt
+          : null;
+    const turnDown = turnDownRecord(seen.turnDown);
     const changed =
       job.chainStatus !== seen.status ||
       job.deadline !== seen.deadline ||
       job.reviewDeadlineAt !== reviewDeadlineAt ||
       job.result !== result ||
-      knownRecorded !== providerRecorded;
+      knownRecorded !== providerRecorded ||
+      !sameTurnDown(job.turnDown, turnDown);
     if (!changed) return;
     this.#patchJob(job.id, (entry) => {
       entry.chainStatus = seen.status;
       entry.deadline = seen.deadline;
       entry.reviewDeadlineAt = reviewDeadlineAt;
       entry.result = result;
+      if (turnDown === undefined) delete entry.turnDown;
+      else entry.turnDown = turnDown;
       if (providerRecorded !== undefined) entry.providerRecorded = providerRecorded;
       if (seen.status === "pending_validation") entry.changesRequested = false;
       if (seen.status !== "open") entry.autoRefundAt = null;
@@ -2821,9 +2945,14 @@ export class AgencWallet {
 
   /**
    * Look at the deliveries this wallet's agents are waiting to be paid for.
-   * One that the buyer turned down is on hold: remember until when, and once
-   * the review time has run out with no ruling, collect the pay. A provider
-   * should not depend on the buyer's software to be paid.
+   * One that the buyer turned down is on hold: remember what the chain says
+   * about it, for the person to see. Since revision 9 the provider may
+   * dispute the turn-down within 72 hours, posting a bond; that is the
+   * person's decision (`disputeTurnDown`), never this wallet's. Once the
+   * time is over, settle it, so the provider does not depend on the buyer's
+   * software: that returns its claim and submission rent (and a bond nobody
+   * ruled on) while the buyer is refunded, or, for a turn-down made before
+   * revision 9, pays it.
    */
   async #watchFrozenWork(): Promise<void> {
     const seenNow = new Set<string>();
@@ -2834,19 +2963,23 @@ export class AgencWallet {
       if (provider === null) continue;
       for (const entry of waiting) {
         const seen = await inspectJob(this.#chain, entry.task as Address, provider);
-        if (seen === null || seen.status !== "reject_frozen" || seen.submission === null) continue;
+        if (seen === null || seen.status !== "reject_frozen" || seen.turnDown === null) continue;
         seenNow.add(entry.task);
         const previous = this.#frozenWork.get(entry.task);
-        const deadline = seen.submission.reviewDeadlineAt;
-        if (previous?.reviewDeadlineAt !== deadline) {
-          this.#frozenWork.set(entry.task, { reviewDeadlineAt: deadline, attemptAt: null });
+        const deadline = seen.turnDown.rulingUntil ?? seen.turnDown.disputeUntil;
+        const turnDown = turnDownRecord(seen.turnDown);
+        if (previous?.reviewDeadlineAt !== deadline || !sameTurnDown(previous.turnDown, turnDown)) {
+          this.#frozenWork.set(entry.task, {
+            reviewDeadlineAt: deadline,
+            attemptAt: previous?.attemptAt ?? null,
+            turnDown,
+          });
           this.#emit({ type: "job", jobId: `earn_${agent.id}_${entry.task}` });
         }
         const state = this.#frozenWork.get(entry.task)!;
-        const clock = await this.#chain.clusterTime();
         const recently =
           state.attemptAt !== null && this.#now() - state.attemptAt < FROZEN_SETTLE_RETRY_MS;
-        if (deadline > 0 && clock > deadline && !recently) {
+        if (seen.turnDown.expiryDue !== null && !recently) {
           state.attemptAt = this.#now();
           try {
             await sendFrozenExpiry(
@@ -2866,6 +2999,78 @@ export class AgencWallet {
     for (const task of [...this.#frozenWork.keys()]) {
       if (!seenNow.has(task)) this.#frozenWork.delete(task);
     }
+  }
+
+  /**
+   * Dispute a buyer's turn-down of a delivery one of this wallet's agents
+   * made (revision 9). It posts the bond from the agent's wallet: 10% of the
+   * price, at least 0.01 SOL, plus a deposit for the bond's record that
+   * comes back. The marketplace's reviewers then rule within 72 hours. For
+   * the provider, it is paid and the bond comes back. For the buyer, the
+   * bond goes to the buyer. With no ruling, the price goes back to the buyer
+   * and the bond comes back. Only the person may do this.
+   */
+  async disputeTurnDown(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
+    if (!isOwner) {
+      throw new WalletError(
+        "NOT_ALLOWED",
+        "Disputing a turn-down puts a bond at risk, so it is the user's decision: they can do it from the Market panel.",
+      );
+    }
+    const match = /^earn_(.+)_([1-9A-HJ-NP-Za-km-z]{32,44})$/u.exec(jobId);
+    const agent = match === null ? undefined : this.#store.state.agents[match[1]!];
+    if (match === null || agent === undefined || (agentId !== undefined && agent.id !== agentId)) {
+      throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
+    }
+    const task = match[2]! as Address;
+    const provider = await this.#earn.marketplaceAgent(agent.id);
+    if (provider === null) {
+      throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
+    }
+    await this.#lock(`dispute:${task}`, async () => {
+      let sent: { signature: string; bondLamports: bigint };
+      try {
+        sent = await sendDisputeTurnDown(
+          this.#chain,
+          await this.#vault.signer(agent.keyId),
+          task,
+          provider,
+        );
+      } catch (error) {
+        if (error instanceof WalletError) throw error;
+        throw new WalletError(
+          isNetworkTrouble(error) ? "NETWORK" : "NOT_ALLOWED",
+          isNetworkTrouble(error)
+            ? "The network was too busy to dispute this turn-down. Nothing changed. Try again in a moment."
+            : "This turn-down cannot be disputed right now. Nothing changed.",
+          { cause: error },
+        );
+      }
+      this.#store.update((draft) => {
+        this.#note(draft, {
+          kind: "note",
+          text: `${agent.name} disputed a buyer's turn-down. The marketplace's reviewers now decide.`,
+          lamports: sent.bondLamports,
+          agentId: agent.id,
+          jobId,
+          signature: sent.signature,
+        });
+      });
+      // Read the dispute back so the job shows its new clock.
+      this.#frozenWork.delete(task);
+      await this.#watchFrozenWork().catch((error) => {
+        this.#log(`reading a disputed turn-down: ${describeError(error)}`);
+      });
+      this.#dropBalances();
+      this.#emit({ type: "activity" });
+      this.#emit({ type: "overview" });
+      this.#emit({ type: "job", jobId });
+    });
+    const view = this.#earnJobs(agent.id).find((record) => record.id === jobId);
+    if (view === undefined) {
+      throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
+    }
+    return this.#jobView(view, isOwner);
   }
 
   #earnJobs(agentId: string): JobRecord[] {
@@ -2923,6 +3128,9 @@ export class AgencWallet {
         entry.state === "delivered"
           ? (this.#frozenWork.get(entry.task)?.reviewDeadlineAt ?? null)
           : null,
+      ...(entry.state === "delivered" && this.#frozenWork.get(entry.task)?.turnDown !== undefined
+        ? { turnDown: this.#frozenWork.get(entry.task)!.turnDown! }
+        : {}),
       autoRefundAt: null,
       outcome: entry.state === "paid" ? "paid" : entry.state === "not_paid" ? "refunded" : null,
       changesRequested: false,
@@ -3174,10 +3382,13 @@ export class AgencWallet {
    * Cancel and take the money back where the job allows it.
    *
    * A person may also turn down a delivery; an agent may not. Turning a
-   * delivery down does NOT bring the price back by itself, because the buyer
-   * has already read the work: the price goes on hold, a reviewer decides who
-   * gets it, and if nobody rules before the review time runs out the provider
-   * is paid. Asking for changes is the way to get the work fixed.
+   * delivery down does NOT bring the price back at once, because the buyer
+   * has already read the work: the price goes on hold and the provider has
+   * 72 hours to dispute the turn-down. If it does not, the price comes back
+   * then. If it does, the marketplace's reviewers decide; if nobody rules in
+   * time, the price comes back. Asking for changes is the way to get the work
+   * fixed. A first turn-down or cancel also starts the buyer's marketplace
+   * record, paid once by the buyer.
    */
   async refundJob(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
@@ -3227,7 +3438,7 @@ export class AgencWallet {
         if (delivery === null) {
           throw new WalletError("NOT_ALLOWED", "There is no delivery to turn down yet.");
         }
-        let sent: { signature: string; recorded: boolean };
+        let sent: { signature: string; recordLamports: bigint };
         try {
           const reason = await turnDownReason({
             task,
@@ -3236,8 +3447,10 @@ export class AgencWallet {
           });
           sent = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash);
         } catch (error) {
+          // The record a first turn-down starts is checked before signing,
+          // and its message says what to add.
+          if (error instanceof WalletError && error.code === "NOT_ENOUGH_MONEY") throw error;
           if (hireFailureText(error).code === "NOT_ENOUGH_MONEY") {
-            // Its fee is all a turn-down costs, and even that was not there.
             throw new WalletError(
               "NOT_ENOUGH_MONEY",
               "There is not enough money to turn this down. Nothing changed.",
@@ -3252,18 +3465,19 @@ export class AgencWallet {
             { cause: error },
           );
         }
-        const { signature, recorded } = sent;
+        const { signature } = sent;
+        this.#forgetRecordCost(job);
         this.#patchJob(jobId, (entry, draft) => {
           entry.chainStatus = "reject_frozen";
           entry.signatures.reject = signature;
-          entry.providerRecorded = recorded;
-          // The review clock is read back from the chain on the next look.
+          entry.providerRecorded = true;
+          // The dispute clock is read back from the chain on the next look.
           entry.reviewDeadlineAt = null;
           this.#note(draft, {
             kind: "note",
             text: isRequest(entry)
-              ? `You turned down ${entry.title}. Its reward is on hold while it is reviewed.`
-              : `You turned down ${entry.title}. Its price is on hold while it is reviewed.`,
+              ? `You turned down ${entry.title}. Whoever did it can dispute that for 72 hours. If they do not, the reward comes back.`
+              : `You turned down ${entry.title}. The provider can dispute that for 72 hours. If it does not, the price comes back.`,
             agentId: entry.agentId === "" ? null : entry.agentId,
             jobId: entry.id,
             signature,
