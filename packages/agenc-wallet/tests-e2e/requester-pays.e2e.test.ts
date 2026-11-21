@@ -488,10 +488,12 @@ describe("the wallet pays for its own approvals", () => {
     expect(await world.balance(approver)).toBe(before.approver);
     // Gone from the buyer: only what the network keeps for a job that was
     // hired, cancelled and tidied (its record, the first hire's one-time
-    // record, three fees). Not the check, and not the ten cents.
+    // record, three fees, and, since revision 9, the record of turn-downs
+    // and cancels this first cancel started). Not the check, and not the
+    // ten cents.
     const rent = (space: number) => sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(before.buyer - (await world.balance(agent.address))).toBe(
-      (await rent(466)) + (await rent(67)) + 3n * 5_000n,
+      (await rent(466)) + (await rent(67)) + (await rent(129)) + 3n * 5_000n,
     );
   });
 

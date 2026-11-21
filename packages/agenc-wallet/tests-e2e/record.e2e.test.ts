@@ -89,16 +89,17 @@ describe("a service's record", () => {
     expect(after!.offeredBy).toMatchObject({ jobsDone: 1, buyers: 1, paid: { usdCents: 20 } });
   });
 
-  it("counts turn-downs once the provider has a record, and says nothing is kept before", async () => {
+  it("counts turn-downs in the record the provider's first claim starts, and says nothing is kept before", async () => {
     world = await startWorld();
     const { wallet, sandbox } = world;
     const [before] = (await wallet.find({ query: "haiku" })).services;
     expect(before!.offeredBy).toMatchObject({ turnedDown: null, disputesLost: null });
 
-    // A buyer turns its work down and pays to start its record.
+    // Revision 9: the provider's first claim starts its record; a buyer then
+    // turns its work down, which always counts there.
     const open = await sandbox.postOpenJob({ title: "A line", instructions: "Write one line.", rewardLamports: 20n * CENT });
     await sandbox.workOnce();
-    await open.turnDown({ payForRecord: true });
+    await open.turnDown();
     // The record is read again after a while, and then it counts.
     world.clock.now += 6 * 60_000;
     const after = await eventually(async () => {

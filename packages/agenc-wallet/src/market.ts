@@ -14,6 +14,7 @@ import {
   findAgentPda,
   findAgentStatsPda,
   findClaimPda,
+  findCreatorStatsPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
   findHireRatingPda,
@@ -32,6 +33,9 @@ import {
   getAgentRegistrationDiscriminatorBytes,
   getAgentStatsDiscriminatorBytes,
   getAuthorityRateLimitSize,
+  getCreatorStatsDiscriminatorBytes,
+  getCreatorStatsSize,
+  getDisputeBondSize,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
   getHireRecordSize,
@@ -455,7 +459,78 @@ async function jobDeposits(
     total += once;
     kept += once;
   }
+  // A paying wallet's first turn-down or cancel (a refund included) also
+  // starts its record of those, paid then, before the refund. That is not set
+  // aside here: it is shown on the job (`creatorRecordCost`), kept back when
+  // everything is taken out of the wallet, and asked for when it is missing.
   return { total, kept };
+}
+
+/**
+ * Lamports `payer` still lacks to pay for its first cancel's record on top of
+ * fee headroom, or 0 when it can cancel (or has its record already).
+ */
+export async function cancelShortfall(chain: Chain, payer: Address): Promise<bigint> {
+  const cost = await creatorRecordCost(chain, payer);
+  if (cost === 0n) return 0n;
+  const needed = cost + FEE_HEADROOM_LAMPORTS;
+  const balance = await chain.getBalance(payer);
+  return balance >= needed ? 0n : needed - balance;
+}
+
+/**
+ * Lamports the wallet `creator` pays, once, to start its marketplace record of
+ * turn-downs and cancels: the record's rent, read live, or 0 once it exists.
+ * Its first turn-down or cancel pays it, before any refund, and it never
+ * comes back.
+ */
+export async function creatorRecordCost(chain: Chain, creator: Address): Promise<bigint> {
+  const [record] = await findCreatorStatsPda({ authority: creator });
+  const info = await chain.readAccountInfo(record);
+  if (
+    info !== null &&
+    info.owner === AGENC_COORDINATION_PROGRAM_ADDRESS &&
+    startsWith(info.data, getCreatorStatsDiscriminatorBytes())
+  ) {
+    return 0n;
+  }
+  return chain.getMinimumBalanceForRentExemption(getCreatorStatsSize());
+}
+
+/** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
+function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
+  return async (account) => {
+    const info = await chain.readAccountInfo(account);
+    return info === null ? null : { owner: info.owner, data: info.data };
+  };
+}
+
+/**
+ * Fail before signing when `payer` cannot pay `cost` on top of fee headroom,
+ * saying what the cost is for and how much to add.
+ */
+async function requireBalanceFor(
+  chain: Chain,
+  payer: Address,
+  cost: bigint,
+  what: string,
+): Promise<void> {
+  if (cost === 0n) return;
+  const balance = await chain.getBalance(payer);
+  const needed = cost + FEE_HEADROOM_LAMPORTS;
+  if (balance < needed) {
+    throw new WalletError(
+      "NOT_ENOUGH_MONEY",
+      `${what} starts your marketplace record, which costs ${solText(cost)} once and does not come back. Add at least ${solText(needed - balance)} and try again. Nothing changed.`,
+    );
+  }
+}
+
+/** Lamports as SOL, every digit kept, trailing zeros dropped. */
+export function solText(lamports: bigint): string {
+  const whole = lamports / 1_000_000_000n;
+  const frac = (lamports % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/u, "");
+  return `${whole}${frac.length > 0 ? `.${frac}` : ""} SOL`;
 }
 
 /** The task address a purchase will create. */
@@ -667,6 +742,27 @@ const STATUS_NAMES: Record<number, ChainTaskStatus> = {
   [TaskStatus.RejectFrozen]: "reject_frozen",
 };
 
+/** A turned-down job, as the chain shows it (see the SDK's `readTurnDown`). */
+export interface TurnDownOnChain {
+  /**
+   * True: a revision 9 turn-down. The provider may dispute it until
+   * `disputeUntil`; the buyer is refunded unless a ruling pays the provider.
+   * False: a turn-down made before revision 9. If nobody rules by its review
+   * time (`disputeUntil` here), the provider is paid.
+   */
+  disputable: boolean;
+  /** Unix seconds: the last second the provider may dispute (or, before revision 9, the review time). */
+  disputeUntil: number;
+  /** Lamports a dispute posts as its bond. */
+  bondLamports: bigint;
+  /** Unix seconds: the last second a ruling may land, once disputed. Null before a dispute. */
+  rulingUntil: number | null;
+  /** Whether the provider may dispute it now, by the cluster's clock. */
+  disputeOpen: boolean;
+  /** What an expiry sent now would do, or null while it cannot be sent yet. */
+  expiryDue: "refunds_buyer" | "pays_provider" | null;
+}
+
 export interface JobOnChain {
   status: ChainTaskStatus;
   /** Unix seconds; 0 when the task has no deadline. */
@@ -683,6 +779,35 @@ export interface JobOnChain {
     reviewDeadlineAt: number;
     submissionCount: number;
   } | null;
+  /** While the job is turned down (reject_frozen): the turn-down. Null otherwise. */
+  turnDown: TurnDownOnChain | null;
+}
+
+/** Read a turned-down job's turn-down, or null when the job is not frozen. */
+export async function readTurnDownOnChain(
+  chain: Chain,
+  task: Address,
+  providerAgent: Address,
+): Promise<TurnDownOnChain | null> {
+  const turnDown = await facade.readTurnDown(snapshotReader(chain), {
+    task,
+    worker: providerAgent,
+  });
+  if (turnDown === null) return null;
+  const stage = facade.turnDownStage(turnDown, await chain.clusterTime());
+  return {
+    disputable: turnDown.disputable,
+    disputeUntil: Number(turnDown.reviewDeadlineAt),
+    bondLamports: turnDown.bondToDispute,
+    rulingUntil: turnDown.dispute === null ? null : Number(turnDown.dispute.rulingDeadline),
+    disputeOpen: stage === "dispute_window",
+    expiryDue:
+      stage === "legacy_payout_due"
+        ? "pays_provider"
+        : stage === "refund_due" || stage === "unruled_refund_due"
+          ? "refunds_buyer"
+          : null,
+  };
 }
 
 async function readSubmission(
@@ -719,6 +844,10 @@ export async function inspectJob(
     throw new WalletError("INTERNAL", "The marketplace reported a job state this wallet does not know.");
   }
   const submission = providerAgent === null ? null : await readSubmission(chain, task, providerAgent);
+  const turnDown =
+    status === "reject_frozen" && providerAgent !== null
+      ? await readTurnDownOnChain(chain, task, providerAgent)
+      : null;
   return {
     status,
     deadline: Number(account.deadline),
@@ -737,6 +866,7 @@ export async function inspectJob(
             reviewDeadlineAt: Number(submission.account.reviewDeadlineAt),
             submissionCount: submission.account.submissionCount,
           },
+    turnDown,
   };
 }
 
@@ -819,39 +949,6 @@ export async function sendChangesRequest(
   return result.signature;
 }
 
-/**
- * Turn a delivery down. The job goes back to "nobody has started", from where
- * it can be cancelled for a refund.
- */
-export async function sendReject(
-  chain: Chain,
-  buyer: KeyPairSigner,
-  task: Address,
-  providerAgent: Address,
-  rejectionHash: Uint8Array,
-): Promise<string> {
-  const agent = await readAgent(chain, providerAgent);
-  if (agent === null) {
-    throw new WalletError("NOT_AVAILABLE", "This delivery cannot be turned down from here yet.");
-  }
-  const [claim] = await findClaimPda({ task, bidder: providerAgent });
-  const [workerCompletionBond] = await findWorkerCompletionBondPda({
-    task,
-    workerAuthority: agent.authority,
-  });
-  const client = chain.clientFor(buyer);
-  const result = await client.rejectTaskResult({
-    task,
-    claim,
-    worker: providerAgent,
-    creator: buyer,
-    workerAuthority: agent.authority,
-    workerCompletionBond,
-    rejectionHash,
-  });
-  return result.signature;
-}
-
 /** The one reason a person gives by turning a delivery down. */
 export const TURN_DOWN_REASON = "The delivery does not do what was asked.";
 
@@ -888,9 +985,10 @@ export async function providerRecordAddress(providerAgent: Address): Promise<Add
 }
 
 /**
- * Whether the marketplace keeps that record for the provider agent. Nobody
- * has to keep one: it exists only once someone paid to start it, and it is
- * never removed.
+ * Whether the marketplace keeps that record for the provider agent. Since
+ * revision 9 the provider's first claim starts it, so only a provider whose
+ * claim is older has none; a turn-down then starts it, paid by the buyer. A
+ * record is never removed.
  */
 export async function providerHasRecord(chain: Chain, providerAgent: Address): Promise<boolean> {
   const info = await chain.readAccountInfo(await providerRecordAddress(providerAgent));
@@ -902,20 +1000,22 @@ export async function providerHasRecord(chain: Chain, providerAgent: Address): P
 }
 
 /**
- * Turn a delivery down and hold the price for review. Unlike a plain
- * rejection, this does not hand the money back: the job stays with the
- * provider, a reviewer decides who gets the price, and if nobody rules before
- * the review time runs out the provider is paid. A buyer cannot read the work
- * and then walk away with both it and the price.
+ * Turn a delivery down: a freeze that holds the price. It does not hand the
+ * money back at once, and a plain rejection that reopened the job for a free
+ * refund is refused on these jobs. Since revision 9 the provider has 72
+ * hours to dispute the turn-down, posting a bond. If it does not, the buyer
+ * is refunded when that time ends. If it does, the marketplace's reviewers
+ * rule within 72 hours more: for the provider, the provider is paid; for the
+ * buyer, the buyer is refunded and receives the bond; with no ruling, the
+ * buyer is refunded and the bond goes back.
  *
- * The turn-down goes on the provider's own record when it has one, with a
- * reason that says what was turned down (see {@link turnDownReason}). A
- * provider without a record gets none: the marketplace makes whoever passes a
- * missing record pay to start it, and turning work down must never cost the
- * buyer more than the transaction. So the record is read right before the
- * transaction is built and passed only when it is already there, where
- * counting costs nothing; a record is never removed, so it is still there
- * when the transaction lands. `recorded` says which it was.
+ * The turn-down always goes on the provider's record and on the buyer's own,
+ * with a reason that says what was turned down (see {@link turnDownReason}).
+ * A record that does not exist yet is started by this transaction and paid
+ * by the buyer, for good: the buyer's own at its first turn-down or cancel,
+ * and the provider's only for a claim made before revision 9. The cost is
+ * read before signing, and a wallet that cannot pay it fails here with
+ * nothing changed. `recordLamports` says what it paid.
  */
 export async function sendRejectAndFreeze(
   chain: Chain,
@@ -923,36 +1023,46 @@ export async function sendRejectAndFreeze(
   task: Address,
   providerAgent: Address,
   rejectionHash: Uint8Array,
-): Promise<{ signature: string; recorded: boolean }> {
-  const [claim] = await findClaimPda({ task, bidder: providerAgent });
-  const recorded = await providerHasRecord(chain, providerAgent);
+): Promise<{ signature: string; recordLamports: bigint }> {
+  const cost = await facade.missingRecordCost(
+    snapshotReader(chain),
+    (space) => chain.getMinimumBalanceForRentExemption(space),
+    { creator: buyer.address, workerAgent: providerAgent },
+  );
+  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down");
   const client = chain.clientFor(buyer);
   const result = await client.send([
     await facade.rejectAndFreeze({
       task,
-      claim,
+      worker: providerAgent,
       creator: buyer,
       rejectionHash,
-      ...(recorded
-        ? { agentStats: await providerRecordAddress(providerAgent), systemProgram: SYSTEM_PROGRAM_ADDRESS }
-        : {}),
     }),
   ]);
-  return { signature: result.signature, recorded };
+  return { signature: result.signature, recordLamports: cost.lamports };
 }
 
 /**
- * Settle a turned-down job whose review time ran out with no ruling: the
- * provider is paid. Anyone may send it, so either side's wallet does.
+ * Settle a turned-down job once its time is over. Anyone may send it, so
+ * either side's wallet does. What it does depends on the turn-down:
+ * revision 9 (with no dispute, or a dispute nobody ruled on) refunds the
+ * buyer and returns the provider's claim and submission rent, and its bond
+ * when it disputed; a turn-down made before revision 9 pays the provider.
+ * `paidProvider` says which it was, read from the chain before sending, so a
+ * refund is never recorded as a payment.
  */
 export async function sendFrozenExpiry(
   chain: Chain,
   sender: KeyPairSigner,
   task: Address,
   providerAgent: Address,
-): Promise<string> {
+): Promise<{ signature: string; paidProvider: boolean }> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  const turnDown = await readTurnDownOnChain(chain, task, providerAgent);
+  if (turnDown === null || turnDown.expiryDue === null) {
+    throw new WalletError("NOT_ALLOWED", "This turned-down job cannot be settled yet.");
+  }
   const payees = await settlementPayees(chain, account, providerAgent);
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
   const [hireRecord] = await findHireRecordPda({ task });
@@ -971,16 +1081,72 @@ export async function sendFrozenExpiry(
       ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
     }),
   ]);
-  return result.signature;
+  return { signature: result.signature, paidProvider: turnDown.expiryDue === "pays_provider" };
+}
+
+/**
+ * The provider disputes a buyer's turn-down of its delivery (revision 9),
+ * posting the bond: 10% of the price, at least 0.01 SOL, plus the bond
+ * account's rent, which always comes back. The marketplace's reviewers then
+ * rule. For the provider: it is paid and the bond comes back. For the buyer:
+ * the bond goes to the buyer. With no ruling in time: the buyer is refunded
+ * and the bond comes back. This is a person's decision; a wallet never sends
+ * it by itself. The delivery's recorded fingerprint is the evidence.
+ */
+export async function sendDisputeTurnDown(
+  chain: Chain,
+  provider: KeyPairSigner,
+  task: Address,
+  providerAgent: Address,
+): Promise<{ signature: string; bondLamports: bigint }> {
+  const account = await readTask(chain, task);
+  if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  const turnDown = await readTurnDownOnChain(chain, task, providerAgent);
+  if (turnDown === null || !turnDown.disputable) {
+    throw new WalletError("NOT_ALLOWED", "This job has no turn-down that can be disputed.");
+  }
+  if (turnDown.rulingUntil !== null) {
+    throw new WalletError("NOT_ALLOWED", "This turn-down is already disputed.");
+  }
+  if ((await chain.clusterTime()) > turnDown.disputeUntil) {
+    throw new WalletError("NOT_ALLOWED", "The time to dispute this turn-down is over.");
+  }
+  const submission = await readSubmission(chain, task, providerAgent);
+  if (submission === null) {
+    throw new WalletError("NOT_FOUND", "The turned-down delivery could not be found.");
+  }
+  const bondRent = await chain.getMinimumBalanceForRentExemption(getDisputeBondSize());
+  const needed = turnDown.bondLamports + bondRent + FEE_HEADROOM_LAMPORTS;
+  const balance = await chain.getBalance(provider.address);
+  if (balance < needed) {
+    throw new WalletError(
+      "NOT_ENOUGH_MONEY",
+      `Disputing this turn-down needs ${solText(needed)}: the bond of ${solText(turnDown.bondLamports)}, a deposit of ${solText(bondRent)} that comes back, and network fees. Add at least ${solText(needed - balance)} and try again. Nothing changed.`,
+    );
+  }
+  const client = chain.clientFor(provider);
+  const result = await client.send([
+    await facade.disputeRejection({
+      task,
+      worker: providerAgent,
+      creator: account.creator,
+      authority: provider,
+      evidenceHash: new Uint8Array(submission.account.proofHash),
+      evidenceUri: "",
+    }),
+  ]);
+  return { signature: result.signature, bondLamports: turnDown.bondLamports };
 }
 
 /**
  * Rule on a turned-down job as the marketplace's reviewer. `payProvider`
- * true overturns the buyer's rejection and pays the provider; false upholds
+ * true overturns the buyer's turn-down and pays the provider; false upholds
  * it and the price goes back to the buyer. Only the marketplace's own
  * approvers can send this, and the program wants at least two of them to
- * agree. A wallet never does: it is here for the practice marketplace, which
- * has reviewers of its own, and for tests.
+ * agree. Since revision 9 a ruling needs the provider's dispute first, lands
+ * within the ruling time, and carries a reason. A wallet never sends it: it
+ * is here for the practice marketplace, which has reviewers of its own, and
+ * for tests.
  */
 export async function sendFrozenRuling(
   chain: Chain,
@@ -996,6 +1162,12 @@ export async function sendFrozenRuling(
   const [hireRecord] = await findHireRecordPda({ task });
   const reviewer = reviewers[0];
   if (reviewer === undefined) throw new WalletError("BAD_REQUEST", "A ruling needs a reviewer.");
+  const rationale = await values.canonicalJobSpecHash({
+    kind: "agenc.marketplace.ruling",
+    v: 1,
+    task,
+    ruling: payProvider ? "pay_provider" : "refund_buyer",
+  });
   const client = chain.clientFor(reviewer);
   const result = await client.send([
     await facade.resolveRejectFrozen({
@@ -1008,6 +1180,8 @@ export async function sendFrozenRuling(
       authority: reviewer,
       hireRecord,
       approveCompletion: payProvider,
+      rationaleHash: rationale.bytes,
+      rationaleUri: "",
       multisigSigners: [...reviewers],
       ...(payees.operator !== null ? { operator: payees.operator } : {}),
       ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
@@ -1018,7 +1192,12 @@ export async function sendFrozenRuling(
 
 /**
  * Cancel and refund. Allowed while nobody has started, or after the deadline
- * passed with a provider who started and never delivered.
+ * passed with a provider who started and never delivered (its claim deposit
+ * then comes to the buyer too, unless it is still inside its first hour or a
+ * dispute was filed on the job). Since revision 9 a cancel also counts on the
+ * buyer's marketplace record; the first one starts that record, paid by the
+ * buyer before the refund. A wallet that cannot pay it fails here with
+ * nothing changed.
  */
 export async function sendCancel(
   chain: Chain,
@@ -1028,6 +1207,12 @@ export async function sendCancel(
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  await requireBalanceFor(
+    chain,
+    buyer.address,
+    await creatorRecordCost(chain, buyer.address),
+    "Cancelling this job",
+  );
   const client = chain.clientFor(buyer);
   if (Number(account.status) === TaskStatus.Open && account.currentWorkers === 0) {
     const result = await client.cancelTask({

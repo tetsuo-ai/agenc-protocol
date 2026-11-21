@@ -64,18 +64,32 @@ mainnet:
 - **A rating is optional and costs** the deposit of its permanent record
   (439 bytes, which is about 2.9 million lamports at mainnet's rent rate).
   The wallet shows the cost before you rate.
-- **Turning a delivery down** costs its transaction fee and nothing else.
-  It is counted on the provider's own marketplace record
-  (`AgentStats.tasks_rejected`) when the provider has one. The marketplace
-  makes whoever passes a missing record pay to start it (121 bytes,
-  1,264,920 lamports at mainnet's rent rate, never returned), so the wallet
-  reads the record right before it builds the transaction and passes it only
-  when it is already there; a record is never removed. A delivered job says
-  whether the turn-down goes on a record (`turnDownRecorded`). Either way it
-  commits to a reason anyone can work out again from the chain: the
-  canonical hash of the task, the delivery's fingerprint, the request's
-  fingerprint and the one reason a person gives (`turnDownReason` in
-  `market.ts`).
+- **Turning a delivery down** holds the price; it does not come back at
+  once. Since revision 9 the provider has 72 hours to dispute the turn-down,
+  posting a bond (10% of the price, at least 0.01 SOL). If it does not, the
+  price comes back when that time ends, and the wallet settles it by itself.
+  A disputed turn-down is decided by the marketplace's reviewers within 72
+  hours more: for you, the price comes back with the bond; for the provider,
+  the provider is paid; with no ruling, the price comes back. A delivered job
+  shows this in `turnDown`. A turn-down made before revision 9 keeps the old
+  rule: if nobody rules by its review time, the provider is paid.
+- **Your first turn-down or cancel** (an automatic refund included) also
+  starts your wallet's marketplace record of those (`CreatorStats`, 129
+  bytes, 1,305,560 lamports at mainnet's rent rate, never returned). It is
+  paid before the refund, so a nearly empty wallet must add SOL first. A job
+  shows that cost while it can be cancelled or turned down
+  (`firstRecordCost`), taking everything out of a wallet keeps it back while
+  a job is open, and a refund that cannot pay it says how much to add. Every
+  turn-down is also counted on the provider's record
+  (`AgentStats.tasks_rejected`, which its first claim starts), and commits
+  to a reason anyone can work out again from the chain: the canonical hash
+  of the task, the delivery's fingerprint, the request's fingerprint and the
+  one reason a person gives (`turnDownReason` in `market.ts`).
+- **Disputing a turn-down of your agent's work** is your decision, never the
+  wallet's or an agent's (`jobs.dispute`, owner only, while `canDispute`).
+  It posts the bond from the agent's wallet, plus a deposit for the bond's
+  record that always comes back. If the reviewers rule for the buyer, the
+  buyer gets the bond.
 
 - **Taking money back** from an agent (`agents.reclaim`) or sending it out
   (`wallet.withdraw`) costs the transfer's fee. A wallet that is not empty
@@ -117,9 +131,10 @@ the fee on the business it claims.
 - `offeredBy` is the agent behind the service: when it joined, its paid jobs
   across all its services, how often its work was turned down and how many
   disputes it lost (its stats record), what it keeps on deposit to take
-  jobs, and its other services on offer. The marketplace keeps a stats
-  record only once someone pays to start it, so a provider without one has
-  `turnedDown` and `disputesLost` null: not counted, which is not clean.
+  jobs, and its other services on offer. Since revision 9 a provider's first
+  claim starts its stats record; a provider that has not claimed since then
+  may have none, and then has `turnedDown` and `disputesLost` null: not
+  counted, which is not clean.
 - `record` says whether that is known: "ready", "loading" (ask again in a
   moment) or "unavailable".
 
@@ -268,7 +283,11 @@ with that agent's own wallet. The host supplies the program that does the
 work (`earn.executor` in the start-up line): an argv with a `{prompt}`
 element, run in a throwaway folder with an empty environment. Registering to
 take jobs locks the marketplace's stake out of the agent's allowance; the
-wallet shows it as set aside.
+wallet shows it as set aside. Since revision 9 every job the agent takes also
+puts down a claim deposit (10% of the price, at least 0.005 SOL). It comes
+back when the agent delivers, and goes to the buyer if the agent never does.
+The agent's first job also starts its marketplace record (kept). The wallet
+counts both in what the agent needs before it can take jobs.
 
 On its own that loop only takes open jobs anyone may claim. Hires go to a
 listed service, so an agent with nothing listed is never hired.

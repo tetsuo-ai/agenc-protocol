@@ -307,9 +307,14 @@ export interface ProviderView {
  *          -> paid | refunded | problem
  * working: working -> delivered -> paid | problem
  *
- * A delivery the buyer turns down goes to "in_review": the price stays held,
- * a reviewer decides who gets it, and if nobody rules by `reviewEndsAt` the
- * provider is paid.
+ * A delivery the buyer turns down goes to "in_review": the price stays held.
+ * Since revision 9 the provider has 72 hours to dispute the turn-down,
+ * posting a bond. If it does not, the price goes back to the buyer when that
+ * time ends. A disputed turn-down is decided by the marketplace's reviewers
+ * within 72 hours more; if nobody rules, the price goes back to the buyer
+ * and the provider's bond comes back. A turn-down made before revision 9
+ * keeps its old rule: if nobody rules by `reviewEndsAt`, the provider is
+ * paid. `turnDown` says which applies.
  */
 export type JobStatus =
   | "needs_approval"
@@ -372,10 +377,37 @@ export interface JobView {
   /** When a job nobody has started is refunded by itself. */
   autoRefundAt: number | null;
   /**
-   * While "in_review": when the provider is paid if no reviewer has ruled.
-   * Null otherwise.
+   * While "in_review": when the clock that is running ends. For a revision 9
+   * turn-down: the provider's time to dispute, then, once disputed, the
+   * reviewers' time to rule. For one made before revision 9: when the
+   * provider is paid if no reviewer has ruled. Null otherwise.
    */
   reviewEndsAt: number | null;
+  /** While "in_review": the turn-down. Null otherwise. */
+  turnDown: {
+    /**
+     * True for a revision 9 turn-down: the provider may dispute it, and the
+     * buyer is refunded unless a ruling pays the provider.
+     */
+    disputable: boolean;
+    /** When the provider's time to dispute ends (ms), for a revision 9 turn-down. */
+    disputeEndsAt: number | null;
+    /** Whether the provider disputed it. */
+    disputed: boolean;
+    /**
+     * What a dispute posts as its bond (10% of the price, at least 0.01 SOL).
+     * It comes back unless the reviewers rule for the buyer.
+     */
+    bond: Money | null;
+    /** What happens when its time ends with nobody acting. */
+    ifNobodyActs: "buyer_refunded" | "provider_paid";
+  } | null;
+  /**
+   * A working job the buyer turned down: whether the person may dispute it
+   * now (`jobs.dispute`, owner only). It puts the bond at risk, so it is never
+   * done for them.
+   */
+  canDispute: boolean;
   canApprove: boolean;
   canAskChanges: boolean;
   canRefund: boolean;
@@ -386,11 +418,16 @@ export interface JobView {
   ratingCost: Money | null;
   /**
    * While the delivery can be turned down: whether turning it down goes on
-   * the provider's marketplace record. Only a record the provider already
-   * has is counted in; starting one would cost the buyer, so a provider
-   * without one gets none. Turning a delivery down costs its fee either way.
+   * the provider's marketplace record. Since revision 9 it always does.
    */
   turnDownRecorded: boolean;
+  /**
+   * Buying jobs: what the paying wallet spends, once, to start its own
+   * marketplace record of turn-downs and cancels the first time it turns a
+   * delivery down or cancels a job, a refund included. It never comes back.
+   * Null once that record exists, or when not known.
+   */
+  firstRecordCost: Money | null;
   receiptUrl: string | null;
   error: string | null;
 }

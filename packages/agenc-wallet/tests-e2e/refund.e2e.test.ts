@@ -1,7 +1,10 @@
 // Getting money back: a job nobody starts refunds itself; a provider who
 // starts and never delivers is cancelled after the deadline. A delivery is
 // different: the buyer has read it, so turning it down (a person's call, not
-// an agent's) holds the price for review instead of handing it back.
+// an agent's) holds the price instead of handing it back. Since revision 9
+// the provider may dispute the turn-down within 72 hours, posting a bond; if
+// it does not, the price comes back then. A disputed turn-down is ruled by
+// the marketplace's reviewers; if nobody rules, the price comes back too.
 import type { Address } from "@solana/kit";
 import {
   findClaimPda,
@@ -88,10 +91,16 @@ describe("refunds", () => {
     const after = await world.balance(agent.address);
     // The whole price came back. What is gone is exactly what the network
     // keeps: the job record's deposit, the buyer's one-time rate-limit
-    // record, four transaction fees, and the safety check of the request.
+    // record, four transaction fees, the safety check of the request, and
+    // (revision 9) the buyer's record of turn-downs and cancels, which this
+    // first cancel started.
     const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(before - after).toBe(
-      (await rent(466)) + (await rent(67)) + 4n * 5_000n + (await checkCost(world)),
+      (await rent(466)) +
+        (await rent(67)) +
+        (await rent(129)) +
+        4n * 5_000n +
+        (await checkCost(world)),
     );
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("0");
   });
@@ -133,7 +142,7 @@ describe("refunds", () => {
     expect(refunded.statusText).toMatch(/did not deliver in time/);
   });
 
-  it("holds the price for review when a person turns a delivery down, and pays the provider when nobody rules", async () => {
+  it("holds the price when a person turns a delivery down, and refunds the buyer when the provider does not dispute", async () => {
     world = await startWorld();
     const { wallet, sandbox, listing, clock } = world;
     const agent = await fundedAgent(world);
@@ -148,60 +157,72 @@ describe("refunds", () => {
     });
     const looked = await wallet.getJob(job.id, true);
     expect(looked.canRefund).toBe(true);
-    // Nobody keeps a record of this provider's turn-downs, and starting one
-    // would cost the buyer: the screen does not say it goes on a record.
-    expect(await turnDowns(world, looked.provider!)).toBeNull();
-    expect(looked.turnDownRecorded).toBe(false);
-    expect(delivered.turnDownRecorded).toBe(false);
+    // Revision 9: the provider's claim started its record, and every
+    // turn-down counts there.
+    expect(await turnDowns(world, looked.provider!)).toBe(0n);
+    expect(looked.turnDownRecorded).toBe(true);
+    // The buyer's own record does not exist yet: its first turn-down or
+    // cancel starts it, and the screen says what that costs.
+    const recordRent = await sandbox.chain.getMinimumBalanceForRentExemption(129);
+    expect(looked.firstRecordCost?.lamports).toBe(recordRent.toString());
 
     const beforeTurnDown = await world.balance(agent.address);
     const turnedDown = await wallet.refundJob(job.id, true);
     expect(turnedDown.status).toBe("in_review");
-    expect(turnedDown.turnDownRecorded).toBe(false);
-    // No record was started for it. The delivery still carries a reason
-    // anyone can work out again from what the chain holds: this delivery,
-    // this request, and why.
-    expect(await turnDowns(world, looked.provider!)).toBeNull();
+    expect(await turnDowns(world, looked.provider!)).toBe(1n);
+    // The delivery carries a reason anyone can work out again from what the
+    // chain holds: this delivery, this request, and why.
     expect(await recordedReason(world, looked.task!, looked.provider!)).toBe(
       await reasonFromChain(world, looked.task!, looked.provider!),
     );
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
     expect(held.status).toBe("in_review");
-    expect(held.statusText).toMatch(/on hold while it is reviewed/);
-    expect(held.reviewEndsAt).not.toBeNull();
+    expect(held.statusText).toMatch(/The time to dispute it ends.*If nobody disputes it, the price comes back then/);
+    expect(held.turnDown).toMatchObject({
+      disputable: true,
+      disputed: false,
+      ifNobodyActs: "buyer_refunded",
+      bond: { lamports: values.MIN_DISPUTE_BOND_LAMPORTS.toString() },
+    });
+    expect(held.reviewEndsAt).toBe(held.turnDown!.disputeEndsAt);
     expect(held.autoApproveAt).toBeNull();
     // Nothing more to decide while it is held, and no second turn-down.
     expect(held.canApprove).toBe(false);
     expect(held.canAskChanges).toBe(false);
     expect(held.canRefund).toBe(false);
+    expect(held.canDispute).toBe(false);
     await expect(wallet.refundJob(job.id, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
-    // The buyer has read the work, so the price did NOT come back: turning it
-    // down cost the transaction's own fee and nothing else.
-    expect(beforeTurnDown - (await world.balance(agent.address))).toBe(5_000n);
+    // The price did not come back yet. The turn-down cost the transaction's
+    // fee and the buyer's record, once.
+    expect(beforeTurnDown - (await world.balance(agent.address))).toBe(5_000n + recordRent);
     expect((await wallet.overview()).agents[0]!.held.lamports).toBe(job.price.lamports);
     expect((await wallet.listActivity()).some((entry) => /turned down/.test(entry.text))).toBe(true);
 
-    // Before the review time is up nothing settles.
-    sandbox.advanceClock(23 * 3600);
-    clock.now += 23 * 3600_000;
+    // Before the dispute time is up nothing settles.
+    sandbox.advanceClock(71 * 3600);
+    clock.now += 71 * 3600_000;
     await wallet.tick();
     expect((await wallet.getJob(job.id, true)).status).toBe("in_review");
 
-    // Nobody ruled. The provider is paid, and this wallet is the one that
-    // settles it, so the job is not left hanging.
+    // Nobody disputed. The price comes back, and this wallet is the one that
+    // settles it, so the job is not left hanging. It is a refund, not a payment.
+    const beforeRefund = await world.balance(agent.address);
     sandbox.advanceClock(3600 + 120);
     clock.now += 3600_000 + 120_000;
     await wallet.tick();
     await wallet.tick();
     const settled = await wallet.getJob(job.id, true);
-    expect(settled.status).toBe("paid");
-    expect(settled.statusText).toMatch(/was paid to the provider/);
-    expect((await wallet.overview()).agents[0]!.spent.lamports).toBe(job.price.lamports);
+    expect(settled.status).toBe("refunded");
+    expect(settled.statusText).toMatch(/did not dispute your turn-down in time, so the price came back/);
+    expect((await world.balance(agent.address)) - beforeRefund).toBeGreaterThanOrEqual(
+      BigInt(job.price.lamports) - 5_000n,
+    );
+    expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("0");
     expect((await wallet.overview()).agents[0]!.held.lamports).toBe("0");
   });
 
-  it("returns the price when the reviewer agrees with the buyer", async () => {
+  it("refunds the buyer with the provider's bond when the reviewers uphold a disputed turn-down", async () => {
     world = await startWorld();
     const { wallet, sandbox, listing } = world;
     const agent = await fundedAgent(world);
@@ -212,6 +233,21 @@ describe("refunds", () => {
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
     expect(held.status).toBe("in_review");
+
+    // The reviewers rule only on a turn-down the provider disputed.
+    await expect(
+      sandbox.ruleOnTurnedDown({
+        task: held.task as never,
+        providerAgent: held.provider as never,
+        payProvider: false,
+      }),
+    ).rejects.toThrow();
+    await sandbox.disputeTurnDown({ task: held.task as never, providerAgent: held.provider as never });
+    await wallet.tick();
+    const disputed = await wallet.getJob(job.id, true);
+    expect(disputed.status).toBe("in_review");
+    expect(disputed.turnDown?.disputed).toBe(true);
+    expect(disputed.statusText).toMatch(/Your turn-down was disputed/);
     const beforeRuling = await world.balance(agent.address);
 
     await sandbox.ruleOnTurnedDown({
@@ -222,13 +258,14 @@ describe("refunds", () => {
     await wallet.tick();
     const refunded = await wallet.getJob(job.id, true);
     expect(refunded.status).toBe("refunded");
+    // The price and the provider's bond.
     expect((await world.balance(agent.address)) - beforeRuling).toBeGreaterThanOrEqual(
-      BigInt(job.price.lamports),
+      BigInt(job.price.lamports) + values.MIN_DISPUTE_BOND_LAMPORTS,
     );
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("0");
   });
 
-  it("pays the provider when the reviewer overturns the turn-down", async () => {
+  it("pays the provider when the reviewers overturn a disputed turn-down", async () => {
     world = await startWorld();
     const { wallet, sandbox, listing } = world;
     const agent = await fundedAgent(world);
@@ -238,6 +275,7 @@ describe("refunds", () => {
     await wallet.refundJob(job.id, true);
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
+    await sandbox.disputeTurnDown({ task: held.task as never, providerAgent: held.provider as never });
 
     await sandbox.ruleOnTurnedDown({
       task: held.task as never,
@@ -250,54 +288,64 @@ describe("refunds", () => {
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe(job.price.lamports);
   });
 
-  it("counts a turn-down in a record the provider already has, for the transaction's fee alone", async () => {
+  it("refunds the buyer when nobody rules on a disputed turn-down", async () => {
+    world = await startWorld();
+    const { wallet, sandbox, listing, clock } = world;
+    const agent = await fundedAgent(world);
+    const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+    await sandbox.workOnce();
+    await wallet.getJob(job.id, true);
+    await wallet.refundJob(job.id, true);
+    await wallet.tick();
+    const held = await wallet.getJob(job.id, true);
+    await sandbox.disputeTurnDown({ task: held.task as never, providerAgent: held.provider as never });
+    await wallet.tick();
+    expect((await wallet.getJob(job.id, true)).turnDown?.disputed).toBe(true);
+
+    sandbox.advanceClock(72 * 3600 + 120);
+    clock.now += 72 * 3600_000 + 120_000;
+    await wallet.tick();
+    await wallet.tick();
+    const settled = await wallet.getJob(job.id, true);
+    expect(settled.status).toBe("refunded");
+    expect(settled.statusText).toMatch(/disputed your turn-down and nobody ruled in time, so the price came back/);
+    expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("0");
+  });
+
+  it("counts every turn-down on the provider's record, and starts the buyer's own record once", async () => {
     world = await startWorld();
     const { wallet, sandbox, listing } = world;
     const agent = await fundedAgent(world, 500);
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku about rain." });
     await sandbox.workOnce();
-    const before = await wallet.getJob(job.id, true);
-    expect(before.status).toBe("delivered");
-    const provider = before.provider!;
-    expect(await turnDowns(world, provider)).toBeNull();
-    expect(before.turnDownRecorded).toBe(false);
-
-    // Meanwhile another buyer turns down this provider's work and pays to
-    // start its record, which the marketplace lets whoever turns work down do.
-    const other = await sandbox.postOpenJob({
-      title: "A line",
-      instructions: "Write one line.",
-      rewardLamports: 20n * CENT,
-    });
-    await sandbox.workOnce();
-    expect(await other.delivered()).toBe(true);
-    await other.turnDown({ payForRecord: true });
-    expect(await turnDowns(world, provider)).toBe(1n);
-
-    // The next look says this turn-down goes on that record...
-    await wallet.tick();
     const looked = await wallet.getJob(job.id, true);
     expect(looked.status).toBe("delivered");
+    const provider = looked.provider!;
+    expect(await turnDowns(world, provider)).toBe(0n);
     expect(looked.turnDownRecorded).toBe(true);
-    // ...and it is counted there, for the fee and nothing more.
+    const recordRent = await sandbox.chain.getMinimumBalanceForRentExemption(129);
+    expect(looked.firstRecordCost?.lamports).toBe(recordRent.toString());
+
+    // The first turn-down pays the fee and starts the buyer's record.
     const balance = await world.balance(agent.address);
     const turnedDown = await wallet.refundJob(job.id, true);
     expect(turnedDown.status).toBe("in_review");
-    expect(balance - (await world.balance(agent.address))).toBe(5_000n);
-    expect(await turnDowns(world, provider)).toBe(2n);
+    expect(balance - (await world.balance(agent.address))).toBe(5_000n + recordRent);
+    expect(await turnDowns(world, provider)).toBe(1n);
     expect(await recordedReason(world, looked.task!, provider)).toBe(
       await reasonFromChain(world, looked.task!, provider),
     );
 
-    // A later delivery of the same provider is counted the same way.
+    // A later turn-down costs only its fee.
     const { job: next } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku about snow." });
     await sandbox.workOnce();
     const again = await wallet.getJob(next.id, true);
     expect(again.turnDownRecorded).toBe(true);
+    expect(again.firstRecordCost).toBeNull();
     const balanceAgain = await world.balance(agent.address);
     await wallet.refundJob(next.id, true);
     expect(balanceAgain - (await world.balance(agent.address))).toBe(5_000n);
-    expect(await turnDowns(world, provider)).toBe(3n);
+    expect(await turnDowns(world, provider)).toBe(2n);
     // Each reason names its own delivery.
     expect(await recordedReason(world, again.task!, provider)).not.toBe(
       await recordedReason(world, looked.task!, provider),
