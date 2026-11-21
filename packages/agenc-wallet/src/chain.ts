@@ -31,6 +31,7 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
+import { assertSigningRevision, revisionGatedClient } from "./revision.js";
 import {
   readSettlementFacts,
   readSettlementWorker,
@@ -51,7 +52,12 @@ export interface RawAccount {
 
 export interface Chain {
   readonly network: WalletNetwork;
-  /** A client that signs and pays fees with `signer`. */
+  /**
+   * A client that signs and pays fees with `signer`. On a real network it
+   * refuses, with nothing signed, anything that calls the marketplace
+   * program unless the program is on the revision this service signs for
+   * (`assertSigningRevision`).
+   */
   clientFor(signer: TransactionSigner): MarketplaceClient;
   /**
    * Send a transaction that was built somewhere else, once it carries every
@@ -59,6 +65,14 @@ export interface Chain {
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
+  /**
+   * Refuse, with a retryable `NOT_AVAILABLE` that names the revision, unless
+   * the marketplace program is on the revision this service signs for (see
+   * revision.ts). Callers run it before a money check or a signature, so a
+   * person hears about the revision first. Absent on the practice network,
+   * whose program is the one bundled with this service.
+   */
+  assertSigningRevision?(): Promise<void>;
   /** Account bytes, or null when the account does not exist. */
   readAccount(account: Address): Promise<Uint8Array | null>;
   /** Bytes plus owner, for accounts whose owner matters. */
@@ -311,6 +325,15 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
   const transport = createRpcTransport({ rpc });
+  // Read every time: the stamp changes once, at a release, and a send never
+  // goes out on an old answer.
+  const signingRevision = () =>
+    assertSigningRevision(async (account) => {
+      const value = await fetchInfo(account);
+      return value === null
+        ? null
+        : { data: new Uint8Array(Buffer.from(value.data[0], "base64")), owner: value.owner };
+    });
 
   const priorityFee =
     options.computeUnitPrice === undefined
@@ -320,18 +343,26 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     network: options.network,
     transferFeeLamports: BASE_FEE_LAMPORTS + priorityFee,
     clientFor(signer) {
-      return createMarketplaceClient({
-        rpc,
-        signer,
-        ...(options.computeUnitPrice !== undefined
-          ? {
-              computeUnitPrice: options.computeUnitPrice,
-              computeUnitLimit: PRICED_COMPUTE_UNIT_LIMIT,
-            }
-          : {}),
-      });
+      return revisionGatedClient(
+        createMarketplaceClient({
+          rpc,
+          signer,
+          ...(options.computeUnitPrice !== undefined
+            ? {
+                computeUnitPrice: options.computeUnitPrice,
+                computeUnitLimit: PRICED_COMPUTE_UNIT_LIMIT,
+              }
+            : {}),
+        }),
+        signingRevision,
+      );
     },
-    sendSigned: (transaction) => sendThroughTransport(transport, transaction),
+    async sendSigned(transaction) {
+      // Only a marketplace call reaches here (a job's safety check).
+      await signingRevision();
+      return sendThroughTransport(transport, transaction);
+    },
+    assertSigningRevision: signingRevision,
     readAccount: (account) => network(() => readAccount(account)),
     readAccountInfo: (account) => network(() => readAccountInfo(account)),
     async readRawAccount(account) {

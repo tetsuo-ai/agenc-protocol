@@ -1085,6 +1085,8 @@ export async function sendRejectAndFreeze(
   rejectionHash: Uint8Array,
   words: AmountWords = SOL_AMOUNT_WORDS,
 ): Promise<{ signature: string; recordLamports: bigint }> {
+  // The revision first, so a person on the wrong one is not asked for money.
+  await chain.assertSigningRevision?.();
   const cost = await facade.missingRecordCost(
     snapshotReader(chain),
     (space) => chain.getMinimumBalanceForRentExemption(space),
@@ -1161,6 +1163,7 @@ export async function sendDisputeTurnDown(
   providerAgent: Address,
   words: AmountWords = SOL_AMOUNT_WORDS,
 ): Promise<{ signature: string; bondLamports: bigint }> {
+  await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
   const turnDown = await readTurnDownOnChain(chain, task, providerAgent);
@@ -1274,6 +1277,7 @@ export async function sendCancel(
   providerAgent: Address | null,
   words: AmountWords = SOL_AMOUNT_WORDS,
 ): Promise<string> {
+  await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
   await requireBalanceFor(

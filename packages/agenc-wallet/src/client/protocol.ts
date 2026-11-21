@@ -263,7 +263,7 @@ export interface RpcRequest {
 
 export type RpcResponse =
   | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; error: { code: string; message: string } };
+  | { id: number; ok: false; error: { code: string; message: string; retryable?: boolean } };
 
 export interface RpcHello {
   hello: 1;

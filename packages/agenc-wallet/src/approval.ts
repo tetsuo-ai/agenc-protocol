@@ -264,6 +264,8 @@ export async function signApproval(
     target,
     maxDepositLamports: await approvalDeposit(chain, target.kind),
   });
+  // The record is a marketplace call: never sign one for another revision.
+  await chain.assertSigningRevision?.();
   const transaction = await partiallySignTransaction([payer.keyPair], checked.transaction);
   if (Object.values(transaction.signatures).some((signature) => signature == null)) {
     refuse("it is not fully signed");

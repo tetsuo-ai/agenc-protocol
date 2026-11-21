@@ -506,4 +506,11 @@ export interface WalletErrorShape {
   code: WalletErrorCode;
   /** A sentence that is safe to show to a person. */
   message: string;
+  /**
+   * True when the same request may work if tried again later with nothing
+   * changed (the marketplace program is not on the revision this service
+   * signs for yet); false when it never will as things are (an update is
+   * needed). Absent when the service does not say.
+   */
+  retryable?: boolean;
 }

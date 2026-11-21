@@ -17,11 +17,14 @@ import type { WalletErrorCode, WalletErrorShape } from "./types.js";
 /** A failure the service reported. `message` is safe to show to a person. */
 export class WalletClientError extends Error implements WalletErrorShape {
   readonly code: WalletErrorCode;
+  /** Whether the service said trying again later may work (see `WalletErrorShape`). */
+  readonly retryable?: boolean;
 
-  constructor(code: WalletErrorCode, message: string) {
+  constructor(code: WalletErrorCode, message: string, retryable?: boolean) {
     super(message);
     this.name = "WalletClientError";
     this.code = code;
+    if (retryable !== undefined) this.retryable = retryable;
   }
 }
 
@@ -221,7 +224,11 @@ export function connectWallet(options: WalletClientOptions): Promise<WalletClien
         if (response.ok) entry.resolve(response.result);
         else {
           entry.reject(
-            new WalletClientError(toCode(response.error.code), response.error.message),
+            new WalletClientError(
+              toCode(response.error.code),
+              response.error.message,
+              typeof response.error.retryable === "boolean" ? response.error.retryable : undefined,
+            ),
           );
         }
       },

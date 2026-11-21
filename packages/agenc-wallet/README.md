@@ -208,6 +208,15 @@ node dist/cli.js init  --data-dir ~/.local/share/agenc-wallet
 node dist/cli.js serve --data-dir ~/.local/share/agenc-wallet --rpc-url https://your-rpc
 ```
 
+This build signs only for revision 9 of the marketplace program. Before it
+signs anything that calls the program, it reads the program's stamp
+(`ProtocolConfig.surface_revision`); on any other revision it refuses with
+`NOT_AVAILABLE` and signs nothing. The error carries `retryable: true` while
+the program is older (try again once it moves) and `false` when it is newer
+(update the wallet). Reads, and moving the wallet's own money, keep working
+on any revision. Practice money runs the program bundled with the wallet, so
+it has no gate.
+
 `status` prints the address to send SOL to. The default public endpoint
 turns away anyone who asks too fast, so the wallet paces itself on it (about
 four requests a second) and waits out a "too many requests" instead of

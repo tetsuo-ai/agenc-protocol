@@ -7,18 +7,27 @@ import type { WalletErrorCode, WalletErrorShape } from "./client/types.js";
  */
 export class WalletError extends Error implements WalletErrorShape {
   readonly code: WalletErrorCode;
+  /** Whether trying again later, with nothing changed, may work (see `WalletErrorShape`). */
+  readonly retryable?: boolean;
 
-  constructor(code: WalletErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(
+    code: WalletErrorCode,
+    message: string,
+    options?: { cause?: unknown; retryable?: boolean },
+  ) {
     super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = "WalletError";
     this.code = code;
+    if (options?.retryable !== undefined) this.retryable = options.retryable;
   }
 }
 
 /** Turn anything thrown into the wire error shape without leaking detail. */
 export function toWalletErrorShape(error: unknown): WalletErrorShape {
   if (error instanceof WalletError) {
-    return { code: error.code, message: error.message };
+    return error.retryable === undefined
+      ? { code: error.code, message: error.message }
+      : { code: error.code, message: error.message, retryable: error.retryable };
   }
   return {
     code: "INTERNAL",
