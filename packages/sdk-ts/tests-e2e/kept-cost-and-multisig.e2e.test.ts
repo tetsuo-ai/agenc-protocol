@@ -258,6 +258,36 @@ describe("revision 9 C: close_task keeps only the marker", () => {
       await facade.closeTask({ task, authority: creator, taskJobSpec: null }),
     ]);
     expect(lamportsOf(svm, task)).toBe(markerRent);
+    // Review R3-1: a settled escrow found later is recovered on the marker
+    // path too, since the default close passes the canonical escrow.
+    svm.setAccount({
+      address: escrow,
+      data: new Uint8Array(
+        getTaskEscrowEncoder().encode({
+          task,
+          amount: 100_000_000n,
+          distributed: 100_000_000n,
+          isClosed: true,
+          bump: escrowBump,
+        }),
+      ),
+      executable: false,
+      lamports: lamports(rent(svm, getTaskEscrowSize())),
+      programAddress: PROGRAM,
+      space: BigInt(getTaskEscrowSize()),
+    });
+    const leftover = lamportsOf(svm, escrow);
+    const creatorBeforeLeftover = lamportsOf(svm, creator.address);
+    // litesvm refuses a byte-identical transaction: take a new blockhash.
+    svm.expireBlockhash();
+    await send(svm, payer, [
+      await facade.closeTask({ task, authority: creator, taskJobSpec: null }),
+    ]);
+    expect(accountData(svm, escrow)).toBeNull();
+    expect(lamportsOf(svm, creator.address) - creatorBeforeLeftover).toBe(
+      leftover,
+    );
+    expect(lamportsOf(svm, task)).toBe(markerRent);
     // The marker keeps the task id from being reused and takes no new child.
     await expect(send(svm, creator, [await create()])).rejects.toThrow();
     await expect(send(svm, payer, [await record(modAuth)])).rejects.toThrow();
