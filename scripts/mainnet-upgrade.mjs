@@ -224,9 +224,9 @@ const MAX_MODERATION_LIVENESS_WINDOW_SECS = 34_560_000;
 // Mirrors ProtocolConfig::SURFACE_REVISION_CURRENT. These counts are release
 // invariants, not documentation: preflight independently derives each surface
 // from the cfg-gated Rust #[program] modules and refuses any drift.
-const SURFACE_REVISION_CURRENT = 8;
-export const PRODUCTION_INSTRUCTION_COUNT = 104;
-export const PRIVATE_ZK_INSTRUCTION_COUNT = 107;
+const SURFACE_REVISION_CURRENT = 9;
+export const PRODUCTION_INSTRUCTION_COUNT = 106;
+export const PRIVATE_ZK_INSTRUCTION_COUNT = 109;
 export const CANARY_INSTRUCTION_COUNT = 25;
 export const PRIVATE_ZK_INSTRUCTION_NAMES = Object.freeze([
   "complete_task_private",

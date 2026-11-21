@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// RETIRED WITH REVISION 9: a revision 8 rail only. It builds `expire_dispute`
+// and `apply_initiator_slash` from the committed IDL, and revision 9 appends
+// accounts to `expire_dispute` (the dispute bond, both records and the system
+// program) that this rail is deliberately not taught. Once the committed IDL is
+// the revision 9 IDL it refuses to run (`assertRevision8RepairIdl`). Kept as
+// the record of the reviewed 2026-10 repair.
+//
 // Reviewed incident recovery. PLAN simulates unsigned messages and sends nothing.
 // PREPARE: PAYER_KEYPAIR, RPC_URL; revision-5 payload must still be live.
 // REPAIR: AUTHORITY_KEYPAIR, COSIGNERS (comma-separated paths), RPC_URL,
@@ -844,14 +851,33 @@ export async function runRepairPhase({
   return result;
 }
 
+// Revision 9 retires this rail: `dispute_rejection` exists only from
+// revision 9 on, so its presence marks a committed IDL this rail cannot build.
+export function assertRevision8RepairIdl(canonicalIdl) {
+  if (canonicalIdl.instructions.some((ix) => ix.name === "dispute_rejection")) {
+    throw new Error(
+      "mainnet-repair-dispute-counter is a revision 8 rail, retired with revision 9; the committed IDL is the revision 9 IDL",
+    );
+  }
+  return canonicalIdl;
+}
+
 async function main() {
   const args = parseRepairArgs(process.argv.slice(2));
   if (args.help) {
     console.log(
-      "Usage: node scripts/mainnet-repair-dispute-counter.mjs --phase prepare|repair [--execute --confirm <incident dispute>]\nPLAN simulates without signing. Keys: PAYER_KEYPAIR for prepare; AUTHORITY_KEYPAIR and COSIGNERS for repair. Repair also requires EXPECTED_IDL_SHA256 and EXPECTED_SO_SHA256. RPC_URL must be mainnet.",
+      "Usage: node scripts/mainnet-repair-dispute-counter.mjs --phase prepare|repair [--execute --confirm <incident dispute>]\nPLAN simulates without signing. Keys: PAYER_KEYPAIR for prepare; AUTHORITY_KEYPAIR and COSIGNERS for repair. Repair also requires EXPECTED_IDL_SHA256 and EXPECTED_SO_SHA256. RPC_URL must be mainnet.\nRetired with revision 9: revision 8 only.",
     );
     return;
   }
+  assertRevision8RepairIdl(
+    JSON.parse(
+      readFileSync(
+        path.join(ROOT, "artifacts/anchor/idl/agenc_coordination.json"),
+        "utf8",
+      ),
+    ),
+  );
   const record = loadDisputeCounterRepairRecord();
   if (args.execute && args.confirm !== record.incident.dispute)
     throw new Error(

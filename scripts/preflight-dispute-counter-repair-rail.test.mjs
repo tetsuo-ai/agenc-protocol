@@ -12,6 +12,7 @@ import {
   repairReceiptPda,
   assertRepairIdlBinding,
   assertRepairExecutableBinding,
+  assertRevision8RepairIdl,
 } from "./mainnet-repair-dispute-counter.mjs";
 import {
   PROGRAM_ID,
@@ -261,7 +262,13 @@ test("multisig requires authority and distinct configured owner threshold", asyn
     /AUTHORITY_KEYPAIR/,
   );
 });
-test("prepare PLAN simulates each expiry unsigned and defers state-dependent finalization", async () => {
+// Revision 9 retires this rail (build QUESTIONS 14, lead decision): it builds
+// `expire_dispute` from the committed IDL, which now carries the revision 9
+// accounts the rail was never taught, so this end-to-end PLAN cannot run. The
+// rail's pure helpers keep their tests above and below.
+test("prepare PLAN simulates each expiry unsigned and defers state-dependent finalization", {
+  skip: "revision 8 rail, retired with revision 9: expire_dispute needs the revision 9 accounts",
+}, async () => {
   const f = await historicalFixture();
   const m = mock(f);
   const result = await runPreparePhase({
@@ -331,6 +338,16 @@ test("repair refuses counter mismatch, an existing receipt, and unpaused config 
   );
 });
 
+test("the rail refuses to run once the committed IDL is the revision 9 IDL", async () => {
+  assert.throws(() => assertRevision8RepairIdl(idl), /revision 8 rail, retired with revision 9/);
+  const revision8 = { ...idl, instructions: idl.instructions.filter((ix) => ix.name !== "dispute_rejection") };
+  assert.equal(assertRevision8RepairIdl(revision8), revision8);
+  const { spawnSync } = await import("node:child_process");
+  const script = new URL("./mainnet-repair-dispute-counter.mjs", import.meta.url);
+  const refused = spawnSync(process.execPath, [script.pathname, "--phase", "prepare"], { encoding: "utf8" });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /retired with revision 9/);
+});
 test("standalone CLI handles its own flags without importing another rail's parser", async () => {
   const { spawnSync } = await import("node:child_process");
   const script = new URL(

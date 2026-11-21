@@ -557,13 +557,14 @@ impl ProtocolConfig {
     pub const SURFACE_REVISION_FEE_QUALIFIED_RATINGS: u16 = 8;
 
     /// Revision 9 (accountable review): disputable freezes, dispute bonds,
-    /// creator records, claim deposits, compacted task markers. Not yet the
-    /// current revision: the surface-9 change stamps it.
+    /// creator records, claim deposits and `release_claim`, agent-door hires
+    /// with creator review, compacted task markers, and 2-of-3 moderation and
+    /// suspension. 106 production instructions.
     pub const SURFACE_REVISION_ACCOUNTABLE_REVIEW: u16 = 9;
 
     /// Highest surface revision implemented by this binary. Deployment tooling
     /// stamps this value only after the matching artifact has been verified live.
-    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_FEE_QUALIFIED_RATINGS;
+    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_ACCOUNTABLE_REVIEW;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -4929,10 +4930,16 @@ mod tests {
 
     #[test]
     fn rev9_surface_constant_follows_revision_8() {
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_FEE_QUALIFIED_RATINGS, 8);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW, 9);
         assert_eq!(
             ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW,
             ProtocolConfig::SURFACE_REVISION_FEE_QUALIFIED_RATINGS + 1
+        );
+        // Surface 9: this binary implements revision 9.
+        assert_eq!(
+            ProtocolConfig::SURFACE_REVISION_CURRENT,
+            ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW
         );
     }
 }

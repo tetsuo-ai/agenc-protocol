@@ -785,7 +785,11 @@ test("derives the full instruction surface from Rust and rejects stale IDL inven
     "utf8",
   );
   const names = deriveFullProgramInstructionNames(source);
-  assert.equal(names.length, 104);
+  // Revision 9: dispute_rejection and release_claim are new; hire_from_listing
+  // v3 replaces v2 under the same name.
+  assert.equal(names.length, 106);
+  assert.ok(names.includes("dispute_rejection"));
+  assert.ok(names.includes("release_claim"));
   assert.ok(names.includes("reclaim_orphan_task_child"));
   assert.ok(names.includes("promote_bid"));
   assert.ok(names.includes("demote_ineligible_best"));
@@ -799,7 +803,7 @@ test("derives the full instruction surface from Rust and rejects stale IDL inven
   const privateNames = deriveProgramInstructionNames(source, {
     privateZk: true,
   });
-  assert.equal(privateNames.length, 107);
+  assert.equal(privateNames.length, 109);
   assert.ok(privateNames.includes("complete_task_private"));
   assert.equal(
     deriveProgramInstructionNames(source, { mainnetCanary: true }).length,

@@ -15,11 +15,13 @@ and `GovernanceConfig` are INITIALIZED (sane params). Production has no
 `initialize_zk_config`, and `update_zk_image_id` exist only in the explicit
 `private-zk` development build.
 
-Candidate build breakdown: default production (`spl-token-rewards`) is **104
-instructions**, explicit `private-zk` is **107**, and `mainnet-canary` remains
-**25**. The committed candidate IDL has **46 accounts / 108 events / 418 errors**;
-the generated reference describes this candidate. `validation-timings` only
-shortens constants; `mainnet-canary` cannot combine with rewards or ZK.
+Candidate build breakdown (revision 9): default production (`spl-token-rewards`)
+is **106 instructions**, explicit `private-zk` is **109**, and `mainnet-canary`
+remains **25**. The committed candidate IDL has **49 accounts / 117 events / 435
+errors** (the `TaskMarker` account entry is added by the artifacts sync, see
+`scripts/anchor-idl-task-marker.mjs`); the generated reference describes this
+candidate. `validation-timings` only shortens constants; `mainnet-canary` cannot
+combine with rewards or ZK.
 
 The revision-6 candidate adds `upvote_post_by_authority`, a receipt keyed by
 wallet authority and post, and the SDK capability `feedAuthorityVotes`. It
@@ -41,11 +43,17 @@ in Task and PurchaseRecord, preserving allocation and wire shape. The
 `feeQualifiedRatings` capability describes the new semantics; historical
 aggregates are not retrospectively filtered. See [rating policy](design/fee-qualified-ratings.md).
 
+The revision-9 candidate (accountable review, `surface_revision = 9`) is in this
+source and not deployed. It adds `dispute_rejection` and `release_claim`,
+replaces `hire_from_listing` v2 with v3, and changes account lists on existing
+instructions; [Revision 9 notes](#revision-9-notes) below list what it does and
+its known limits.
+
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (418 variants in the candidate IDL)
+- `src/errors.rs` - program error codes (435 variants in the candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
@@ -346,3 +354,77 @@ The complete model lives in `src/state.rs`. Important state families include:
 - update error semantics: `src/errors.rs`
 
 Use the file layout in `src/instructions/` as the real ownership guide instead of older condensed summaries.
+
+## Revision 9 notes
+
+What the revision-9 candidate changes, in brief:
+
+- **Turn-downs.** A single-worker review task (Exclusive, one worker,
+  CreatorReview) is refused only with `reject_and_freeze`; `reject_task_result`
+  refuses it (`SingleWorkerRejectMustFreeze`). The freeze opens a fixed 72-hour
+  dispute window. The worker may dispute once with `dispute_rejection`, posting a
+  bond of max(10% of the price, 0.01 SOL); the 2-of-3 multisig then has 72 hours
+  to rule with `resolve_reject_frozen` (new discriminator). Without a dispute the
+  buyer is refunded after the window; a dispute left unruled refunds the buyer
+  and returns the bond. A suspended worker cannot dispute; a Busy or Inactive one
+  can. Freezes made before revision 9 keep their revision 8 rules.
+- **Task disputes.** Every filing posts a bond (`DisputeBond`). A ruling against
+  the filer, or the filer's own cancel, sends the principal to the other side;
+  otherwise it comes back. The bond's rent always goes back to the filer. Owners
+  who are the creator or the worker wallet do not count toward a ruling's
+  threshold.
+  `initiate_dispute` refuses a dispute on a single-worker review task from
+  either side (`DisputeRefusedOnReviewTask`): the buyer freezes and the worker
+  disputes the freeze. The program reads only the Task there (Exclusive, one
+  worker, manual validation), so the refusal also covers single-worker tasks in
+  the closed legacy modes (ValidatorQuorum, ExternalAttestation); none is in a
+  disputable state on mainnet.
+- **Records.** Each creator wallet has a `CreatorStats` record and each worker
+  an `AgentStats` record. A dispute counts as won or lost by its ruling, not by
+  who filed it. An approved Split, a worker's approved Refund filing and a
+  creator's approved Complete filing move no record.
+- **Claim deposits.** A non-contest, non-bid claim posts max(10% of the worker
+  share, 0.005 SOL). It comes back at the first delivery, or with
+  `release_claim` within one hour of the claim. A later release, or a no-show
+  (`expire_claim`, the cancel drain, an unruled dispute filed after the claim
+  lapsed), forfeits it to the buyer, with these exceptions: once a dispute was
+  filed on the task it always comes back; a no-show on a task whose parent does
+  not prove Completed keeps it; the cancel drain returns it while the claim is
+  inside its one-hour grace; and a Competitive claim that lost the race on a
+  completed task gets it back. A settled dispute peer's claim, rent and deposit,
+  closes to its own wallet.
+- **Agent buyers.** `hire_from_listing` v3 gives agent-door hires creator review.
+- **Kept cost.** `close_task` compacts a finished (Completed or Cancelled) task
+  into a 56-byte `TaskMarker` at the same address and refunds the rest of its
+  rent to the creator; children of a compacted parent keep working.
+- **One key.** Turning moderation on or off, choosing the moderator, suspending
+  and unsuspending an agent, the moderation attestor roster and heartbeat window
+  changes need 2 of the 3 owners. A task creator cannot moderate its own task,
+  and a provider cannot moderate its own listing.
+- **Closed for new tasks.** ExternalAttestation validation, and CreatorReview on
+  token-reward and bid tasks.
+
+Known limits, carried to revision 10 or left to clients:
+
+- **Squatting is not priced.** A worker can release inside the one-hour grace
+  and claim again, keeping a slot for transaction fees only; the deposit prices
+  abandonment past the grace, not squatting. On a task with a deadline the hold
+  ends at the deadline (revision 8: one hour after it). A dependent task created
+  without a deadline can be held indefinitely, in revision 8 too, because an
+  InProgress task without a deadline cannot be cancelled. Listed for revision 10.
+- **An overturned freeze still counts as a rejection.** `tasks_rejected` (worker)
+  and `rejections` (creator) count every freeze, including one a ruling later
+  overturned; `disputes_won` and `disputes_lost` show the outcome. Clients should
+  not read `tasks_rejected` alone as a bad mark.
+- **First records are paid first.** A creator's first freeze or cancel pays its
+  `CreatorStats` rent (1,305,560 lamports at mainnet rent) before the escrow
+  refund, a worker's first claim pays its `AgentStats` (1,264,920), and a
+  cranker of `expire_reject_frozen`, `expire_dispute` or `expire_claim` pays for
+  a missing record. A wallet that cannot cover it plus fees must add SOL first;
+  clients show the cost.
+- **Deposit events.** `ClaimDepositSettled` reports every claim deposit that
+  moves (forfeited or refunded, the recipient and the amount). Rent left on an
+  old-rate claim above today's minimum is not a deposit and emits none.
+  `TerminalClaimReclaimed.forfeited` reports lamports sent to the creator or the
+  treasury; indexers read `ClaimDepositSettled` for deposits.
+- **Collaborative review tasks** keep reject, then cancel.
