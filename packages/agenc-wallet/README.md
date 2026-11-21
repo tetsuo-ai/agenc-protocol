@@ -52,11 +52,12 @@ mainnet:
   gives each service's share and amount as `marketFee`. It is part of the
   price, not added to it.
 - **A network fee that is not returned**, even when the job is cancelled: the
-  deposit behind the permanent job record, the deposit behind the permanent
-  record of the safety check of your request (whoever asks for a check pays
-  for it), and six transaction fees. At mainnet's rent on 2026-11-14 that is
-  3,017,520 + 1,838,960 + 30,000 = 4,886,480 lamports (about $0.34 with SOL
-  at $69).
+  deposit of the small marker that stays where the job's record was once the
+  finished job is tidied (revision 9), and six transaction fees. At mainnet's
+  rent on 2026-11-14 that is 934,720 + 30,000 = 964,720 lamports (about $0.07
+  with SOL at $69). The rest of the job record's deposit, and the deposit
+  behind the record of the safety check of your request (whoever asks for a
+  check pays for it), come back when the job is tidied.
 - **A one-time record** per paying wallet on its first hire (990,600 lamports
   on mainnet at the documented rent rate).
 - **Deposits that come back** when the finished job is tidied. The wallet

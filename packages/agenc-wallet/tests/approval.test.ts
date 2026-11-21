@@ -75,11 +75,14 @@ async function taskApproval(
     hash?: Uint8Array;
     status?: number;
     roster?: boolean;
+    rentPayer?: TransactionSigner;
   } = {},
 ): Promise<Instruction> {
   const moderator = overrides.moderator ?? approver;
+  // Revision 9: the job's buyer pays the record's rent as its rent payer.
   return (await facade.recordTaskModeration({
     moderator,
+    rentPayer: overrides.rentPayer ?? payerSlot,
     task: overrides.task ?? TASK,
     jobSpecHash: overrides.hash ?? HASH,
     status: overrides.status ?? 0,
@@ -133,8 +136,13 @@ async function build(
 const pay = (lamports: bigint, to: Address = approver.address): Instruction =>
   transferInstruction(payerSlot, to, lamports);
 
-/** The honest transaction: hand over the deposit, record the approval. */
-const honest = async (): Promise<Uint8Array> => build([pay(DEPOSIT), await taskApproval()]);
+/** The honest job approval: record it, its buyer paying the record's rent. */
+const honest = async (): Promise<Uint8Array> => build([await taskApproval()]);
+
+const LISTING_TARGET: ApprovalTarget = { kind: "listing", listing: LISTING, hash: HASH };
+const LISTING_EXPECTED = { ...EXPECTED, target: LISTING_TARGET };
+/** The honest service approval: hand over the deposit, record the approval. */
+const honestListing = async (): Promise<Uint8Array> => build([pay(DEPOSIT), await listingApproval()]);
 
 async function refused(
   wire: Uint8Array,
@@ -152,43 +160,44 @@ async function refused(
 }
 
 describe("an approval this wallet will sign", () => {
-  it("is the deposit to the approver, then the approval of what was asked for", async () => {
+  it("is the approval of what was asked for, with the job's buyer as the record's rent payer", async () => {
     const checked = await checkApprovalTransaction(await honest(), EXPECTED);
-    expect(checked.depositLamports).toBe(DEPOSIT);
+    // Nothing goes to the approver: the payer funds the record itself and
+    // gets the deposit back when the job is tidied.
+    expect(checked.depositLamports).toBe(0n);
     // Signed by the approver already; the payer's place is still empty.
     expect(checked.transaction.signatures[approver.address]).toBeInstanceOf(Uint8Array);
     expect(checked.transaction.signatures[payer.address]).toBeNull();
   });
 
-  it("may ask for less than the deposit, or for nothing when the record exists", async () => {
+  it("for a service, is the deposit to the approver, less of it, or nothing when the record exists", async () => {
+    expect((await checkApprovalTransaction(await honestListing(), LISTING_EXPECTED)).depositLamports).toBe(
+      DEPOSIT,
+    );
     const less = await checkApprovalTransaction(
-      await build([pay(900_000n), await taskApproval()]),
-      EXPECTED,
+      await build([pay(900_000n), await listingApproval()]),
+      LISTING_EXPECTED,
     );
     expect(less.depositLamports).toBe(900_000n);
-    const none = await checkApprovalTransaction(await build([await taskApproval()]), EXPECTED);
+    const none = await checkApprovalTransaction(await build([await listingApproval()]), LISTING_EXPECTED);
     expect(none.depositLamports).toBe(0n);
   });
 
   it("may come from an approver on the roster as well as from the marketplace itself", async () => {
     const checked = await checkApprovalTransaction(
-      await build([pay(DEPOSIT), await taskApproval({ roster: true })]),
+      await build([await taskApproval({ roster: true })]),
       EXPECTED,
     );
-    expect(checked.depositLamports).toBe(DEPOSIT);
+    expect(checked.depositLamports).toBe(0n);
   });
 
-  it("may be for a service's description", async () => {
-    const expected = {
-      ...EXPECTED,
-      target: { kind: "listing", listing: LISTING, hash: HASH } as ApprovalTarget,
-    };
-    const wire = await build([pay(DEPOSIT), await listingApproval()]);
-    expect((await checkApprovalTransaction(wire, expected)).depositLamports).toBe(DEPOSIT);
-    // The same transaction is not an approval of a job.
-    expect(await refused(wire)).toMatch(/something else/);
+  it("is told apart by what it approves", async () => {
+    const wire = await honestListing();
+    // A service's approval is not one of a job.
+    expect(await refused(wire)).toMatch(/pays its deposit by a transfer/);
+    expect(await refused(await build([await listingApproval()]))).toMatch(/something else/);
     // And a job's approval is not one of a service.
-    expect(await refused(await honest(), expected)).toMatch(/something else/);
+    expect(await refused(await honest(), LISTING_EXPECTED)).toMatch(/something else/);
   });
 
   it("gets the payer's signature only after it passed", async () => {
@@ -197,7 +206,7 @@ describe("an approval this wallet will sign", () => {
 
     const ready = await signApproval(chain, payer, payment, TARGET);
 
-    expect(ready.depositLamports).toBe(DEPOSIT);
+    expect(ready.depositLamports).toBe(0n);
     for (const signer of [payer, approver] as KeyPairSigner[]) {
       const signature = ready.transaction.signatures[signer.address];
       expect(signature).toBeInstanceOf(Uint8Array);
@@ -207,8 +216,14 @@ describe("an approval this wallet will sign", () => {
     }
 
     // One lamport above what the chain says the record costs: not signed.
-    const greedy = { transaction: await build([pay(DEPOSIT + 1n), await taskApproval()]), moderator: approver.address };
-    await expect(signApproval(chain, payer, greedy, TARGET)).rejects.toMatchObject({ code: "NETWORK" });
+    const greedy = {
+      transaction: await build([pay(DEPOSIT + 1n), await listingApproval()]),
+      moderator: approver.address,
+    };
+    await expect(signApproval(chain, payer, greedy, LISTING_TARGET)).rejects.toMatchObject({ code: "NETWORK" });
+    // A job's approval that also asks for a transfer: not signed either.
+    const old = { transaction: await build([pay(DEPOSIT), await taskApproval()]), moderator: approver.address };
+    await expect(signApproval(chain, payer, old, TARGET)).rejects.toMatchObject({ code: "NETWORK" });
   });
 
   it("costs its deposit and the fee of two signatures", async () => {
@@ -227,34 +242,57 @@ describe("an approval this wallet will sign", () => {
 });
 
 describe("an approval this wallet refuses to sign", () => {
+  it("pays a job's deposit to the approver by a transfer, as before revision 9", async () => {
+    expect(await refused(await build([pay(DEPOSIT), await taskApproval()]))).toMatch(
+      /pays its deposit by a transfer/,
+    );
+  });
+
+  it("has somebody else pay a job record's rent", async () => {
+    // The approver itself, or a stranger, as the rent payer.
+    expect(await refused(await build([await taskApproval({ rentPayer: approver })]))).toMatch(
+      /something else|signers/,
+    );
+    const stranger = await generateKeyPairSigner();
+    expect(await refused(await build([await taskApproval({ rentPayer: stranger })]))).toMatch(
+      /signers/,
+    );
+  });
+
   it("takes more than the record's deposit", async () => {
-    expect(await refused(await build([pay(DEPOSIT + 1n), await taskApproval()]))).toMatch(
-      /above the deposit/,
-    );
-    expect(await refused(await build([pay(1_000_000_000n), await taskApproval()]))).toMatch(
-      /above the deposit/,
-    );
+    expect(
+      await refused(await build([pay(DEPOSIT + 1n), await listingApproval()]), LISTING_EXPECTED),
+    ).toMatch(/above the deposit/);
+    expect(
+      await refused(await build([pay(1_000_000_000n), await listingApproval()]), LISTING_EXPECTED),
+    ).toMatch(/above the deposit/);
   });
 
   it("pays somebody other than the approver", async () => {
-    expect(await refused(await build([pay(DEPOSIT, THIEF), await taskApproval()]))).toMatch(
-      /not from the payer to the approver/,
-    );
+    expect(
+      await refused(await build([pay(DEPOSIT, THIEF), await listingApproval()]), LISTING_EXPECTED),
+    ).toMatch(/not from the payer to the approver/);
   });
 
   it("holds a second payment, in any place", async () => {
-    const approval = await taskApproval();
+    const approval = await listingApproval();
     for (const steps of [
       [pay(DEPOSIT), pay(1_000_000_000n, THIEF), approval],
       [pay(DEPOSIT), approval, pay(1_000_000_000n, THIEF)],
       [pay(1_000_000_000n, THIEF), pay(DEPOSIT), approval],
     ]) {
-      expect(await refused(await build(steps))).toMatch(/wrong number of steps/);
+      expect(await refused(await build(steps), LISTING_EXPECTED)).toMatch(/wrong number of steps/);
     }
     // Two steps signed by both, but the approver takes the deposit and
     // records nothing.
     const pocket = transferInstruction(approver, THIEF, 1n);
-    expect(await refused(await build([pay(DEPOSIT), pocket]))).toMatch(/not the marketplace's/);
+    expect(await refused(await build([pay(DEPOSIT), pocket]), LISTING_EXPECTED)).toMatch(
+      /not the marketplace's/,
+    );
+    // Any payment next to a job's approval.
+    expect(await refused(await build([await taskApproval(), pay(1n, THIEF)]))).toMatch(
+      /pays its deposit by a transfer/,
+    );
   });
 
   it("bids up the network fee at the payer's cost", async () => {
@@ -266,10 +304,13 @@ describe("an approval this wallet refuses to sign", () => {
       accounts: [],
       data: price,
     };
-    expect(await refused(await build([bid, pay(DEPOSIT), await taskApproval()]))).toMatch(
-      /wrong number of steps/,
+    expect(await refused(await build([bid, await taskApproval()]))).toMatch(/by a transfer/);
+    expect(
+      await refused(await build([bid, pay(DEPOSIT), await listingApproval()]), LISTING_EXPECTED),
+    ).toMatch(/wrong number of steps/);
+    expect(await refused(await build([bid, await listingApproval()]), LISTING_EXPECTED)).toMatch(
+      /not a transfer/,
     );
-    expect(await refused(await build([bid, await taskApproval()]))).toMatch(/not a transfer/);
   });
 
   it("uses the payer's key for anything but a plain transfer", async () => {
@@ -286,35 +327,33 @@ describe("an approval this wallet refuses to sign", () => {
       ],
       data,
     };
-    expect(await refused(await build([other, await taskApproval()]))).toMatch(/not a plain transfer/);
+    expect(await refused(await build([other, await listingApproval()]), LISTING_EXPECTED)).toMatch(
+      /not a plain transfer/,
+    );
 
     // "Assign": hand the payer's account to another program.
     const assign = new Uint8Array(36);
     new DataView(assign.buffer).setUint32(0, 1, true);
     expect(
-      await refused(await build([{ ...other, data: assign }, await taskApproval()])),
+      await refused(await build([{ ...other, data: assign }, await listingApproval()]), LISTING_EXPECTED),
     ).toMatch(/malformed/);
   });
 
   it("runs the transfer the other way round", async () => {
     const back = transferInstruction(approver, payer.address, DEPOSIT);
-    expect(await refused(await build([back, await taskApproval()]))).toMatch(
+    expect(await refused(await build([back, await listingApproval()]), LISTING_EXPECTED)).toMatch(
       /not from the payer to the approver/,
     );
   });
 
   it("approves something other than what was asked for", async () => {
-    expect(await refused(await build([pay(DEPOSIT), await taskApproval({ task: fill(8) })]))).toMatch(
-      /something else/,
-    );
+    expect(await refused(await build([await taskApproval({ task: fill(8) })]))).toMatch(/something else/);
     expect(
-      await refused(
-        await build([pay(DEPOSIT), await taskApproval({ hash: new Uint8Array(32).fill(0xcd) })]),
-      ),
+      await refused(await build([await taskApproval({ hash: new Uint8Array(32).fill(0xcd) })])),
     ).toMatch(/something else/);
     // A verdict that does not pass the words is worth nothing to the payer.
     for (const status of [1, 2, 3]) {
-      expect(await refused(await build([pay(DEPOSIT), await taskApproval({ status })]))).toMatch(
+      expect(await refused(await build([await taskApproval({ status })]))).toMatch(
         /does not pass the words/,
       );
     }
@@ -322,18 +361,14 @@ describe("an approval this wallet refuses to sign", () => {
 
   it("calls a different program, or a different instruction of the marketplace's", async () => {
     const approval = await taskApproval();
-    expect(
-      await refused(await build([pay(DEPOSIT), { ...approval, programAddress: fill(6) }])),
-    ).toMatch(/not the marketplace's/);
+    expect(await refused(await build([{ ...approval, programAddress: fill(6) }]))).toMatch(
+      /not the marketplace's/,
+    );
 
     const data = Uint8Array.from(approval.data!);
     data[0] = (data[0]! + 1) % 256;
-    expect(await refused(await build([pay(DEPOSIT), { ...approval, data }]))).toMatch(
-      /not an approval/,
-    );
-    expect(
-      await refused(await build([pay(DEPOSIT), { ...approval, data: data.subarray(0, 40) }])),
-    ).toMatch(/malformed/);
+    expect(await refused(await build([{ ...approval, data }]))).toMatch(/not an approval/);
+    expect(await refused(await build([{ ...approval, data: data.subarray(0, 40) }]))).toMatch(/malformed/);
   });
 
   it("brings the payer, or anyone else, into the approval", async () => {
@@ -343,64 +378,70 @@ describe("an approval this wallet refuses to sign", () => {
       ...approval,
       accounts: [...accounts, { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payerSlot } as never],
     };
-    expect(await refused(await build([pay(DEPOSIT), withPayer]))).toMatch(/something else/);
+    expect(await refused(await build([withPayer]))).toMatch(/something else/);
 
     // In the one place that is allowed to vary.
     const swapped = [...accounts];
     swapped[4] = { address: payer.address, role: AccountRole.READONLY };
-    expect(await refused(await build([pay(DEPOSIT), { ...approval, accounts: swapped }]))).toMatch(
-      /something else/,
-    );
+    expect(await refused(await build([{ ...approval, accounts: swapped }]))).toMatch(/something else/);
 
     const stranger = await generateKeyPairSigner();
     const third = {
       ...approval,
       accounts: [...accounts, { address: stranger.address, role: AccountRole.READONLY_SIGNER, signer: stranger } as never],
     };
-    expect(await refused(await build([pay(DEPOSIT), third]))).toMatch(/wrong number of signers/);
+    expect(await refused(await build([third]))).toMatch(/wrong number of signers/);
+
+    // A service's approval still takes no part of the payer's.
+    const listing = await listingApproval();
+    const listingWithPayer = {
+      ...listing,
+      accounts: [
+        ...listing.accounts!,
+        { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payerSlot } as never,
+      ],
+    };
+    expect(await refused(await build([pay(DEPOSIT), listingWithPayer]), LISTING_EXPECTED)).toMatch(
+      /something else/,
+    );
   });
 
   it("is paid for, or signed, by the wrong party", async () => {
     // Somebody else as the fee payer.
     const stranger = await generateKeyPairSigner();
-    expect(
-      await refused(await build([pay(DEPOSIT), await taskApproval()], { feePayer: stranger })),
-    ).toMatch(/wrong number of signers/);
+    expect(await refused(await build([await taskApproval()], { feePayer: stranger }))).toMatch(
+      /wrong number of signers/,
+    );
     // The approver pays the fee and the wallet is second.
-    expect(
-      await refused(await build([pay(DEPOSIT), await taskApproval()], { feePayer: approver })),
-    ).toMatch(/somebody else pays/);
+    expect(await refused(await build([await taskApproval()], { feePayer: approver }))).toMatch(
+      /somebody else pays/,
+    );
     // An approval by an approver other than the one this wallet was told of.
     const other = await generateKeyPairSigner();
-    expect(
-      await refused(await build([pay(DEPOSIT, other.address), await taskApproval({ moderator: other })])),
-    ).toMatch(/somebody else signs/);
+    expect(await refused(await build([await taskApproval({ moderator: other })]))).toMatch(
+      /somebody else signs/,
+    );
     // The approver named itself as the payer.
-    expect(
-      await refused(await honest(), { ...EXPECTED, payer: approver.address }),
-    ).toMatch(/the payer is the approver/);
+    expect(await refused(await honest(), { ...EXPECTED, payer: approver.address })).toMatch(
+      /the payer is the approver/,
+    );
   });
 
   it("was not signed by the approver", async () => {
-    const unsigned = await build([
-      pay(DEPOSIT),
-      await taskApproval({ moderator: createNoopSigner(approver.address) }),
-    ]);
+    const unsigned = await build([await taskApproval({ moderator: createNoopSigner(approver.address) })]);
     expect(await refused(unsigned)).toMatch(/has not signed/);
   });
 
   it("hides accounts in a lookup table", async () => {
     const approval = await taskApproval();
-    const hidden = await build([pay(DEPOSIT), approval], {
+    const hidden = await build([approval], {
       lookups: { [fill(9)]: [TASK, approval.accounts![0]!.address] },
     });
     expect(await refused(hidden)).toMatch(/lookup tables/);
   });
 
   it("is in the old format, has bytes after its end, or is not a transaction", async () => {
-    expect(
-      await refused(await build([pay(DEPOSIT), await taskApproval()], { version: "legacy" })),
-    ).toMatch(/version 0/);
+    expect(await refused(await build([await taskApproval()], { version: "legacy" }))).toMatch(/version 0/);
 
     const wire = await honest();
     const longer = new Uint8Array(wire.length + 2);

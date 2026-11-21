@@ -17,7 +17,7 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import { providerRecordAddress, turnDownReason } from "../src/market.js";
-import { CENT, checkCost, startWorld, type World } from "./harness.js";
+import { CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -90,17 +90,18 @@ describe("refunds", () => {
     expect(refunded.statusText).toMatch(/price returned/);
     const after = await world.balance(agent.address);
     // The whole price came back. What is gone is exactly what the network
-    // keeps: the job record's deposit, the buyer's one-time rate-limit
-    // record, four transaction fees, the safety check of the request, and
-    // (revision 9) the buyer's record of turn-downs and cancels, which this
-    // first cancel started.
+    // keeps: the marker the tidied job record was compacted into, the
+    // buyer's one-time rate-limit record, four transaction fees, the
+    // signatures of the safety check of the request (its deposit came back),
+    // and (revision 9) the buyer's record of turn-downs and cancels, which
+    // this first cancel started.
     const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(before - after).toBe(
-      (await rent(466)) +
+      (await rent(MARKER_SPACE)) +
         (await rent(67)) +
         (await rent(129)) +
         4n * 5_000n +
-        (await checkCost(world)),
+        CHECK_FEE,
     );
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("0");
   });
