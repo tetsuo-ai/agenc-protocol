@@ -8,10 +8,10 @@ import {
   parseProverHeadersJson,
 } from "./marketplace-devnet-scenario-shared.mjs";
 
-// Review S-19, item 64: AGENC_PROVER_HEADERS_JSON can hold an Authorization
-// header, and a JSON.parse error quotes its input. This file is a preflight-*
-// test so the deployment-scripts suite runs it; the parser's other tests are in
-// marketplace-devnet-scenario.test.mjs, which no suite runs.
+// Review S-19, items 64 and 65: the prover config can carry a credential, in
+// AGENC_PROVER_HEADERS_JSON (an Authorization header, and a JSON.parse error
+// quotes its input) or in the endpoint's query string. No error may quote it.
+// The config's other tests are in marketplace-devnet-scenario.test.mjs.
 
 // Synthetic stand-ins for a credential: none of them is a real token.
 const TOKEN = "SynthTok-Qw3rTy7Z9x-NotAReal-K3y";
@@ -109,4 +109,60 @@ test("S-19 item 64: a valid AGENC_PROVER_HEADERS_JSON still parses", () => {
   );
   assert.deepEqual(parseProverHeadersJson(""), {});
   assert.deepEqual(parseProverHeadersJson(undefined), {});
+});
+
+test("S-19 item 65: a bad prover endpoint never quotes its value", () => {
+  for (const [label, endpoint, message] of [
+    [
+      "no scheme",
+      `prover.example.com/v1/prove?api_key=${TOKEN}`,
+      "Security: Invalid prover endpoint URL (value not shown)",
+    ],
+    [
+      "a missing colon",
+      `https//prover.example.com/?token=${TOKEN}`,
+      "Security: Invalid prover endpoint URL (value not shown)",
+    ],
+    [
+      "a space in the host",
+      `https://prover example.com/?token=${TOKEN}`,
+      "Security: Invalid prover endpoint URL (value not shown)",
+    ],
+    [
+      "a port out of range",
+      `https://prover.example.com:99999/?token=${TOKEN}`,
+      "Security: Invalid prover endpoint URL (value not shown)",
+    ],
+    [
+      "another protocol",
+      `ftp://prover.example.com/?token=${TOKEN}`,
+      "Security: Prover endpoint must use http or https protocol",
+    ],
+    [
+      "the token as a password",
+      `https://user:${TOKEN}@prover.example.com/`,
+      "Security: Prover endpoint must not include credentials",
+    ],
+  ]) {
+    // The fixed message names "prover endpoint" itself, so the check is on
+    // the exact message and on the token in the error's every output.
+    const fromEnv = caught(() =>
+      buildRemoteProverConfigFromEnv({ AGENC_PROVER_ENDPOINT: endpoint }),
+    );
+    assert.equal(fromEnv.message, message, label);
+    assertQuotesNone(fromEnv, TOKEN, label);
+
+    const fromConfig = caught(() => buildRemoteProverConfig({ endpoint }, {}));
+    assert.equal(fromConfig.message, message, label);
+    assertQuotesNone(fromConfig, TOKEN, label);
+    for (const output of [fromEnv.stack, inspect(fromEnv), inspect(fromConfig)]) {
+      assert.ok(!String(output).includes(endpoint), `${label}: output quotes the endpoint`);
+    }
+  }
+  // A valid endpoint with a token in its query string is still accepted as is.
+  const endpoint = `https://prover.example.com/v1/prove?token=${TOKEN}`;
+  assert.deepEqual(
+    buildRemoteProverConfigFromEnv({ AGENC_PROVER_ENDPOINT: endpoint }),
+    { kind: "remote", endpoint },
+  );
 });
