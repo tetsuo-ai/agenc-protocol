@@ -66,9 +66,11 @@ const SOL = 1_000_000_000n;
 const LEDGER_SHREDS = "200000";
 const PROGRAMDATA_HEADER = 45;
 
+/** A refusal with a plain message; thrown, so locks and cleanups still run. */
+class LocalnetMacError extends Error {}
+
 function fail(message) {
-  console.error(`localnet-mac: ${message}`);
-  process.exit(1);
+  throw new LocalnetMacError(message);
 }
 
 export function parseArgs(argv) {
@@ -356,7 +358,8 @@ async function up(args) {
 async function status() {
   const { kit } = await sdkModules();
   const env = JSON.parse(await readFile(ENV_FILE, "utf8"));
-  const record = JSON.parse(await readFile(PID_FILE, "utf8"));
+  const record = await readFile(PID_FILE, "utf8").then(JSON.parse, () => null);
+  if (record === null) fail("no validator was started here; run up first");
   if (env.launcher !== "localnet-mac") fail("env.json was not written by localnet-mac");
   const url = new URL(env.rpcUrl);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") fail("the RPC is not loopback");
@@ -427,7 +430,8 @@ async function compactUnlocked(args) {
   }
   const { kit } = await sdkModules();
   const env = JSON.parse(await readFile(ENV_FILE, "utf8"));
-  const record = JSON.parse(await readFile(PID_FILE, "utf8"));
+  const record = await readFile(PID_FILE, "utf8").then(JSON.parse, () => null);
+  if (record === null) fail("no validator was started here; run up first");
   if (env.launcher !== "localnet-mac") fail("env.json was not written by localnet-mac");
   if (!alive(record.pid)) fail(`validator pid ${record.pid} is not running`);
   const before = walBytes(record.ledger);
@@ -470,19 +474,22 @@ async function down(args) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  let args;
-  try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (error) {
-    fail(error.message);
-  }
-  const run =
-    args.command === "up"
-      ? up(args)
-      : args.command === "status"
-        ? status()
-        : args.command === "compact"
-          ? compact(args)
-          : down(args);
-  run.catch((error) => fail(error?.stack ?? String(error)));
+  const main = async () => {
+    let args;
+    try {
+      args = parseArgs(process.argv.slice(2));
+    } catch (error) {
+      fail(error.message);
+    }
+    if (args.command === "up") return up(args);
+    if (args.command === "status") return status();
+    if (args.command === "compact") return compact(args);
+    return down(args);
+  };
+  main().catch((error) => {
+    console.error(
+      `localnet-mac: ${error instanceof LocalnetMacError ? error.message : (error?.stack ?? String(error))}`,
+    );
+    process.exit(1);
+  });
 }
