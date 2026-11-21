@@ -457,11 +457,16 @@ Before or during any future mainnet upgrade:
    `surface_revision`, instruction count, upgrade authority).
 7. Keep committed artifacts and downstream protocol consumers aligned.
 8. Before the final surface stamp, publish/upgrade and fetch-verify the **on-chain
-   IDL per cluster**. The canonical rail derives a deterministic docs-free projection
-   from the hash-approved full `target/idl/agenc_coordination.json`, checks Anchor
-   0.32.1 authority/capacity/rent, publishes that ABI-complete projection, and verifies
-   every non-`docs` value from chain. Do not pass the oversized documented source IDL
-   directly to `anchor idl upgrade`. The 25-instruction
+   IDL per cluster**. The revision 9 publish uses the committed
+   `artifacts/anchor/idl/agenc_coordination.json`, which is the rail's default IDL
+   path. Never publish `target/idl/agenc_coordination.json`: the raw Anchor output
+   has no `TaskMarker` account, so clients built from it cannot decode a task that
+   `close_task` compacted. The preflight refuses any IDL without that entry. The
+   canonical rail derives a deterministic docs-free projection from the
+   hash-approved committed IDL, checks Anchor 0.32.1 authority/capacity/rent,
+   publishes that ABI-complete projection, and verifies every non-`docs` value from
+   chain. Do not pass the oversized documented source IDL directly to
+   `anchor idl upgrade`. The 25-instruction
    `agenc_coordination.canary.json` remains the IDL of the restricted
    rehearsal/fallback `--features mainnet-canary` build kept frozen in CI via
    `scripts/canary-idl-baseline.json`. See [./VERSIONS.md](./VERSIONS.md) for the full

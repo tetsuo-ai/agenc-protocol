@@ -4,6 +4,11 @@ This note explains `repair_dispute_initiator_counter`, a one-time governance
 repair for a historical dispute whose counter units were lost. It also gives the
 mainnet release order that uses it.
 
+Status: the repair rail, `scripts/mainnet-repair-dispute-counter.mjs`, is a
+revision 8 rail only, and revision 9 retires it. The revision 9 upgrade has no
+repair allowance. Its gate stops on a pending repair shape. See
+[Revision 9](#revision-9).
+
 ## The defect
 
 `initiate_dispute` takes a writable `agent` and an optional writable
@@ -96,7 +101,14 @@ the release:
    They must report zero dispute blockers before the revision stamp, and the
    protocol cannot unpause without that stamp.
 
+This order belonged to the revision 8 upgrade. Revision 9 removes the step 3
+exception. See [Revision 9](#revision-9).
+
 ## Operator rail
+
+This rail is revision 8 only. It is retired with revision 9 and refuses to run
+on the revision 9 tree. The rest of this section describes it as it ran under
+revision 8.
 
 Use `scripts/mainnet-repair-dispute-counter.mjs --phase prepare` while the
 reviewed revision-5 payload is live. `RPC_URL` must select mainnet-beta and
@@ -130,12 +142,16 @@ Submitted manual-validation record also requires its validation config. Token
 rewards and peer-worker settlement are refused with an explicit unsupported-shape
 error. These cases require a separately reviewed rail.
 
-The predeploy exception requires `AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1` and
-the exact recorded revision-5 payload hash. It only permits the one recorded
-agent with zero counters and one unfinalized tracked outcome. Any additional
-blocker fails closed. The postdeploy and prestamp gates never accept the
-exception. Keep the protocol paused, repair immediately after upgrading, then
-resume the release rail before any stamp.
+Under revision 8, the predeploy exception required
+`AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1` and the exact recorded revision-5 payload
+hash. It only permitted the one recorded agent with zero counters and one
+unfinalized tracked outcome. Any additional blocker failed closed. The postdeploy
+and prestamp gates never accepted the exception. The operator kept the protocol
+paused, repaired immediately after upgrading, then resumed the release rail
+before any stamp.
+
+The local proof below ran against revision 8. Revision 9 skips it, because
+revision 9's `expire_dispute` takes accounts the retired rail does not build.
 
 Local proof: `AGENC_RPC_E2E=1 node --test
 scripts/preflight-dispute-counter-repair-rpc.test.mjs` starts a disposable
@@ -149,6 +165,27 @@ reproduce the historical state by changing only the two counter bytes from 2/2
 to 1/1. The test executes both exported phases and checks the complete final
 state. Local genesis and executable checks are injected into exported helpers;
 the CLI has no switch to bypass its mainnet or artifact checks.
+
+## Revision 9
+
+The repair rail is revision 8 only, and revision 9 retires it. The rail builds
+`expire_dispute` and `apply_initiator_slash` from the committed IDL. Revision 9
+appends accounts to `expire_dispute` (the dispute bond, both records and the
+system program) that the rail does not build. So the rail refuses to run once
+the committed IDL is the revision 9 IDL (`assertRevision8RepairIdl`). It stays
+in the tree as the record of the reviewed 2026-10 repair.
+
+The revision 9 upgrade has no repair allowance.
+`createDisputeCounterRepairAllowance` is never active, and
+`AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1` only prints a warning that it is
+ignored. The gate stops on a pending repair shape: when the dispute scan finds
+the one recorded agent with zero counters and one unfinalized tracked outcome of
+a recorded dispute, every cutover gate stops with
+`pending-revision8-dispute-counter-repair`. That covers the predeploy snapshot,
+the immediate predeploy rescan and the postdeploy/prestamp rescan. Finish the
+repair on the live revision 8 program with the revision 8 release tree's rail,
+then rerun the revision 9 preflight. Any other dispute blocker stops with the
+ordinary dispute error.
 
 ## Completion-bond cutover gate
 
