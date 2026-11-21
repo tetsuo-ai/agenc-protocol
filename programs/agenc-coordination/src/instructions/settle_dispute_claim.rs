@@ -49,7 +49,7 @@ pub struct SettleDisputeClaim<'info> {
     pub claim: UncheckedAccount<'info>,
 
     /// CHECK: canonical `["agent", agent_id]` AgentRegistration PDA bound by
-    /// the shared bundle validation; receives the closed claim's rent.
+    /// the shared bundle validation; its active task count drops by one.
     #[account(mut)]
     pub worker: UncheckedAccount<'info>,
 
@@ -67,6 +67,14 @@ pub struct SettleDisputeClaim<'info> {
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 
     pub authority: Signer<'info>,
+
+    /// Revision 9 (review R1-4): the peer's wallet, the `authority` stored in
+    /// its AgentRegistration. The closed claim's whole balance (rent and any
+    /// deposit) and the peer's submission rent go to it, as on every other
+    /// claim close.
+    /// CHECK: bound to the registration's `authority` by the bundle validation.
+    #[account(mut)]
+    pub worker_authority: UncheckedAccount<'info>,
 }
 
 pub fn handler(ctx: Context<SettleDisputeClaim>) -> Result<()> {
@@ -91,6 +99,7 @@ pub fn handler(ctx: Context<SettleDisputeClaim>) -> Result<()> {
         &task_key,
         &ctx.accounts.claim.to_account_info(),
         &ctx.accounts.worker.to_account_info(),
+        &ctx.accounts.worker_authority.to_account_info(),
         &ctx.accounts.task_submission.to_account_info(),
         defendant,
         ctx.accounts.task_validation_config.as_deref_mut(),

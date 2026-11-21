@@ -435,6 +435,8 @@ function settleIx(w, r, crank) {
       taskSubmission: r.subB,
       taskValidationConfig: r.validation,
       authority: crank.publicKey,
+      // Review R1-4: the peer's wallet, where its claim closes.
+      workerAuthority: r.peerWallet ?? r.peer.publicKey,
     })
     .instruction();
 }
@@ -876,3 +878,52 @@ for (const outcome of ["expire", "resolve"]) {
     await finalizeAndRecoverStake(w, r, crank);
   });
 }
+
+// Review R1-4. A peer is not a party to the dispute. Its claim, rent and any
+// deposit, and its submission rent close to its own wallet, as every other claim
+// close does, never into its AgentRegistration, which only deregistration (and
+// the end of the identity) can empty.
+const lamports = (w, key) => BigInt(w.svm.getBalance(key) ?? 0n);
+const rentFor = (w, key) => BigInt(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(key).data.length)));
+
+test("AGNC-01: a settled peer's claim (rent and deposit) and submission rent go to its wallet, not its AgentRegistration (review R1-4; 9f2db57: into the AgentRegistration)", async () => {
+  for (const c of [
+    { label: "an undelivered peer, dispute rejected", opts: { peerCount: 1 }, approve: false, deposit: 5_000_000n },
+    { label: "a peer with a submitted delivery, dispute upheld", opts: { submissionState: "submitted", resolutionType: 1 }, approve: true, deposit: 0n },
+  ]) {
+    const w = await freshWorld({ moderationEnabled: true });
+    const r = await setup(w, c.opts);
+    const claimBalance = lamports(w, r.claimB);
+    assert.equal(claimBalance - rentFor(w, r.claimB), c.deposit, `${c.label}: the deposit on the claim`);
+    const submissionBalance = lamports(w, r.subB);
+    assert.equal(submissionBalance > 0n, c.opts.submissionState === "submitted", `${c.label}: a live submission`);
+    const { ix, resolver } = await resolveIx(w, r, { resolutionType: c.opts.resolutionType ?? 0, approve: c.approve });
+    expectOk(send(w.svm, ix, [resolver]), `${c.label}: ruling`);
+    const crank = newCrank(w);
+    const before = { wallet: lamports(w, r.peer.publicKey), agent: lamports(w, r.peerAgent) };
+    expectOk(send(w.svm, await settleIx(w, r, crank), [crank]), `${c.label}: settle the peer`);
+    assert.ok(isClosed(w.svm, r.claimB), `${c.label}: claim closed`);
+    assert.equal(lamports(w, r.peer.publicKey) - before.wallet, claimBalance + submissionBalance,
+      `${c.label}: the wallet gets the whole claim and the submission rent`);
+    assert.equal(lamports(w, r.peerAgent), before.agent, `${c.label}: the AgentRegistration gains nothing`);
+    assert.equal(decode(w.svm, "AgentRegistration", r.peerAgent).active_tasks, 0);
+    assertSettlement(w, r, { total: 1, settled: 1, terminal: "Resolved" });
+  }
+});
+
+test("AGNC-01: peer settlement refuses a wallet that is not the peer's own (review R1-4; 9f2db57: no wallet account, settles into the AgentRegistration)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setup(w, { peerCount: 1 });
+  const { ix, resolver } = await resolveIx(w, r, { approve: false });
+  expectOk(send(w.svm, ix, [resolver]), "the multisig rejects the creator's dispute");
+  const crank = newCrank(w);
+  const watched = [r.claimB, r.subB, r.peerAgent, r.peer.publicKey, r.dispute, r.task];
+  const snapshot = () => watched.map((key) => w.svm.getAccount(key));
+  const before = snapshot();
+  expectFail(send(w.svm, await settleIx(w, { ...r, peerWallet: crank.publicKey }, crank), [crank]),
+    "UnauthorizedAgent", "the crank names itself as the peer's wallet");
+  assert.deepEqual(snapshot(), before, "nothing moved");
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await settleIx(w, r, crank), [crank]), "the peer's own wallet");
+  assertSettlement(w, r, { total: 1, settled: 1, terminal: "Resolved" });
+});
