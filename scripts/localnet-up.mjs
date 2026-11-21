@@ -134,6 +134,10 @@ function usage() {
     "                            and 10-minute hard expiry in disposable genesis.",
     "  --legacy-loader-drill    With --dev-ready only: deactivate SIMD-0500 so",
     "                            the pinned v0 SBF can be locally upgraded in tests.",
+    "  --validation-timings     With --dev-ready only: record programProfile",
+    "                            validation-timings in env.json, for a program built",
+    "                            with `--features validation-timings` (300-second",
+    "                            turn-down windows). localnet-up never builds it.",
     "",
     "See docs/LOCALNET.md for the full local-stack runbook.",
   ].join("\n");
@@ -147,6 +151,7 @@ export function parseArgs(argv) {
     devReady: false,
     shortDisputes: false,
     legacyLoaderDrill: false,
+    validationTimings: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -167,6 +172,8 @@ export function parseArgs(argv) {
       args.shortDisputes = true;
     } else if (arg === "--legacy-loader-drill") {
       args.legacyLoaderDrill = true;
+    } else if (arg === "--validation-timings") {
+      args.validationTimings = true;
     } else if (arg === "--env-file") {
       if (!argv[i + 1]) throw new Error("--env-file requires a path");
       args.envFile = path.resolve(argv[i + 1]);
@@ -189,6 +196,10 @@ export function parseArgs(argv) {
   if (args.legacyLoaderDrill && !args.devReady)
     throw new Error(
       "--legacy-loader-drill requires --dev-ready disposable genesis",
+    );
+  if (args.validationTimings && !args.devReady)
+    throw new Error(
+      "--validation-timings requires --dev-ready disposable genesis",
     );
   return args;
 }
@@ -1406,6 +1417,9 @@ async function mainLocked(args, lifecycleLock) {
     programId,
     programSha256: soSha256,
     programSize: soBytes,
+    // Which build the operator says is deployed; the validation-timings RPC
+    // suites refuse any other label.
+    programProfile: args.validationTimings ? "validation-timings" : "production",
     attestorUrl,
     deactivatedFeatures: args.legacyLoaderDrill
       ? [LEGACY_LOADER_DEPLOY_FEATURE]
