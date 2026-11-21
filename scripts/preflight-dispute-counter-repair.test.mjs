@@ -73,27 +73,32 @@ test("reviewed remediation record validates and rejects malformed boundaries", (
     );
   }
 });
-test("default rejects exact reviewed shape with operator recovery instructions", () => {
-  assert.throws(
-    () => assertRevision5DisputeCutover(shape()),
-    /AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1.*predeploy.*mainnet-repair-dispute-counter.mjs.*before any stamp/,
-  );
+// Lead item 52: revision 9 retires the revision 8 repair allowance with its
+// rail, so the pending repair-record shape is a hard gate at every stage.
+const PENDING_REPAIR_GATE =
+  /PENDING REVISION 8 DISPUTE COUNTER REPAIR \(pending-revision8-dispute-counter-repair\).*revision 8 release tree's scripts\/mainnet-repair-dispute-counter\.mjs/;
+test("the exact reviewed shape is a hard gate with recovery instructions (item 52)", () => {
+  assert.throws(() => assertRevision5DisputeCutover(shape()), PENDING_REPAIR_GATE);
 });
-test("active revision-5 allowance accepts either recorded pending dispute", () => {
+test("even the old revision-5 opt-in no longer accepts either recorded pending dispute (item 52)", () => {
   for (const pending of [
     record.incident.dispute,
     record.siblingDisputes[0].dispute,
   ]) {
-    assert.deepEqual(
-      assertRevision5DisputeCutover(shape(pending), "Predeploy", {
-        repairAllowance: allowance(),
-      }),
-      {
-        agent: record.initiatorAgent,
-        pendingDispute: pending,
-        incidentDispute: record.incident.dispute,
-      },
-    );
+    for (const stage of [
+      "Predeploy cutover snapshot",
+      "Immediate predeploy rescan",
+      "Postdeploy/prestamp rescan",
+    ]) {
+      assert.throws(
+        () =>
+          assertRevision5DisputeCutover(shape(pending), stage, {
+            repairAllowance: allowance(),
+          }),
+        PENDING_REPAIR_GATE,
+        `${stage} pending=${pending}`,
+      );
+    }
   }
 });
 test("allowance refuses any deviation from exact reviewed shape", () => {
@@ -127,8 +132,9 @@ test("allowance refuses any deviation from exact reviewed shape", () => {
     );
   }
 });
-test("missing opt-in and non-revision-5 payload never activate allowance", () => {
+test("no opt-in or payload activates the retired allowance (item 52)", () => {
   for (const repairAllowance of [
+    allowance(),
     allowance({}),
     allowance(undefined, "0".repeat(64)),
   ]) {
@@ -138,18 +144,18 @@ test("missing opt-in and non-revision-5 payload never activate allowance", () =>
         assertRevision5DisputeCutover(shape(), "Predeploy", {
           repairAllowance,
         }),
-      /dispute cutover requires/,
+      PENDING_REPAIR_GATE,
     );
   }
   const warnings = [];
   createDisputeCounterRepairAllowance({
     env: { AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: "1" },
-    livePayloadSha256: "0".repeat(64),
+    livePayloadSha256: record.priorRevision.payloadSha256,
     warn: (s) => warnings.push(s),
   });
   assert.match(
     warnings.join(),
-    /ignoring.*not the reviewed revision-5 payload/,
+    /ignoring AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: revision 9 retires the revision 8 repair allowance/,
   );
 });
 test("postdeploy and prestamp reject even an accidentally forwarded allowance", () => {
@@ -163,7 +169,7 @@ test("postdeploy and prestamp reject even an accidentally forwarded allowance", 
         assertRevision5DisputeCutover(shape(), stage, {
           repairAllowance: allowance(),
         }),
-      /dispute cutover requires/,
+      PENDING_REPAIR_GATE,
     );
   }
   const source = readFileSync(

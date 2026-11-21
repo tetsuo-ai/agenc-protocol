@@ -1348,7 +1348,7 @@ test("revision-5 cutover accepts only a fully empty/canonical snapshot", () => {
   );
 });
 
-test("both cutover assertion paths receive the same predeploy repair allowance", async () => {
+test("both cutover assertion paths stop on the pending repair shape, with or without the old allowance (item 52)", async () => {
   const record = loadDisputeCounterRepairRecord();
   const snapshot = safeSnapshot();
   const agent = new PublicKey(record.initiatorAgent);
@@ -1370,50 +1370,33 @@ test("both cutover assertion paths receive the same predeploy repair allowance",
       record,
       env: { AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: "1" },
       livePayloadSha256: record.priorRevision.payloadSha256,
+      warn: () => {},
     }),
   };
+  assert.equal(options.repairAllowance.active, false);
   const scanners = {
     scanTaskSettlement: async () => snapshot.taskSettlement,
     scanTaskChildren: async () => snapshot.taskChildren,
   };
-  await assert.rejects(
-    scanStableRevision5CompletionBondCutover(
-      {},
-      snapshot.disputes,
-      "Predeploy",
-      scanners,
-    ),
-    /dispute cutover requires/,
-  );
-  await scanStableRevision5CompletionBondCutover(
-    {},
-    snapshot.disputes,
-    "Predeploy",
-    scanners,
-    options,
-  );
-  assert.throws(
-    () => assertRevision5CutoverResults(snapshot, "Predeploy"),
-    /dispute cutover requires/,
-  );
-  assert.doesNotThrow(() =>
-    assertRevision5CutoverResults(snapshot, "Predeploy", options),
-  );
-  await assert.rejects(
-    scanStableRevision5CompletionBondCutover(
-      {},
-      snapshot.disputes,
-      "Postdeploy/prestamp",
-      scanners,
-      options,
-    ),
-    /dispute cutover requires/,
-  );
-  assert.throws(
-    () =>
-      assertRevision5CutoverResults(snapshot, "Postdeploy/prestamp", options),
-    /dispute cutover requires/,
-  );
+  const gate = /PENDING REVISION 8 DISPUTE COUNTER REPAIR \(pending-revision8-dispute-counter-repair\)/;
+  for (const stage of ["Predeploy", "Postdeploy/prestamp"]) {
+    for (const forwarded of [undefined, options]) {
+      await assert.rejects(
+        scanStableRevision5CompletionBondCutover(
+          {},
+          snapshot.disputes,
+          stage,
+          scanners,
+          forwarded,
+        ),
+        gate,
+      );
+      assert.throws(
+        () => assertRevision5CutoverResults(snapshot, stage, forwarded),
+        gate,
+      );
+    }
+  }
 });
 
 test("bond entry assumption is pinned to the reviewed revision-5 payload and the candidate entry gate", () => {
