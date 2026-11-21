@@ -164,9 +164,10 @@ RPC configured (and not localhost; inject secret-bearing provider URLs with
 support matrix (a package may have multiple compatible minor lines — sdk
 0.8.x through 0.11.x all speak the revision-4 wire (see `docs/VERSIONING.md`
 §1.1); revision 5 instead requires the coordinated SDK 0.12.x / React 0.5.x
-client train, revision 8 the SDK 0.13.x / React 0.6.x train, and a directly
-installed `@tetsuo-ai/protocol` artifact must be 0.3.x for revision 4, 0.4.x
-for revision 5 or 0.5.x for revision 8). Those version buckets are not a
+client train, revision 8 the SDK 0.13.x / React 0.6.x train, the planned
+revision 9 the SDK 0.14.x / React 0.7.x train, and a directly installed
+`@tetsuo-ai/protocol` artifact must be 0.3.x for revision 4, 0.4.x for
+revision 5, 0.5.x for revision 8 or 0.6.x for revision 9). Those version buckets are not a
 permissive Cartesian product: `promote` also reads each installed first-party
 manifest and checks its actual npm dependency/peer ranges against the installed
 SDK and other first-party packages. A truly absent optional package is ignored;
@@ -174,7 +175,7 @@ a present but missing, malformed, unreadable, or mutually incompatible manifest
 fails closed. See `docs/VERSIONING.md` §1.1.2 for coherent combinations.
 `promote` selects exactly one package set from the finalized on-chain surface
 revision and rejects both directions of client/program skew; it never treats the
-revision-4, revision-5 and revision-8 sets as one permissive union. Project-local
+revision-4, revision-5, revision-8 and revision-9 sets as one permissive union. Project-local
 CLI/scaffolder packages are not used as evidence for the version of a command
 that may be running from npx, a global install, or an embedding process. It also
 checks a fee-leg rent-exemption advisory and the receipts surface. Chain
@@ -193,7 +194,9 @@ accepted as release evidence. CLI 0.4.0 carries the reviewed revision-8 identity
 (ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, slot 462468899,
 normalized executable hash `ffb8f3cb…`, commit `f39b383`). No reviewed
 store-core release targets revision 8 yet, so an installed store-core fails
-closed there.
+closed there. The revision-9 package matrix is in place, but its deployment
+identity is added only after the verified cutover, so `promote` fails closed
+on a revision-9 deployment until then.
 
 `promote` deliberately cannot return production-ready for a generated checkout
 or worker based on local files alone. It reports an explicit blocker until an
