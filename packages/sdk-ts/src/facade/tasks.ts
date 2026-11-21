@@ -334,7 +334,8 @@ export async function createDependentTask(
  * Revision 9: a non-contest claim also moves a claim deposit from the worker
  * wallet onto the claim (`values.claimDepositForTask`: 10% of the worker's share,
  * at least 0.005 SOL). It comes back on the first delivery. It goes to the buyer
- * when the claim ends without a delivery after its expiry. Fund the wallet for it.
+ * when the claim ends without a delivery after its expiry, unless a dispute was
+ * filed on the task. Fund the wallet for it.
  */
 export type ClaimTaskWithJobSpecInput = Omit<
   ClaimTaskWithJobSpecAsyncInput,
@@ -836,7 +837,8 @@ export type RejectAndFreezeInput = Omit<
  * Creator turns a submission down and freezes the price (with a rejection
  * hash). Auto-derives validation config, submission, protocol config, the
  * worker's record (from `worker`) and the creator's record (from `creator`).
- * A record missing on chain is created by the program, paid by the creator.
+ * A record missing on chain is created by the program, paid by the creator
+ * (its first freeze or cancel starts its record; see `missingRecordCost`).
  *
  * Revision 9 freeze (the program sets `freeze_kind = 1`): the worker has the
  * dispute window (72 hours on the production build; the frozen submission's
@@ -1022,8 +1024,11 @@ function snapshotCancelTaskWorkerAccounts(
  *
  * Revision 9: the creator's record (`CreatorStats`, derived from `authority`)
  * is required. The program creates it at the creator's first cancel, paid by
- * the creator, and counts the cancel there. A no-show drain sends each drained
- * non-contest claim's deposit to the creator.
+ * the creator before the refund (its rent is never returned; read it with
+ * `missingRecordCost`), and counts the cancel there. A no-show drain sends each
+ * drained non-contest claim's deposit to the creator, except a deposit still
+ * inside its 1-hour release grace or on a task with a dispute filed, which goes
+ * back to the worker.
  */
 export async function cancelTask(input: CancelTaskInput) {
   const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
