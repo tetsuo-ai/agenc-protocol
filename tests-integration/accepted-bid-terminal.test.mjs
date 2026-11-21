@@ -1260,6 +1260,15 @@ test("expire_dispute refunds principal and applies the evidence-bound accepted-b
     noShowSlashBps,
     tag: "accepted-bid-expire-dispute-proof",
   });
+  // Review R1-1: a dispute expiry penalizes only a claim that had already lapsed
+  // when the dispute was filed (the D16 shape), so the creator files after it.
+  {
+    const lapse = w.svm.getClock();
+    lapse.unixTimestamp =
+      BigInt(decode(w.svm, "TaskClaim", b.claim).expires_at.toString()) + 1n;
+    w.svm.setClock(lapse);
+    w.svm.expireBlockhash();
+  }
   const dispute = await initiateAcceptedBidDispute(
     w,
     b,

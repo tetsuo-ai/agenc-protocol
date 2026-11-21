@@ -306,9 +306,15 @@ fn bond_forfeit_wallet_is_live_noshow(
     live_worker_wallets.iter().any(|w| w == worker_wallet)
 }
 
+/// Review R1-1: a task a dispute was ever filed on never forfeits a worker bond
+/// here; the dispute blocked the worker from delivering.
 #[cfg(not(feature = "mainnet-canary"))]
-fn worker_bond_forfeit_allowed(is_no_show_cancel: bool, dependency_parent_completed: bool) -> bool {
-    is_no_show_cancel && dependency_parent_completed
+fn worker_bond_forfeit_allowed(
+    is_no_show_cancel: bool,
+    dependency_parent_completed: bool,
+    dispute_filed: bool,
+) -> bool {
+    is_no_show_cancel && dependency_parent_completed && !dispute_filed
 }
 
 /// Classify the optional canonical parent prefix used by cancellation. Legacy
@@ -381,6 +387,9 @@ fn process_cancel_task_impl<'info>(
     #[cfg(not(feature = "mainnet-canary"))]
     let is_no_show_cancel =
         matches!(task.status, TaskStatus::InProgress) && task.current_workers > 0;
+    // Review R1-1: a dispute ever filed on the task disables every forfeit here.
+    #[cfg(not(feature = "mainnet-canary"))]
+    let dispute_filed = task.dispute_filed();
 
     let escrow = load_task_escrow(&accounts.escrow)?;
     let escrow_info = accounts.escrow.to_account_info();
@@ -567,8 +576,11 @@ fn process_cancel_task_impl<'info>(
 
     #[cfg(not(feature = "mainnet-canary"))]
     if let Some(bid_accounts) = accepted_bid_accounts {
-        let bid_no_show_penalty_allowed =
-            worker_bond_forfeit_allowed(is_no_show_cancel, dependency_parent_completed);
+        let bid_no_show_penalty_allowed = worker_bond_forfeit_allowed(
+            is_no_show_cancel,
+            dependency_parent_completed,
+            dispute_filed,
+        );
         let bid_bond_disposition =
             accepted_bid_no_show_bond_disposition(bid_no_show_penalty_allowed);
         let claim_info = &worker_accounts[0];
@@ -719,15 +731,23 @@ fn process_cancel_task_impl<'info>(
         // its deadline with no live delivery), so a non-contest claim's deposit
         // goes to the creator (`authority`), not back with the claim rent. A
         // delivered claim already had its deposit back at submit. Bid claims
-        // carry a bid bond instead (settled above). Full surface only.
+        // carry a bid bond instead (settled above). Review R1-1: once a dispute
+        // was filed on the task (it blocked every worker), the deposit goes back
+        // to the worker instead. Full surface only.
         #[cfg(not(feature = "mainnet-canary"))]
         if !is_contest_configured_task(task) && task.task_type != TaskType::BidExclusive {
+            let forfeit = !dispute_filed;
+            let authority_info = accounts.authority.to_account_info();
             crate::instructions::claim_deposit_helpers::settle_claim_deposit(
                 claim_info,
-                &accounts.authority.to_account_info(),
+                if forfeit {
+                    &authority_info
+                } else {
+                    rent_recipient_info
+                },
                 task.key(),
                 worker_info.key(),
-                true,
+                forfeit,
                 clock.unix_timestamp,
             )?;
         }
@@ -773,26 +793,29 @@ fn process_cancel_task_impl<'info>(
         let worker_wallet = accounts.worker_bond_authority.to_account_info();
         // #70 fix: forfeit to the creator ONLY on a genuine no-show; on an Open cancel
         // the worker is not at fault, so refund their bond to them (the poster).
-        let disposition =
-            if worker_bond_forfeit_allowed(is_no_show_cancel, dependency_parent_completed) {
-                // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
-                // one of the workers whose claims are being drained above (their
-                // rent-recipient wallets are already constrained == worker.authority).
-                // Without this binding a creator could sybil-claim, no-show, and forfeit
-                // the bond of an honest, already-rejected worker (whose bond stays
-                // hostage while the task is live). settle_completion_bond separately
-                // enforces poster_wallet == bond.party + the canonical PDA, so
-                // membership here fully pins the forfeit to a real no-show.
-                require!(
-                    bond_forfeit_wallet_is_live_noshow(&worker_wallet.key(), &live_worker_wallets),
-                    CoordinationError::BondNotTiedToNoShowWorker
-                );
-                BondDisposition::Forfeit {
-                    recipient: &creator_info,
-                }
-            } else {
-                BondDisposition::Refund
-            };
+        let disposition = if worker_bond_forfeit_allowed(
+            is_no_show_cancel,
+            dependency_parent_completed,
+            dispute_filed,
+        ) {
+            // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
+            // one of the workers whose claims are being drained above (their
+            // rent-recipient wallets are already constrained == worker.authority).
+            // Without this binding a creator could sybil-claim, no-show, and forfeit
+            // the bond of an honest, already-rejected worker (whose bond stays
+            // hostage while the task is live). settle_completion_bond separately
+            // enforces poster_wallet == bond.party + the canonical PDA, so
+            // membership here fully pins the forfeit to a real no-show.
+            require!(
+                bond_forfeit_wallet_is_live_noshow(&worker_wallet.key(), &live_worker_wallets),
+                CoordinationError::BondNotTiedToNoShowWorker
+            );
+            BondDisposition::Forfeit {
+                recipient: &creator_info,
+            }
+        } else {
+            BondDisposition::Refund
+        };
         settle_completion_bond(
             &accounts.worker_completion_bond.to_account_info(),
             &worker_wallet,
@@ -967,10 +990,19 @@ mod tests {
     #[cfg(not(feature = "mainnet-canary"))]
     #[test]
     fn dependency_failure_always_disables_worker_bond_forfeit() {
-        assert!(worker_bond_forfeit_allowed(true, true));
-        assert!(!worker_bond_forfeit_allowed(true, false));
-        assert!(!worker_bond_forfeit_allowed(false, true));
-        assert!(!worker_bond_forfeit_allowed(false, false));
+        assert!(worker_bond_forfeit_allowed(true, true, false));
+        assert!(!worker_bond_forfeit_allowed(true, false, false));
+        assert!(!worker_bond_forfeit_allowed(false, true, false));
+        assert!(!worker_bond_forfeit_allowed(false, false, false));
+    }
+
+    // Review R1-1: a dispute filing disables the forfeit whatever else holds.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn a_filed_dispute_always_disables_worker_bond_forfeit() {
+        for (no_show, parent) in [(true, true), (true, false), (false, true)] {
+            assert!(!worker_bond_forfeit_allowed(no_show, parent, true));
+        }
     }
 
     #[cfg(not(feature = "mainnet-canary"))]

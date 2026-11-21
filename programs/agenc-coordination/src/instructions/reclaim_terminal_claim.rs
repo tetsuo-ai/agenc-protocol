@@ -163,10 +163,17 @@ enum ReclaimSurplus {
     Worker,
 }
 
-fn reclaim_surplus_recipient(contest: bool, now: i64, claim_expires_at: i64) -> ReclaimSurplus {
+/// Review R1-1: a task a dispute was ever filed on returns the deposit to the
+/// worker (the dispute blocked it from delivering).
+fn reclaim_surplus_recipient(
+    contest: bool,
+    dispute_filed: bool,
+    now: i64,
+    claim_expires_at: i64,
+) -> ReclaimSurplus {
     if contest {
         ReclaimSurplus::Treasury
-    } else if now > claim_expires_at {
+    } else if !dispute_filed && now > claim_expires_at {
         ReclaimSurplus::Creator
     } else {
         ReclaimSurplus::Worker
@@ -282,6 +289,7 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     };
     let recipient = reclaim_surplus_recipient(
         is_contest_configured_task(task),
+        task.dispute_filed(),
         clock.unix_timestamp,
         claim.expires_at,
     );
@@ -381,20 +389,25 @@ mod tests {
     fn reclaim_surplus_follows_contest_and_claim_expiry() {
         let expires = 1_000;
         assert_eq!(
-            reclaim_surplus_recipient(true, expires - 1, expires),
+            reclaim_surplus_recipient(true, false, expires - 1, expires),
             ReclaimSurplus::Treasury
         );
         assert_eq!(
-            reclaim_surplus_recipient(true, expires + 1, expires),
+            reclaim_surplus_recipient(true, false, expires + 1, expires),
             ReclaimSurplus::Treasury
         );
         assert_eq!(
-            reclaim_surplus_recipient(false, expires, expires),
+            reclaim_surplus_recipient(false, false, expires, expires),
             ReclaimSurplus::Worker
         );
         assert_eq!(
-            reclaim_surplus_recipient(false, expires + 1, expires),
+            reclaim_surplus_recipient(false, false, expires + 1, expires),
             ReclaimSurplus::Creator
+        );
+        // Review R1-1: after a dispute filing the deposit stays with the worker.
+        assert_eq!(
+            reclaim_surplus_recipient(false, true, expires + 1, expires),
+            ReclaimSurplus::Worker
         );
     }
 

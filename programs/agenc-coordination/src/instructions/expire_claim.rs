@@ -581,7 +581,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
 
         // No-op when the canonical PDA holds no live bond (un-bonded task). A live
         // bond is always tombstoned so it cannot be replayed after task reopen.
-        if dependency_allows_worker_bond_forfeit(task.dependency_type, parent_completed) {
+        // Review R1-1: never after a dispute was filed on the task.
+        if dependency_allows_worker_bond_forfeit(task.dependency_type, parent_completed)
+            && !task.dispute_filed()
+        {
             settle_completion_bond(
                 &bond.to_account_info(),
                 &worker_wallet_info,
@@ -610,10 +613,29 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     // delivered claim already had its deposit back at submit, and a claim made
     // before the upgrade has none, so both move only rent. Bid claims carry a
     // bid bond instead and are left to their own settlement.
+    //
+    // Review R1-1: after a dispute was filed on the task the deposit goes back
+    // to the worker (the claim closes to its wallet with the rent below).
     #[cfg(not(feature = "mainnet-canary"))]
     if is_pure_noshow
         && !crate::instructions::task_validation_helpers::is_contest_configured_task(task)
         && task.task_type != TaskType::BidExclusive
+        && task.dispute_filed()
+    {
+        settle_claim_deposit(
+            &claim.to_account_info(),
+            &ctx.accounts.rent_recipient.to_account_info(),
+            task.key(),
+            worker.key(),
+            false,
+            clock.unix_timestamp,
+        )?;
+    }
+    #[cfg(not(feature = "mainnet-canary"))]
+    if is_pure_noshow
+        && !crate::instructions::task_validation_helpers::is_contest_configured_task(task)
+        && task.task_type != TaskType::BidExclusive
+        && !task.dispute_filed()
     {
         let claim_info = claim.to_account_info();
         if claim_surplus_lamports(&claim_info)? > 0 {

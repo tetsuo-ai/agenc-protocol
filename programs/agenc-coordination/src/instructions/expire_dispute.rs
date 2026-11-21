@@ -46,15 +46,21 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 /// objective evidence required by the ordinary claim-expiry path is present.
 /// In particular, dispute initiation cannot shorten the worker's claim window,
 /// and any live TaskSubmission protects the worker from confiscation.
+/// Review R1-1: the claim must already have lapsed when the dispute was filed
+/// (`claim_expires_at < dispute_created_at`, the D16 case). A dispute filed
+/// against a live claim blocks the worker from delivering, so it can never make
+/// the deposit or the completion bond forfeitable.
 fn expiry_no_show_penalty_allowed(
     claim_is_completed: bool,
     claim_expires_at: i64,
+    dispute_created_at: i64,
     now: i64,
     submission_was_live: bool,
     dependency_parent_completed: bool,
 ) -> bool {
     !claim_is_completed
         && claim_expires_at > 0
+        && claim_expires_at < dispute_created_at
         && now > claim_expires_at
         && !submission_was_live
         && dependency_parent_completed
@@ -522,6 +528,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     let no_show_penalty_allowed = expiry_no_show_penalty_allowed(
         claim.is_completed,
         claim.expires_at,
+        dispute.created_at,
         clock.unix_timestamp,
         submission_was_live,
         dependency_parent_completed,
@@ -676,23 +683,28 @@ mod tests {
     use super::*;
     use crate::instructions::bid_settlement_helpers::AcceptedBidBondDisposition;
 
+    // `filed` is the dispute's created_at; a claim that lapsed before the filing
+    // (the D16 case) is the only one a dispute expiry may penalize.
     #[test]
     fn expiry_no_show_penalty_requires_expired_incomplete_claim_and_absence() {
         let expires_at = 1_000;
+        let filed = expires_at + 1;
 
         assert!(expiry_no_show_penalty_allowed(
             false,
             expires_at,
+            filed,
             expires_at + 1,
             false,
             true,
         ));
         assert!(!expiry_no_show_penalty_allowed(
-            false, expires_at, expires_at, false, true,
+            false, expires_at, filed, expires_at, false, true,
         ));
         assert!(!expiry_no_show_penalty_allowed(
             false,
             expires_at,
+            filed,
             expires_at - 1,
             false,
             true,
@@ -700,6 +712,7 @@ mod tests {
         assert!(!expiry_no_show_penalty_allowed(
             true,
             expires_at,
+            filed,
             expires_at + 1,
             false,
             true,
@@ -707,7 +720,33 @@ mod tests {
         assert!(!expiry_no_show_penalty_allowed(
             false,
             0,
+            filed,
             expires_at + 1,
+            false,
+            true,
+        ));
+    }
+
+    // Review R1-1. Revert-sensitive: drop the filing-time require and the first
+    // two cases turn true.
+    #[test]
+    fn a_dispute_filed_against_a_live_claim_never_penalizes_it() {
+        let expires_at = 1_000;
+        for filed in [expires_at - 1, expires_at] {
+            assert!(!expiry_no_show_penalty_allowed(
+                false,
+                expires_at,
+                filed,
+                expires_at + 10_000,
+                false,
+                true,
+            ));
+        }
+        assert!(expiry_no_show_penalty_allowed(
+            false,
+            expires_at,
+            expires_at + 1,
+            expires_at + 10_000,
             false,
             true,
         ));
@@ -715,7 +754,7 @@ mod tests {
 
     #[test]
     fn any_live_submission_forces_bond_refund() {
-        let allowed = expiry_no_show_penalty_allowed(false, 1_000, 2_000, true, true);
+        let allowed = expiry_no_show_penalty_allowed(false, 1_000, 1_001, 2_000, true, true);
         assert!(!allowed);
         assert_eq!(
             accepted_bid_no_show_bond_disposition(allowed),
@@ -727,7 +766,8 @@ mod tests {
     fn expired_absent_non_dependent_claim_uses_snapshotted_bid_slash() {
         let task = Task::default();
         let parent_completed = dependency_parent_completed(&task, &[], &crate::ID).unwrap();
-        let allowed = expiry_no_show_penalty_allowed(false, 1_000, 1_001, false, parent_completed);
+        let allowed =
+            expiry_no_show_penalty_allowed(false, 1_000, 1_001, 1_001, false, parent_completed);
 
         assert!(allowed);
         assert_eq!(
@@ -739,7 +779,7 @@ mod tests {
     #[test]
     fn dependent_no_show_refunds_when_parent_is_not_completed() {
         assert!(!expiry_no_show_penalty_allowed(
-            false, 1_000, 1_001, false, false,
+            false, 1_000, 1_001, 1_001, false, false,
         ));
     }
 
