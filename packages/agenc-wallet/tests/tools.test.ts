@@ -84,6 +84,10 @@ describe("market_post", () => {
     // The model is told, in the tool and in its instructions, that a request is public.
     expect(post.description).toMatch(/The request is public: anyone can read it/);
     expect(MARKET_TOOL_INSTRUCTIONS).toMatch(/market_post .* It is public: anyone can read it/);
+    // Revision 9: what a first cancel costs, once.
+    expect(MARKET_TOOL_INSTRUCTIONS).toMatch(
+      /A small network fee per job is not returned, and the first job a wallet cancels also pays once to start its marketplace record\./,
+    );
   });
 
   it("posts as the agent, in cents, and passes the call's key", async () => {

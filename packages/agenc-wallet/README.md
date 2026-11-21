@@ -90,7 +90,9 @@ mainnet:
   wallet's or an agent's (`jobs.dispute`, owner only, while `canDispute`).
   It posts the bond from the agent's wallet, plus a deposit for the bond's
   record that always comes back. If the reviewers rule for the buyer, the
-  buyer gets the bond.
+  buyer gets the bond. No dispute is offered while the marketplace has the
+  agent suspended (`turnDown.providerSuspended`): the program refuses a
+  suspended agent's dispute, so the wallet refuses it first and says why.
 
 - **Taking money back** from an agent (`agents.reclaim`) or sending it out
   (`wallet.withdraw`) costs the transfer's fee. A wallet that is not empty

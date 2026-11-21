@@ -201,9 +201,12 @@ describe("earning", () => {
 
     // The agent's wallet holds what it needs to work, not a bond: the person
     // is told what to add, and nothing changes.
+    // In the person's money (play money: $1.00 is 0.01 SOL), never in SOL.
     await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({
       code: "NOT_ENOUGH_MONEY",
-      message: expect.stringMatching(/the bond of 0\.01 SOL, a deposit of .* that comes back, and network fees\. Add at least/),
+      message: expect.stringMatching(
+        /^Disputing this turn-down needs \$[0-9.]+: the bond of \$1\.00, a deposit of \$[0-9.]+ that comes back, and network fees\. Add at least \$[0-9.]+ and try again\. Nothing changed\.$/,
+      ),
     });
     await wallet.fundAgent(agent.id, { usdCents: 200 });
 
@@ -234,5 +237,59 @@ describe("earning", () => {
       (job) => job.task === open.task,
     );
     expect(done?.status).toBe("paid");
+  }, 120_000);
+
+  it("offers no dispute while the marketplace has the agent suspended, and refuses one with the reason", async () => {
+    world = await startWorld({
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('Here is the finished work.')", "{prompt}"],
+          mode: "sandboxed",
+          envAllowlist: [],
+          timeoutMs: 30_000,
+        },
+        pollIntervalMs: 150,
+      },
+    });
+    const { wallet, sandbox } = world;
+    const agent = await wallet.createAgent("My assistant");
+    await wallet.setEarn(agent.id, true, 10);
+    await wallet.fundAgent(agent.id, { usdCents: 200 });
+    const open = await sandbox.postOpenJob({
+      title: "Write a line",
+      instructions: "Write one friendly line.",
+      rewardLamports: 50n * CENT,
+    });
+    await eventually(async () => {
+      const jobs = await wallet.listJobs({ role: "working" }, true);
+      return jobs.find((job) => job.status === "delivered");
+    }, 30_000);
+    await open.turnDown();
+    // The marketplace's owners suspend the agent (two of them approve).
+    await sandbox.setAgentSuspended({ task: open.task as never, suspended: true });
+    await wallet.tick();
+    const held = (await wallet.listJobs({ role: "working" }, true)).find(
+      (job) => job.task === open.task,
+    )!;
+    expect(held.status).toBe("in_review");
+    expect(held.turnDown?.providerSuspended).toBe(true);
+    expect(held.canDispute).toBe(false);
+    expect(held.statusText).toMatch(/The marketplace has suspended your agent, and a suspended agent cannot dispute\./);
+    const before = await world.balance(agent.address as never);
+    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({
+      code: "NOT_ALLOWED",
+      message: expect.stringMatching(/suspended this agent, and a suspended agent cannot dispute a turn-down\. Nothing changed\./),
+    });
+    // Refused before anything was signed: not even a fee.
+    expect(await world.balance(agent.address as never)).toBe(before);
+
+    // Lifted: the offer comes back on the next look.
+    await sandbox.setAgentSuspended({ task: open.task as never, suspended: false });
+    await wallet.tick();
+    const lifted = (await wallet.listJobs({ role: "working" }, true)).find(
+      (job) => job.task === open.task,
+    )!;
+    expect(lifted.turnDown?.providerSuspended).toBe(false);
+    expect(lifted.canDispute).toBe(true);
   }, 120_000);
 });

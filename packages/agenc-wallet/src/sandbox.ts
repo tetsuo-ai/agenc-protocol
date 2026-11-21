@@ -176,6 +176,16 @@ export interface Sandbox {
    * bond, as a provider's person would. For trying a disputed turn-down.
    */
   disputeTurnDown(input: { task: Address; providerAgent: Address }): Promise<void>;
+  /**
+   * Suspend an agent, or lift its suspension, as the practice marketplace's
+   * owners do (both approve). For trying what a suspended provider may do.
+   */
+  setAgentSuspended(input: {
+    /** The agent; or the one that holds the claim on `task` when omitted. */
+    agent?: Address;
+    task?: Address;
+    suspended: boolean;
+  }): Promise<void>;
   /** Deliveries published so far, keyed by fingerprint (tests). */
   readonly deliveries: ReadonlyMap<string, Uint8Array>;
 }
@@ -808,6 +818,23 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     return provider;
   }
 
+  /** The agent that holds the claim on `task`. */
+  async function claimWorker(task: Address): Promise<Address> {
+    const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
+      "@tetsuo-ai/marketplace-sdk"
+    );
+    const claims = await gpa.getProgramAccounts({
+      filters: [
+        { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskClaimDiscriminatorBytes()) } },
+      ],
+    });
+    const worker = claims
+      .map((entry) => getTaskClaimDecoder().decode(entry.data))
+      .find((entry) => entry.task === task)?.worker;
+    if (worker === undefined) throw new Error("nobody holds a claim on that job");
+    return worker;
+  }
+
   return {
     chain,
     services,
@@ -823,27 +850,21 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       svm.setClock(clock);
     },
     async ruleOnTurnedDown({ task, providerAgent, payProvider }) {
-      let worker = providerAgent;
-      if (worker === undefined) {
-        const { getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } = await import(
-          "@tetsuo-ai/marketplace-sdk"
-        );
-        const claims = await gpa.getProgramAccounts({
-          filters: [
-            { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskClaimDiscriminatorBytes()) } },
-          ],
-        });
-        worker = claims
-          .map((entry) => getTaskClaimDecoder().decode(entry.data))
-          .find((entry) => entry.task === task)?.worker;
-        if (worker === undefined) throw new Error("nobody holds a claim on that job");
-      }
+      const worker = providerAgent ?? (await claimWorker(task));
       await sendFrozenRuling(chain, reviewers, task, worker, payProvider);
     },
     async disputeTurnDown({ task, providerAgent }) {
       const provider = providers.find((entry) => entry.agent === providerAgent);
       if (provider === undefined) throw new Error("that is not a house provider");
       await sendDisputeTurnDown(chain, provider.signer, task, providerAgent);
+    },
+    async setAgentSuspended({ agent: named, task, suspended }) {
+      const agent = named ?? (await claimWorker(task!));
+      const proposer = reviewers[0]!;
+      const instruction = suspended
+        ? await facade.suspendAgent({ agent, authority: proposer, multisigSigners: reviewers })
+        : await facade.unsuspendAgent({ agent, authority: proposer, multisigSigners: reviewers });
+      await chain.clientFor(proposer).send([instruction]);
     },
 
     async addService(service) {

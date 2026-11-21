@@ -88,8 +88,22 @@ describe("a request in Jobs", () => {
     expect(
       jobView(request({ chainStatus: "pending_validation", reviewDeadlineAt: NOW / 1000 + 86_400 }), context).statusText,
     ).toBe("Delivered. Approve it to pay $0.30. If nobody reviews it, it is paid in 24 hours.");
+    // A turn-down just made, before its clock is read back: the new rule.
     expect(jobView(request({ chainStatus: "reject_frozen" }), context).statusText).toBe(
-      "You turned this down, so the reward is on hold while it is reviewed.",
+      "You turned this down. If whoever did it does not dispute it in time, the reward comes back.",
+    );
+    // One made before revision 9, read with its review time: the old rule.
+    expect(
+      jobView(
+        request({
+          chainStatus: "reject_frozen",
+          reviewDeadlineAt: NOW / 1000 + 3600,
+          turnDown: { disputable: false, disputeUntil: NOW / 1000 + 3600, bondLamports: "0", rulingUntil: null, disputeOpen: false },
+        }),
+        context,
+      ).statusText,
+    ).toBe(
+      "You turned this down, so the reward is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, it is paid in about an hour.",
     );
     expect(jobView(request({ phase: "done", outcome: "paid" }), context).statusText).toBe("Done. $0.30 was paid for it.");
     expect(jobView(request({ phase: "done", outcome: "refunded" }), context).statusText).toBe(

@@ -402,11 +402,16 @@ export interface JobView {
     bond: Money | null;
     /** What happens when its time ends with nobody acting. */
     ifNobodyActs: "buyer_refunded" | "provider_paid";
+    /**
+     * The marketplace suspended the provider's agent, so it cannot dispute
+     * this turn-down (the program refuses a suspended agent's dispute).
+     */
+    providerSuspended: boolean;
   } | null;
   /**
    * A working job the buyer turned down: whether the person may dispute it
    * now (`jobs.dispute`, owner only). It puts the bond at risk, so it is never
-   * done for them.
+   * done for them. False while the marketplace has the agent suspended.
    */
   canDispute: boolean;
   canApprove: boolean;

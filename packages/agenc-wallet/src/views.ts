@@ -1,5 +1,5 @@
 // Turn the journal's records into what a person reads.
-import { formatMoney, formatSol, formatWait } from "./client/format.js";
+import { formatMoney, formatUsd, formatWait } from "./client/format.js";
 import type {
   ActivityView,
   ApprovalView,
@@ -7,12 +7,28 @@ import type {
   JobView,
   Money,
 } from "./client/types.js";
+import { SOL_AMOUNT_WORDS, type AmountWords } from "./market.js";
 import { lamportsToCents } from "./pricing.js";
 import type { ActivityRecord, ApprovalRecord, JobRecord } from "./store.js";
 
 export function money(lamports: bigint | string, usdPerSol: number | null): Money {
   const value = typeof lamports === "bigint" ? lamports : BigInt(lamports);
   return { lamports: value.toString(), usdCents: lamportsToCents(value, usdPerSol) };
+}
+
+/**
+ * Amounts in a refusal for lack of money, in the person's money: dollars
+ * when a rate is known (what to add rounded up to a whole cent, so it is
+ * always enough), else exact SOL.
+ */
+export function amountWords(usdPerSol: number | null): AmountWords {
+  if (usdPerSol === null) return SOL_AMOUNT_WORDS;
+  return {
+    cost: (lamports) => formatMoney(money(lamports, usdPerSol)),
+    // Whole cents, rounded up (the small allowance keeps an exact amount exact).
+    add: (lamports) =>
+      formatUsd(Math.max(1, Math.ceil((Number(lamports) / 1e9) * usdPerSol * 100 - 1e-6))),
+  };
 }
 
 /** The plain status of a purchase, derived from where the journal says it is. */
@@ -58,6 +74,17 @@ function revision9TurnDown(job: JobRecord): NonNullable<JobRecord["turnDown"]> |
   return job.turnDown !== undefined && job.turnDown.disputable ? job.turnDown : null;
 }
 
+/**
+ * A turn-down this wallet just sent, whose freeze has not been read back yet:
+ * no turn-down and no clock. Every turn-down this version sends is a
+ * revision 9 one (one read before revision 9 always has its review time).
+ */
+function justTurnedDown(job: JobRecord): boolean {
+  return (
+    job.chainStatus === "reject_frozen" && job.turnDown === undefined && job.reviewDeadlineAt === null
+  );
+}
+
 /** The provider's side of a turn-down. */
 function workingTurnDownText(job: JobRecord, now: number, usdPerSol: number | null): string {
   const turnDown = revision9TurnDown(job);
@@ -68,6 +95,11 @@ function workingTurnDownText(job: JobRecord, now: number, usdPerSol: number | nu
       : "The buyer turned this down, so the price is on hold while it is reviewed.";
   }
   if (turnDown.rulingUntil === null) {
+    if (turnDown.providerSuspended === true) {
+      return turnDown.disputeOpen
+        ? `The buyer turned this down. The marketplace has suspended your agent, and a suspended agent cannot dispute. When the time to dispute ends ${formatWait(turnDown.disputeUntil * 1000, now)}, the price goes back to the buyer.`
+        : "The buyer turned this down and nobody disputed it in time, so the price goes back to the buyer.";
+    }
     if (turnDown.disputeOpen) {
       const bond = formatMoney(money(turnDown.bondLamports, usdPerSol));
       return `The buyer turned this down. You can dispute that for a bond of ${bond}. The time to dispute it ends ${formatWait(turnDown.disputeUntil * 1000, now)}. If you do not dispute it, the price goes back to the buyer.`;
@@ -81,6 +113,9 @@ function workingTurnDownText(job: JobRecord, now: number, usdPerSol: number | nu
 function buyingTurnDownText(job: JobRecord, now: number, what: "price" | "reward"): string {
   const turnDown = revision9TurnDown(job);
   if (turnDown === null) {
+    if (justTurnedDown(job)) {
+      return `You turned this down. If ${what === "price" ? "the provider" : "whoever did it"} does not dispute it in time, the ${what} comes back.`;
+    }
     // A turn-down made before revision 9 keeps its old rule.
     return job.reviewDeadlineAt !== null
       ? `You turned this down, so the ${what} is on hold while it is reviewed. If the reviewer agrees with you it comes back. If nobody rules, ${what === "price" ? "the provider" : "it"} is paid ${formatWait(job.reviewDeadlineAt * 1000, now)}.`
@@ -94,10 +129,44 @@ function buyingTurnDownText(job: JobRecord, now: number, what: "price" | "reward
   return `Your turn-down was disputed. The reviewers' time to rule ends ${formatWait(turnDown.rulingUntil * 1000, now)}. If they rule for you, the ${what} comes back with the bond. If nobody rules, the ${what} comes back.`;
 }
 
+/** The turn-down of a job "in_review", as the view carries it. */
+function turnDownView(job: JobRecord, usdPerSol: number | null): NonNullable<JobView["turnDown"]> {
+  const turnDown = revision9TurnDown(job);
+  if (turnDown !== null) {
+    return {
+      disputable: true,
+      disputeEndsAt: turnDown.disputeUntil * 1000,
+      disputed: turnDown.rulingUntil !== null,
+      bond: money(turnDown.bondLamports, usdPerSol),
+      ifNobodyActs: "buyer_refunded",
+      providerSuspended: turnDown.providerSuspended === true,
+    };
+  }
+  if (justTurnedDown(job)) {
+    // Its clock and bond come with the read-back; its rule is known now.
+    return {
+      disputable: true,
+      disputeEndsAt: null,
+      disputed: false,
+      bond: null,
+      ifNobodyActs: "buyer_refunded",
+      providerSuspended: false,
+    };
+  }
+  return {
+    disputable: false,
+    disputeEndsAt: null,
+    disputed: false,
+    bond: null,
+    ifNobodyActs: "provider_paid",
+    providerSuspended: job.turnDown?.providerSuspended === true,
+  };
+}
+
 /** A refund that is due but cannot be paid yet: what to add. */
-function blockedRefundText(job: JobRecord, blocked: string): string {
+function blockedRefundText(job: JobRecord, blocked: string, usdPerSol: number | null): string {
   const what = job.kind === "request" ? "reward" : "price";
-  return `This job is due for its refund, which needs ${formatSol(blocked)} more in this wallet: a first cancel starts the wallet's marketplace record. Add it and the ${what} comes back.`;
+  return `This job is due for its refund, which needs ${amountWords(usdPerSol).add(BigInt(blocked))} more: a first cancel starts your marketplace record. Add it and the ${what} comes back.`;
 }
 
 function statusText(
@@ -113,7 +182,7 @@ function statusText(
     job.refundBlockedLamports !== undefined &&
     (status === "waiting" || status === "working")
   ) {
-    return blockedRefundText(job, job.refundBlockedLamports);
+    return blockedRefundText(job, job.refundBlockedLamports, usdPerSol);
   }
   if (job.role === "buying" && job.kind === "request") return requestText(job, status, amount, now);
   if (job.role === "working") {
@@ -259,28 +328,17 @@ export function jobView(
     autoRefundAt: status === "waiting" ? job.autoRefundAt : null,
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
-    turnDown:
-      status === "in_review"
-        ? {
-            disputable: revision9TurnDown(job) !== null,
-            disputeEndsAt:
-              revision9TurnDown(job) !== null ? revision9TurnDown(job)!.disputeUntil * 1000 : null,
-            disputed: revision9TurnDown(job)?.rulingUntil != null,
-            bond:
-              revision9TurnDown(job) !== null
-                ? money(revision9TurnDown(job)!.bondLamports, context.usdPerSol)
-                : null,
-            ifNobodyActs: revision9TurnDown(job) !== null ? "buyer_refunded" : "provider_paid",
-          }
-        : null,
-    // Disputing puts a bond at risk: a person's decision, in its window only.
+    turnDown: status === "in_review" ? turnDownView(job, context.usdPerSol) : null,
+    // Disputing puts a bond at risk: a person's decision, in its window only,
+    // and never for an agent the marketplace suspended (the program refuses it).
     canDispute:
       !buying &&
       context.isOwner &&
       status === "in_review" &&
       revision9TurnDown(job) !== null &&
       revision9TurnDown(job)!.rulingUntil === null &&
-      revision9TurnDown(job)!.disputeOpen,
+      revision9TurnDown(job)!.disputeOpen &&
+      revision9TurnDown(job)!.providerSuspended !== true,
     canApprove: buying && status === "delivered",
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.

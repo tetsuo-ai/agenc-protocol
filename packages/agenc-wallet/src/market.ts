@@ -10,6 +10,7 @@
 import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  AgentStatus,
   facade,
   findAgentPda,
   findAgentStatsPda,
@@ -513,6 +514,18 @@ function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
 }
 
 /**
+ * How a refusal for lack of money says its amounts: `cost` for what something
+ * costs, `add` for what to add (never less than enough). The wallet passes the
+ * person's own money (dollars when it knows a rate); the default is exact SOL.
+ */
+export interface AmountWords {
+  cost(lamports: bigint): string;
+  add(lamports: bigint): string;
+}
+
+export const SOL_AMOUNT_WORDS: AmountWords = { cost: solText, add: solText };
+
+/**
  * Fail before signing when `payer` cannot pay `cost` on top of fee headroom,
  * saying what the cost is for and how much to add.
  */
@@ -521,6 +534,7 @@ async function requireBalanceFor(
   payer: Address,
   cost: bigint,
   what: string,
+  words: AmountWords,
 ): Promise<void> {
   if (cost === 0n) return;
   const balance = await chain.getBalance(payer);
@@ -528,7 +542,7 @@ async function requireBalanceFor(
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `${what} starts your marketplace record, which costs ${solText(cost)} once and does not come back. Add at least ${solText(needed - balance)} and try again. Nothing changed.`,
+      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
     );
   }
 }
@@ -766,6 +780,11 @@ export interface TurnDownOnChain {
   rulingUntil: number | null;
   /** Whether the provider may dispute it now, by the cluster's clock. */
   disputeOpen: boolean;
+  /**
+   * The marketplace suspended the provider's agent. The program refuses a
+   * suspended agent's dispute (`AgentSuspended`), so none is offered.
+   */
+  providerSuspended: boolean;
   /** What an expiry sent now would do, or null while it cannot be sent yet. */
   expiryDue: "refunds_buyer" | "pays_provider" | null;
 }
@@ -808,12 +827,14 @@ export async function readTurnDownOnChain(
   });
   if (turnDown === null) return null;
   const stage = facade.turnDownStage(turnDown, await chain.clusterTime());
+  const agent = await readAgent(chain, providerAgent);
   return {
     disputable: turnDown.disputable,
     disputeUntil: Number(turnDown.reviewDeadlineAt),
     bondLamports: turnDown.bondToDispute,
     rulingUntil: turnDown.dispute === null ? null : Number(turnDown.dispute.rulingDeadline),
     disputeOpen: stage === "dispute_window",
+    providerSuspended: agent !== null && Number(agent.status) === AgentStatus.Suspended,
     expiryDue:
       stage === "legacy_payout_due"
         ? "pays_provider"
@@ -1062,13 +1083,14 @@ export async function sendRejectAndFreeze(
   task: Address,
   providerAgent: Address,
   rejectionHash: Uint8Array,
+  words: AmountWords = SOL_AMOUNT_WORDS,
 ): Promise<{ signature: string; recordLamports: bigint }> {
   const cost = await facade.missingRecordCost(
     snapshotReader(chain),
     (space) => chain.getMinimumBalanceForRentExemption(space),
     { creator: buyer.address, workerAgent: providerAgent },
   );
-  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down");
+  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words);
   const client = chain.clientFor(buyer);
   const result = await client.send([
     await facade.rejectAndFreeze({
@@ -1137,6 +1159,7 @@ export async function sendDisputeTurnDown(
   provider: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  words: AmountWords = SOL_AMOUNT_WORDS,
 ): Promise<{ signature: string; bondLamports: bigint }> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -1146,6 +1169,12 @@ export async function sendDisputeTurnDown(
   }
   if (turnDown.rulingUntil !== null) {
     throw new WalletError("NOT_ALLOWED", "This turn-down is already disputed.");
+  }
+  if (turnDown.providerSuspended) {
+    throw new WalletError(
+      "NOT_ALLOWED",
+      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. Nothing changed. If nobody disputes it in time, the price goes back to the buyer.",
+    );
   }
   if ((await chain.clusterTime()) > turnDown.disputeUntil) {
     throw new WalletError("NOT_ALLOWED", "The time to dispute this turn-down is over.");
@@ -1160,7 +1189,7 @@ export async function sendDisputeTurnDown(
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `Disputing this turn-down needs ${solText(needed)}: the bond of ${solText(turnDown.bondLamports)}, a deposit of ${solText(bondRent)} that comes back, and network fees. Add at least ${solText(needed - balance)} and try again. Nothing changed.`,
+      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
     );
   }
   const client = chain.clientFor(provider);
@@ -1243,6 +1272,7 @@ export async function sendCancel(
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address | null,
+  words: AmountWords = SOL_AMOUNT_WORDS,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -1251,6 +1281,7 @@ export async function sendCancel(
     buyer.address,
     await creatorRecordCost(chain, buyer.address),
     "Cancelling this job",
+    words,
   );
   const client = chain.clientFor(buyer);
   if (Number(account.status) === TaskStatus.Open && account.currentWorkers === 0) {
