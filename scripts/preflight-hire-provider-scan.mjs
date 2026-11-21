@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MAINNET_GENESIS,
   PROGRAM_ID,
-  decodeTaskBinding,
+  decodeTaskOrMarker,
   redactRpcText,
 } from "./preflight-dispute-scan.mjs";
 import { decodeCanonicalTaskJobSpec } from "./preflight-active-job-spec-block-scan.mjs";
@@ -251,10 +251,14 @@ export async function scanHireProviderBindings(connection) {
   const settlementOnly = [];
   const committed = [];
   const canonicalListings = new Map();
+  let closedTaskCount = 0;
 
   for (const record of records) {
     const taskAccount = accountMap.get(record.task.toBase58());
     let task = null;
+    // Revision 9: a hired task compacted by close_task (a TaskMarker) is a
+    // closed task: terminal, with no Task fields to check.
+    let closedTask = null;
     if (isMissing(taskAccount)) {
       blockers.push(
         blocker("missing-hired-task", record.address, undefined, {
@@ -273,18 +277,24 @@ export async function scanHireProviderBindings(connection) {
       );
     } else {
       try {
-        task = decodeTaskBinding(taskAccount.data);
-        const [expected, bump] = PublicKey.findProgramAddressSync(
-          [Buffer.from("task"), task.creator.toBuffer(), task.taskId],
-          PROGRAM_ID,
-        );
-        if (!expected.equals(record.task) || task.bump !== bump) {
-          throw new Error("canonical Task PDA/bump mismatch");
-        }
-        if (task.taskType !== 0 || task.maxWorkers !== 1) {
-          throw new Error(
-            `hired Task must be Exclusive/single-worker; type=${task.taskType} max=${task.maxWorkers}`,
+        const decoded = decodeTaskOrMarker(taskAccount.data);
+        if (decoded.closed) {
+          closedTask = decoded.marker;
+          closedTaskCount++;
+        } else {
+          task = decoded.task;
+          const [expected, bump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("task"), task.creator.toBuffer(), task.taskId],
+            PROGRAM_ID,
           );
+          if (!expected.equals(record.task) || task.bump !== bump) {
+            throw new Error("canonical Task PDA/bump mismatch");
+          }
+          if (task.taskType !== 0 || task.maxWorkers !== 1) {
+            throw new Error(
+              `hired Task must be Exclusive/single-worker; type=${task.taskType} max=${task.maxWorkers}`,
+            );
+          }
         }
       } catch (error) {
         blockers.push(
@@ -323,9 +333,10 @@ export async function scanHireProviderBindings(connection) {
       } else {
         try {
           jobSpec = decodeCanonicalTaskJobSpec(jobSpecAccount.data);
+          const taskCreator = task?.creator ?? closedTask?.creator ?? null;
           if (
             !jobSpec.task.equals(record.task) ||
-            (task && !jobSpec.creator.equals(task.creator)) ||
+            (taskCreator && !jobSpec.creator.equals(taskCreator)) ||
             jobSpec.bump !== taskJobSpecBump
           ) {
             throw new Error("canonical TaskJobSpec PDA/field/bump mismatch");
@@ -438,15 +449,21 @@ export async function scanHireProviderBindings(connection) {
     }
 
     if (!listing) continue;
+    const taskStatus = task?.status ?? closedTask?.status ?? null;
     if (record.designatedProvider.equals(PublicKey.default)) {
-      const terminal = task ? TERMINAL_STATUSES.has(task.status) : null;
+      const terminal = task
+        ? TERMINAL_STATUSES.has(task.status)
+        : closedTask
+          ? true
+          : null;
       const item = {
         hireRecord: record.address,
         task: record.task,
         listing: record.listing,
         expectedProvider: listing.providerAgent,
-        taskStatus: task?.status ?? null,
+        taskStatus,
         terminal,
+        taskClosed: closedTask !== null,
       };
       backfill.push(item);
     } else if (!record.designatedProvider.equals(listing.providerAgent)) {
@@ -469,7 +486,8 @@ export async function scanHireProviderBindings(connection) {
         task: record.task,
         listing: record.listing,
         designatedProvider: record.designatedProvider,
-        taskStatus: task?.status ?? null,
+        taskStatus,
+        taskClosed: closedTask !== null,
       });
     }
   }
@@ -523,6 +541,7 @@ export async function scanHireProviderBindings(connection) {
   return {
     accountCount: accounts.length,
     decodedCount: records.length,
+    closedTaskCount,
     boundCount: bound.length,
     backfillCount: backfill.length,
     nonterminalBackfillCount: backfill.filter((item) => item.terminal === false).length,

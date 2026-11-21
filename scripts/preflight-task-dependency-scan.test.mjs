@@ -245,3 +245,65 @@ test("refuses non-mainnet before account enumeration", async () => {
   );
   assert.equal(enumerated, false);
 });
+
+// Item 34: a parent compacted by revision 9's close_task is a 56-byte TaskMarker,
+// a closed task. A Completed marker is a completed parent; a Cancelled marker is
+// not; a malformed marker is invalid. Never read as a Task layout error.
+function markerFixture({ creator, status = 3, flags = 0 }) {
+  const data = Buffer.alloc(56);
+  Buffer.from("c10bc0c833d06cff", "hex").copy(data, 0);
+  creator.toBuffer().copy(data, 8);
+  data[40] = status;
+  data[41] = flags;
+  data.writeBigInt64LE(1_700_000_000n, 42);
+  return data;
+}
+
+test("a compacted parent is a closed task: Completed proves the parent, Cancelled does not (item 34)", async () => {
+  for (const [status, completed] of [[3, true], [4, false]]) {
+    const parent = taskFixture({ marker: 170, status });
+    const child = taskFixture({
+      marker: 172,
+      status: 1,
+      currentWorkers: 1,
+      parent: parent.address,
+      dependencyType: 2,
+    });
+    const connection = connectionFor([child]);
+    const marker = {
+      owner: PROGRAM_ID,
+      executable: false,
+      lamports: 934_720,
+      data: markerFixture({ creator: new PublicKey(Buffer.alloc(32, 171)), status }),
+    };
+    connection.getMultipleAccountsInfo = async (addresses) =>
+      addresses.map((address) => (address.equals(parent.address) ? marker : null));
+    const result = await scanTaskDependencies(connection);
+    assert.equal(result.dependentCount, 1);
+    assert.equal(result.parentCompletedCount, completed ? 1 : 0);
+    assert.ok(
+      !result.blockers.some((item) => item.kind === "invalid-dependent-parent"),
+      "a marker parent is never a layout error",
+    );
+    assert.equal(
+      result.blockers.some((item) => item.kind === "unsafe-dependent-obligation"),
+      !completed,
+      "an assigned child of a Cancelled marker is still unsafe",
+    );
+  }
+
+  const parent = taskFixture({ marker: 174, status: 3 });
+  const child = taskFixture({ marker: 176, status: 1, currentWorkers: 1, parent: parent.address, dependencyType: 1 });
+  const connection = connectionFor([child]);
+  connection.getMultipleAccountsInfo = async (addresses) => addresses.map(() => ({
+    owner: PROGRAM_ID,
+    executable: false,
+    lamports: 934_720,
+    data: markerFixture({ creator: new PublicKey(Buffer.alloc(32, 175)), status: 1 }),
+  }));
+  const result = await scanTaskDependencies(connection);
+  assert.ok(
+    result.blockers.some((item) => item.kind === "invalid-dependent-parent"),
+    "a marker with a non-terminal status is malformed",
+  );
+});

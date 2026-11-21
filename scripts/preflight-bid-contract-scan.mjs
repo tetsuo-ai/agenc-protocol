@@ -13,7 +13,7 @@ import {
   MAINNET_GENESIS,
   PROGRAM_ID,
   decodeAgentBinding,
-  decodeTaskBinding,
+  decodeTaskOrMarker,
   redactRpcText,
 } from "./preflight-dispute-scan.mjs";
 import { decodeCanonicalTaskJobSpec } from "./preflight-active-job-spec-block-scan.mjs";
@@ -489,7 +489,18 @@ export async function scanBidContracts(connection) {
       if (!account.owner.equals(PROGRAM_ID) || account.executable === true) {
         throw new Error("invalid Task owner/executable state");
       }
-      const task = decodeTaskBinding(account.data);
+      const decoded = decodeTaskOrMarker(account.data);
+      if (decoded.closed) {
+        // Revision 9: a task compacted by close_task (a TaskMarker) is a closed
+        // task, not a malformed one. A bid on it has no live task to exit through.
+        taskStates.set(address.toBase58(), {
+          kind: "closed",
+          marker: decoded.marker,
+          detail: `task closed (TaskMarker status=${decoded.marker.status})`,
+        });
+        continue;
+      }
+      const task = decoded.task;
       const [expected, bump] = PublicKey.findProgramAddressSync(
         [Buffer.from("task"), task.creator.toBuffer(), task.taskId],
         PROGRAM_ID,
@@ -535,10 +546,13 @@ export async function scanBidContracts(connection) {
         throw new Error("TaskJobSpec.bump mismatch");
       }
       const taskState = taskStates.get(taskAddress.toBase58());
-      if (
-        taskState?.kind === "live" &&
-        !job.creator.equals(taskState.task.creator)
-      ) {
+      const taskCreator =
+        taskState?.kind === "live"
+          ? taskState.task.creator
+          : taskState?.kind === "closed"
+            ? taskState.marker.creator
+            : null;
+      if (taskCreator && !job.creator.equals(taskCreator)) {
         throw new Error("TaskJobSpec.creator mismatch");
       }
       jobsByTask.set(taskAddress.toBase58(), {
@@ -680,6 +694,7 @@ export async function scanBidContracts(connection) {
   return {
     bidCount: rawBids.length,
     bookCount: rawBooks.length,
+    closedTaskCount: [...taskStates.values()].filter((state) => state.kind === "closed").length,
     decodedBidCount: bids.length,
     decodedBookCount: books.length,
     legacyActiveCount: records.filter((record) => record.state === 0).length,
