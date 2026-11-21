@@ -8,7 +8,11 @@ import {
 } from "../src/index.js";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  findClaimPda,
+  findCreatorStatsPda,
+  findDisputeRejectionDisputeBondPda,
   findModerationAttestorPda,
+  findWorkerStatsPda,
   getCreateServiceListingInstructionDataDecoder,
   getHireFromListingInstructionDataDecoder,
   getHireFromListingHumanlessInstructionDataDecoder,
@@ -632,6 +636,45 @@ describe("review/cleanup/rating prepare handlers", () => {
       },
     ],
     ["prepare_cancel_task", { task: A_TASK_PDA, authority: A_AUTHORITY }],
+    [
+      "prepare_reject_and_freeze",
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        creator: A_AUTHORITY,
+        rejectionHash: HEX32,
+      },
+    ],
+    [
+      "prepare_dispute_rejection",
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        creator: A_AUTHORITY,
+        evidenceHash: HEX32,
+      },
+    ],
+    [
+      "prepare_expire_reject_frozen",
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        treasury: A_AUTHORITY,
+        creator: A_AUTHORITY,
+        authority: A_AUTHORITY,
+      },
+    ],
+    [
+      "prepare_release_claim",
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        creator: A_AUTHORITY,
+      },
+    ],
     ["prepare_close_task", { task: A_TASK_PDA, authority: A_AUTHORITY }],
     [
       "prepare_rate_hire",
@@ -650,6 +693,59 @@ describe("review/cleanup/rating prepare handlers", () => {
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(ix.signatures).toEqual([]);
     expect(ix.dataBase64.length).toBeGreaterThan(0);
+  });
+});
+
+describe("revision 9 prepare handlers derive the new accounts", () => {
+  const addresses = (ix: UnsignedInstructionView) => ix.accounts.map((meta) => meta.address);
+
+  it("prepare_reject_and_freeze passes the worker's and the creator's records", async () => {
+    const ix = (await getTool("prepare_reject_and_freeze")!.handler(
+      { task: A_TASK_PDA, worker: A_PROVIDER, creator: A_AUTHORITY, rejectionHash: HEX32 } as never,
+      ctx,
+    )) as UnsignedInstructionView;
+    const [claim] = await findClaimPda({ task: A_TASK_PDA as never, bidder: A_PROVIDER as never });
+    const [workerRecord] = await findWorkerStatsPda({ worker: A_PROVIDER as never });
+    const [creatorRecord] = await findCreatorStatsPda({ authority: A_AUTHORITY as never });
+    expect(addresses(ix)[1]).toBe(claim);
+    expect(addresses(ix)[6]).toBe(workerRecord);
+    expect(addresses(ix)[8]).toBe(creatorRecord);
+  });
+
+  it("prepare_dispute_rejection posts into the turn-down's bond and counts on the creator's record", async () => {
+    const ix = (await getTool("prepare_dispute_rejection")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        creator: A_CREATOR,
+        evidenceHash: HEX32,
+      } as never,
+      ctx,
+    )) as UnsignedInstructionView;
+    const [bond] = await findDisputeRejectionDisputeBondPda({ task: A_TASK_PDA as never });
+    const [creatorRecord] = await findCreatorStatsPda({ authority: A_CREATOR as never });
+    expect(addresses(ix)[4]).toBe(bond);
+    expect(addresses(ix)[5]).toBe(creatorRecord);
+    expect(ix.accounts[7]).toEqual({
+      address: A_AUTHORITY,
+      role: { writable: true, signer: true },
+    });
+  });
+
+  it("prepare_release_claim names the creator and leaves out an Auto task's config", async () => {
+    const ix = (await getTool("prepare_release_claim")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        creator: A_CREATOR,
+        autoTask: true,
+      } as never,
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(addresses(ix)[4]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(addresses(ix)[6]).toBe(A_CREATOR);
   });
 });
 

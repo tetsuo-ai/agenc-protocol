@@ -224,12 +224,12 @@ describe("MCP server: tool registration", () => {
     }
   });
 
-  it("mutation opt-in adds the keyless prepare_* lifecycle tools (19 total)", async () => {
+  it("mutation opt-in adds the keyless prepare_* lifecycle tools (23 total)", async () => {
     const { client, close } = await connectClient({ enableMutations: true });
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name);
-      expect(names).toHaveLength(19);
+      expect(names).toHaveLength(23);
       expect(names).toContain("prepare_register_agent");
       expect(names).toContain("prepare_hire");
       expect(names).toContain("prepare_hire_humanless");
@@ -238,6 +238,11 @@ describe("MCP server: tool registration", () => {
       expect(names).toContain("prepare_submit");
       expect(names).toContain("prepare_accept_task_result");
       expect(names).toContain("prepare_reject_task_result");
+      // Revision 9: the turn-down, its dispute and expiry, and claim release.
+      expect(names).toContain("prepare_reject_and_freeze");
+      expect(names).toContain("prepare_dispute_rejection");
+      expect(names).toContain("prepare_expire_reject_frozen");
+      expect(names).toContain("prepare_release_claim");
       expect(names).toContain("prepare_auto_accept_task_result");
       expect(names).toContain("prepare_cancel_task");
       expect(names).toContain("prepare_close_task");
@@ -311,7 +316,7 @@ describe("MCP server: tool registration", () => {
     const { client, close } = await connectClient({ enableMutations: true });
     try {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(19);
+      expect(tools).toHaveLength(23);
       for (const tool of tools) {
         const result = await client.callTool({
           name: tool.name,
