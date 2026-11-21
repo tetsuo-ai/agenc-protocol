@@ -110,6 +110,7 @@ describe("e2e: event codecs decode real program logs", () => {
         taskId,
         expectedPrice: price,
         expectedVersion: 1n,
+        reviewWindowSecs: 3_600n,
         listingSpecHash,
         taskJobSpecHash: listingSpecHash,
         moderator: moderator.address,

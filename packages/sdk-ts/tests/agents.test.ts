@@ -225,12 +225,26 @@ describe("suspendAgent (facade)", () => {
   );
 
   it("assembles with the right program, auto-derived protocolConfig, account order, and round-trips its data", async () => {
-    const ix = await suspendAgent({ agent, authority });
+    const approver = createNoopSigner(
+      address("Vote111111111111111111111111111111111111111"),
+    );
+    const ix = await suspendAgent({
+      agent,
+      authority,
+      multisigSigners: [authority, approver],
+    });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // Accounts: agent, protocolConfig (auto-derived PDA), authority.
+    // Accounts: agent, protocolConfig (auto-derived PDA), authority, then the
+    // revision 9 multisig approvals as readonly signers.
     const addrs = ix.accounts.map((a) => a.address);
-    expect(addrs).toHaveLength(3);
+    expect(addrs).toHaveLength(5);
+    expect(addrs.slice(3)).toEqual([authority.address, approver.address]);
+    expect(ix.accounts[3]!.role).toBe(AccountRole.READONLY_SIGNER);
+    expect(ix.accounts[4]!.role).toBe(AccountRole.READONLY_SIGNER);
+    await expect(suspendAgent({ agent, authority } as never)).rejects.toThrow(
+      /multisigSigners/,
+    );
     expect(addrs[0]).toBe(agent);
     expect(addrs[2]).toBe(authority.address);
     // protocolConfig is a derived PDA distinct from the supplied accounts.
@@ -250,12 +264,26 @@ describe("unsuspendAgent (facade)", () => {
   );
 
   it("assembles with the right program, auto-derived protocolConfig, account order, and round-trips its data", async () => {
-    const ix = await unsuspendAgent({ agent, authority });
+    const approver = createNoopSigner(
+      address("Vote111111111111111111111111111111111111111"),
+    );
+    const ix = await unsuspendAgent({
+      agent,
+      authority,
+      multisigSigners: [authority, approver],
+    });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // Accounts: agent, protocolConfig (auto-derived PDA), authority.
+    // Accounts: agent, protocolConfig (auto-derived PDA), authority, then the
+    // revision 9 multisig approvals as readonly signers.
     const addrs = ix.accounts.map((a) => a.address);
-    expect(addrs).toHaveLength(3);
+    expect(addrs).toHaveLength(5);
+    expect(addrs.slice(3)).toEqual([authority.address, approver.address]);
+    expect(ix.accounts[3]!.role).toBe(AccountRole.READONLY_SIGNER);
+    expect(ix.accounts[4]!.role).toBe(AccountRole.READONLY_SIGNER);
+    await expect(unsuspendAgent({ agent, authority } as never)).rejects.toThrow(
+      /multisigSigners/,
+    );
     expect(addrs[0]).toBe(agent);
     expect(addrs[2]).toBe(authority.address);
     // protocolConfig is a derived PDA distinct from the supplied accounts.

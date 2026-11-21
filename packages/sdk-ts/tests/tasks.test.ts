@@ -1872,6 +1872,24 @@ describe("expireClaim facade instruction", () => {
     ).rejects.toThrow(/bondCreator/);
   });
 
+  it("puts a dependent task's parent at remaining_accounts[0] for any task type (revision 9)", async () => {
+    // A Collaborative or Competitive no-show with a deposit at stake must show
+    // its parent too; the facade appends it right after the 15 named accounts.
+    const ix = await expireClaim({
+      authority: signerA,
+      task: A,
+      worker: B,
+      rentRecipient: C,
+      creator: D,
+      dependencyParent: signerB.address,
+    });
+    expect(ix.accounts).toHaveLength(16);
+    expect(ix.accounts[15]).toEqual({
+      address: signerB.address,
+      role: AccountRole.READONLY,
+    });
+  });
+
   it("orders a dependency parent before the four-account BidExclusive suffix", async () => {
     const ix = await expireClaim({
       authority: signerA,

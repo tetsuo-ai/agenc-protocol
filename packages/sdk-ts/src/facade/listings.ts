@@ -40,6 +40,7 @@ import {
   encodeListingCategory,
   encodeListingTags,
   assertCanonicalHash32,
+  assertCreatorReviewWindow,
   snapshotFixedBytes,
   snapshotOptionalFixedBytes,
   snapshotOptionOrNullable,
@@ -419,16 +420,25 @@ export type HireFromListingInput = Omit<
   };
 
 /**
- * Build a hire_from_listing instruction — the registered-buyer entry point.
+ * Build a hire_from_listing instruction: the entry point for a buyer that
+ * owns a registered agent.
  *
- * The async builder auto-derives task, escrow, hireRecord, protocolConfig,
- * moderationConfig, authorityRateLimit, and systemProgram. The caller must
- * supply `listing` and `creatorAgent` (not derivable), plus the P1.2 `moderator`
- * argument — the pubkey whose listing attestation the hire consumes (the global
- * moderation authority, or a registered attestor with
- * `moderatorIsAttestor: true`). If the caller passes `listingSpecHash`, the
- * facade derives `listingModeration` (v2: listing + specHash + moderator) and
- * the REQUIRED `moderationBlock` BLOCK-floor PDA from it.
+ * Revision 9 (v3 wire): the hire is a CreatorReview task, exactly like the
+ * bare-wallet door. `reviewWindowSecs` (1 second to 7 days) is how long the
+ * buyer has to review a delivery before it auto-accepts. The provider claims
+ * and submits with `submit_task_result`; the buyer's wallet accepts, asks for
+ * changes or turns it down. `complete_task` refuses these hires. The buyer
+ * also funds the task's validation config, returned when the task is closed.
+ *
+ * The async builder auto-derives task, escrow, hireRecord,
+ * taskValidationConfig, protocolConfig, moderationConfig, authorityRateLimit,
+ * and systemProgram. The caller must supply `listing` and `creatorAgent` (not
+ * derivable), plus the P1.2 `moderator` argument: the pubkey whose listing
+ * attestation the hire consumes (the global moderation authority, or a
+ * registered attestor with `moderatorIsAttestor: true`). If the caller passes
+ * `listingSpecHash`, the facade derives `listingModeration` (v2: listing +
+ * specHash + moderator) and the REQUIRED `moderationBlock` BLOCK-floor PDA
+ * from it.
  */
 export async function hireFromListing(input: HireFromListingInput) {
   const includeQuota = snapshotTaskQuotaSurface(input.taskQuotaSurface);
@@ -436,6 +446,7 @@ export async function hireFromListing(input: HireFromListingInput) {
     "authority",
     "creator",
   ] as const);
+  assertCreatorReviewWindow(stableInput.reviewWindowSecs, "hireFromListing");
   const {
     listingSpecHash,
     moderatorIsAttestor,
@@ -535,6 +546,10 @@ export async function hireFromListingHumanless(
   const stableInput = canonicalizeFacadeInputSignerFields(input, [
     "creator",
   ] as const);
+  assertCreatorReviewWindow(
+    stableInput.reviewWindowSecs,
+    "hireFromListingHumanless",
+  );
   const {
     listingSpecHash,
     moderatorIsAttestor,

@@ -44,6 +44,7 @@ describe.skipIf(!RPC_ENABLED)(
             providerAgent: seller.agent,
             expectedPrice: price,
             expectedVersion: 1n,
+            reviewWindowSecs: 3_600n,
             listingSpecHash: listing.spec,
             taskJobSpecHash: listing.spec,
             moderator: h.moderator.address,
@@ -60,17 +61,26 @@ describe.skipIf(!RPC_ENABLED)(
             )[0],
           }),
         ]);
-        const treasuryBefore = await h.balance(h.config.treasury);
-        await h.send("complete and pay actual SOL fee", seller.signer, [
-          await sdk.facade.completeTask({
+        // Revision 9: an agent hire is a review task. The seller delivers
+        // and the buyer's accept pays the actual SOL fee.
+        await h.send("deliver paid hire", seller.signer, [
+          await sdk.facade.submitTaskResult({
             task,
             worker: seller.agent,
             authority: seller.signer,
-            creator: buyer.signer.address,
-            treasury: h.config.treasury,
-            hireRecord,
             proofHash: id32(),
             resultData: null,
+          }),
+        ]);
+        const treasuryBefore = await h.balance(h.config.treasury);
+        await h.send("accept and pay actual SOL fee", buyer.signer, [
+          await sdk.facade.acceptTaskResult({
+            task,
+            worker: seller.agent,
+            creator: buyer.signer,
+            workerAuthority: seller.signer.address,
+            treasury: h.config.treasury,
+            hireRecord,
           }),
         ]);
         expect(await h.balance(h.config.treasury)).toBe(

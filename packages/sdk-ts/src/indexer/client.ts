@@ -36,6 +36,7 @@ import {
   findModerationConfigPda,
   findProtocolConfigPda,
   findTaskPda,
+  findTaskValidationConfigPda,
   getHireRecordDecoder,
   getHireFromListingInstructionDataDecoder,
   getServiceListingDecoder,
@@ -281,6 +282,11 @@ export interface BuildHireTransactionParams {
   taskJobSpecHash: string;
   /** The buyer's creator AgentRegistration PDA. */
   creatorAgent: Address | string;
+  /**
+   * Revision 9: how long the buyer has to review a delivery before it
+   * auto-accepts, 1 to 604,800 seconds. The hire is a CreatorReview task.
+   */
+  reviewWindowSecs: bigint | number | string;
 }
 
 /**
@@ -1202,6 +1208,25 @@ export function createIndexerClient(
     return parsed;
   }
 
+  // Revision 9: the agent hire is a CreatorReview task with a 1 second to
+  // 7 day review window (the program's MAX_REVIEW_WINDOW_SECS).
+  function parseReviewWindowInput(value: bigint | number | string): bigint {
+    let parsed: bigint;
+    try {
+      if (typeof value === "string" && !DECIMAL.test(value)) throw new Error();
+      if (typeof value === "number" && !Number.isSafeInteger(value)) {
+        throw new Error();
+      }
+      parsed = BigInt(value);
+    } catch {
+      throw new TypeError("reviewWindowSecs must be a whole number of seconds");
+    }
+    if (parsed < 1n || parsed > 604_800n) {
+      throw new TypeError("reviewWindowSecs must be 1 to 604800 seconds");
+    }
+    return parsed;
+  }
+
   function parseHexBytes(value: string, context: string): Uint8Array {
     if (!HEX_64.test(value)) {
       throw new TypeError(`${context} must be 64 lowercase hex characters`);
@@ -1258,6 +1283,7 @@ export function createIndexerClient(
       params.expectedVersion,
       "expectedVersion",
     );
+    const reviewWindowSecs = parseReviewWindowInput(params.reviewWindowSecs);
     const taskIdHex = params.taskId ?? result.taskId;
     if (params.taskId !== undefined && params.taskId !== result.taskId) {
       throw transportError(
@@ -1339,8 +1365,10 @@ export function createIndexerClient(
       ) {
         throw new Error("instruction targets the wrong program");
       }
+      // Revision 9 v3: 8 + 32 + 8 + 8 + 8 (review window) + 1 (no referrer)
+      // + 2 + 32 + 32 bytes.
       const data = instruction.data;
-      if (data === undefined || data.length !== 123) {
+      if (data === undefined || data.length !== 131) {
         throw new Error(
           "instruction has invalid hire_from_listing data length",
         );
@@ -1358,6 +1386,7 @@ export function createIndexerClient(
         !bytesEqual(new Uint8Array(decoded.taskId), taskId) ||
         decoded.expectedPrice !== expectedPrice ||
         decoded.expectedVersion !== expectedVersion ||
+        decoded.reviewWindowSecs !== reviewWindowSecs ||
         !isNone(decoded.referrer) ||
         decoded.referrerFeeBps !== 0 ||
         !bytesEqual(
@@ -1368,8 +1397,8 @@ export function createIndexerClient(
         throw new Error("instruction terms disagree with requested intent");
       }
       const indices = instruction.accountIndices ?? [];
-      if (indices.length !== 15)
-        throw new Error("hire instruction must have exactly 15 accounts");
+      if (indices.length !== 16)
+        throw new Error("hire instruction must have exactly 16 accounts");
       const instructionAccounts = indices.map((index) => {
         const account = message.staticAccounts[index];
         if (account === undefined)
@@ -1381,7 +1410,14 @@ export function createIndexerClient(
       ) {
         throw new Error("transaction contains duplicate static accounts");
       }
+      // task, escrow, hire_record, task_validation_config, listing,
+      // provider_agent, protocol_config, moderation_config,
+      // listing_moderation, moderation_attestor, moderation_block,
+      // creator_agent, authority_rate_limit, authority, creator,
+      // system_program. The buyer is both authority and creator, so both
+      // read as the writable fee payer.
       const expectedWritable = [
+        true,
         true,
         true,
         true,
@@ -1408,7 +1444,7 @@ export function createIndexerClient(
           : staticIndex <
             message.staticAccounts.length -
               message.header.numReadonlyNonSignerAccounts;
-        const expectedSigner = position === 12 || position === 13;
+        const expectedSigner = position === 13 || position === 14;
         if (
           isSigner !== expectedSigner ||
           isWritable !== expectedWritable[position]
@@ -1432,12 +1468,14 @@ export function createIndexerClient(
       const [
         [escrowPda],
         [hireRecordPda],
+        [validationConfigPda],
         [protocolConfig],
         [moderationConfig],
         [rateLimit],
       ] = await Promise.all([
         findEscrowPda({ task: taskPda }),
         findHireRecordPda({ task: taskPda }),
+        findTaskValidationConfigPda({ task: taskPda }),
         findProtocolConfigPda(),
         findModerationConfigPda(),
         findAuthorityRateLimitPda({ authority: buyer }),
@@ -1446,14 +1484,15 @@ export function createIndexerClient(
         [0, taskPda],
         [1, escrowPda],
         [2, hireRecordPda],
-        [3, listing],
-        [5, protocolConfig],
-        [6, moderationConfig],
-        [10, creatorAgent],
-        [11, rateLimit],
-        [12, buyer],
+        [3, validationConfigPda],
+        [4, listing],
+        [6, protocolConfig],
+        [7, moderationConfig],
+        [11, creatorAgent],
+        [12, rateLimit],
         [13, buyer],
-        [14, address("11111111111111111111111111111111")],
+        [14, buyer],
+        [15, address("11111111111111111111111111111111")],
       ]);
       for (const [index, expected] of expectedKnown) {
         if (instructionAccounts[index] !== expected) {
@@ -1469,7 +1508,7 @@ export function createIndexerClient(
       ) {
         throw new Error("response metadata disagrees with derived PDAs");
       }
-      const providerAgent = instructionAccounts[4]!;
+      const providerAgent = instructionAccounts[5]!;
       const moderator = decoded.moderator;
       if (listingSpecHash !== undefined) {
         const [[listingModeration], [moderationBlock], [moderationAttestor]] =
@@ -1482,20 +1521,20 @@ export function createIndexerClient(
             findModerationBlockPda({ contentHash: listingSpecHash }),
             findModerationAttestorPda({ attestor: moderator }),
           ]);
-        if (instructionAccounts[7] !== listingModeration) {
+        if (instructionAccounts[8] !== listingModeration) {
           throw new Error(
             "listing moderation PDA disagrees with listing/spec/moderator",
           );
         }
         if (
-          instructionAccounts[8] !== AGENC_COORDINATION_PROGRAM_ADDRESS &&
-          instructionAccounts[8] !== moderationAttestor
+          instructionAccounts[9] !== AGENC_COORDINATION_PROGRAM_ADDRESS &&
+          instructionAccounts[9] !== moderationAttestor
         ) {
           throw new Error(
             "moderation attestor account is neither canonical path",
           );
         }
-        if (instructionAccounts[9] !== moderationBlock) {
+        if (instructionAccounts[10] !== moderationBlock) {
           throw new Error(
             "moderation block PDA disagrees with listing spec hash",
           );
@@ -1768,6 +1807,7 @@ export function createIndexerClient(
       const creatorAgent = parseCanonicalAddress(String(params.creatorAgent));
       parseU64Input(params.expectedPrice, "expectedPrice");
       parseU64Input(params.expectedVersion, "expectedVersion");
+      const reviewWindowSecs = parseReviewWindowInput(params.reviewWindowSecs);
       if (params.taskId !== undefined) parseHexBytes(params.taskId, "taskId");
       if (params.listingSpecHash !== undefined) {
         parseHexBytes(params.listingSpecHash, "listingSpecHash");
@@ -1791,6 +1831,7 @@ export function createIndexerClient(
             : {}),
           taskJobSpecHash: params.taskJobSpecHash,
           creatorAgent,
+          reviewWindowSecs: String(reviewWindowSecs),
         },
       });
       let result: BuildHireTransactionResult;

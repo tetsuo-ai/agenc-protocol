@@ -27,6 +27,7 @@ import {
   findModerationConfigPda,
   getAgentRegistrationEncoder,
   getAgentRegistrationDecoder,
+  facade,
 } from "../src/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -190,4 +191,17 @@ export function accountData(svm: LiteSVM, addr: Address): Uint8Array | null {
   const a = svm.getAccount(addr);
   if (!a || !a.exists) return null;
   return Uint8Array.from(a.data);
+}
+
+/**
+ * Revision 9: what a task's address holds. `close_task` compacts a finished
+ * Task into a 56-byte TaskMarker, so a closed task reads as `closed`.
+ */
+export function readTaskAccount(svm: LiteSVM, addr: Address) {
+  const a = svm.getAccount(addr);
+  return facade.decodeTaskAccount(
+    a && a.exists
+      ? { owner: a.programAddress, data: Uint8Array.from(a.data) }
+      : null,
+  );
 }

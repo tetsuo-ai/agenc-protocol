@@ -47,17 +47,29 @@ function writeAccount(
 export interface SeedProtocolConfigOptions {
   /** Minimum arbiter stake (lamports). Defaults to `0n`. */
   minArbiterStake?: bigint;
+  /**
+   * ProtocolConfig multisig owners, at most five distinct wallets. Revision 9
+   * gates `configure_task_moderation`, `suspend_agent`, `unsuspend_agent`, the
+   * attestor roster, heartbeat window changes and rulings on this multisig,
+   * so a world that calls them needs owners and a threshold. Defaults to none
+   * (threshold 0): every multisig-gated instruction then fails with
+   * `MultisigInvalidSigners`.
+   */
+  multisigOwners?: readonly Address[];
+  /** Approvals required, 2 up to the number of owners. Required with owners. */
+  multisigThreshold?: number;
 }
 
 /**
  * Seed the `ProtocolConfig` singleton directly (rent-exempt, program-owned),
  * using the SDK's generated encoder. `authority` and `treasury` are both set
  * to `admin`; fees 100 bps, dispute threshold 50, no cooldowns or rate limits,
- * protocol live (not paused), version 1.
+ * protocol live (not paused), version 1, and no multisig unless `opts` names
+ * its owners.
  *
  * @param svm - The litesvm VM to write into.
  * @param admin - Address installed as protocol authority AND treasury.
- * @param opts - Optional overrides (e.g. `minArbiterStake`).
+ * @param opts - Optional overrides (e.g. `minArbiterStake`, a test multisig).
  * @returns The `ProtocolConfig` PDA address.
  */
 export async function seedProtocolConfig(
@@ -65,6 +77,27 @@ export async function seedProtocolConfig(
   admin: Address,
   opts: SeedProtocolConfigOptions = {},
 ): Promise<Address> {
+  const multisigOwners = [...(opts.multisigOwners ?? [])];
+  const multisigThreshold = opts.multisigThreshold ?? 0;
+  if (multisigOwners.length > 5) {
+    throw new RangeError(
+      "seedProtocolConfig: at most five multisig owners are supported",
+    );
+  }
+  if (new Set(multisigOwners).size !== multisigOwners.length) {
+    throw new Error("seedProtocolConfig: multisig owners must be distinct");
+  }
+  if (
+    (multisigOwners.length === 0 && multisigThreshold !== 0) ||
+    (multisigOwners.length > 0 &&
+      (!Number.isInteger(multisigThreshold) ||
+        multisigThreshold < 2 ||
+        multisigThreshold > multisigOwners.length))
+  ) {
+    throw new RangeError(
+      "seedProtocolConfig: the multisig threshold must be 2 up to the number of owners",
+    );
+  }
   const [pda, bump] = await findProtocolConfigPda();
   const data = getProtocolConfigEncoder().encode({
     authority: admin,
@@ -80,8 +113,8 @@ export async function seedProtocolConfig(
     completedTasks: 0n,
     totalValueDistributed: 0n,
     bump,
-    multisigThreshold: 0,
-    multisigOwnersLen: 0,
+    multisigThreshold,
+    multisigOwnersLen: multisigOwners.length,
     taskCreationCooldown: 0n,
     maxTasksPer24h: 0,
     disputeInitiationCooldown: 0n,
@@ -96,11 +129,8 @@ export async function seedProtocolConfig(
     disabledTaskTypeMask: 0,
     surfaceRevision: SURFACE_REVISION_FULL,
     multisigOwners: [
-      DEFAULT_ADDR,
-      DEFAULT_ADDR,
-      DEFAULT_ADDR,
-      DEFAULT_ADDR,
-      DEFAULT_ADDR,
+      ...multisigOwners,
+      ...Array.from({ length: 5 - multisigOwners.length }, () => DEFAULT_ADDR),
     ],
   });
   writeAccount(svm, pda, data);

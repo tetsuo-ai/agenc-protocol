@@ -968,9 +968,11 @@ export type CancelTaskInput = Omit<
   /** One complete claim/agent/wallet triple for every live worker. */
   workerAccounts?: readonly CancelTaskWorkerAccounts[];
   /**
-   * Optional canonical parent prefix for dependent-task cancellation. Supplying
-   * a Completed parent proves worker fault; omission keeps the exit live but
-   * forces dependency-related bond disposition to refund/no-slash.
+   * Optional canonical parent prefix for dependent-task cancellation (a Task
+   * or a TaskMarker). Supplying a Completed parent proves worker fault;
+   * omission keeps the exit live but forces dependency-related bond and
+   * revision 9 deposit disposition to refund/no-slash. Pass it for every
+   * dependent task so a real no-show forfeits its deposit.
    */
   dependencyParent?: Address;
   /** Required for BidExclusive cancellation; fixes the remaining-account wire. */
@@ -1027,8 +1029,9 @@ function snapshotCancelTaskWorkerAccounts(
  * the creator before the refund (its rent is never returned; read it with
  * `missingRecordCost`), and counts the cancel there. A no-show drain sends each
  * drained non-contest claim's deposit to the creator, except a deposit still
- * inside its 1-hour release grace or on a task with a dispute filed, which goes
- * back to the worker.
+ * inside its 1-hour release grace, on a task with a dispute filed, or on a
+ * dependent task whose parent is not passed or does not prove Completed, which
+ * goes back to the worker.
  */
 export async function cancelTask(input: CancelTaskInput) {
   const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
@@ -1118,8 +1121,17 @@ export async function cancelTask(input: CancelTaskInput) {
 
 export type CloseTaskInput = Omit<
   CloseTaskAsyncInput,
-  "taskJobSpec" | "escrow" | "listing" | "workerCompletionBond"
+  | "taskJobSpec"
+  | "escrow"
+  | "listing"
+  | "workerCompletionBond"
+  | "creatorCompletionBond"
 > & {
+  /**
+   * The creator's completion-bond address, `["completion_bond", task,
+   * authority]`. Derived from `task` and `authority` when omitted.
+   */
+  creatorCompletionBond?: Address;
   /**
    * Defaults to the derived task-job-spec PDA because activated tasks should
    * reclaim that pointer on close. Pass `null` for terminal tasks that never
@@ -1127,11 +1139,19 @@ export type CloseTaskInput = Omit<
    */
   taskJobSpec?: Address | null;
   /**
-   * Defaults to `None`: normal terminal settlement paths close escrow before
-   * the task becomes closable. Pass a still-alive, already-drained escrow only
-   * for dispute-expiry cleanup.
+   * Defaults to `None`: SOL settlement paths close the escrow before the task
+   * becomes closable. Pass a still-alive, already-drained escrow for
+   * dispute-expiry cleanup. A token-reward task sets `tokenEscrow` instead.
    */
   escrow?: Address | null;
+  /**
+   * Set for a token-reward task. Revision 9 compacts a token task only when
+   * its canonical escrow address is passed (else `TaskNotCompactable`, 6430),
+   * whether the escrow still exists (it then closes in the same call) or is
+   * already gone. The facade derives that address. Ignored when `escrow` is
+   * an address.
+   */
+  tokenEscrow?: boolean;
   /** Source listing for hired tasks; pass `null` for non-hired tasks. */
   listing?: Address | null;
   /** Optional live worker bond to liveness-check before close. */
@@ -1151,7 +1171,11 @@ export type CloseTaskChild =
       account: Address;
     }
   | {
-      /** A TaskModeration record; rent returns to its stored moderator. */
+      /**
+       * A TaskModeration record and the wallet its rent returns to: the
+       * task's creator when the creator paid it, else the moderator. Read it
+       * with {@link taskModerationRentRecipient}.
+       */
       kind: "namedRecipient";
       account: Address;
       recipient: Address;
@@ -1268,12 +1292,18 @@ function optionalAddress(value: Address | null | undefined): Address {
 }
 
 /**
- * Sweep a terminal task while retaining its rent-exempt Task as the durable
- * liveness anchor for children that cannot be enumerated on-chain. Auto-derives
- * the optional job-spec pointer on the first pass, omits the normally-closed
- * escrow by default, and derives the required hire-record address when omitted.
- * Pass `listing` while a live hired-task record still needs its capacity slot
- * released.
+ * Close a terminal task. Revision 9 sweeps the passed children and then
+ * compacts the Task in place into a 56-byte `TaskMarker` at the same address;
+ * every lamport above the marker's rent goes back to the creator. The marker
+ * still blocks the task id from being reused and still anchors children that
+ * were not passed: a later call on the marker sweeps children only. Read a
+ * closed task with {@link readTask}. Compaction is refused (6430) while peer
+ * settlement is pending and for a token task without `tokenEscrow`.
+ *
+ * Auto-derives the optional job-spec pointer on the first pass, the creator's
+ * completion-bond address, and the required hire-record address when
+ * omitted; omits the normally-closed escrow by default. Pass `listing` while
+ * a live hired-task record still needs its capacity slot released.
  *
  * One standalone client transaction supports at most 19 remaining metas: the
  * optional bid book plus weighted `children` (creator-funded=1,
@@ -1308,6 +1338,19 @@ export async function closeTask(input: CloseTaskInput) {
   const hireRecord =
     stableInput.hireRecord ??
     (await findHireRecordPda({ task: stableInput.task }))[0];
+  const creatorCompletionBond =
+    stableInput.creatorCompletionBond ??
+    (
+      await findCreatorCompletionBondPda({
+        task: stableInput.task,
+        creator: stableInput.authority.address,
+      })
+    )[0];
+  const escrow =
+    stableInput.escrow ??
+    (stableInput.tokenEscrow
+      ? (await findEscrowPda({ task: stableInput.task }))[0]
+      : null);
   const [protocolConfig] = await findProtocolConfigPda();
 
   const remainingAccounts: { address: Address; role: AccountRole }[] = [];
@@ -1351,8 +1394,8 @@ export async function closeTask(input: CloseTaskInput) {
             : AccountRole.WRITABLE,
       },
       {
-        address: optionalAddress(stableInput.escrow),
-        role: stableInput.escrow ? AccountRole.WRITABLE : AccountRole.READONLY,
+        address: optionalAddress(escrow),
+        role: escrow ? AccountRole.WRITABLE : AccountRole.READONLY,
       },
       { address: hireRecord, role: AccountRole.WRITABLE },
       {
@@ -1360,7 +1403,7 @@ export async function closeTask(input: CloseTaskInput) {
         role: stableInput.listing ? AccountRole.WRITABLE : AccountRole.READONLY,
       },
       {
-        address: stableInput.creatorCompletionBond,
+        address: creatorCompletionBond,
         role: AccountRole.READONLY,
       },
       {
@@ -1461,9 +1504,12 @@ export async function reclaimOrphanTaskChild(
 /**
  * Permissionlessly expire a stale claim, freeing the task and paying the caller a
  * cleanup reward. Caller supplies `worker`/`rentRecipient`; escrow, claim,
- * validation config, submission, and protocol-config PDAs auto-derive. Dependent
- * Exclusive no-shows must pass their canonical parent. BidExclusive expiry also
- * supplies the accepted-bid settlement suffix in exact Rust order.
+ * validation config, submission, and protocol-config PDAs auto-derive. A
+ * dependent task passes its parent (`task.dependsOn`, a Task or a TaskMarker)
+ * as `dependencyParent`: revision 9 requires it whenever a claim deposit is at
+ * stake, for every task type, and a parent that does not prove Completed
+ * refunds the deposit. BidExclusive expiry also supplies the accepted-bid
+ * settlement suffix in exact Rust order.
  */
 export type ExpireClaimBidSettlement = {
   bidBook?: Address;
@@ -1482,7 +1528,11 @@ export type ExpireClaimInput = ExpireClaimAsyncInput & {
    * (it is never created here).
    */
   creator?: Address;
-  /** Parent prefix when the Rust exit path requires dependency evidence. */
+  /**
+   * The parent task (`task.dependsOn`) at `remaining_accounts[0]`. Pass it for
+   * every dependent task: Exclusive, Collaborative and Competitive. Without
+   * it a no-show with a deposit at stake fails `ParentTaskAccountRequired`.
+   */
   dependencyParent?: Address;
   /** Required for BidExclusive claim expiry. */
   bidSettlement?: ExpireClaimBidSettlement;

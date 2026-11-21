@@ -254,10 +254,12 @@ export async function main() {
   });
 
   // close_task closes the supplied children, decrements listing open_jobs, and
-  // retains the terminal Task as the durable liveness anchor for any child not
-  // enumerable here. Pass `listing` for hired tasks and
-  // `creatorCompletionBond` even when no creator bond was posted; the program
-  // seeds-checks that PDA.
+  // (revision 9) compacts the terminal Task into a 56-byte TaskMarker that
+  // stays the liveness anchor for any child not enumerable here; the rest of
+  // the Task's rent goes back to the buyer. Pass `listing` for hired tasks.
+  // `creatorCompletionBond` is the [completion_bond, task, authority] PDA,
+  // derived when omitted, even when no creator bond was posted; the program
+  // seeds-checks it.
   const closeIx = await facade.closeTask({
     task,
     hireRecord,

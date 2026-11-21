@@ -6,11 +6,16 @@
  * old program from accepting a new payload while silently ignoring the new
  * buyer-specific commitment. Indexers still need to backfill transactions
  * emitted by the deployed revision-4 program, though, so this module preserves
- * those three legacy data/account schemas alongside the current v2 schemas.
+ * those three legacy data/account schemas alongside the current schemas.
  *
- * This surface is decode-only by design. Never use revision-4 shapes to build
- * or replay a transaction; legacy hires do not commit to the buyer's exact job
- * spec and revision 5 rejects their activation/claim path.
+ * Revision 9 changed `hire_from_listing` again (v3: a `review_window_secs`
+ * argument and a `task_validation_config` account, because an agent buyer now
+ * reviews the delivery). The revision 5 commitment-v2 hire is kept here as a
+ * frozen schema; the bare-wallet hire and `set_task_job_spec` did not change.
+ *
+ * This surface is decode-only by design. Never use frozen shapes to build or
+ * replay a transaction; legacy hires do not commit to the buyer's exact job
+ * spec, and revision 9 no longer has the v2 hire entry point.
  */
 
 import {
@@ -55,6 +60,13 @@ const REVISION_4_HIRE_FROM_LISTING_HUMANLESS_DISCRIMINATOR_BYTES = [
 const REVISION_4_SET_TASK_JOB_SPEC_DISCRIMINATOR_BYTES = [
   134, 102, 102, 86, 31, 164, 202, 193,
 ] as const;
+const REVISION_5_HIRE_FROM_LISTING_DISCRIMINATOR_BYTES = [
+  241, 94, 127, 7, 104, 174, 240, 116,
+] as const;
+
+/** Exact Anchor discriminator of the revision 5 commitment-v2 agent hire. */
+export const REVISION_5_HIRE_FROM_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
+  Uint8Array.from(REVISION_5_HIRE_FROM_LISTING_DISCRIMINATOR_BYTES);
 
 /** Exact Anchor discriminator deployed on revision 4. */
 export const REVISION_4_HIRE_FROM_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
@@ -73,7 +85,10 @@ export type MarketplaceWriteInstructionName =
   | "hire_from_listing_humanless"
   | "set_task_job_spec";
 
-export type MarketplaceWriteWireVersion = "legacy-v1" | "commitment-v2";
+export type MarketplaceWriteWireVersion =
+  | "legacy-v1"
+  | "commitment-v2"
+  | "creator-review-v3";
 
 /** Account-meta position and privileges in one frozen instruction ABI. */
 export interface MarketplaceWriteAccountSchema {
@@ -211,6 +226,40 @@ export const REVISION_5_MARKETPLACE_WRITE_ACCOUNT_SCHEMAS = Object.freeze({
   ]),
 });
 
+/** Exact revision-9 creator-review-v3 account order of the agent hire. */
+export const REVISION_9_MARKETPLACE_WRITE_ACCOUNT_SCHEMAS = Object.freeze({
+  hire_from_listing: freezeAccountSchema([
+    rw("task"),
+    rw("escrow"),
+    rw("hire_record"),
+    rw("task_validation_config"),
+    rw("listing"),
+    ro("provider_agent"),
+    rw("protocol_config"),
+    ro("moderation_config"),
+    ro("listing_moderation", true),
+    ro("moderation_attestor", true),
+    ro("moderation_block"),
+    ro("creator_agent"),
+    rw("authority_rate_limit"),
+    signer("authority", false),
+    signer("creator", true),
+    ro("system_program"),
+  ]),
+});
+
+/** Frozen revision-5 commitment-v2 agent hire payload. */
+export interface Revision5HireFromListingInstructionData {
+  readonly discriminator: ReadonlyUint8Array;
+  readonly taskId: ReadonlyUint8Array;
+  readonly expectedPrice: bigint;
+  readonly expectedVersion: bigint;
+  readonly referrer: Option<Address>;
+  readonly referrerFeeBps: number;
+  readonly moderator: Address;
+  readonly taskJobSpecHash: ReadonlyUint8Array;
+}
+
 export interface Revision4HireFromListingInstructionData {
   readonly discriminator: ReadonlyUint8Array;
   readonly taskId: ReadonlyUint8Array;
@@ -262,6 +311,18 @@ const revision4HireFromListingHumanlessDecoder: Decoder<Revision4HireFromListing
     ["moderator", getAddressDecoder()],
   ]);
 
+const revision5HireFromListingDecoder: Decoder<Revision5HireFromListingInstructionData> =
+  getStructDecoder([
+    ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
+    ["taskId", fixDecoderSize(getBytesDecoder(), 32)],
+    ["expectedPrice", getU64Decoder()],
+    ["expectedVersion", getU64Decoder()],
+    ["referrer", getOptionDecoder(getAddressDecoder())],
+    ["referrerFeeBps", getU16Decoder()],
+    ["moderator", getAddressDecoder()],
+    ["taskJobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
+  ]);
+
 const revision4SetTaskJobSpecDecoder: Decoder<Revision4SetTaskJobSpecInstructionData> =
   getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
@@ -276,7 +337,7 @@ const revision4SetTaskJobSpecDecoder: Decoder<Revision4SetTaskJobSpecInstruction
 type Identity<
   TName extends MarketplaceWriteInstructionName,
   TWire extends MarketplaceWriteWireVersion,
-  TRevision extends 4 | 5,
+  TRevision extends 4 | 5 | 9,
 > = {
   readonly instruction: TName;
   readonly wireVersion: TWire;
@@ -291,7 +352,8 @@ export type MarketplaceWriteInstructionIdentity =
   | Identity<"set_task_job_spec", "legacy-v1", 4>
   | Identity<"hire_from_listing", "commitment-v2", 5>
   | Identity<"hire_from_listing_humanless", "commitment-v2", 5>
-  | Identity<"set_task_job_spec", "commitment-v2", 5>;
+  | Identity<"set_task_job_spec", "commitment-v2", 5>
+  | Identity<"hire_from_listing", "creator-review-v3", 9>;
 
 export type DecodedMarketplaceWriteInstruction =
   | (Identity<"hire_from_listing", "legacy-v1", 4> & {
@@ -304,13 +366,16 @@ export type DecodedMarketplaceWriteInstruction =
       readonly data: Revision4SetTaskJobSpecInstructionData;
     })
   | (Identity<"hire_from_listing", "commitment-v2", 5> & {
-      readonly data: HireFromListingInstructionData;
+      readonly data: Revision5HireFromListingInstructionData;
     })
   | (Identity<"hire_from_listing_humanless", "commitment-v2", 5> & {
       readonly data: HireFromListingHumanlessInstructionData;
     })
   | (Identity<"set_task_job_spec", "commitment-v2", 5> & {
       readonly data: SetTaskJobSpecInstructionData;
+    })
+  | (Identity<"hire_from_listing", "creator-review-v3", 9> & {
+      readonly data: HireFromListingInstructionData;
     });
 
 function startsWithDiscriminator(
@@ -360,7 +425,9 @@ const IDENTITIES: readonly MarketplaceWriteInstructionIdentity[] =
       instruction: "hire_from_listing",
       wireVersion: "commitment-v2",
       surfaceRevision: 5,
-      discriminator: new Uint8Array(HIRE_FROM_LISTING_DISCRIMINATOR),
+      discriminator: Uint8Array.from(
+        REVISION_5_HIRE_FROM_LISTING_DISCRIMINATOR_BYTES,
+      ),
       accountSchema:
         REVISION_5_MARKETPLACE_WRITE_ACCOUNT_SCHEMAS.hire_from_listing,
     },
@@ -379,6 +446,14 @@ const IDENTITIES: readonly MarketplaceWriteInstructionIdentity[] =
       discriminator: new Uint8Array(SET_TASK_JOB_SPEC_DISCRIMINATOR),
       accountSchema:
         REVISION_5_MARKETPLACE_WRITE_ACCOUNT_SCHEMAS.set_task_job_spec,
+    },
+    {
+      instruction: "hire_from_listing",
+      wireVersion: "creator-review-v3",
+      surfaceRevision: 9,
+      discriminator: new Uint8Array(HIRE_FROM_LISTING_DISCRIMINATOR),
+      accountSchema:
+        REVISION_9_MARKETPLACE_WRITE_ACCOUNT_SCHEMAS.hire_from_listing,
     },
   ] satisfies readonly MarketplaceWriteInstructionIdentity[]);
 
@@ -461,7 +536,8 @@ function assertCanonicalOptionTag(
 }
 
 /**
- * Strictly decode a revision-4 legacy-v1 or revision-5 commitment-v2 write.
+ * Strictly decode a revision-4 legacy-v1, revision-5 commitment-v2 or
+ * revision-9 creator-review-v3 write.
  * The complete byte slice must match its selected schema; truncated payloads,
  * non-canonical options/strings, and trailing bytes throw `TypeError`.
  * Unrelated instruction data returns `null`, which is convenient for history
@@ -474,8 +550,14 @@ export function decodeMarketplaceWriteInstruction(
   const identity = identifyMarketplaceWriteInstruction(data);
   if (identity === null) return null;
   const label = `${identity.instruction} ${identity.wireVersion}`;
+  // The referrer option tag follows the fixed prefix; the v3 agent hire and
+  // the bare-wallet hire carry an extra i64 review window before it.
   if (identity.instruction === "hire_from_listing") {
-    assertCanonicalOptionTag(data, 56, label);
+    assertCanonicalOptionTag(
+      data,
+      identity.wireVersion === "creator-review-v3" ? 64 : 56,
+      label,
+    );
   } else if (identity.instruction === "hire_from_listing_humanless") {
     assertCanonicalOptionTag(data, 64, label);
   }
@@ -504,15 +586,22 @@ export function decodeMarketplaceWriteInstruction(
     }
   }
 
+  if (identity.wireVersion === "creator-review-v3") {
+    return {
+      ...identity,
+      data: decodeExactly(
+        getHireFromListingInstructionDataDecoder(),
+        data,
+        label,
+      ),
+    };
+  }
+
   switch (identity.instruction) {
     case "hire_from_listing":
       return {
         ...identity,
-        data: decodeExactly(
-          getHireFromListingInstructionDataDecoder(),
-          data,
-          label,
-        ),
+        data: decodeExactly(revision5HireFromListingDecoder, data, label),
       };
     case "hire_from_listing_humanless":
       return {

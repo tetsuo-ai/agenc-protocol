@@ -6,9 +6,8 @@
 // Recipes mirrored from client.e2e.test.ts:
 //  - hire flow: register provider+buyer -> listing -> attestListing ->
 //    hireFromListing -> attestTask -> setTaskJobSpec -> claim -> bonds ->
-//    completeTask settles and refunds the bonds (an agent-hired task settles
-//    on the direct-pay path; configure_task_validation rejects tasks with a
-//    live HireRecord, so submit/accept runs on the CreatorReview flow below).
+//    submit -> accept settles and refunds the bonds (revision 9: an
+//    agent-hired task is a CreatorReview task made by the hire itself).
 //  - CreatorReview flow: createTask -> configureTaskValidation -> attestTask
 //    -> setTaskJobSpec -> claim -> submit -> accept settles to the worker.
 import { describe, it, expect, vi } from "vitest";
@@ -134,6 +133,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
       taskId,
       expectedPrice: price,
       expectedVersion: 1n,
+      reviewWindowSecs: 3_600n,
       listingSpecHash,
       taskJobSpecHash: jobSpecHash,
       moderator: market.moderator.address,
@@ -183,24 +183,30 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
     expect(accountData(market, creatorBond)).not.toBeNull();
     expect(accountData(market, workerBond)).not.toBeNull();
 
-    // 8) provider settles on the direct-pay path; the sandbox admin doubles
-    //    as the protocol treasury.
+    // 8) revision 9: an agent hire is a review task. The provider delivers
+    //    and the buyer accepts; the sandbox admin doubles as the protocol
+    //    treasury.
     const workerBalBefore = market.svm.getBalance(provider.address) ?? 0n;
     const [hireRecord] = await findHireRecordPda({ task });
     await providerClient.send([
-      await facade.completeTask({
+      await facade.submitTaskResult({
         task,
-        creator: buyer.address,
         worker: providerAgent,
-        treasury: market.admin.address,
         authority: provider,
-        hireRecord,
-        creatorCompletionBond: creatorBond,
-        workerCompletionBond: workerBond,
         proofHash: new Uint8Array(32).fill(66),
         resultData: null,
       }),
     ]);
+    await buyerClient.acceptTaskResult({
+      task,
+      worker: providerAgent,
+      creator: buyer,
+      treasury: market.admin.address,
+      workerAuthority: provider.address,
+      hireRecord,
+      creatorCompletionBond: creatorBond,
+      workerCompletionBond: workerBond,
+    });
 
     // ---- REAL on-chain assertions ----
     expect(getTaskDecoder().decode(accountData(market, task)!).status).toBe(

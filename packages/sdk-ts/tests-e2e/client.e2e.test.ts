@@ -61,6 +61,7 @@ import {
   seedModerationConfig,
   fundedSigner,
   accountData,
+  readTaskAccount,
 } from "./harness.js";
 import { createLiteSvmTransport } from "./litesvm-transport.js";
 
@@ -207,7 +208,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       }),
     ]);
 
-    // 4) buyer hires the listing (named convenience) -> Task + escrow + HireRecord.
+    // 4) buyer hires the listing (named convenience) -> Task + escrow +
+    //    HireRecord + (revision 9) the buyer's CreatorReview config.
     const taskId = new Uint8Array(32).fill(44);
     const jobSpecHash = new Uint8Array(32).fill(55);
     await buyerClient.hireFromListing({
@@ -219,11 +221,18 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       taskId,
       expectedPrice: price,
       expectedVersion: 1n,
+      reviewWindowSecs: 3_600n,
       listingSpecHash,
       taskJobSpecHash: jobSpecHash,
       moderator: moderator.address,
     });
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
+    const [validationConfig] = await findTaskValidationConfigPda({ task });
+    const config = getTaskValidationConfigDecoder().decode(
+      accountData(svm, validationConfig)!,
+    );
+    expect(config.mode).toBe(ValidationMode.CreatorReview);
+    expect(config.reviewWindowSecs).toBe(3_600n);
 
     // 5) CLEAN task moderation + job-spec pin (claim is gated on both).
     await moderatorClient.send([
@@ -280,24 +289,49 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(accountData(svm, creatorBond)).not.toBeNull();
     expect(accountData(svm, workerBond)).not.toBeNull();
 
-    // 8) provider settles the hired task on the direct-pay path, passing the
+    // 8) revision 9: an agent hire is a review task, so the direct-pay path
+    //    is refused; the provider delivers and the buyer accepts, passing the
     //    HireRecord (always required for hires) and both bonds so they refund.
     const workerBalBefore = svm.getBalance(provider.address) ?? 0n;
     const [hireRecord] = await findHireRecordPda({ task });
+    await expect(
+      providerClient.send([
+        await facade.completeTask({
+          task,
+          creator: buyer.address,
+          worker: providerAgent,
+          treasury: admin.address,
+          authority: provider,
+          hireRecord,
+          creatorCompletionBond: creatorBond,
+          workerCompletionBond: workerBond,
+          proofHash: new Uint8Array(32).fill(66),
+          resultData: null,
+        }),
+      ]),
+    ).rejects.toThrow();
     await providerClient.send([
-      await facade.completeTask({
+      await facade.submitTaskResult({
         task,
-        creator: buyer.address,
         worker: providerAgent,
-        treasury: admin.address,
         authority: provider,
-        hireRecord,
-        creatorCompletionBond: creatorBond,
-        workerCompletionBond: workerBond,
         proofHash: new Uint8Array(32).fill(66),
         resultData: null,
       }),
     ]);
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.PendingValidation,
+    );
+    await buyerClient.acceptTaskResult({
+      task,
+      worker: providerAgent,
+      creator: buyer,
+      treasury: admin.address,
+      workerAuthority: provider.address,
+      hireRecord,
+      creatorCompletionBond: creatorBond,
+      workerCompletionBond: workerBond,
+    });
 
     // ---- REAL on-chain assertions ----
     expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
@@ -684,11 +718,18 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(decodedListing.ratingCount).toBe(1);
     expect(accountData(svm, hireRecord)).toBeNull();
     expect(accountData(svm, taskJobSpec)).toBeNull();
-    // close_task deliberately retains the terminal Task as a durable liveness
-    // anchor for any auxiliary child account that was not enumerable here.
-    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
-      TaskStatus.Completed,
-    );
+    // Revision 9: close_task compacts the terminal Task into a 56-byte
+    // TaskMarker that keeps blocking the id and anchors any auxiliary child
+    // account that was not enumerable here. This close ended a live hire of a
+    // fee-qualified completion.
+    expect(accountData(svm, task)).toHaveLength(56);
+    expect(readTaskAccount(svm, task)).toMatchObject({
+      kind: "closed",
+      status: "completed",
+      endedLiveHire: true,
+      feeQualified: true,
+      marker: { creator: buyer.address },
+    });
 
     await buyerClient.hireFromListingHumanless({
       listing,
@@ -856,9 +897,12 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       authority: buyer,
     });
 
-    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
-      TaskStatus.Cancelled,
-    );
+    expect(readTaskAccount(svm, task)).toMatchObject({
+      kind: "closed",
+      status: "cancelled",
+      endedLiveHire: true,
+      feeQualified: false,
+    });
     expect(accountData(svm, hireRecord)).toBeNull();
     decodedListing = getServiceListingDecoder().decode(
       accountData(svm, listing)!,

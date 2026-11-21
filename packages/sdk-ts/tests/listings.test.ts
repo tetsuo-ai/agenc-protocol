@@ -20,6 +20,7 @@ import {
   findModerationAttestorPda,
   findModerationBlockPda,
   findTaskPda,
+  findTaskValidationConfigPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   HIRE_FROM_LISTING_DISCRIMINATOR,
   HIRE_FROM_LISTING_HUMANLESS_DISCRIMINATOR,
@@ -587,7 +588,7 @@ describe("hireFromListing (facade)", () => {
   // P1.2: the moderator whose listing attestation the hire consumes.
   const moderator = address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA");
 
-  it("auto-derives the multi-PDA flow with correct order (P1.2: 14 with the BLOCK floor) and round-trips its data", async () => {
+  it("auto-derives the multi-PDA flow with correct order (revision 9 v3: 16 with the validation config) and round-trips its data", async () => {
     const taskId = new Uint8Array(32).fill(5);
     const specHash = new Uint8Array(32).fill(9);
     const taskJobSpecHash = new Uint8Array(32).fill(10);
@@ -600,47 +601,54 @@ describe("hireFromListing (facade)", () => {
       taskId,
       expectedPrice: 1000n,
       expectedVersion: 1n,
+      reviewWindowSecs: 3600n,
       listingSpecHash: specHash,
       taskJobSpecHash,
       moderator,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // P1.2 pins the gate at 15 accounts, including the immutable provider
-    // binding and the REQUIRED moderationBlock.
-    expect(ix.accounts.length).toBe(15);
+    // Revision 9 pins the v3 gate at 16 accounts: the P1.2 provider binding
+    // and REQUIRED moderationBlock, plus the buyer's review config.
+    expect(ix.accounts.length).toBe(16);
     const accts = ix.accounts.map((a) => a.address);
-    expect(accts[3]).toBe(listing);
-    expect(accts[4]).toBe(providerAgent);
-    // listingModeration (7): facade-derived v2 moderator-keyed record PDA
+    const [task] = await findTaskPda({ creator: creator.address, taskId });
+    const [validationConfig] = await findTaskValidationConfigPda({ task });
+    expect(accts[0]).toBe(task);
+    expect(accts[3]).toBe(validationConfig);
+    expect(ix.accounts[3]!.role).toBe(AccountRole.WRITABLE);
+    expect(accts[4]).toBe(listing);
+    expect(accts[5]).toBe(providerAgent);
+    // listingModeration (8): facade-derived v2 moderator-keyed record PDA
     // ["listing_moderation_v2", listing, specHash, moderator].
     const [expectedModeration] = await findListingModerationPda({
       listing,
       jobSpecHash: specHash,
       moderator,
     });
-    expect(accts[7]).toBe(expectedModeration);
-    // moderationAttestor (8): global-authority path -> program-id placeholder.
-    expect(accts[8]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // moderationBlock (9): REQUIRED BLOCK-floor PDA ["moderation_block", specHash].
+    expect(accts[8]).toBe(expectedModeration);
+    // moderationAttestor (9): global-authority path -> program-id placeholder.
+    expect(accts[9]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // moderationBlock (10): REQUIRED BLOCK-floor PDA ["moderation_block", specHash].
     const [expectedBlock] = await findModerationBlockPda({
       contentHash: specHash,
     });
-    expect(accts[9]).toBe(expectedBlock);
-    expect(accts[10]).toBe(creatorAgent);
-    expect(accts[12]).toBe(authority.address);
-    expect(accts[13]).toBe(creator.address);
-    expect(accts[14]).toBe(SYSTEM_PROGRAM);
+    expect(accts[10]).toBe(expectedBlock);
+    expect(accts[11]).toBe(creatorAgent);
+    expect(accts[13]).toBe(authority.address);
+    expect(accts[14]).toBe(creator.address);
+    expect(accts[15]).toBe(SYSTEM_PROGRAM);
 
     const decoded = getHireFromListingInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.discriminator)).toEqual(
       Array.from(HIRE_FROM_LISTING_DISCRIMINATOR),
     );
     expect(Array.from(decoded.discriminator)).toEqual([
-      241, 94, 127, 7, 104, 174, 240, 116,
+      72, 38, 44, 237, 3, 93, 253, 108,
     ]);
     expect(decoded.expectedPrice).toBe(1000n);
     expect(decoded.expectedVersion).toBe(1n);
+    expect(decoded.reviewWindowSecs).toBe(3600n);
     expect(Array.from(decoded.taskId)).toEqual(Array.from(taskId));
     expect(decoded.moderator).toBe(moderator); // P1.2: new arg
     expect(Array.from(decoded.taskJobSpecHash)).toEqual(
@@ -658,6 +666,7 @@ describe("hireFromListing (facade)", () => {
       taskId: new Uint8Array(32).fill(6),
       expectedPrice: 2000n,
       expectedVersion: 2n,
+      reviewWindowSecs: 3600n,
       listingSpecHash: new Uint8Array(32).fill(9),
       taskJobSpecHash: new Uint8Array(32).fill(10),
       moderator,
@@ -666,7 +675,7 @@ describe("hireFromListing (facade)", () => {
     const [expectedAttestor] = await findModerationAttestorPda({
       attestor: moderator,
     });
-    expect(ix.accounts[8].address).toBe(expectedAttestor);
+    expect(ix.accounts[9].address).toBe(expectedAttestor);
   });
 
   it("throws when neither listingSpecHash nor moderationBlock is given (the BLOCK floor is required)", async () => {
@@ -680,10 +689,42 @@ describe("hireFromListing (facade)", () => {
         taskId: new Uint8Array(32).fill(7),
         expectedPrice: 1000n,
         expectedVersion: 1n,
+        reviewWindowSecs: 3600n,
         taskJobSpecHash: new Uint8Array(32).fill(10),
         moderator,
       }),
     ).rejects.toThrow(/listingSpecHash|moderationBlock/);
+  });
+
+  it("takes a review window of 1 second to 7 days and refuses anything else before building", async () => {
+    const base = {
+      listing,
+      providerAgent,
+      creatorAgent,
+      authority,
+      creator,
+      taskId: new Uint8Array(32).fill(7),
+      expectedPrice: 1000n,
+      expectedVersion: 1n,
+      listingSpecHash: new Uint8Array(32).fill(9),
+      taskJobSpecHash: new Uint8Array(32).fill(10),
+      moderator,
+    };
+    for (const reviewWindowSecs of [1n, 604_800n]) {
+      const ix = await hireFromListing({ ...base, reviewWindowSecs });
+      expect(
+        getHireFromListingInstructionDataDecoder().decode(ix.data)
+          .reviewWindowSecs,
+      ).toBe(reviewWindowSecs);
+    }
+    for (const reviewWindowSecs of [0n, -1n, 604_801n]) {
+      await expect(
+        hireFromListing({ ...base, reviewWindowSecs }),
+      ).rejects.toThrow(/reviewWindowSecs must be 1 to 604800 seconds/);
+    }
+    await expect(
+      hireFromListing({ ...base, reviewWindowSecs: 1.5 }),
+    ).rejects.toThrow(/whole number/);
   });
 
   it("rejects task commitments the generated fixed encoder would alter", async () => {
@@ -702,6 +743,7 @@ describe("hireFromListing (facade)", () => {
           taskId: new Uint8Array(32).fill(8),
           expectedPrice: 1000n,
           expectedVersion: 1n,
+          reviewWindowSecs: 3600n,
           listingSpecHash: new Uint8Array(32).fill(9),
           taskJobSpecHash: bad,
           moderator,
@@ -733,6 +775,7 @@ describe("hireFromListing (facade)", () => {
       taskId,
       expectedPrice: 1000n,
       expectedVersion: 1n,
+      reviewWindowSecs: 3600n,
       listingSpecHash,
       taskJobSpecHash,
       moderator,
@@ -757,11 +800,11 @@ describe("hireFromListing (facade)", () => {
     expect(decoded.taskId).toEqual(expectedTaskId);
     expect(decoded.taskJobSpecHash).toEqual(expectedJobHash);
     expect(ix.accounts[0].address).toBe(expectedTask);
-    expect(ix.accounts[7].address).toBe(expectedModeration);
-    expect(ix.accounts[12].address).toBe(originalAddress);
+    expect(ix.accounts[8].address).toBe(expectedModeration);
     expect(ix.accounts[13].address).toBe(originalAddress);
-    expect("signer" in ix.accounts[12] && ix.accounts[12].signer).toBe(
-      "signer" in ix.accounts[13] ? ix.accounts[13].signer : undefined,
+    expect(ix.accounts[14].address).toBe(originalAddress);
+    expect("signer" in ix.accounts[13] && ix.accounts[13].signer).toBe(
+      "signer" in ix.accounts[14] ? ix.accounts[14].signer : undefined,
     );
   });
 
@@ -780,6 +823,7 @@ describe("hireFromListing (facade)", () => {
       taskId: foreignTaskId,
       expectedPrice: 1000n,
       expectedVersion: 1n,
+      reviewWindowSecs: 3600n,
       listingSpecHash: new ForeignUint8Array(32).fill(0x52),
       taskJobSpecHash: new ForeignUint8Array(32).fill(0x53),
       moderator,
@@ -801,6 +845,7 @@ describe("hireFromListing (facade)", () => {
           taskId: new Uint8Array(32).fill(1),
           expectedPrice: 1000n,
           expectedVersion: 1n,
+          reviewWindowSecs: 3600n,
           listingSpecHash: new Uint8Array(32).fill(2),
           taskJobSpecHash: bad,
           moderator,

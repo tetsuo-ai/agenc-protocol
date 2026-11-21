@@ -207,6 +207,7 @@ async function validHireBuild(input: {
   expectedVersion?: bigint;
   listingSpecHash?: string;
   taskJobSpecHash?: string;
+  reviewWindowSecs?: bigint;
   extraInstruction?: Instruction;
   programOverride?: Address;
 }) {
@@ -232,6 +233,7 @@ async function validHireBuild(input: {
     taskId,
     expectedPrice: input.expectedPrice ?? 1_000_000n,
     expectedVersion: input.expectedVersion ?? 2n,
+    reviewWindowSecs: input.reviewWindowSecs ?? 3_600n,
     listingSpecHash: specHash,
     taskJobSpecHash: taskHash,
     moderator: addrFromByte(0x55),
@@ -588,6 +590,7 @@ describe("createIndexerClient writes", () => {
         listingSpecHash: "13".repeat(32),
         taskJobSpecHash: "14".repeat(32),
         creatorAgent,
+        reviewWindowSecs: 3_600n,
       }),
     ).resolves.toEqual(build);
     expect(calls[0]!.method).toBe("POST");
@@ -602,6 +605,7 @@ describe("createIndexerClient writes", () => {
       listingSpecHash: "13".repeat(32),
       taskJobSpecHash: "14".repeat(32),
       creatorAgent,
+      reviewWindowSecs: "3600",
     });
   });
 
@@ -686,7 +690,25 @@ describe("indexer trust and resource boundaries", () => {
     listingSpecHash: "13".repeat(32),
     taskJobSpecHash: "14".repeat(32),
     creatorAgent,
+    reviewWindowSecs: 3_600n,
   };
+
+  it("refuses a review window outside 1 second to 7 days before any request", async () => {
+    const { impl, calls } = createFakeFetch(() => ({
+      payload: { success: true },
+    }));
+    const indexer = createIndexerClient({
+      baseUrl: BASE_URL,
+      fetchImpl: impl,
+      verifyHireTransaction: async () => {},
+    });
+    for (const reviewWindowSecs of [0n, 604_801n, "-1", "1.5", 1.5]) {
+      await expect(
+        indexer.buildHireTransaction({ ...params, reviewWindowSecs }),
+      ).rejects.toThrow(/reviewWindowSecs/);
+    }
+    expect(calls).toHaveLength(0);
+  });
 
   it("requires an explicit exact-intent verifier before returning a signable hire", async () => {
     const build = await validHireBuild({ buyer, listing, creatorAgent });
@@ -728,12 +750,21 @@ describe("indexer trust and resource boundaries", () => {
       creatorAgent,
       taskJobSpecHash: "15".repeat(32),
     });
+    // A server that picks its own review window changes when the buyer's
+    // money auto-releases, so it must match the requested one exactly.
+    const wrongWindow = await validHireBuild({
+      buyer,
+      listing,
+      creatorAgent,
+      reviewWindowSecs: 1n,
+    });
     const candidates = [
       { ...valid, transaction: "NOT_BASE64" },
       extra,
       wrongProgram,
       wrongTerms,
       wrongCommitment,
+      wrongWindow,
       {
         ...valid,
         transaction: makeAllNonSignersWritable(valid.transaction),
@@ -765,7 +796,8 @@ describe("indexer trust and resource boundaries", () => {
       baseUrl: BASE_URL,
       fetchImpl: impl,
       verifyHireTransaction: async ({ instructionAccounts }) => {
-        expect(instructionAccounts[4]).toBe(addrFromByte(0x54));
+        expect(instructionAccounts).toHaveLength(16);
+        expect(instructionAccounts[5]).toBe(addrFromByte(0x54));
         throw new Error(
           "provider does not match independently fetched listing",
         );

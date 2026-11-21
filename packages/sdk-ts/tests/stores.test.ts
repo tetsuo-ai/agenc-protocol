@@ -15,6 +15,7 @@ import {
   CLOSE_STORE_DISCRIMINATOR,
   findStorePda,
   findModerationConfigPda,
+  findProtocolConfigPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 import {
@@ -308,11 +309,15 @@ describe("moderationHeartbeat (facade)", () => {
       newWindowSecs: 172800, // 2 days
     });
     const [moderationConfig] = await findModerationConfigPda();
+    const [protocolConfig] = await findProtocolConfigPda();
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // Revision 9: the optional protocol config is always passed (an owner
+    // sending the heartbeat needs it). Approvals ride after it.
     expect(ix.accounts.map((a) => a.address)).toEqual([
       moderationConfig,
       authority.address,
+      protocolConfig,
     ]);
 
     const decoded = getModerationHeartbeatInstructionDataDecoder().decode(

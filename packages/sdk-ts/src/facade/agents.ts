@@ -40,6 +40,10 @@ import {
   type UnsuspendAgentAsyncInput,
 } from "../generated/index.js";
 import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import {
+  appendMultisigSignerMetas,
+  snapshotMultisigFacadeInput,
+} from "./wire.js";
 import { snapshotFixedBytes } from "../values/fixed-bytes.js";
 import { snapshotOptionOrNullable } from "../values/options.js";
 
@@ -149,18 +153,48 @@ export async function deregisterAgent(input: DeregisterAgentAsyncInput) {
   };
 }
 
-/** Build a suspend_agent instruction; the protocol config PDA is auto-derived. */
-export async function suspendAgent(input: SuspendAgentAsyncInput) {
-  return getSuspendAgentInstructionAsync(
-    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+/**
+ * Approvals for `suspend_agent` and `unsuspend_agent`. Revision 9 (G): on the
+ * full surface these need the ProtocolConfig multisig threshold (2 of 3 on
+ * mainnet) over `remaining_accounts`; `authority` is only the fee payer and
+ * proposer. Supply every approval in `multisigSigners` (an owner used as
+ * `authority` must appear there too). The canary build keeps the single
+ * protocol-authority signer.
+ */
+type AgentSuspensionApprovals = {
+  readonly multisigSigners: readonly TransactionSigner[];
+};
+
+export type SuspendAgentInput = SuspendAgentAsyncInput &
+  AgentSuspensionApprovals;
+export type UnsuspendAgentInput = UnsuspendAgentAsyncInput &
+  AgentSuspensionApprovals;
+
+/**
+ * Build a suspend_agent instruction; the protocol config PDA is auto-derived.
+ * The multisig approvals ride in `multisigSigners`.
+ */
+export async function suspendAgent(input: SuspendAgentInput) {
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
   );
+  const instruction = await getSuspendAgentInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
-/** Build an unsuspend_agent instruction; the protocol config PDA is auto-derived. */
-export async function unsuspendAgent(input: UnsuspendAgentAsyncInput) {
-  return getUnsuspendAgentInstructionAsync(
-    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+/**
+ * Build an unsuspend_agent instruction; the protocol config PDA is
+ * auto-derived. The multisig approvals ride in `multisigSigners`. An
+ * unsuspended agent comes back Inactive.
+ */
+export async function unsuspendAgent(input: UnsuspendAgentInput) {
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
   );
+  const instruction = await getUnsuspendAgentInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 // ===========================================================================

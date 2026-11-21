@@ -835,3 +835,27 @@ describe("disputes facade (structural)", () => {
     ).rejects.toThrow(/duplicate signer address/);
   });
 });
+
+describe("settleDisputeClaim (revision 9 peer wallet)", () => {
+  it("appends the peer's wallet as writable after the authority", async () => {
+    const ix = await facade.settleDisputeClaim({
+      dispute: DISPUTE,
+      task: TASK,
+      claim: CLAIM,
+      worker: WORKER_AGENT,
+      authority: AUTHORITY,
+      workerAuthority: WORKER_WALLET,
+    });
+    expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.accounts).toHaveLength(9);
+    expect(order(ix).slice(2, 5)).toEqual([TASK, CLAIM, WORKER_AGENT]);
+    expect(ix.accounts[7]).toMatchObject({
+      address: AUTHORITY_ADDR,
+      role: AccountRole.READONLY_SIGNER,
+    });
+    expect(ix.accounts[8]).toEqual({
+      address: WORKER_WALLET,
+      role: AccountRole.WRITABLE,
+    });
+  });
+});
