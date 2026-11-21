@@ -21,6 +21,7 @@ import {
   BN, Keypair, PublicKey, SystemProgram, agentStatsPda, creatorStatsPda,
   disputeRespondent,
   injectLegacyAutoHire,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------------------
@@ -204,7 +205,7 @@ test("set_service_listing_state: a non-authority cannot change listing state", a
 // configure_task_moderation
 // ---------------------------------------------------------------------------
 
-test("configure_task_moderation: protocol authority sets moderation authority + enabled flag", async () => {
+test("configure_task_moderation: the 2-of-3 multisig sets moderation authority + enabled flag (revision 9)", async () => {
   // freshWorld injects a ModerationConfig (disabled, authority=admin). configure_task_moderation
   // is init_if_needed so it reuses the existing account and rewrites its fields.
   const w = await freshWorld({ moderationEnabled: false });
@@ -213,14 +214,16 @@ test("configure_task_moderation: protocol authority sets moderation authority + 
   const before = decode(w.svm, "ModerationConfig", w.modCfg);
   assert.equal(before.enabled, false, "starts disabled");
 
+  const approvals = await configureTestMultisig(w);
   expectOk(
     send(
       w.svm,
       await makeProgram(w.admin).methods
         .configureTaskModeration(newModAuth.publicKey, true)
         .accounts({ protocolConfig: w.protocolPda, moderationConfig: w.modCfg, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
+        .remainingAccounts(approvals.remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(approvals, w.admin),
     ),
     "configure moderation",
   );
@@ -231,35 +234,40 @@ test("configure_task_moderation: protocol authority sets moderation authority + 
   assert.equal(after.authority.toBase58(), w.admin.publicKey.toBase58(), "config authority == protocol authority");
 });
 
-test("configure_task_moderation: a non-protocol-authority is rejected", async () => {
+test("configure_task_moderation: one signer is rejected, even the protocol authority (revision 9: 2 of 3)", async () => {
   const w = await freshWorld({ moderationEnabled: false });
+  await configureTestMultisig(w);
   const stranger = Keypair.generate();
   w.svm.airdrop(stranger.publicKey, BigInt(10e9));
-  expectFail(
-    send(
-      w.svm,
-      await makeProgram(stranger).methods
-        .configureTaskModeration(stranger.publicKey, true)
-        .accounts({ protocolConfig: w.protocolPda, moderationConfig: w.modCfg, authority: stranger.publicKey, systemProgram: SystemProgram.programId })
-        .instruction(),
-      [stranger],
-    ),
-    "UnauthorizedAgent",
-    "non-protocol-authority configure",
-  );
+  for (const signer of [stranger, w.admin]) {
+    expectFail(
+      send(
+        w.svm,
+        await makeProgram(signer).methods
+          .configureTaskModeration(stranger.publicKey, true)
+          .accounts({ protocolConfig: w.protocolPda, moderationConfig: w.modCfg, authority: signer.publicKey, systemProgram: SystemProgram.programId })
+          .instruction(),
+        [signer],
+      ),
+      "MultisigNotEnoughSigners",
+      "single-signer configure",
+    );
+  }
   assert.equal(decode(w.svm, "ModerationConfig", w.modCfg).enabled, false, "config unchanged after rejected configure");
 });
 
 test("configure_task_moderation: a default (zero) moderation authority is rejected", async () => {
   const w = await freshWorld({});
+  const approvals = await configureTestMultisig(w);
   expectFail(
     send(
       w.svm,
       await makeProgram(w.admin).methods
         .configureTaskModeration(PublicKey.default, true)
         .accounts({ protocolConfig: w.protocolPda, moderationConfig: w.modCfg, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
+        .remainingAccounts(approvals.remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(approvals, w.admin),
     ),
     "InvalidTaskModerationAuthority",
     "zero moderation authority",

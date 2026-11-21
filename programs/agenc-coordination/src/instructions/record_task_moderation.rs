@@ -122,6 +122,8 @@ pub fn handler(
         ctx.accounts.moderation_config.moderation_authority,
         attestor_supplied,
     )?;
+    // Revision 9 (G): a task creator cannot moderate its own task (both builds).
+    require_moderator_is_not_creator(ctx.accounts.moderator.key(), ctx.accounts.task.creator)?;
 
     // P1.2 §4.2: an attestor in its exit window can no longer record — the window
     // closes at request, not finalize.
@@ -186,6 +188,18 @@ pub fn handler(
         timestamp: clock.unix_timestamp,
     });
 
+    Ok(())
+}
+
+/// Revision 9 (G): self-moderation is refused when recorded (here) and again at
+/// the publish gate (`set_task_job_spec`), so a self-moderated record from before
+/// the upgrade cannot publish either.
+pub fn require_moderator_is_not_creator(moderator: Pubkey, creator: Pubkey) -> Result<()> {
+    require_keys_neq!(
+        moderator,
+        creator,
+        CoordinationError::ModeratorIsTaskCreator
+    );
     Ok(())
 }
 
@@ -284,6 +298,15 @@ mod tests {
             err,
             CoordinationError::UnauthorizedModerationAttestor.into()
         );
+    }
+
+    // Revision 9 (G): the task creator can never be the moderator.
+    #[test]
+    fn a_task_creator_cannot_moderate_its_own_task() {
+        let creator = Pubkey::new_unique();
+        let err = require_moderator_is_not_creator(creator, creator).unwrap_err();
+        assert_eq!(err, CoordinationError::ModeratorIsTaskCreator.into());
+        assert!(require_moderator_is_not_creator(Pubkey::new_unique(), creator).is_ok());
     }
 
     // Revision 9 (C): the creator or the moderator pays; nobody else.

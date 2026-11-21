@@ -472,6 +472,9 @@ export async function setMultisig(svm, owners, threshold) {
 /// Configure a realistic 2-of-3 ProtocolConfig owner set for compiled tests and
 /// return the two signers/account metas needed by multisig-gated instructions.
 export async function configureTestMultisig(w) {
+  // One owner set per world: later callers get the same approvers, so a test can
+  // mix multisig-gated calls without re-keying the owners under earlier ones.
+  if (w.testMultisig) return w.testMultisig;
   const owner2 = Keypair.generate();
   const owner3 = Keypair.generate();
   for (const owner of [owner2, owner3]) {
@@ -483,7 +486,7 @@ export async function configureTestMultisig(w) {
     2,
   );
   const approvers = [w.admin, owner2];
-  return {
+  w.testMultisig = {
     approvers,
     remainingAccounts: approvers.map((signer) => ({
       pubkey: signer.publicKey,
@@ -491,6 +494,15 @@ export async function configureTestMultisig(w) {
       isWritable: false,
     })),
   };
+  return w.testMultisig;
+}
+
+// Revision 9 (G): configure_task_moderation, suspend_agent, unsuspend_agent, the
+// moderation-attestor roster and heartbeat window changes need the ProtocolConfig
+// multisig threshold. Signers for `proposer` plus the two test approvers, without
+// a duplicate when the proposer is itself an approver.
+export function approvalSigners(approvals, proposer) {
+  return [proposer, ...approvals.approvers.filter((a) => !a.publicKey.equals(proposer.publicKey))];
 }
 
 /// Seat the synthetic test world's protocol authority on the resolver roster via

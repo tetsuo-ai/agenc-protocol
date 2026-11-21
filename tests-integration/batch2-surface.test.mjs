@@ -42,6 +42,7 @@ import {
   BN, Keypair, PublicKey, SystemProgram, PID, agentStatsPda,
   injectLegacyAutoHire,
   readTaskMarker,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 const STORE_BOND = 50_000_000; // STORE_REGISTRATION_BOND_LAMPORTS (0.05 SOL)
@@ -146,9 +147,11 @@ test("store identity: register enforces the bond, update is owner-only + version
 // ---------------------------------------------------------------------------
 // (2) P1.3 moderation_heartbeat: authorization + window-change rules.
 // ---------------------------------------------------------------------------
-test("moderation_heartbeat: authority/mod-authority may heartbeat; window change is config-authority-only and floored at 1 day", async () => {
+test("moderation_heartbeat: authorities and owners may heartbeat; a window change needs 2 of 3 and is floored at 1 day (revision 9)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const hbAccounts = (signer) => ({ moderationConfig: w.modCfg, authority: signer.publicKey });
+  const hbAccounts = (signer, protocolConfig = null) => ({ moderationConfig: w.modCfg, authority: signer.publicKey, protocolConfig });
+  const approvals = await configureTestMultisig(w);
+  const owner2 = approvals.approvers[1];
 
   // The moderation authority may heartbeat (no window change).
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
@@ -158,21 +161,35 @@ test("moderation_heartbeat: authority/mod-authority may heartbeat; window change
   const afterHb = decode(w.svm, "ModerationConfig", w.modCfg);
   assert.ok(Number(afterHb.updated_at) > 0, "heartbeat stamped updated_at");
 
-  // ...but may NOT retune the window (config authority only).
-  expectFail(send(w.svm, await makeProgram(w.modAuth).methods
-    .moderationHeartbeat(7 * DAY)
-    .accounts(hbAccounts(w.modAuth))
-    .instruction(), [w.modAuth]), "UnauthorizedModerationHeartbeat", "b2:modAuth window change rejected");
+  // Revision 9: another multisig owner may heartbeat, with the protocol config.
+  expectFail(send(w.svm, await makeProgram(owner2).methods
+    .moderationHeartbeat(null)
+    .accounts(hbAccounts(owner2))
+    .instruction(), [owner2]), "UnauthorizedModerationHeartbeat", "b2:owner without the protocol config");
+  expectOk(send(w.svm, await makeProgram(owner2).methods
+    .moderationHeartbeat(null)
+    .accounts(hbAccounts(owner2, w.protocolPda))
+    .instruction(), [owner2]), "b2:owner heartbeat");
 
-  // The config authority may — but not below the 1-day floor.
+  // One signer may NOT retune the window, not even the config authority.
+  for (const signer of [w.modAuth, w.admin]) {
+    expectFail(send(w.svm, await makeProgram(signer).methods
+      .moderationHeartbeat(7 * DAY)
+      .accounts(hbAccounts(signer, w.protocolPda))
+      .instruction(), [signer]), "UnauthorizedModerationHeartbeat", "b2:single-signer window change rejected");
+  }
+
+  // With 2 of 3 it may, but not below the 1-day floor.
   expectFail(send(w.svm, await makeProgram(w.admin).methods
     .moderationHeartbeat(DAY - 1)
-    .accounts(hbAccounts(w.admin))
-    .instruction(), [w.admin]), "InvalidModerationLivenessWindow", "b2:sub-floor window rejected");
+    .accounts(hbAccounts(w.admin, w.protocolPda))
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvalSigners(approvals, w.admin)), "InvalidModerationLivenessWindow", "b2:sub-floor window rejected");
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .moderationHeartbeat(7 * DAY)
-    .accounts(hbAccounts(w.admin))
-    .instruction(), [w.admin]), "b2:authority retunes window to 7d");
+    .accounts(hbAccounts(w.admin, w.protocolPda))
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvalSigners(approvals, w.admin)), "b2:2-of-3 retunes window to 7d");
   const cfg = decode(w.svm, "ModerationConfig", w.modCfg);
   const carvedWindow = Buffer.from(cfg._reserved.slice(0, 4)).readUInt32LE(0);
   assert.equal(carvedWindow, 7 * DAY, "liveness window carved into _reserved[0..4]");
@@ -182,7 +199,7 @@ test("moderation_heartbeat: authority/mod-authority may heartbeat; window change
   w.svm.airdrop(rando.publicKey, BigInt(1e9));
   expectFail(send(w.svm, await makeProgram(rando).methods
     .moderationHeartbeat(null)
-    .accounts(hbAccounts(rando))
+    .accounts(hbAccounts(rando, w.protocolPda))
     .instruction(), [rando]), "UnauthorizedModerationHeartbeat", "b2:random signer rejected");
 });
 
@@ -222,7 +239,7 @@ test("moderation liveness deadman: silence past the window relaxes the hire gate
   // One heartbeat re-arms strict mode: the same shape of hire now fails again.
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
     .moderationHeartbeat(null)
-    .accounts({ moderationConfig: w.modCfg, authority: w.modAuth.publicKey })
+    .accounts({ moderationConfig: w.modCfg, authority: w.modAuth.publicKey, protocolConfig: null })
     .instruction(), [w.modAuth]), "b2:heartbeat re-arms");
   const { ix: strictHire } = await hireIx(w, { taskId: id32() });
   expectFail(send(w.svm, strictHire, [w.buyer]), "TaskModerationRequired",

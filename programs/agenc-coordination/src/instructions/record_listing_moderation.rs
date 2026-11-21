@@ -88,6 +88,13 @@ pub fn handler(
         ctx.accounts.moderation_config.moderation_authority,
         ctx.accounts.moderation_attestor.is_some(),
     )?;
+    // Revision 9 (G, design open question 13): a provider cannot moderate its own
+    // listing.
+    require_keys_neq!(
+        ctx.accounts.moderator.key(),
+        ctx.accounts.listing.authority,
+        CoordinationError::ModeratorIsListingProvider
+    );
 
     // P1.2 §4.2: an attestor in its exit window can no longer record — the window
     // closes at request, not finalize.

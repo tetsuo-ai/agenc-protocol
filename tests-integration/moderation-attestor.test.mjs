@@ -44,15 +44,18 @@ import {
   freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda,
   BN, Keypair, PublicKey, SystemProgram,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 // Derive the roster PDA for an attestor wallet.
 const attestorPda = (attestor) =>
   pda([enc("moderation_attestor"), attestor.toBuffer()]);
 
-// Assign `attestor` to the roster, signed by the roster authority (admin).
-async function assign(w, attestor, signer = w.admin) {
+// Assign `attestor` to the roster. Revision 9: proposed by `signer` (the fee
+// payer) and approved by the 2-of-3 test multisig unless `approve` is false.
+async function assign(w, attestor, signer = w.admin, { approve = true } = {}) {
   const [entry] = attestorPda(attestor);
+  const approvals = await configureTestMultisig(w);
   return send(
     w.svm,
     await makeProgram(signer).methods
@@ -63,8 +66,9 @@ async function assign(w, attestor, signer = w.admin) {
         authority: signer.publicKey,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts(approve ? approvals.remainingAccounts : [])
       .instruction(),
-    [signer],
+    approve ? approvalSigners(approvals, signer) : [signer],
   );
 }
 
@@ -80,8 +84,9 @@ async function revoke(w, attestor, signer = w.admin) {
         moderationAttestor: entry,
         authority: signer.publicKey,
       })
+      .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
       .instruction(),
-    [signer],
+    approvalSigners(await configureTestMultisig(w), signer),
   );
 }
 
@@ -121,16 +126,23 @@ test("assign_moderation_attestor: roster authority assigns a new attestor PDA", 
   assert.equal(acct.assigned_by.toBase58(), w.admin.publicKey.toBase58(), "assigned_by = roster authority");
 });
 
-test("assign_moderation_attestor: a non-roster-authority cannot assign", async () => {
+test("assign_moderation_attestor: one signer cannot assign, not even the old roster authority (revision 9: 2 of 3)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const attestor = Keypair.generate();
-  // modAuth is the global RECORDER but NOT the roster authority (that's admin).
-  expectFail(
-    await assign(w, attestor.publicKey, w.modAuth),
-    "UnauthorizedTaskModerator",
-    "non-authority assign",
-  );
+  // modAuth is the global RECORDER; admin was the single-key roster authority.
+  for (const signer of [w.modAuth, w.admin]) {
+    expectFail(
+      await assign(w, attestor.publicKey, signer, { approve: false }),
+      "MultisigNotEnoughSigners",
+      "single-signer assign",
+    );
+    w.svm.expireBlockhash();
+  }
   assert.ok(isClosed(w.svm, attestorPda(attestor.publicKey)[0]), "no entry created on rejected assign");
+  // Any proposer with the threshold assigns, pays the rent and is recorded.
+  expectOk(await assign(w, attestor.publicKey, w.modAuth), "threshold-approved assign");
+  const entry = decode(w.svm, "ModerationAttestor", attestorPda(attestor.publicKey)[0]);
+  assert.equal(entry.assigned_by.toBase58(), w.modAuth.publicKey.toBase58(), "assigned_by is the proposer");
 });
 
 test("assign_moderation_attestor: a default (zero) attestor is rejected", async () => {
@@ -147,8 +159,9 @@ test("assign_moderation_attestor: a default (zero) attestor is rejected", async 
           authority: w.admin.publicKey,
           systemProgram: SystemProgram.programId,
         })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "InvalidModerationAttestor",
     "zero attestor",

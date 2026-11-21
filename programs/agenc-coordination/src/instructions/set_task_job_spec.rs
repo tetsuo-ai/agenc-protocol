@@ -433,6 +433,13 @@ pub fn validate_task_moderation_for_job_spec(
         task_moderation.creator == task.creator,
         CoordinationError::TaskModerationTaskMismatch
     );
+    // Revision 9 (G): a record whose moderator is the task's creator never
+    // publishes, including one recorded before the upgrade.
+    require_keys_neq!(
+        task_moderation.moderator,
+        task.creator,
+        CoordinationError::ModeratorIsTaskCreator
+    );
     require!(
         task_moderation.job_spec_hash == *job_spec_hash,
         CoordinationError::TaskModerationHashMismatch
@@ -663,6 +670,32 @@ mod tests {
                 false,
             )
             .is_ok());
+        }
+    }
+
+    // Revision 9 (G): a record moderated by the task's own creator never publishes,
+    // even from a registered attestor or the global authority. Revert-sensitive:
+    // drop the require and both cases turn green.
+    #[test]
+    fn a_creator_moderated_record_never_publishes() {
+        for attestor_supplied in [false, true] {
+            let (mut config, mut moderation, task_key, task, hash) =
+                moderation_case(task_moderation_status::CLEAN, 0);
+            moderation.moderator = task.creator;
+            if !attestor_supplied {
+                config.moderation_authority = task.creator;
+            }
+            let err = validate_task_moderation_for_job_spec(
+                &config,
+                &moderation,
+                task_key,
+                &task,
+                &hash,
+                100,
+                attestor_supplied,
+            )
+            .unwrap_err();
+            assert_eq!(err, CoordinationError::ModeratorIsTaskCreator.into());
         }
     }
 

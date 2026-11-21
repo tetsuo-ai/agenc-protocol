@@ -32,6 +32,7 @@ import {
   freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------------------
@@ -51,8 +52,9 @@ async function assign(w, attestor, signer = w.admin) {
         authority: signer.publicKey,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
       .instruction(),
-    [signer],
+    approvalSigners(await configureTestMultisig(w), signer),
   );
 }
 
@@ -67,8 +69,9 @@ async function revoke(w, attestor, signer = w.admin) {
         moderationAttestor: entry,
         authority: signer.publicKey,
       })
+      .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
       .instruction(),
-    [signer],
+    approvalSigners(await configureTestMultisig(w), signer),
   );
 }
 
