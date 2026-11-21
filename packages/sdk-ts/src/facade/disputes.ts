@@ -5,6 +5,7 @@
 // Never import from generated/ internals other than its public exports.
 import {
   AccountRole,
+  address,
   type AccountMeta,
   type Address,
   type TransactionSigner,
@@ -83,6 +84,8 @@ export {
  * respondent. Refused on single-worker review tasks
  * (`DisputeRefusedOnReviewTask`, 6425): there the buyer turns work down with
  * `rejectAndFreeze` and the worker disputes that with {@link disputeRejection}.
+ * Once a dispute was filed on a task, a creator cannot file again against a
+ * claim that lapsed after that filing (`ClaimExpired`).
  */
 export async function initiateDispute(input: InitiateDisputeAsyncInput) {
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
@@ -132,10 +135,20 @@ export type ResolveDisputeAuthorization =
       resolverAssignment: Address;
       /** Assigned resolvers do not use protocol-owner approvals. */
       readonly multisigSigners?: never;
+      readonly multisigOwners?: never;
     }
   | ({
-      /** Omit the roster PDA when the protocol authority rules directly. */
+      /** Omit the roster PDA for a direct ruling by the owners. */
       resolverAssignment?: undefined;
+      /**
+       * Revision 9 (review R4-8): the ProtocolConfig owners
+       * (`multisigOwners.slice(0, multisigOwnersLen)`). Only approvals by
+       * these wallets go into the remaining accounts. Any wallet may propose
+       * a direct ruling as `authority`, but a proposer that is not an owner
+       * must not land there: the program then fails the ruling
+       * (`DisputePeerBundlesRetired`, or `InvalidInput` on a dependent task).
+       */
+      readonly multisigOwners: readonly Address[];
     } & RequiredMultisigApprovals);
 
 async function appendDisputeRemainingAccounts<
@@ -200,10 +213,12 @@ async function appendDisputeRemainingAccounts<
  * through `multisigSigners`; those signer metas are appended after every
  * dependency/peer/bid settlement account so Rust can remove approvals before parsing
  * the economic suffix. Revision 9 (review R4-1): any wallet may propose a direct
- * ruling as `authority`, exactly as for `resolveRejectFrozen`; two unconflicted
- * owners decide, and neither the task's creator nor the worker's wallet counts
- * toward the threshold. The deciding resolver + rationale hash are persisted on the
- * dispute and emitted in `DisputeResolved`.
+ * ruling as `authority`, exactly as for `resolveRejectFrozen`, except the dispute's
+ * initiator; two unconflicted owners decide, and neither the task's creator nor the
+ * worker's wallet counts toward the threshold. A lone wallet's ruling fails with
+ * `MultisigNotEnoughSigners` (no longer `UnauthorizedResolver`). The deciding
+ * resolver + rationale hash are persisted on the dispute and emitted in
+ * `DisputeResolved`.
  *
  * Audit F-9: to sweep the defendant's TaskSubmission on exit (decrement the review
  * counters and return its rent to the worker authority), pass `taskSubmission` and —
@@ -244,7 +259,7 @@ export type ResolveDisputeInput = Omit<
   ResolveDisputeAuthorization;
 
 export async function resolveDispute(input: ResolveDisputeInput) {
-  const { generatedInput, multisigSigners: stableMultisigSigners } =
+  const { generatedInput, multisigSigners: givenMultisigSigners } =
     snapshotMultisigFacadeInput(input, ["authority"], {
       multisigRequired: false,
     });
@@ -255,8 +270,31 @@ export async function resolveDispute(input: ResolveDisputeInput) {
     taskSubmission,
     dependencyParent,
     bidSettlement,
+    multisigOwners,
     ...rest
   } = generatedInput;
+  // Review R4-8: a direct ruling carries only owner approvals in its
+  // remaining accounts, so a non-owner proposer (or any other non-owner) is
+  // dropped from the approvals before they are appended.
+  let stableMultisigSigners = givenMultisigSigners;
+  if (rest.resolverAssignment === undefined) {
+    if (!Array.isArray(multisigOwners)) {
+      throw new TypeError(
+        "resolveDispute: a direct ruling needs multisigOwners (the ProtocolConfig owners)",
+      );
+    }
+    const owners = new Set<string>();
+    for (const owner of multisigOwners as readonly Address[]) {
+      owners.add(address(owner));
+    }
+    stableMultisigSigners = givenMultisigSigners.filter((signer) =>
+      owners.has(signer.address),
+    );
+  } else if (multisigOwners !== undefined) {
+    throw new TypeError(
+      "resolveDispute: an assigned resolver takes no multisigOwners",
+    );
+  }
   const stableBidSettlement =
     bidSettlement === undefined
       ? undefined
