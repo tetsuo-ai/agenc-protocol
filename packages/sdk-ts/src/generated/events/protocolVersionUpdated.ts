@@ -26,7 +26,7 @@ export type ProtocolVersionUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ProtocolVersionUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ProtocolVersionUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `PROTOCOL_VERSION_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getProtocolVersionUpdatedEventDecoder(): Decoder<ProtocolVersionUpdatedEventData> {

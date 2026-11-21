@@ -26,7 +26,7 @@ export type ProposalCancelledEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ProposalCancelledEventData} event payload — the bytes
+ * Gets the decoder for the {@link ProposalCancelledEventData} event payload: the bytes
  * AFTER the 8-byte `PROPOSAL_CANCELLED_EVENT_DISCRIMINATOR`.
  */
 export function getProposalCancelledEventDecoder(): Decoder<ProposalCancelledEventData> {

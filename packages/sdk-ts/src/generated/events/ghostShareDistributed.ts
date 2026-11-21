@@ -41,7 +41,7 @@ export type GhostShareDistributedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link GhostShareDistributedEventData} event payload — the bytes
+ * Gets the decoder for the {@link GhostShareDistributedEventData} event payload: the bytes
  * AFTER the 8-byte `GHOST_SHARE_DISTRIBUTED_EVENT_DISCRIMINATOR`.
  */
 export function getGhostShareDistributedEventDecoder(): Decoder<GhostShareDistributedEventData> {

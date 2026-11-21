@@ -30,7 +30,7 @@ export type AttestorExitFinalizedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link AttestorExitFinalizedEventData} event payload — the bytes
+ * Gets the decoder for the {@link AttestorExitFinalizedEventData} event payload: the bytes
  * AFTER the 8-byte `ATTESTOR_EXIT_FINALIZED_EVENT_DISCRIMINATOR`.
  */
 export function getAttestorExitFinalizedEventDecoder(): Decoder<AttestorExitFinalizedEventData> {

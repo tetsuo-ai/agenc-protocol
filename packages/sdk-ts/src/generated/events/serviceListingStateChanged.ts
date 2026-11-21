@@ -28,7 +28,7 @@ export type ServiceListingStateChangedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ServiceListingStateChangedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ServiceListingStateChangedEventData} event payload: the bytes
  * AFTER the 8-byte `SERVICE_LISTING_STATE_CHANGED_EVENT_DISCRIMINATOR`.
  */
 export function getServiceListingStateChangedEventDecoder(): Decoder<ServiceListingStateChangedEventData> {

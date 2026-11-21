@@ -28,7 +28,7 @@ export type ReputationStakeWithdrawnEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReputationStakeWithdrawnEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReputationStakeWithdrawnEventData} event payload: the bytes
  * AFTER the 8-byte `REPUTATION_STAKE_WITHDRAWN_EVENT_DISCRIMINATOR`.
  */
 export function getReputationStakeWithdrawnEventDecoder(): Decoder<ReputationStakeWithdrawnEventData> {

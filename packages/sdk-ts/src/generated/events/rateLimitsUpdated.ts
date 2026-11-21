@@ -32,7 +32,7 @@ export type RateLimitsUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link RateLimitsUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link RateLimitsUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `RATE_LIMITS_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getRateLimitsUpdatedEventDecoder(): Decoder<RateLimitsUpdatedEventData> {

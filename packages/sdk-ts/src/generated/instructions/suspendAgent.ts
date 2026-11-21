@@ -106,7 +106,13 @@ export type SuspendAgentAsyncInput<
   TAccountAuthority extends string = string,
 > = {
   agent: Address<TAccountAgent>;
+  /**
+   * Revision 9 (G): on the full surface the approval is the multisig threshold
+   * over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single
+   * protocol-authority signer.
+   */
   protocolConfig?: Address<TAccountProtocolConfig>;
+  /** Fee payer and proposer (the protocol authority in the canary build). */
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -173,7 +179,13 @@ export type SuspendAgentInput<
   TAccountAuthority extends string = string,
 > = {
   agent: Address<TAccountAgent>;
+  /**
+   * Revision 9 (G): on the full surface the approval is the multisig threshold
+   * over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single
+   * protocol-authority signer.
+   */
   protocolConfig: Address<TAccountProtocolConfig>;
+  /** Fee payer and proposer (the protocol authority in the canary build). */
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -234,7 +246,13 @@ export type ParsedSuspendAgentInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     agent: TAccountMetas[0];
+    /**
+     * Revision 9 (G): on the full surface the approval is the multisig threshold
+     * over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single
+     * protocol-authority signer.
+     */
     protocolConfig: TAccountMetas[1];
+    /** Fee payer and proposer (the protocol authority in the canary build). */
     authority: TAccountMetas[2];
   };
   data: SuspendAgentInstructionData;

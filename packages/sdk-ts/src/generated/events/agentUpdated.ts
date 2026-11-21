@@ -29,7 +29,7 @@ export type AgentUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link AgentUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link AgentUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `AGENT_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getAgentUpdatedEventDecoder(): Decoder<AgentUpdatedEventData> {

@@ -75,7 +75,11 @@ export type TaskModeration = {
   moderator: Address;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future attestation metadata. */
+  /**
+   * Reserved for future attestation metadata. Revision 9 carves
+   * `_reserved[0]` as the rent payer role (see `rent_payer_role`); the rest
+   * stays zeroed.
+   */
   reserved: ReadonlyUint8Array;
 };
 
@@ -104,7 +108,11 @@ export type TaskModerationArgs = {
   moderator: Address;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future attestation metadata. */
+  /**
+   * Reserved for future attestation metadata. Revision 9 carves
+   * `_reserved[0]` as the rent payer role (see `rent_payer_role`); the rest
+   * stays zeroed.
+   */
   reserved: ReadonlyUint8Array;
 };
 

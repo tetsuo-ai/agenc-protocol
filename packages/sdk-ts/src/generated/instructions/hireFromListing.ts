@@ -12,6 +12,8 @@ import {
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
+  getI64Decoder,
+  getI64Encoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -59,11 +61,12 @@ import {
   findModerationConfigPda,
   findProtocolConfigPda,
   findTaskPda,
+  findTaskValidationConfigPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const HIRE_FROM_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
-  new Uint8Array([241, 94, 127, 7, 104, 174, 240, 116]);
+  new Uint8Array([72, 38, 44, 237, 3, 93, 253, 108]);
 
 export function getHireFromListingDiscriminatorBytes(): ReadonlyUint8Array {
   return getFixedBytesEncoder(8).encode(HIRE_FROM_LISTING_DISCRIMINATOR);
@@ -74,6 +77,7 @@ export type HireFromListingInstruction<
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountEscrow extends string | AccountMeta<string> = string,
   TAccountHireRecord extends string | AccountMeta<string> = string,
+  TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
   TAccountListing extends string | AccountMeta<string> = string,
   TAccountProviderAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
@@ -101,6 +105,9 @@ export type HireFromListingInstruction<
       TAccountHireRecord extends string
         ? WritableAccount<TAccountHireRecord>
         : TAccountHireRecord,
+      TAccountTaskValidationConfig extends string
+        ? WritableAccount<TAccountTaskValidationConfig>
+        : TAccountTaskValidationConfig,
       TAccountListing extends string
         ? WritableAccount<TAccountListing>
         : TAccountListing,
@@ -148,6 +155,7 @@ export type HireFromListingInstructionData = {
   taskId: ReadonlyUint8Array;
   expectedPrice: bigint;
   expectedVersion: bigint;
+  reviewWindowSecs: bigint;
   referrer: Option<Address>;
   referrerFeeBps: number;
   moderator: Address;
@@ -158,6 +166,7 @@ export type HireFromListingInstructionDataArgs = {
   taskId: ReadonlyUint8Array;
   expectedPrice: number | bigint;
   expectedVersion: number | bigint;
+  reviewWindowSecs: number | bigint;
   referrer: OptionOrNullable<Address>;
   referrerFeeBps: number;
   moderator: Address;
@@ -171,6 +180,7 @@ export function getHireFromListingInstructionDataEncoder(): Encoder<HireFromList
       ["taskId", getFixedBytesEncoder(32, "taskId")],
       ["expectedPrice", getU64Encoder()],
       ["expectedVersion", getU64Encoder()],
+      ["reviewWindowSecs", getI64Encoder()],
       ["referrer", getOptionEncoder(getAddressEncoder())],
       ["referrerFeeBps", getU16Encoder()],
       ["moderator", getAddressEncoder()],
@@ -186,6 +196,7 @@ export function getHireFromListingInstructionDataDecoder(): Decoder<HireFromList
     ["taskId", fixDecoderSize(getBytesDecoder(), 32)],
     ["expectedPrice", getU64Decoder()],
     ["expectedVersion", getU64Decoder()],
+    ["reviewWindowSecs", getI64Decoder()],
     ["referrer", getOptionDecoder(getAddressDecoder())],
     ["referrerFeeBps", getU16Decoder()],
     ["moderator", getAddressDecoder()],
@@ -207,6 +218,7 @@ export type HireFromListingAsyncInput<
   TAccountTask extends string = string,
   TAccountEscrow extends string = string,
   TAccountHireRecord extends string = string,
+  TAccountTaskValidationConfig extends string = string,
   TAccountListing extends string = string,
   TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
@@ -227,6 +239,12 @@ export type HireFromListingAsyncInput<
    * without a Task layout change, and snapshots the operator fee terms.
    */
   hireRecord?: Address<TAccountHireRecord>;
+  /**
+   * Revision 9 (D): the hire's CreatorReview config, created here (as on the
+   * bare-wallet door) so an agent-door hire never settles on the auto-pay
+   * path; the buying agent's wallet reviews first.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   /**
    * Standing listing being hired from. Mutable to record the hire
    * (`total_hires`, `updated_at`).
@@ -292,6 +310,7 @@ export type HireFromListingAsyncInput<
   taskId: HireFromListingInstructionDataArgs["taskId"];
   expectedPrice: HireFromListingInstructionDataArgs["expectedPrice"];
   expectedVersion: HireFromListingInstructionDataArgs["expectedVersion"];
+  reviewWindowSecs: HireFromListingInstructionDataArgs["reviewWindowSecs"];
   referrer: HireFromListingInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
   moderator: HireFromListingInstructionDataArgs["moderator"];
@@ -302,6 +321,7 @@ export async function getHireFromListingInstructionAsync<
   TAccountTask extends string,
   TAccountEscrow extends string,
   TAccountHireRecord extends string,
+  TAccountTaskValidationConfig extends string,
   TAccountListing extends string,
   TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
@@ -320,6 +340,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountTask,
     TAccountEscrow,
     TAccountHireRecord,
+    TAccountTaskValidationConfig,
     TAccountListing,
     TAccountProviderAgent,
     TAccountProtocolConfig,
@@ -340,6 +361,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountTask,
     TAccountEscrow,
     TAccountHireRecord,
+    TAccountTaskValidationConfig,
     TAccountListing,
     TAccountProviderAgent,
     TAccountProtocolConfig,
@@ -363,6 +385,10 @@ export async function getHireFromListingInstructionAsync<
     task: { value: input.task ?? null, isWritable: true },
     escrow: { value: input.escrow ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
     listing: { value: input.listing ?? null, isWritable: true },
     providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
@@ -425,6 +451,14 @@ export async function getHireFromListingInstructionAsync<
       ),
     });
   }
+  if (!accounts.taskValidationConfig.value) {
+    accounts.taskValidationConfig.value = await findTaskValidationConfigPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
@@ -450,6 +484,7 @@ export async function getHireFromListingInstructionAsync<
       getAccountMeta("task", accounts.task),
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("listing", accounts.listing),
       getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
@@ -472,6 +507,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountTask,
     TAccountEscrow,
     TAccountHireRecord,
+    TAccountTaskValidationConfig,
     TAccountListing,
     TAccountProviderAgent,
     TAccountProtocolConfig,
@@ -491,6 +527,7 @@ export type HireFromListingInput<
   TAccountTask extends string = string,
   TAccountEscrow extends string = string,
   TAccountHireRecord extends string = string,
+  TAccountTaskValidationConfig extends string = string,
   TAccountListing extends string = string,
   TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
@@ -511,6 +548,12 @@ export type HireFromListingInput<
    * without a Task layout change, and snapshots the operator fee terms.
    */
   hireRecord: Address<TAccountHireRecord>;
+  /**
+   * Revision 9 (D): the hire's CreatorReview config, created here (as on the
+   * bare-wallet door) so an agent-door hire never settles on the auto-pay
+   * path; the buying agent's wallet reviews first.
+   */
+  taskValidationConfig: Address<TAccountTaskValidationConfig>;
   /**
    * Standing listing being hired from. Mutable to record the hire
    * (`total_hires`, `updated_at`).
@@ -576,6 +619,7 @@ export type HireFromListingInput<
   taskId: HireFromListingInstructionDataArgs["taskId"];
   expectedPrice: HireFromListingInstructionDataArgs["expectedPrice"];
   expectedVersion: HireFromListingInstructionDataArgs["expectedVersion"];
+  reviewWindowSecs: HireFromListingInstructionDataArgs["reviewWindowSecs"];
   referrer: HireFromListingInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
   moderator: HireFromListingInstructionDataArgs["moderator"];
@@ -586,6 +630,7 @@ export function getHireFromListingInstruction<
   TAccountTask extends string,
   TAccountEscrow extends string,
   TAccountHireRecord extends string,
+  TAccountTaskValidationConfig extends string,
   TAccountListing extends string,
   TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
@@ -604,6 +649,7 @@ export function getHireFromListingInstruction<
     TAccountTask,
     TAccountEscrow,
     TAccountHireRecord,
+    TAccountTaskValidationConfig,
     TAccountListing,
     TAccountProviderAgent,
     TAccountProtocolConfig,
@@ -623,6 +669,7 @@ export function getHireFromListingInstruction<
   TAccountTask,
   TAccountEscrow,
   TAccountHireRecord,
+  TAccountTaskValidationConfig,
   TAccountListing,
   TAccountProviderAgent,
   TAccountProtocolConfig,
@@ -645,6 +692,10 @@ export function getHireFromListingInstruction<
     task: { value: input.task ?? null, isWritable: true },
     escrow: { value: input.escrow ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
     listing: { value: input.listing ?? null, isWritable: true },
     providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
@@ -693,6 +744,7 @@ export function getHireFromListingInstruction<
       getAccountMeta("task", accounts.task),
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("listing", accounts.listing),
       getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
@@ -715,6 +767,7 @@ export function getHireFromListingInstruction<
     TAccountTask,
     TAccountEscrow,
     TAccountHireRecord,
+    TAccountTaskValidationConfig,
     TAccountListing,
     TAccountProviderAgent,
     TAccountProtocolConfig,
@@ -744,23 +797,29 @@ export type ParsedHireFromListingInstruction<
      */
     hireRecord: TAccountMetas[2];
     /**
+     * Revision 9 (D): the hire's CreatorReview config, created here (as on the
+     * bare-wallet door) so an agent-door hire never settles on the auto-pay
+     * path; the buying agent's wallet reviews first.
+     */
+    taskValidationConfig: TAccountMetas[3];
+    /**
      * Standing listing being hired from. Mutable to record the hire
      * (`total_hires`, `updated_at`).
      */
-    listing: TAccountMetas[3];
+    listing: TAccountMetas[4];
     /**
      * Provider identity behind the standing listing. A listing is durable,
      * but a suspended or permanently retired provider must not receive new
      * hires. Existing hires settle independently through their Task/HireRecord.
      */
-    providerAgent: TAccountMetas[4];
-    protocolConfig: TAccountMetas[5];
+    providerAgent: TAccountMetas[5];
+    protocolConfig: TAccountMetas[6];
     /**
      * Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured
      * gate (account absent) makes the hire fail = marketplace halt (spec §6). When
      * `enabled`, a valid `listing_moderation` is required (checked in the handler).
      */
-    moderationConfig: TAccountMetas[6];
+    moderationConfig: TAccountMetas[7];
     /**
      * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
      * P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the
@@ -770,7 +829,7 @@ export type ParsedHireFromListingInstruction<
      * `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.
      *
      */
-    listingModeration?: TAccountMetas[7] | undefined;
+    listingModeration?: TAccountMetas[8] | undefined;
     /**
      * OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire
      * gate when the record was authored by a non-global-authority attestor. The
@@ -781,7 +840,7 @@ export type ParsedHireFromListingInstruction<
      * PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).
      * Only needed for the roster path; the global-authority path passes with `None`.
      */
-    moderationAttestor?: TAccountMetas[8] | undefined;
+    moderationAttestor?: TAccountMetas[9] | undefined;
     /**
      * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.
      * The handler derives `["moderation_block", listing.spec_hash]` itself and
@@ -792,19 +851,19 @@ export type ParsedHireFromListingInstruction<
      *
      * (handler-derived canonical PDA; system-owned/empty = pass).
      */
-    moderationBlock: TAccountMetas[9];
+    moderationBlock: TAccountMetas[10];
     /** Buyer's agent registration for identity/authorization (mirrors create_task). */
-    creatorAgent: TAccountMetas[10];
+    creatorAgent: TAccountMetas[11];
     /** Wallet-scoped task/dispute rate limit state shared across all agents. */
-    authorityRateLimit: TAccountMetas[11];
+    authorityRateLimit: TAccountMetas[12];
     /** The authority that owns the buyer's agent. */
-    authority: TAccountMetas[12];
+    authority: TAccountMetas[13];
     /**
      * The buyer who pays for and owns the hired task.
      * Must match authority to prevent social-engineering attacks (#375).
      */
-    creator: TAccountMetas[13];
-    systemProgram: TAccountMetas[14];
+    creator: TAccountMetas[14];
+    systemProgram: TAccountMetas[15];
   };
   data: HireFromListingInstructionData;
 };
@@ -817,12 +876,12 @@ export function parseHireFromListingInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedHireFromListingInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 15) {
+  if (instruction.accounts.length < 16) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 15,
+        expectedAccountMetas: 16,
       },
     );
   }
@@ -844,6 +903,7 @@ export function parseHireFromListingInstruction<
       task: getNextAccount(),
       escrow: getNextAccount(),
       hireRecord: getNextAccount(),
+      taskValidationConfig: getNextAccount(),
       listing: getNextAccount(),
       providerAgent: getNextAccount(),
       protocolConfig: getNextAccount(),

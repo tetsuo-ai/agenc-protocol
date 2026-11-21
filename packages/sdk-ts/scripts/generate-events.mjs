@@ -12,7 +12,7 @@
 //   - every `idl.events[]` name has a matching struct entry in `idl.types[]`
 //   - event struct fields use ONLY primitives (u8..u128, i8..i128, bool), pubkey,
 //     string, fixed arrays { array: [inner, N] }, { option: inner }, and
-//     { defined: { name } } references to FIELDLESS (C-style) enums — which reuse
+//     { defined: { name } } references to FIELDLESS (C-style) enums, which reuse
 //     the Codama-generated getXDecoder() from ../types (NO data-carrying variants,
 //     NO vecs)
 //
@@ -89,7 +89,7 @@ const PRIMITIVES = {
  * Records required @solana/kit imports on `imports` ({ values: Set, types: Set }).
  *
  * `typesByName` is the IDL `types[]` lookup; it is only consulted for `{ defined }`
- * references, and only fieldless (C-style) enums are supported — those round-trip
+ * references, and only fieldless (C-style) enums are supported; those round-trip
  * through the Codama-generated `getXDecoder()` in `../types`, recorded on
  * `definedImports` so the event file imports the canonical generated codec rather
  * than re-deriving it (single source of truth, drift-safe).
@@ -174,7 +174,7 @@ function mapType(idlType, imports, context, typesByName, definedImports) {
       }
       // Only fieldless (C-style / scalar) enum variants round-trip through the
       // Codama-generated getEnumDecoder. A data-carrying variant would need the
-      // full discriminated-union codec — reject it loudly instead of emitting a
+      // full discriminated-union codec, so reject it loudly instead of emitting a
       // wrong codec.
       const variants = definedType.type.variants ?? [];
       const hasFields = variants.some(
@@ -280,7 +280,7 @@ ${typeFields}
 };
 
 /**
- * Gets the decoder for the {@link ${name}EventData} event payload — the bytes
+ * Gets the decoder for the {@link ${name}EventData} event payload: the bytes
  * AFTER the 8-byte \`${constCase(name)}_EVENT_DISCRIMINATOR\`.
  */
 export function get${name}EventDecoder(): Decoder<${name}EventData> {
@@ -344,7 +344,7 @@ export type AgencEventName = AgencEvent["eventName"];
 export type AgencEventDecoderEntry = {
   readonly eventName: AgencEventName;
   /**
-   * Decodes an event payload — the bytes AFTER the 8-byte discriminator —
+   * Decodes an event payload (the bytes AFTER the 8-byte discriminator)
    * into a tagged {@link AgencEvent}.
    */
   readonly decode: (payload: ReadonlyUint8Array) => AgencEvent;
@@ -447,7 +447,7 @@ export async function generateEvents() {
   }
 
   console.log(
-    `OK — generated ${events.length} event codecs into src/generated/events/`,
+    `OK: generated ${events.length} event codecs into src/generated/events/`,
   );
 }
 

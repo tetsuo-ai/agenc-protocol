@@ -34,7 +34,7 @@ export type TaskCompactedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskCompactedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskCompactedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_COMPACTED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskCompactedEventDecoder(): Decoder<TaskCompactedEventData> {

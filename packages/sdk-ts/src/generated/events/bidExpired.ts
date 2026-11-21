@@ -30,7 +30,7 @@ export type BidExpiredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link BidExpiredEventData} event payload — the bytes
+ * Gets the decoder for the {@link BidExpiredEventData} event payload: the bytes
  * AFTER the 8-byte `BID_EXPIRED_EVENT_DISCRIMINATOR`.
  */
 export function getBidExpiredEventDecoder(): Decoder<BidExpiredEventData> {

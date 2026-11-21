@@ -29,7 +29,7 @@ export type DisputeResolverAssignedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DisputeResolverAssignedEventData} event payload — the bytes
+ * Gets the decoder for the {@link DisputeResolverAssignedEventData} event payload: the bytes
  * AFTER the 8-byte `DISPUTE_RESOLVER_ASSIGNED_EVENT_DISCRIMINATOR`.
  */
 export function getDisputeResolverAssignedEventDecoder(): Decoder<DisputeResolverAssignedEventData> {

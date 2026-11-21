@@ -63,6 +63,7 @@ export type RecordTaskModerationInstruction<
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountRentPayer extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -87,6 +88,10 @@ export type RecordTaskModerationInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountRentPayer extends string
+        ? WritableSignerAccount<TAccountRentPayer> &
+            AccountSignerMeta<TAccountRentPayer>
+        : TAccountRentPayer,
       ...TRemainingAccounts,
     ]
   >;
@@ -161,6 +166,7 @@ export type RecordTaskModerationAsyncInput<
   TAccountTaskModeration extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountRentPayer extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   task: Address<TAccountTask>;
@@ -179,6 +185,8 @@ export type RecordTaskModerationAsyncInput<
    * verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
    * attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
    * written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+   * Revision 9 (C): the rent is paid by `rent_payer` (the task creator or the
+   * moderator), and the record remembers which so the rent goes back to them.
    */
   taskModeration?: Address<TAccountTaskModeration>;
   /**
@@ -192,6 +200,12 @@ export type RecordTaskModerationAsyncInput<
    */
   moderationAttestor?: Address<TAccountModerationAttestor>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Revision 9 (C), appended: pays the record's rent when it is first created.
+   * Must be the task creator or the moderator (`InvalidModerationRentPayer`).
+   * Full surface only; the canary keeps the moderator as the payer.
+   */
+  rentPayer: TransactionSigner<TAccountRentPayer>;
   jobSpecHash: RecordTaskModerationInstructionDataArgs["jobSpecHash"];
   status: RecordTaskModerationInstructionDataArgs["status"];
   riskScore: RecordTaskModerationInstructionDataArgs["riskScore"];
@@ -208,6 +222,7 @@ export async function getRecordTaskModerationInstructionAsync<
   TAccountTaskModeration extends string,
   TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
+  TAccountRentPayer extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RecordTaskModerationAsyncInput<
@@ -216,7 +231,8 @@ export async function getRecordTaskModerationInstructionAsync<
     TAccountModerator,
     TAccountTaskModeration,
     TAccountModerationAttestor,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountRentPayer
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -227,7 +243,8 @@ export async function getRecordTaskModerationInstructionAsync<
     TAccountModerator,
     TAccountTaskModeration,
     TAccountModerationAttestor,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountRentPayer
   >
 > {
   // Program address.
@@ -248,6 +265,7 @@ export async function getRecordTaskModerationInstructionAsync<
       isWritable: false,
     },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    rentPayer: { value: input.rentPayer ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -291,6 +309,7 @@ export async function getRecordTaskModerationInstructionAsync<
       getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("rentPayer", accounts.rentPayer),
     ],
     data: getRecordTaskModerationInstructionDataEncoder().encode(
       args as RecordTaskModerationInstructionDataArgs,
@@ -303,7 +322,8 @@ export async function getRecordTaskModerationInstructionAsync<
     TAccountModerator,
     TAccountTaskModeration,
     TAccountModerationAttestor,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountRentPayer
   >);
 }
 
@@ -314,6 +334,7 @@ export type RecordTaskModerationInput<
   TAccountTaskModeration extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountRentPayer extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   task: Address<TAccountTask>;
@@ -332,6 +353,8 @@ export type RecordTaskModerationInput<
    * verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
    * attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
    * written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+   * Revision 9 (C): the rent is paid by `rent_payer` (the task creator or the
+   * moderator), and the record remembers which so the rent goes back to them.
    */
   taskModeration: Address<TAccountTaskModeration>;
   /**
@@ -345,6 +368,12 @@ export type RecordTaskModerationInput<
    */
   moderationAttestor?: Address<TAccountModerationAttestor>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Revision 9 (C), appended: pays the record's rent when it is first created.
+   * Must be the task creator or the moderator (`InvalidModerationRentPayer`).
+   * Full surface only; the canary keeps the moderator as the payer.
+   */
+  rentPayer: TransactionSigner<TAccountRentPayer>;
   jobSpecHash: RecordTaskModerationInstructionDataArgs["jobSpecHash"];
   status: RecordTaskModerationInstructionDataArgs["status"];
   riskScore: RecordTaskModerationInstructionDataArgs["riskScore"];
@@ -361,6 +390,7 @@ export function getRecordTaskModerationInstruction<
   TAccountTaskModeration extends string,
   TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
+  TAccountRentPayer extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RecordTaskModerationInput<
@@ -369,7 +399,8 @@ export function getRecordTaskModerationInstruction<
     TAccountModerator,
     TAccountTaskModeration,
     TAccountModerationAttestor,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountRentPayer
   >,
   config?: { programAddress?: TProgramAddress },
 ): RecordTaskModerationInstruction<
@@ -379,7 +410,8 @@ export function getRecordTaskModerationInstruction<
   TAccountModerator,
   TAccountTaskModeration,
   TAccountModerationAttestor,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountRentPayer
 > {
   // Program address.
   const programAddress =
@@ -399,6 +431,7 @@ export function getRecordTaskModerationInstruction<
       isWritable: false,
     },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    rentPayer: { value: input.rentPayer ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -423,6 +456,7 @@ export function getRecordTaskModerationInstruction<
       getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("rentPayer", accounts.rentPayer),
     ],
     data: getRecordTaskModerationInstructionDataEncoder().encode(
       args as RecordTaskModerationInstructionDataArgs,
@@ -435,7 +469,8 @@ export function getRecordTaskModerationInstruction<
     TAccountModerator,
     TAccountTaskModeration,
     TAccountModerationAttestor,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountRentPayer
   >);
 }
 
@@ -462,6 +497,8 @@ export type ParsedRecordTaskModerationInstruction<
      * verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
      * attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
      * written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+     * Revision 9 (C): the rent is paid by `rent_payer` (the task creator or the
+     * moderator), and the record remembers which so the rent goes back to them.
      */
     taskModeration: TAccountMetas[3];
     /**
@@ -475,6 +512,12 @@ export type ParsedRecordTaskModerationInstruction<
      */
     moderationAttestor?: TAccountMetas[4] | undefined;
     systemProgram: TAccountMetas[5];
+    /**
+     * Revision 9 (C), appended: pays the record's rent when it is first created.
+     * Must be the task creator or the moderator (`InvalidModerationRentPayer`).
+     * Full surface only; the canary keeps the moderator as the payer.
+     */
+    rentPayer: TAccountMetas[6];
   };
   data: RecordTaskModerationInstructionData;
 };
@@ -487,12 +530,12 @@ export function parseRecordTaskModerationInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRecordTaskModerationInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 6) {
+  if (instruction.accounts.length < 7) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 6,
+        expectedAccountMetas: 7,
       },
     );
   }
@@ -517,6 +560,7 @@ export function parseRecordTaskModerationInstruction<
       taskModeration: getNextAccount(),
       moderationAttestor: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
+      rentPayer: getNextAccount(),
     },
     data: getRecordTaskModerationInstructionDataDecoder().decode(
       instruction.data,

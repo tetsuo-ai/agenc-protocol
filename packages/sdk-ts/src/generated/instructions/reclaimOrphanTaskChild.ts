@@ -124,7 +124,8 @@ export type ReclaimOrphanTaskChildInput<
   child: Address<TAccountChild>;
   /**
    * children, `TaskSubmission` for validation votes) and be a provably
-   * absent system-owned, zero-data account. The field name is ABI-stable.
+   * absent system-owned, zero-data account, or (task-level children only)
+   * the TaskMarker of a compacted task. The field name is ABI-stable.
    */
   parentTask: Address<TAccountParentTask>;
   /** worker AgentRegistration and is fully deserialized/canonically verified. */
@@ -210,7 +211,8 @@ export type ParsedReclaimOrphanTaskChildInstruction<
     child: TAccountMetas[0];
     /**
      * children, `TaskSubmission` for validation votes) and be a provably
-     * absent system-owned, zero-data account. The field name is ABI-stable.
+     * absent system-owned, zero-data account, or (task-level children only)
+     * the TaskMarker of a compacted task. The field name is ABI-stable.
      */
     parentTask: TAccountMetas[1];
     /** worker AgentRegistration and is fully deserialized/canonically verified. */

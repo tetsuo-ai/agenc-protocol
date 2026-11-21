@@ -37,7 +37,7 @@ export type ReferrerFeePaidEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReferrerFeePaidEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReferrerFeePaidEventData} event payload: the bytes
  * AFTER the 8-byte `REFERRER_FEE_PAID_EVENT_DISCRIMINATOR`.
  */
 export function getReferrerFeePaidEventDecoder(): Decoder<ReferrerFeePaidEventData> {

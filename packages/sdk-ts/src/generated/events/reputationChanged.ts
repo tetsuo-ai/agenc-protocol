@@ -31,7 +31,7 @@ export type ReputationChangedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReputationChangedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReputationChangedEventData} event payload: the bytes
  * AFTER the 8-byte `REPUTATION_CHANGED_EVENT_DISCRIMINATOR`.
  */
 export function getReputationChangedEventDecoder(): Decoder<ReputationChangedEventData> {

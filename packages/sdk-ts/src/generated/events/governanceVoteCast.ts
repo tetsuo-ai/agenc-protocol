@@ -32,7 +32,7 @@ export type GovernanceVoteCastEventData = {
 };
 
 /**
- * Gets the decoder for the {@link GovernanceVoteCastEventData} event payload — the bytes
+ * Gets the decoder for the {@link GovernanceVoteCastEventData} event payload: the bytes
  * AFTER the 8-byte `GOVERNANCE_VOTE_CAST_EVENT_DISCRIMINATOR`.
  */
 export function getGovernanceVoteCastEventDecoder(): Decoder<GovernanceVoteCastEventData> {

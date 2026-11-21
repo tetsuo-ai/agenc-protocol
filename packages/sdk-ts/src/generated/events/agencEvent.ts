@@ -612,7 +612,7 @@ export type AgencEventName = AgencEvent["eventName"];
 export type AgencEventDecoderEntry = {
   readonly eventName: AgencEventName;
   /**
-   * Decodes an event payload — the bytes AFTER the 8-byte discriminator —
+   * Decodes an event payload (the bytes AFTER the 8-byte discriminator)
    * into a tagged {@link AgencEvent}.
    */
   readonly decode: (payload: ReadonlyUint8Array) => AgencEvent;

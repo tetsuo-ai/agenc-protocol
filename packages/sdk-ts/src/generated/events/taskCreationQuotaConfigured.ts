@@ -29,7 +29,7 @@ export type TaskCreationQuotaConfiguredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskCreationQuotaConfiguredEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskCreationQuotaConfiguredEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_CREATION_QUOTA_CONFIGURED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskCreationQuotaConfiguredEventDecoder(): Decoder<TaskCreationQuotaConfiguredEventData> {

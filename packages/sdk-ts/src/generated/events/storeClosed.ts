@@ -39,7 +39,7 @@ export type StoreClosedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link StoreClosedEventData} event payload — the bytes
+ * Gets the decoder for the {@link StoreClosedEventData} event payload: the bytes
  * AFTER the 8-byte `STORE_CLOSED_EVENT_DISCRIMINATOR`.
  */
 export function getStoreClosedEventDecoder(): Decoder<StoreClosedEventData> {

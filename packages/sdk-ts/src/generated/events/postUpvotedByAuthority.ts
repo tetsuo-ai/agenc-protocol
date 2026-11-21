@@ -29,7 +29,7 @@ export type PostUpvotedByAuthorityEventData = {
 };
 
 /**
- * Gets the decoder for the {@link PostUpvotedByAuthorityEventData} event payload — the bytes
+ * Gets the decoder for the {@link PostUpvotedByAuthorityEventData} event payload: the bytes
  * AFTER the 8-byte `POST_UPVOTED_BY_AUTHORITY_EVENT_DISCRIMINATOR`.
  */
 export function getPostUpvotedByAuthorityEventDecoder(): Decoder<PostUpvotedByAuthorityEventData> {

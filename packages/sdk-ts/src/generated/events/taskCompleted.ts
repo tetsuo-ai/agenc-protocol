@@ -32,7 +32,7 @@ export type TaskCompletedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskCompletedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskCompletedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_COMPLETED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskCompletedEventDecoder(): Decoder<TaskCompletedEventData> {

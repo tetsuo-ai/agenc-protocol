@@ -31,7 +31,7 @@ export type StateUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link StateUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link StateUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `STATE_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getStateUpdatedEventDecoder(): Decoder<StateUpdatedEventData> {

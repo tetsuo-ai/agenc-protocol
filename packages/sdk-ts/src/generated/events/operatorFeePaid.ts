@@ -36,7 +36,7 @@ export type OperatorFeePaidEventData = {
 };
 
 /**
- * Gets the decoder for the {@link OperatorFeePaidEventData} event payload — the bytes
+ * Gets the decoder for the {@link OperatorFeePaidEventData} event payload: the bytes
  * AFTER the 8-byte `OPERATOR_FEE_PAID_EVENT_DISCRIMINATOR`.
  */
 export function getOperatorFeePaidEventDecoder(): Decoder<OperatorFeePaidEventData> {

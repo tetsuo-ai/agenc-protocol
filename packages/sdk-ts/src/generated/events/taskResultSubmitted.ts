@@ -34,7 +34,7 @@ export type TaskResultSubmittedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskResultSubmittedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskResultSubmittedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_RESULT_SUBMITTED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskResultSubmittedEventDecoder(): Decoder<TaskResultSubmittedEventData> {

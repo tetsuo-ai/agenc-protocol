@@ -38,7 +38,7 @@ export type TaskClosedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskClosedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskClosedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_CLOSED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskClosedEventDecoder(): Decoder<TaskClosedEventData> {

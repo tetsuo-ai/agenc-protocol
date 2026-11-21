@@ -27,7 +27,7 @@ export type TreasuryUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TreasuryUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TreasuryUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `TREASURY_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getTreasuryUpdatedEventDecoder(): Decoder<TreasuryUpdatedEventData> {

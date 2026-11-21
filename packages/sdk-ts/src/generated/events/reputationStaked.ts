@@ -29,7 +29,7 @@ export type ReputationStakedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReputationStakedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReputationStakedEventData} event payload: the bytes
  * AFTER the 8-byte `REPUTATION_STAKED_EVENT_DISCRIMINATOR`.
  */
 export function getReputationStakedEventDecoder(): Decoder<ReputationStakedEventData> {

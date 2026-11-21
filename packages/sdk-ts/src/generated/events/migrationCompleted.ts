@@ -28,7 +28,7 @@ export type MigrationCompletedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link MigrationCompletedEventData} event payload — the bytes
+ * Gets the decoder for the {@link MigrationCompletedEventData} event payload: the bytes
  * AFTER the 8-byte `MIGRATION_COMPLETED_EVENT_DISCRIMINATOR`.
  */
 export function getMigrationCompletedEventDecoder(): Decoder<MigrationCompletedEventData> {

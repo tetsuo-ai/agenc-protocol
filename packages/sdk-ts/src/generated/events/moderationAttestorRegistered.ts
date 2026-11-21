@@ -30,7 +30,7 @@ export type ModerationAttestorRegisteredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ModerationAttestorRegisteredEventData} event payload — the bytes
+ * Gets the decoder for the {@link ModerationAttestorRegisteredEventData} event payload: the bytes
  * AFTER the 8-byte `MODERATION_ATTESTOR_REGISTERED_EVENT_DISCRIMINATOR`.
  */
 export function getModerationAttestorRegisteredEventDecoder(): Decoder<ModerationAttestorRegisteredEventData> {

@@ -29,7 +29,7 @@ export type DisputeCancelledEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DisputeCancelledEventData} event payload — the bytes
+ * Gets the decoder for the {@link DisputeCancelledEventData} event payload: the bytes
  * AFTER the 8-byte `DISPUTE_CANCELLED_EVENT_DISCRIMINATOR`.
  */
 export function getDisputeCancelledEventDecoder(): Decoder<DisputeCancelledEventData> {

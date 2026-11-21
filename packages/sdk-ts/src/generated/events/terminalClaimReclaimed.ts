@@ -46,7 +46,7 @@ export type TerminalClaimReclaimedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TerminalClaimReclaimedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TerminalClaimReclaimedEventData} event payload: the bytes
  * AFTER the 8-byte `TERMINAL_CLAIM_RECLAIMED_EVENT_DISCRIMINATOR`.
  */
 export function getTerminalClaimReclaimedEventDecoder(): Decoder<TerminalClaimReclaimedEventData> {

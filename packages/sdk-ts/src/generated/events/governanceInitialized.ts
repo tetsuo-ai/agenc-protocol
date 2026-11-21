@@ -30,7 +30,7 @@ export type GovernanceInitializedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link GovernanceInitializedEventData} event payload — the bytes
+ * Gets the decoder for the {@link GovernanceInitializedEventData} event payload: the bytes
  * AFTER the 8-byte `GOVERNANCE_INITIALIZED_EVENT_DISCRIMINATOR`.
  */
 export function getGovernanceInitializedEventDecoder(): Decoder<GovernanceInitializedEventData> {

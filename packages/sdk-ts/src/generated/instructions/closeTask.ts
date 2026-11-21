@@ -38,6 +38,7 @@ import {
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
 import {
+  findCancelTaskCreatorCompletionBondPda,
   findEscrowPda,
   findHireRecordPda,
   findProtocolConfigPda,
@@ -141,6 +142,13 @@ export type CloseTaskAsyncInput<
   TAccountAuthority extends string = string,
   TAccountProtocolConfig extends string = string,
 > = {
+  /**
+   * The task PDA `["task", creator, task_id]`: a terminal Task (closed and
+   * compacted by this call) or the TaskMarker an earlier close left there.
+   * It is loaded by hand in the handler (`load_task_or_marker`): owner,
+   * discriminator, the Task's canonical PDA with its stored bump, and
+   * creator == authority are all checked before anything moves.
+   */
   task: Address<TAccountTask>;
   /**
    * Optional leftover job-spec pointer for this task. When provided it is closed
@@ -149,11 +157,13 @@ export type CloseTaskAsyncInput<
    */
   taskJobSpec?: Address<TAccountTaskJobSpec>;
   /**
-   * Optional already-settled escrow PDA. `resolve_dispute` can leave a token
-   * task's state escrow open after draining it and setting `is_closed = true`;
-   * provide it here to reclaim its rent. A pending token reserve is still marked
-   * open and is rejected until its slash finalizer runs. Bound to this task by
-   * seeds + constraint.
+   * Optional escrow PDA. `resolve_dispute` can leave a token task's state
+   * escrow open after draining it and setting `is_closed = true`; provide it
+   * here to reclaim its rent. A pending token reserve is still marked open and
+   * is rejected until its slash finalizer runs. A token-reward task must pass
+   * this address to be compacted; an empty address proves the escrow is gone.
+   * A program-owned account must deserialize as this task's closed
+   * `TaskEscrow`; anything else must be an empty system account.
    */
   escrow?: Address<TAccountEscrow>;
   /**
@@ -171,12 +181,13 @@ export type CloseTaskAsyncInput<
   listing?: Address<TAccountListing>;
   /**
    * Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
-   * REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
-   * (which reclaim_completion_bond needs) can never be destroyed out from under an
-   * unsettled creator bond. The party is the creator, so this PDA is canonically
-   * derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+   * REFUSES to compact the Task while this is a live program-owned bond, so a
+   * bond's parent can never be compacted out from under an unsettled creator
+   * bond. The party is the creator, and the handler requires
+   * `creator == authority`, so the seeds use the signer. For an already-settled
+   * / un-bonded task it is an empty system PDA.
    */
-  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   /**
    * Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot
    * canonically pin this (the worker authority is not recorded on the Task after the
@@ -188,7 +199,10 @@ export type CloseTaskAsyncInput<
    * path. CHECK: liveness checked in the handler when present.
    */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
-  /** Task creator; receives child rent and any Task balance above rent minimum. */
+  /**
+   * Task creator; receives child rent and every Task lamport above the
+   * marker's rent minimum.
+   */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Protocol config (fix round, FIX 5) — supplies the canonical treasury
@@ -290,6 +304,19 @@ export async function getCloseTaskInstructionAsync<
       ),
     });
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value =
+      await findCancelTaskCreatorCompletionBondPda({
+        task: getAddressFromResolvedInstructionAccount(
+          "task",
+          accounts.task.value,
+        ),
+        authority: getAddressFromResolvedInstructionAccount(
+          "authority",
+          accounts.authority.value,
+        ),
+      });
+  }
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
@@ -334,6 +361,13 @@ export type CloseTaskInput<
   TAccountAuthority extends string = string,
   TAccountProtocolConfig extends string = string,
 > = {
+  /**
+   * The task PDA `["task", creator, task_id]`: a terminal Task (closed and
+   * compacted by this call) or the TaskMarker an earlier close left there.
+   * It is loaded by hand in the handler (`load_task_or_marker`): owner,
+   * discriminator, the Task's canonical PDA with its stored bump, and
+   * creator == authority are all checked before anything moves.
+   */
   task: Address<TAccountTask>;
   /**
    * Optional leftover job-spec pointer for this task. When provided it is closed
@@ -342,11 +376,13 @@ export type CloseTaskInput<
    */
   taskJobSpec?: Address<TAccountTaskJobSpec>;
   /**
-   * Optional already-settled escrow PDA. `resolve_dispute` can leave a token
-   * task's state escrow open after draining it and setting `is_closed = true`;
-   * provide it here to reclaim its rent. A pending token reserve is still marked
-   * open and is rejected until its slash finalizer runs. Bound to this task by
-   * seeds + constraint.
+   * Optional escrow PDA. `resolve_dispute` can leave a token task's state
+   * escrow open after draining it and setting `is_closed = true`; provide it
+   * here to reclaim its rent. A pending token reserve is still marked open and
+   * is rejected until its slash finalizer runs. A token-reward task must pass
+   * this address to be compacted; an empty address proves the escrow is gone.
+   * A program-owned account must deserialize as this task's closed
+   * `TaskEscrow`; anything else must be an empty system account.
    */
   escrow?: Address<TAccountEscrow>;
   /**
@@ -364,10 +400,11 @@ export type CloseTaskInput<
   listing?: Address<TAccountListing>;
   /**
    * Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
-   * REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
-   * (which reclaim_completion_bond needs) can never be destroyed out from under an
-   * unsettled creator bond. The party is the creator, so this PDA is canonically
-   * derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+   * REFUSES to compact the Task while this is a live program-owned bond, so a
+   * bond's parent can never be compacted out from under an unsettled creator
+   * bond. The party is the creator, and the handler requires
+   * `creator == authority`, so the seeds use the signer. For an already-settled
+   * / un-bonded task it is an empty system PDA.
    */
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   /**
@@ -381,7 +418,10 @@ export type CloseTaskInput<
    * path. CHECK: liveness checked in the handler when present.
    */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
-  /** Task creator; receives child rent and any Task balance above rent minimum. */
+  /**
+   * Task creator; receives child rent and every Task lamport above the
+   * marker's rent minimum.
+   */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Protocol config (fix round, FIX 5) — supplies the canonical treasury
@@ -491,6 +531,13 @@ export type ParsedCloseTaskInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
+    /**
+     * The task PDA `["task", creator, task_id]`: a terminal Task (closed and
+     * compacted by this call) or the TaskMarker an earlier close left there.
+     * It is loaded by hand in the handler (`load_task_or_marker`): owner,
+     * discriminator, the Task's canonical PDA with its stored bump, and
+     * creator == authority are all checked before anything moves.
+     */
     task: TAccountMetas[0];
     /**
      * Optional leftover job-spec pointer for this task. When provided it is closed
@@ -499,11 +546,13 @@ export type ParsedCloseTaskInstruction<
      */
     taskJobSpec?: TAccountMetas[1] | undefined;
     /**
-     * Optional already-settled escrow PDA. `resolve_dispute` can leave a token
-     * task's state escrow open after draining it and setting `is_closed = true`;
-     * provide it here to reclaim its rent. A pending token reserve is still marked
-     * open and is rejected until its slash finalizer runs. Bound to this task by
-     * seeds + constraint.
+     * Optional escrow PDA. `resolve_dispute` can leave a token task's state
+     * escrow open after draining it and setting `is_closed = true`; provide it
+     * here to reclaim its rent. A pending token reserve is still marked open and
+     * is rejected until its slash finalizer runs. A token-reward task must pass
+     * this address to be compacted; an empty address proves the escrow is gone.
+     * A program-owned account must deserialize as this task's closed
+     * `TaskEscrow`; anything else must be an empty system account.
      */
     escrow?: TAccountMetas[2] | undefined;
     /**
@@ -521,10 +570,11 @@ export type ParsedCloseTaskInstruction<
     listing?: TAccountMetas[4] | undefined;
     /**
      * Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
-     * REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
-     * (which reclaim_completion_bond needs) can never be destroyed out from under an
-     * unsettled creator bond. The party is the creator, so this PDA is canonically
-     * derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+     * REFUSES to compact the Task while this is a live program-owned bond, so a
+     * bond's parent can never be compacted out from under an unsettled creator
+     * bond. The party is the creator, and the handler requires
+     * `creator == authority`, so the seeds use the signer. For an already-settled
+     * / un-bonded task it is an empty system PDA.
      */
     creatorCompletionBond: TAccountMetas[5];
     /**
@@ -538,7 +588,10 @@ export type ParsedCloseTaskInstruction<
      * path. CHECK: liveness checked in the handler when present.
      */
     workerCompletionBond?: TAccountMetas[6] | undefined;
-    /** Task creator; receives child rent and any Task balance above rent minimum. */
+    /**
+     * Task creator; receives child rent and every Task lamport above the
+     * marker's rent minimum.
+     */
     authority: TAccountMetas[7];
     /**
      * Protocol config (fix round, FIX 5) — supplies the canonical treasury

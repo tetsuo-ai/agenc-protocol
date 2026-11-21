@@ -29,7 +29,7 @@ export type TaskChangesRequestedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskChangesRequestedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskChangesRequestedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_CHANGES_REQUESTED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskChangesRequestedEventDecoder(): Decoder<TaskChangesRequestedEventData> {

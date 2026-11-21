@@ -45,7 +45,7 @@ export type ListingRatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ListingRatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ListingRatedEventData} event payload: the bytes
  * AFTER the 8-byte `LISTING_RATED_EVENT_DISCRIMINATOR`.
  */
 export function getListingRatedEventDecoder(): Decoder<ListingRatedEventData> {

@@ -30,7 +30,7 @@ export type ProtocolInitializedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ProtocolInitializedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ProtocolInitializedEventData} event payload: the bytes
  * AFTER the 8-byte `PROTOCOL_INITIALIZED_EVENT_DISCRIMINATOR`.
  */
 export function getProtocolInitializedEventDecoder(): Decoder<ProtocolInitializedEventData> {

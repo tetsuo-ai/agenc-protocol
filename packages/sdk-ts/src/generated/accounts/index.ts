@@ -50,6 +50,7 @@ export * from "./taskBidBook";
 export * from "./taskClaim";
 export * from "./taskEscrow";
 export * from "./taskJobSpec";
+export * from "./taskMarker";
 export * from "./taskModeration";
 export * from "./taskSubmission";
 export * from "./taskValidationConfig";

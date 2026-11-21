@@ -36,7 +36,7 @@ export type SkillRegisteredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link SkillRegisteredEventData} event payload — the bytes
+ * Gets the decoder for the {@link SkillRegisteredEventData} event payload: the bytes
  * AFTER the 8-byte `SKILL_REGISTERED_EVENT_DISCRIMINATOR`.
  */
 export function getSkillRegisteredEventDecoder(): Decoder<SkillRegisteredEventData> {

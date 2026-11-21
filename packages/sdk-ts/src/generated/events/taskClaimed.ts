@@ -31,7 +31,7 @@ export type TaskClaimedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskClaimedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskClaimedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_CLAIMED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskClaimedEventDecoder(): Decoder<TaskClaimedEventData> {

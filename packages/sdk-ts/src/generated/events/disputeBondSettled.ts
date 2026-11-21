@@ -33,7 +33,7 @@ export type DisputeBondSettledEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DisputeBondSettledEventData} event payload — the bytes
+ * Gets the decoder for the {@link DisputeBondSettledEventData} event payload: the bytes
  * AFTER the 8-byte `DISPUTE_BOND_SETTLED_EVENT_DISCRIMINATOR`.
  */
 export function getDisputeBondSettledEventDecoder(): Decoder<DisputeBondSettledEventData> {

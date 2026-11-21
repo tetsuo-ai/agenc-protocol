@@ -34,7 +34,7 @@ export type ListingModerationRecordedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ListingModerationRecordedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ListingModerationRecordedEventData} event payload: the bytes
  * AFTER the 8-byte `LISTING_MODERATION_RECORDED_EVENT_DISCRIMINATOR`.
  */
 export function getListingModerationRecordedEventDecoder(): Decoder<ListingModerationRecordedEventData> {

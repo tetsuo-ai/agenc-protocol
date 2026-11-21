@@ -28,7 +28,7 @@ export type ProtocolFeeUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ProtocolFeeUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ProtocolFeeUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `PROTOCOL_FEE_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getProtocolFeeUpdatedEventDecoder(): Decoder<ProtocolFeeUpdatedEventData> {

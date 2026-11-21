@@ -29,7 +29,7 @@ export type ClaimDepositPostedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ClaimDepositPostedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ClaimDepositPostedEventData} event payload: the bytes
  * AFTER the 8-byte `CLAIM_DEPOSIT_POSTED_EVENT_DISCRIMINATOR`.
  */
 export function getClaimDepositPostedEventDecoder(): Decoder<ClaimDepositPostedEventData> {

@@ -57,6 +57,7 @@ export type SettleDisputeClaimInstruction<
   TAccountTaskSubmission extends string | AccountMeta<string> = string,
   TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountWorkerAuthority extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -87,6 +88,9 @@ export type SettleDisputeClaimInstruction<
         ? ReadonlySignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountWorkerAuthority extends string
+        ? WritableAccount<TAccountWorkerAuthority>
+        : TAccountWorkerAuthority,
       ...TRemainingAccounts,
     ]
   >;
@@ -134,6 +138,7 @@ export type SettleDisputeClaimAsyncInput<
   TAccountTaskSubmission extends string = string,
   TAccountTaskValidationConfig extends string = string,
   TAccountAuthority extends string = string,
+  TAccountWorkerAuthority extends string = string,
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
   dispute: Address<TAccountDispute>;
@@ -143,7 +148,7 @@ export type SettleDisputeClaimAsyncInput<
    * validation in the handler (identical to the retired monolithic path).
    */
   claim: Address<TAccountClaim>;
-  /** the shared bundle validation; receives the closed claim's rent. */
+  /** the shared bundle validation; its active task count drops by one. */
   worker: Address<TAccountWorker>;
   /**
    * swept with counter conservation; the exact empty system-owned PDA
@@ -152,6 +157,13 @@ export type SettleDisputeClaimAsyncInput<
   taskSubmission: Address<TAccountTaskSubmission>;
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Revision 9 (review R1-4): the peer's wallet, the `authority` stored in
+   * its AgentRegistration. The closed claim's whole balance (rent and any
+   * deposit) and the peer's submission rent go to it, as on every other
+   * claim close.
+   */
+  workerAuthority: Address<TAccountWorkerAuthority>;
 };
 
 export async function getSettleDisputeClaimInstructionAsync<
@@ -163,6 +175,7 @@ export async function getSettleDisputeClaimInstructionAsync<
   TAccountTaskSubmission extends string,
   TAccountTaskValidationConfig extends string,
   TAccountAuthority extends string,
+  TAccountWorkerAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: SettleDisputeClaimAsyncInput<
@@ -173,7 +186,8 @@ export async function getSettleDisputeClaimInstructionAsync<
     TAccountWorker,
     TAccountTaskSubmission,
     TAccountTaskValidationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountWorkerAuthority
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -186,7 +200,8 @@ export async function getSettleDisputeClaimInstructionAsync<
     TAccountWorker,
     TAccountTaskSubmission,
     TAccountTaskValidationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountWorkerAuthority
   >
 > {
   // Program address.
@@ -206,6 +221,7 @@ export async function getSettleDisputeClaimInstructionAsync<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: false },
+    workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -236,6 +252,7 @@ export async function getSettleDisputeClaimInstructionAsync<
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("workerAuthority", accounts.workerAuthority),
     ],
     data: getSettleDisputeClaimInstructionDataEncoder().encode({}),
     programAddress,
@@ -248,7 +265,8 @@ export async function getSettleDisputeClaimInstructionAsync<
     TAccountWorker,
     TAccountTaskSubmission,
     TAccountTaskValidationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountWorkerAuthority
   >);
 }
 
@@ -261,6 +279,7 @@ export type SettleDisputeClaimInput<
   TAccountTaskSubmission extends string = string,
   TAccountTaskValidationConfig extends string = string,
   TAccountAuthority extends string = string,
+  TAccountWorkerAuthority extends string = string,
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
   dispute: Address<TAccountDispute>;
@@ -270,7 +289,7 @@ export type SettleDisputeClaimInput<
    * validation in the handler (identical to the retired monolithic path).
    */
   claim: Address<TAccountClaim>;
-  /** the shared bundle validation; receives the closed claim's rent. */
+  /** the shared bundle validation; its active task count drops by one. */
   worker: Address<TAccountWorker>;
   /**
    * swept with counter conservation; the exact empty system-owned PDA
@@ -279,6 +298,13 @@ export type SettleDisputeClaimInput<
   taskSubmission: Address<TAccountTaskSubmission>;
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Revision 9 (review R1-4): the peer's wallet, the `authority` stored in
+   * its AgentRegistration. The closed claim's whole balance (rent and any
+   * deposit) and the peer's submission rent go to it, as on every other
+   * claim close.
+   */
+  workerAuthority: Address<TAccountWorkerAuthority>;
 };
 
 export function getSettleDisputeClaimInstruction<
@@ -290,6 +316,7 @@ export function getSettleDisputeClaimInstruction<
   TAccountTaskSubmission extends string,
   TAccountTaskValidationConfig extends string,
   TAccountAuthority extends string,
+  TAccountWorkerAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: SettleDisputeClaimInput<
@@ -300,7 +327,8 @@ export function getSettleDisputeClaimInstruction<
     TAccountWorker,
     TAccountTaskSubmission,
     TAccountTaskValidationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountWorkerAuthority
   >,
   config?: { programAddress?: TProgramAddress },
 ): SettleDisputeClaimInstruction<
@@ -312,7 +340,8 @@ export function getSettleDisputeClaimInstruction<
   TAccountWorker,
   TAccountTaskSubmission,
   TAccountTaskValidationConfig,
-  TAccountAuthority
+  TAccountAuthority,
+  TAccountWorkerAuthority
 > {
   // Program address.
   const programAddress =
@@ -331,6 +360,7 @@ export function getSettleDisputeClaimInstruction<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: false },
+    workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -348,6 +378,7 @@ export function getSettleDisputeClaimInstruction<
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("workerAuthority", accounts.workerAuthority),
     ],
     data: getSettleDisputeClaimInstructionDataEncoder().encode({}),
     programAddress,
@@ -360,7 +391,8 @@ export function getSettleDisputeClaimInstruction<
     TAccountWorker,
     TAccountTaskSubmission,
     TAccountTaskValidationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountWorkerAuthority
   >);
 }
 
@@ -378,7 +410,7 @@ export type ParsedSettleDisputeClaimInstruction<
      * validation in the handler (identical to the retired monolithic path).
      */
     claim: TAccountMetas[3];
-    /** the shared bundle validation; receives the closed claim's rent. */
+    /** the shared bundle validation; its active task count drops by one. */
     worker: TAccountMetas[4];
     /**
      * swept with counter conservation; the exact empty system-owned PDA
@@ -387,6 +419,13 @@ export type ParsedSettleDisputeClaimInstruction<
     taskSubmission: TAccountMetas[5];
     taskValidationConfig?: TAccountMetas[6] | undefined;
     authority: TAccountMetas[7];
+    /**
+     * Revision 9 (review R1-4): the peer's wallet, the `authority` stored in
+     * its AgentRegistration. The closed claim's whole balance (rent and any
+     * deposit) and the peer's submission rent go to it, as on every other
+     * claim close.
+     */
+    workerAuthority: TAccountMetas[8];
   };
   data: SettleDisputeClaimInstructionData;
 };
@@ -399,12 +438,12 @@ export function parseSettleDisputeClaimInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedSettleDisputeClaimInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 8) {
+  if (instruction.accounts.length < 9) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 8,
+        expectedAccountMetas: 9,
       },
     );
   }
@@ -431,6 +470,7 @@ export function parseSettleDisputeClaimInstruction<
       taskSubmission: getNextAccount(),
       taskValidationConfig: getNextOptionalAccount(),
       authority: getNextAccount(),
+      workerAuthority: getNextAccount(),
     },
     data: getSettleDisputeClaimInstructionDataDecoder().decode(
       instruction.data,

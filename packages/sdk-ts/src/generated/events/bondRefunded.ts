@@ -30,7 +30,7 @@ export type BondRefundedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link BondRefundedEventData} event payload — the bytes
+ * Gets the decoder for the {@link BondRefundedEventData} event payload: the bytes
  * AFTER the 8-byte `BOND_REFUNDED_EVENT_DISCRIMINATOR`.
  */
 export function getBondRefundedEventDecoder(): Decoder<BondRefundedEventData> {
