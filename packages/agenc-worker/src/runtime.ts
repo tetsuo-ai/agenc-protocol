@@ -23,6 +23,7 @@ import {
   findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
+  findWorkerStatsPda,
   getAgentRegistrationDecoder,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
@@ -44,6 +45,7 @@ import {
   type Task,
   type TaskClaim,
   type TaskSubmission,
+  values,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { AccountInfoReader } from "./account-reader.js";
 import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
@@ -87,7 +89,12 @@ import {
   type WorkerState,
 } from "./state.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
-import { clusterNowSeconds, runUpkeep, type UpkeepMemory } from "./upkeep.js";
+import {
+  clusterNowSeconds,
+  runUpkeep,
+  sendReleaseClaim,
+  type UpkeepMemory,
+} from "./upkeep.js";
 
 /** One structured log event (a JSON line in the CLI). */
 export type WorkerLogEvent = { event: string } & Record<string, unknown>;
@@ -136,6 +143,12 @@ export type WorkerRuntimeConfig = Pick<
    * {@link DEFAULT_MAX_FETCH_WAIT_MS}.
    */
   maxFetchWaitMs?: number;
+  /**
+   * Operator policy, off by default: dispute a buyer's turn-down of this
+   * worker's delivery inside the dispute window, posting the bond. See
+   * `collectTurnDowns`.
+   */
+  disputeTurnDowns?: boolean;
 };
 
 /** A job is tried at most this many times before it is given up. */
@@ -247,16 +260,29 @@ const DEFAULT_ADDRESS = address("11111111111111111111111111111111");
 export const AGENT_ACCOUNT_SIZE = 566;
 export const CLAIM_ACCOUNT_SIZE = 203;
 export const SUBMISSION_ACCOUNT_SIZE = 273;
+/** The worker's revision 9 record (`AgentStats`), created at its first claim. */
+export const AGENT_STATS_ACCOUNT_SIZE = 121;
 
 // Snapshot estimates retained for backward-compatible planning APIs. Runtime
 // funding safety uses live getMinimumBalanceForRentExemption values instead.
 export const AGENT_ACCOUNT_RENT_LAMPORTS = 4_830_240n;
 export const CLAIM_ACCOUNT_RENT_LAMPORTS = 2_303_760n;
 export const SUBMISSION_ACCOUNT_RENT_LAMPORTS = 2_790_960n;
+export const AGENT_STATS_RENT_LAMPORTS = 1_733_040n;
 /** Headroom for transaction fees across the register→claim→submit flow. */
 export const FEE_HEADROOM_LAMPORTS = 1_000_000n;
 /** Refundable deposit charged by the program for a contest-task claim. */
 export const CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000n;
+/**
+ * Deposit budgeted for a claim when the task is not known yet: the larger of
+ * the contest entry deposit and the revision 9 claim deposit floor (0.005
+ * SOL). A task priced above 0.1 SOL needs more (10% of the worker's share);
+ * the gate right before a claim charges that task's exact deposit.
+ */
+export const DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS =
+  CONTEST_ENTRY_DEPOSIT_LAMPORTS > values.MIN_CLAIM_DEPOSIT_LAMPORTS
+    ? CONTEST_ENTRY_DEPOSIT_LAMPORTS
+    : values.MIN_CLAIM_DEPOSIT_LAMPORTS;
 
 // A recent blockhash can remain valid for roughly 60-90 seconds. When claim
 // broadcast returns an ambiguous transport error, wait beyond that window
@@ -287,14 +313,17 @@ export async function readMinAgentStake(
 /**
  * Lamports a fresh wallet needs before its FIRST transaction: the live
  * registration stake + agent-account rent + one task's claim + submission
- * rents + the refundable contest-entry deposit + fee headroom (~0.031 SOL on
- * mainnet with the live 0.01 SOL stake). The worker can claim contest tasks, so
- * fresh-wallet safety must budget the worst-case first claim.
+ * rents + the worker's own record (created at its first claim, kept) + a
+ * claim deposit (the larger of the contest entry deposit and the revision 9
+ * floor; it comes back on delivery) + fee headroom (~0.033 SOL on mainnet
+ * with the live 0.01 SOL stake).
  */
 export type WorkerAccountRentMinimums = {
   agent: bigint;
   claim: bigint;
   submission: bigint;
+  /** Rent of the worker's record; the snapshot estimate is used when omitted. */
+  agentStats?: bigint;
 };
 
 /** Live rents the worker must retain before starting another task. */
@@ -329,33 +358,62 @@ export async function readClaimAccountRentMinimums(
 export async function readWorkerAccountRentMinimums(
   getMinimumBalanceForRentExemption: (space: number) => Promise<bigint>,
 ): Promise<WorkerAccountRentMinimums> {
-  const [agentValue, recurring] = await Promise.all([
+  const [agentValue, statsValue, recurring] = await Promise.all([
     getMinimumBalanceForRentExemption(AGENT_ACCOUNT_SIZE),
+    getMinimumBalanceForRentExemption(AGENT_STATS_ACCOUNT_SIZE),
     readClaimAccountRentMinimums(getMinimumBalanceForRentExemption),
   ]);
   return {
     agent: validateRentMinimum("agent", agentValue),
+    agentStats: validateRentMinimum("worker record", statsValue),
     ...recurring,
   };
 }
 
+/** What a claim of one particular task adds to the claim and submission rents. */
+export type ClaimFundingExtras = {
+  /**
+   * The task's claim deposit (`values.claimDepositForTask`, or the contest
+   * entry deposit for a contest). Defaults to
+   * {@link DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS}, for a task not known yet.
+   */
+  depositLamports?: bigint;
+  /** The worker record's rent when it does not exist yet (a first claim). */
+  recordRentLamports?: bigint;
+};
+
 /**
- * Live balance required immediately before a fresh claim. The contest deposit
- * is included for every task because discovery can surface contest work and a
- * recurring worker must be funded for the worst claim shape it can accept.
+ * Live balance required immediately before a fresh claim: claim and
+ * submission rents, the claim deposit, the worker record's rent on a first
+ * claim, and fee headroom. The deposit comes back on the first delivery; it
+ * goes to the buyer if the claim ends without one after its expiry.
  */
 export function claimFundingRequirement(
   rents: ClaimAccountRentMinimums = {
     claim: CLAIM_ACCOUNT_RENT_LAMPORTS,
     submission: SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   },
+  extras: ClaimFundingExtras = {},
 ): bigint {
   return (
     rents.claim +
     rents.submission +
-    CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+    (extras.depositLamports ?? DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS) +
+    (extras.recordRentLamports ?? 0n) +
     FEE_HEADROOM_LAMPORTS
   );
+}
+
+/**
+ * The deposit a claim of `task` puts down: the contest entry deposit for a
+ * contest task, otherwise 10% of the worker's share with the 0.005 SOL floor.
+ */
+export function claimDepositFor(task: Task): bigint {
+  const contest =
+    (task.reserved[0] ?? 0) >= 1 && task.taskType === TaskType.Competitive;
+  return contest
+    ? CONTEST_ENTRY_DEPOSIT_LAMPORTS
+    : values.claimDepositForTask(task);
 }
 
 export function registrationFundingRequirement(
@@ -371,12 +429,17 @@ export function registrationFundingRequirement(
     rents.agent +
     rents.claim +
     rents.submission +
-    CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+    (rents.agentStats ?? AGENT_STATS_RENT_LAMPORTS) +
+    DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS +
     FEE_HEADROOM_LAMPORTS
   );
 }
 
-async function assertFreshClaimFunding(ctx: WorkerContext): Promise<void> {
+async function assertFreshClaimFunding(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  task: Task,
+): Promise<void> {
   if (
     ctx.getBalance === undefined ||
     ctx.getMinimumBalanceForRentExemption === undefined
@@ -389,7 +452,19 @@ async function assertFreshClaimFunding(ctx: WorkerContext): Promise<void> {
   const rents = await readClaimAccountRentMinimums(
     ctx.getMinimumBalanceForRentExemption,
   );
-  const required = claimFundingRequirement(rents);
+  const depositLamports = claimDepositFor(task);
+  const [record] = await findWorkerStatsPda({ worker: agent.agentPda });
+  const recordRentLamports =
+    (await ctx.readAccount(record)) === null
+      ? validateRentMinimum(
+          "worker record",
+          await ctx.getMinimumBalanceForRentExemption(AGENT_STATS_ACCOUNT_SIZE),
+        )
+      : 0n;
+  const required = claimFundingRequirement(rents, {
+    depositLamports,
+    recordRentLamports,
+  });
   const balance = await ctx.getBalance(ctx.signer.address);
   if (typeof balance !== "bigint" || balance < 0n) {
     throw new Error("RPC returned an invalid wallet balance");
@@ -398,10 +473,13 @@ async function assertFreshClaimFunding(ctx: WorkerContext): Promise<void> {
     const shortfall = required - balance;
     throw new Error(
       `insufficient funds: wallet ${ctx.signer.address} holds ${balance} lamports ` +
-        `(${lamportsToSol(balance)} SOL) but working another task needs at least ` +
-        `${required} lamports (${lamportsToSol(required)} SOL) — ` +
+        `(${lamportsToSol(balance)} SOL) but working this task needs at least ` +
+        `${required} lamports (${lamportsToSol(required)} SOL): ` +
         `claim rent ${rents.claim} + submission rent ${rents.submission} + ` +
-        `refundable contest deposit ${CONTEST_ENTRY_DEPOSIT_LAMPORTS} + ` +
+        `claim deposit ${depositLamports} (back on delivery) + ` +
+        (recordRentLamports > 0n
+          ? `worker record rent ${recordRentLamports} (first claim, kept) + `
+          : "") +
         `fee headroom ${FEE_HEADROOM_LAMPORTS}. ` +
         `Fund ${ctx.signer.address} with at least ${shortfall} more ` +
         `lamport${shortfall === 1n ? "" : "s"} and retry.`,
@@ -565,7 +643,8 @@ export async function ensureRegistered(
           `${required} lamports (${lamportsToSol(required)} SOL) — registration stake ${minAgentStake} ` +
           `(live ProtocolConfig.minAgentStake) + agent rent ${rents.agent} + ` +
           `claim rent ${rents.claim} + submission rent ${rents.submission} + ` +
-          `refundable contest deposit ${CONTEST_ENTRY_DEPOSIT_LAMPORTS} + ` +
+          `worker record rent ${rents.agentStats ?? AGENT_STATS_RENT_LAMPORTS} + ` +
+          `claim deposit ${DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS} (back on delivery) + ` +
           `fee headroom ${FEE_HEADROOM_LAMPORTS}. ` +
           `Fund ${ctx.signer.address} with at least ${required - balance} more lamports and retry.`,
       );
@@ -1145,6 +1224,80 @@ function noteJobWait(
     retryAt,
     reason: line,
   });
+}
+
+/** Seconds left for a release to land before the claim's release grace ends. */
+const RELEASE_LANDING_MARGIN_SECS = 120;
+/** In the last this-many seconds of the release grace, an unfetchable spec releases the claim. */
+const RELEASE_DECISION_WINDOW_SECS = 600;
+
+/**
+ * Revision 9: a claim given back within its first hour keeps its deposit.
+ * When the job spec cannot be fetched after the claim, the job keeps waiting
+ * while there is time, but its next try comes before the last ten minutes of
+ * that hour. In those minutes, if the spec still cannot be fetched, the claim
+ * is released and the deposit comes back. Later than that the job waits as
+ * before (an expiry or a release would then send the deposit to the buyer).
+ * Returns true when the claim was released and the job given up.
+ */
+async function releaseWithinGraceIfUnfetchable(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  task: Address,
+  decodedTask: Task,
+): Promise<boolean> {
+  const marker = loadState(ctx.stateDir).openClaim;
+  // noteJobWait may already have given the job up.
+  if (marker === null || marker.task !== task) return false;
+  if (
+    decodedTask.status !== TaskStatus.InProgress ||
+    decodedTask.taskType === TaskType.Competitive ||
+    decodedTask.taskType === TaskType.BidExclusive
+  ) {
+    return false;
+  }
+  const claim = await readClaim(ctx, agent, task);
+  if (claim === null) return false;
+  const now = await clusterNowSeconds(ctx);
+  const left =
+    Number(claim.claimedAt) + Number(values.CLAIM_RELEASE_GRACE_SECS) - now;
+  if (left < RELEASE_LANDING_MARGIN_SECS) return false;
+  if (left > RELEASE_DECISION_WINDOW_SECS) {
+    const retryBy = Date.now() + (left - RELEASE_DECISION_WINDOW_SECS) * 1_000;
+    if (marker.retryAt === undefined || Date.parse(marker.retryAt) > retryBy) {
+      const state = loadState(ctx.stateDir);
+      if (state.openClaim?.task === task) {
+        state.openClaim = {
+          ...state.openClaim,
+          retryAt: new Date(retryBy).toISOString(),
+        };
+        saveState(ctx.stateDir, state);
+      }
+    }
+    return false;
+  }
+  try {
+    const signature = await sendReleaseClaim(ctx, agent, task, decodedTask);
+    const state = loadState(ctx.stateDir);
+    if (state.openClaim?.task === task) {
+      giveUpJob(ctx, state, state.openClaim, {
+        cause: "attempts",
+        reason:
+          "the job spec could not be fetched, so the claim was given back within its first hour and the deposit came back",
+        rewardAmount: decodedTask.rewardAmount.toString(),
+        claimReleased: true,
+      });
+    }
+    ctx.log({ event: "claim.released", task, how: "released", signature, depositBack: true });
+    return true;
+  } catch (error) {
+    ctx.log({
+      event: "claim.release-failed",
+      task,
+      reason: redactSensitiveText(formatDiagnosticError(error)),
+    });
+    return false;
+  }
 }
 
 /**
@@ -1764,7 +1917,7 @@ export async function processCandidate(
   // A depleted recurring worker can still reconcile and submit an already
   // landed claim, but cannot begin another lifecycle it cannot fund through
   // submission.
-  await assertFreshClaimFunding(ctx);
+  await assertFreshClaimFunding(ctx, agent, decodedTask);
 
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
@@ -2214,6 +2367,10 @@ export async function resumeOpenClaim(
     ctx.log({ event: "task.job-spec-rejected", task, reason });
     if (error instanceof JobSpecUnreachableError) {
       noteJobWait(ctx, task, "the job spec", reason, decodedTask.rewardAmount);
+      // A delivery made before a change request already had its deposit back.
+      if (!revisionRound) {
+        await releaseWithinGraceIfUnfetchable(ctx, agent, task, decodedTask);
+      }
     } else {
       noteJobFailure(ctx, task, `the job spec could not be checked: ${reason}`, {
         rewardAmount: decodedTask.rewardAmount,

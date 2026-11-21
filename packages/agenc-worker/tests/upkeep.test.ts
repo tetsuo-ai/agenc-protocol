@@ -6,15 +6,21 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { address, type Address, type Instruction, type TransactionSigner } from "@solana/kit";
 import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   DependencyType,
   findClaimPda,
+  findDisputeRejectionDisputeBondPda,
+  getDisputeBondEncoder,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   getProtocolConfigEncoder,
   getTaskClaimEncoder,
   getTaskEncoder,
   getTaskSubmissionEncoder,
+  DISPUTE_REJECTION_DISCRIMINATOR,
+  EXPIRE_REJECT_FROZEN_DISCRIMINATOR,
   RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR,
+  RELEASE_CLAIM_DISCRIMINATOR,
   SubmissionStatus,
   TaskStatus,
   TaskType,
@@ -25,7 +31,12 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerAgent, WorkerContext, WorkerLogEvent } from "../src/runtime.js";
 import { emptyState, loadState, saveState } from "../src/state.js";
-import { collectOverdueReviews, releaseOwnClaims, UPKEEP_RETRY_SECONDS } from "../src/upkeep.js";
+import {
+  collectOverdueReviews,
+  collectTurnDowns,
+  releaseOwnClaims,
+  UPKEEP_RETRY_SECONDS,
+} from "../src/upkeep.js";
 
 const TASK = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
 const CREATOR = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
@@ -78,12 +89,12 @@ function taskData(status: TaskStatus, overrides: Partial<TaskArgs> = {}): Uint8A
   );
 }
 
-function claimData(expiresAt: bigint): Uint8Array {
+function claimData(expiresAt: bigint, claimedAt = 1n): Uint8Array {
   return new Uint8Array(
     getTaskClaimEncoder().encode({
       task: TASK,
       worker: WORKER,
-      claimedAt: 1n,
+      claimedAt,
       expiresAt,
       completedAt: 0n,
       proofHash: new Uint8Array(32),
@@ -206,18 +217,55 @@ describe("releasing a given-up job's claim", () => {
     expect(send).toHaveBeenCalledTimes(1);
     const [instruction] = send.mock.calls[0]![0];
     expect([...instruction!.data!.slice(0, 8)]).toEqual([...RECLAIM_TERMINAL_CLAIM_DISCRIMINATOR]);
+    // Revision 9: the task's creator, who gets a stranded deposit after expiry.
+    expect(instruction!.accounts?.[9]?.address).toBe(CREATOR);
     expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).toBe(true);
     expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({ how: "reclaimed", signature: "reclaim-sig" });
   });
 
-  it("waits while the task runs and the claim's time is not over", async () => {
-    const send = vi.fn();
+  it("gives a live undelivered claim back at once with release_claim (revision 9)", async () => {
+    const send = vi.fn(async (_instructions: readonly Instruction[]) => ({ signature: "release-sig" }));
     const w = await setup({ send });
     givenUp(w.stateDir);
     w.accounts.set(TASK, taskData(TaskStatus.InProgress));
-    w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600)));
-    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([]);
-    expect(send).not.toHaveBeenCalled();
+    // Claimed 10 minutes ago: inside the first hour, so the deposit comes back.
+    w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600), BigInt(NOW - 600)));
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([{ task: TASK, how: "released" }]);
+    expect(send).toHaveBeenCalledTimes(1);
+    const [instruction] = send.mock.calls[0]![0];
+    expect([...instruction!.data!.slice(0, 8)]).toEqual([...RELEASE_CLAIM_DISCRIMINATOR]);
+    // No validation config on this task: the optional account is left out.
+    expect(instruction!.accounts?.[4]?.address).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(instruction!.accounts?.[6]?.address).toBe(CREATOR);
+    expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).toBe(true);
+    expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({
+      how: "released",
+      depositBack: true,
+    });
+  });
+
+  it("says when a release after the first hour sends the deposit to the buyer", async () => {
+    const send = vi.fn(async () => ({ signature: "release-sig" }));
+    const w = await setup({ send });
+    givenUp(w.stateDir);
+    w.accounts.set(TASK, taskData(TaskStatus.InProgress));
+    w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600), BigInt(NOW - 3_601)));
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([{ task: TASK, how: "released" }]);
+    expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({
+      depositBack: false,
+    });
+  });
+
+  it("waits for expiry on a contest or bid task, which release_claim refuses", async () => {
+    for (const taskType of [TaskType.Competitive, TaskType.BidExclusive]) {
+      const send = vi.fn();
+      const w = await setup({ send });
+      givenUp(w.stateDir);
+      w.accounts.set(TASK, taskData(TaskStatus.InProgress, { taskType }));
+      w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600)));
+      expect(await releaseOwnClaims(w.ctx, agent)).toEqual([]);
+      expect(send).not.toHaveBeenCalled();
+    }
   });
 
   it("counts a claim someone else closed as released, sending nothing", async () => {
@@ -335,5 +383,143 @@ describe("auto-accepting a delivery nobody reviewed", () => {
     w.later(UPKEEP_RETRY_SECONDS);
     await collectOverdueReviews(w.ctx, agent, memory);
     expect(autoAcceptTaskResult).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a delivery the buyer turned down (revision 9)", () => {
+  function delivered(stateDir: string): void {
+    const state = emptyState();
+    state.submissions.push({
+      task: TASK,
+      submissionSignature: "submit-sig",
+      resultUri: "agenc://result/sha256/x",
+      resultHashHex: "ab".repeat(32),
+      rewardAmount: "1000000",
+      submittedAt: "2026-11-19T00:00:00.000Z",
+      settled: false,
+    });
+    saveState(stateDir, state);
+  }
+
+  function frozenSubmission(claim: Address, freezeKind: number, deadline: bigint): Uint8Array {
+    const reserved = new Uint8Array(5);
+    reserved[2] = freezeKind;
+    return new Uint8Array(
+      getTaskSubmissionEncoder().encode({
+        task: TASK,
+        claim,
+        worker: WORKER,
+        status: SubmissionStatus.Rejected,
+        proofHash: new Uint8Array(32).fill(0xab),
+        resultData: new Uint8Array(64),
+        submissionCount: 1,
+        submittedAt: 1n,
+        reviewDeadlineAt: deadline,
+        acceptedAt: 0n,
+        rejectedAt: 2n,
+        rejectionHash: new Uint8Array(32).fill(0xcd),
+        bump: 249,
+        reserved,
+      }),
+    );
+  }
+
+  async function frozen(options: {
+    freezeKind?: number;
+    deadline?: bigint;
+    disputeTurnDowns?: boolean;
+    send?: ReturnType<typeof vi.fn>;
+  }) {
+    const send = options.send ?? vi.fn(async () => ({ signature: "turn-down-sig" }));
+    const w = await setup({ send });
+    if (options.disputeTurnDowns !== undefined) {
+      w.ctx.config.disputeTurnDowns = options.disputeTurnDowns;
+    }
+    delivered(w.stateDir);
+    w.accounts.set(TASK, taskData(TaskStatus.RejectFrozen));
+    w.accounts.set(
+      w.submission,
+      frozenSubmission(w.claim, options.freezeKind ?? 1, options.deadline ?? BigInt(NOW + 3_600)),
+    );
+    return { ...w, send };
+  }
+
+  it("only reports it while the operator's dispute policy is off (the default)", async () => {
+    const w = await frozen({});
+    expect(await collectTurnDowns(w.ctx, agent)).toEqual([]);
+    expect(w.send).not.toHaveBeenCalled();
+    expect(w.events.find((event) => event.event === "task.turned-down")).toMatchObject({
+      task: TASK,
+      stage: "dispute_window",
+      disputeUntil: NOW + 3_600,
+      // 10% of a 0.001 SOL price is below the 0.01 SOL bond floor.
+      bondLamports: "10000000",
+      disputePolicy: "off",
+    });
+  });
+
+  it("disputes it with the bond inside the window when the policy is on", async () => {
+    const w = await frozen({ disputeTurnDowns: true });
+    expect(await collectTurnDowns(w.ctx, agent)).toEqual([{ task: TASK, action: "disputed" }]);
+    expect(w.send).toHaveBeenCalledTimes(1);
+    const [instruction] = (w.send.mock.calls[0]![0] as Instruction[]);
+    expect([...instruction!.data!.slice(0, 8)]).toEqual([...DISPUTE_REJECTION_DISCRIMINATOR]);
+    const [bond] = await findDisputeRejectionDisputeBondPda({ task: TASK });
+    expect(instruction!.accounts?.[4]?.address).toBe(bond);
+    expect(instruction!.accounts?.[7]?.address).toBe(WALLET);
+  });
+
+  it("does not dispute when the wallet cannot hold the bond, its account rent and fees", async () => {
+    const w = await frozen({ disputeTurnDowns: true });
+    w.ctx.getBalance = async () => 10_000_000n;
+    w.ctx.getMinimumBalanceForRentExemption = async () => 1_000_000n;
+    expect(await collectTurnDowns(w.ctx, agent)).toEqual([]);
+    expect(w.send).not.toHaveBeenCalled();
+    expect(w.events.find((event) => event.event === "task.turn-down-dispute-unfunded")).toMatchObject({
+      neededLamports: String(10_000_000n + 1_000_000n + 100_000n),
+    });
+  });
+
+  it("sends the expiry once the window is over, which refunds the buyer and returns the worker's rent", async () => {
+    const w = await frozen({ deadline: BigInt(NOW - 1) });
+    expect(await collectTurnDowns(w.ctx, agent)).toEqual([{ task: TASK, action: "collected" }]);
+    const [instruction] = (w.send.mock.calls[0]![0] as Instruction[]);
+    expect([...instruction!.data!.slice(0, 8)]).toEqual([...EXPIRE_REJECT_FROZEN_DISCRIMINATOR]);
+    expect(w.events.find((event) => event.event === "task.turn-down-collected")).toMatchObject({
+      paid: false,
+    });
+  });
+
+  it("waits while a disputed turn-down can still be ruled, then collects the bond back", async () => {
+    const w = await frozen({ deadline: BigInt(NOW - 100) });
+    const [bond] = await findDisputeRejectionDisputeBondPda({ task: TASK });
+    const bondData = new Uint8Array(
+      getDisputeBondEncoder().encode({
+        subject: TASK,
+        task: TASK,
+        filer: WALLET,
+        respondent: CREATOR,
+        amount: 10_000_000n,
+        kind: 0,
+        filedAt: BigInt(NOW - 200),
+        rulingDeadline: BigInt(NOW + 50),
+        bump: 248,
+        reserved: new Uint8Array(24),
+      }),
+    );
+    w.accounts.set(bond, bondData);
+    const memory = new Map<string, number>();
+    expect(await collectTurnDowns(w.ctx, agent, memory)).toEqual([]);
+    expect(w.send).not.toHaveBeenCalled();
+    w.later(51);
+    expect(await collectTurnDowns(w.ctx, agent, memory)).toEqual([{ task: TASK, action: "collected" }]);
+  });
+
+  it("collects the pay of a revision 8 freeze after its review time", async () => {
+    const w = await frozen({ freezeKind: 0, deadline: BigInt(NOW - 1) });
+    expect(await collectTurnDowns(w.ctx, agent)).toEqual([{ task: TASK, action: "collected" }]);
+    expect(w.events.find((event) => event.event === "task.turn-down-collected")).toMatchObject({
+      paid: true,
+    });
   });
 });

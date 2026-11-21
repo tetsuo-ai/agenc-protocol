@@ -1,22 +1,25 @@
 // The worker looks after its own jobs against the REAL compiled program
 // (litesvm): a delivery whose buyer never reviews it is auto-accepted by the
-// worker itself once the review window has passed, so it is paid; and the
-// claim of a job it gave up is expired by the worker once its time is over,
-// so the claim's rent comes back and its active-task slot is free again.
+// worker itself once the review window has passed, so it is paid; the claim
+// of a job it gave up is given back (revision 9 release_claim), so the
+// claim's rent and, in its first hour, its deposit come back and its
+// active-task slot is free again; and a delivery the buyer turns down is
+// disputed only under the operator's policy, and collected once its window
+// is over.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { lamports, type Address, type KeyPairSigner } from "@solana/kit";
+import type { KeyPairSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   createMarketplaceClient,
   facade,
   findAgentPda,
   findClaimPda,
-  findExpireClaimAgentStatsPda,
+  findTaskSubmissionPda,
+  findWorkerStatsPda,
   getAgentStatsDecoder,
-  getAgentStatsEncoder,
   findHireRecordPda,
   findTaskJobSpecPda,
   findTaskPda,
@@ -179,32 +182,18 @@ async function world(executor: string[], config: Partial<WorkerContext["config"]
     const [agentPda] = await findAgentPda({ agentId: hexToBytes(loadState(stateDir).agentIdHex!) });
     return agentPda;
   };
-  return { svm, ctx, events, stateDir, task, creator: creator as KeyPairSigner, workerWallet, advance, workerAgent };
-}
-
-/** An agent's record of turn-downs and lapses, as if someone had started it. */
-function seedRecord(svm: ReturnType<typeof freshSvm>, record: Address, agent: Address, bump: number): void {
-  const data = new Uint8Array(
-    getAgentStatsEncoder().encode({
-      agent,
-      tasksRejected: 0n,
-      disputesWon: 0n,
-      disputesLost: 0n,
-      claimsExpired: 0n,
-      totalCancelled: 0n,
-      lastUpdated: 0n,
-      bump,
-      reserved: new Uint8Array(32),
-    }),
-  );
-  svm.setAccount({
-    address: record,
-    data,
-    executable: false,
-    lamports: lamports(svm.minimumBalanceForRentExemption(BigInt(data.length))),
-    programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
-    space: BigInt(data.length),
-  });
+  return {
+    svm,
+    ctx,
+    events,
+    stateDir,
+    task,
+    creator: creator as KeyPairSigner,
+    creatorClient,
+    workerWallet,
+    advance,
+    workerAgent,
+  };
 }
 
 describe("e2e: a worker looks after its own jobs", () => {
@@ -238,7 +227,7 @@ describe("e2e: a worker looks after its own jobs", () => {
     expect(loadState(w.stateDir).submissions[0]).toMatchObject({ settled: true, outcome: "accepted", title: "Write a line" });
   });
 
-  it("expires the claim of a job it gave up once its time is over, and gets the claim's rent back", async () => {
+  it("gives back the claim of a job it gave up at once, and gets the claim's rent and deposit back", async () => {
     const w = await world(
       [process.execPath, "-e", "process.exit(3)", "{prompt}"],
       { maxJobAttempts: 1 },
@@ -252,50 +241,53 @@ describe("e2e: a worker looks after its own jobs", () => {
     ]);
     const agentPda = await w.workerAgent();
     const [claim] = await findClaimPda({ task: w.task, bidder: agentPda });
-    expect(accountData(w.svm, claim)).not.toBeNull();
+    const claimHeld = w.svm.getBalance(claim) ?? 0n;
+    // Revision 9: the claim holds its rent and the 0.005 SOL deposit floor.
+    expect(claimHeld).toBe(
+      w.svm.minimumBalanceForRentExemption(203n) + values.MIN_CLAIM_DEPOSIT_LAMPORTS,
+    );
     expect(getAgentRegistrationDecoder().decode(accountData(w.svm, agentPda)!).activeTasks).toBe(1);
 
-    // Before the claim's time is over, it cannot be released.
-    w.advance(DEADLINE_SECS);
-    await runTickOnce(w.ctx);
-    expect(accountData(w.svm, claim)).not.toBeNull();
-
-    // After it (the deadline plus an hour), the worker expires its own claim.
-    w.advance(3_600n + 30n);
+    // On the next pass, inside the claim's first hour, the worker gives it back.
     const before = w.svm.getBalance(w.workerWallet.address) ?? 0n;
-    const claimHeld = w.svm.getBalance(claim) ?? 0n;
     await runTickOnce(w.ctx);
     expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({
       task: w.task,
-      how: "expired",
+      how: "released",
+      depositBack: true,
     });
     expect(accountData(w.svm, claim)).toBeNull();
     expect(getAgentRegistrationDecoder().decode(accountData(w.svm, agentPda)!).activeTasks).toBe(0);
-    // Everything the claim held came back, less the one fee: the agent had no
-    // record of lapses, and the worker did not pay to start one (its rent
-    // would have come out of this).
-    const [record] = await findExpireClaimAgentStatsPda({ worker: agentPda });
-    expect(accountData(w.svm, record)).toBeNull();
+    // Everything the claim held came back, deposit included, less the fee.
     expect((w.svm.getBalance(w.workerWallet.address) ?? 0n) - before).toBeGreaterThanOrEqual(claimHeld - FEE);
     expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
+    // The worker's record, created at its claim, counts no lapse.
+    const [record] = await findWorkerStatsPda({ worker: agentPda });
+    expect(getAgentStatsDecoder().decode(accountData(w.svm, record)!).claimsExpired).toBe(0n);
     // The task is open again for someone who can do it.
     expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.Open);
   });
 
-  it("counts the lapse of a job it gave up in a record of lapses the agent already has", async () => {
+  it("gives back a claim after its first hour: the deposit goes to the buyer and the lapse is counted", async () => {
     const w = await world(
       [process.execPath, "-e", "process.exit(3)", "{prompt}"],
       { maxJobAttempts: 1 },
     );
     await runTickOnce(w.ctx);
     const agentPda = await w.workerAgent();
-    // Someone already started the agent's record (anyone may, at their cost).
-    const [record, bump] = await findExpireClaimAgentStatsPda({ worker: agentPda });
-    seedRecord(w.svm, record, agentPda, bump);
-
-    w.advance(DEADLINE_SECS + 3_600n + 30n);
+    const creatorBefore = w.svm.getBalance(w.creator.address) ?? 0n;
+    // Past the hour, still before the claim's own expiry (the deadline plus an hour).
+    w.advance(3_600n + 30n);
     await runTickOnce(w.ctx);
     expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
+    expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({
+      how: "released",
+      depositBack: false,
+    });
+    expect((w.svm.getBalance(w.creator.address) ?? 0n) - creatorBefore).toBe(
+      values.MIN_CLAIM_DEPOSIT_LAMPORTS,
+    );
+    const [record] = await findWorkerStatsPda({ worker: agentPda });
     expect(getAgentStatsDecoder().decode(accountData(w.svm, record)!).claimsExpired).toBe(1n);
   });
 
@@ -316,5 +308,82 @@ describe("e2e: a worker looks after its own jobs", () => {
     w.advance(3_600n + 30n);
     await runTickOnce(w.ctx);
     expect(loadState(w.stateDir).failedJobs[0]).toMatchObject({ claimReleased: true });
+  });
+
+  it("reports a turn-down while its window is open, then collects it: the buyer is refunded and its rents come back", async () => {
+    const w = await world([process.execPath, "-e", "process.stdout.write('Here is your line.')", "{prompt}"]);
+    expect((await runTickOnce(w.ctx)).outcome?.status).toBe("submitted");
+    const agentPda = await w.workerAgent();
+    await w.creatorClient.send([
+      await facade.rejectAndFreeze({
+        task: w.task,
+        worker: agentPda,
+        creator: w.creator,
+        rejectionHash: new Uint8Array(32).fill(0x5a),
+      }),
+    ]);
+    expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.RejectFrozen);
+
+    // Inside the dispute window, with the policy off (the default), nothing is sent.
+    const balanceInWindow = w.svm.getBalance(w.workerWallet.address) ?? 0n;
+    await runTickOnce(w.ctx);
+    expect(w.events.find((event) => event.event === "task.turned-down")).toMatchObject({
+      task: w.task,
+      stage: "dispute_window",
+      bondLamports: values.MIN_DISPUTE_BOND_LAMPORTS.toString(),
+      disputePolicy: "off",
+    });
+    expect(w.svm.getBalance(w.workerWallet.address) ?? 0n).toBe(balanceInWindow);
+
+    // After the window the worker sends the expiry. The buyer gets the price
+    // back and the worker its claim and submission rent; it is not paid.
+    w.advance(values.REJECT_DISPUTE_WINDOW_SECS + 1n);
+    const [claim] = await findClaimPda({ task: w.task, bidder: agentPda });
+    const rents =
+      (w.svm.getBalance(claim) ?? 0n) +
+      (w.svm.getBalance((await findTaskSubmissionPda({ claim }))[0]) ?? 0n);
+    const before = w.svm.getBalance(w.workerWallet.address) ?? 0n;
+    const tick = await runTickOnce(w.ctx);
+    expect(w.events.find((event) => event.event === "task.turn-down-collected")).toMatchObject({
+      task: w.task,
+      paid: false,
+    });
+    expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.Cancelled);
+    expect((w.svm.getBalance(w.workerWallet.address) ?? 0n) - before).toBe(rents - FEE);
+    expect(tick.settlements).toEqual([
+      expect.objectContaining({ task: w.task, outcome: "cancelled" }),
+    ]);
+  });
+
+  it("disputes a turn-down with the bond when its operator turned the policy on", async () => {
+    const w = await world(
+      [process.execPath, "-e", "process.stdout.write('Here is your line.')", "{prompt}"],
+      { disputeTurnDowns: true },
+    );
+    expect((await runTickOnce(w.ctx)).outcome?.status).toBe("submitted");
+    const agentPda = await w.workerAgent();
+    await w.creatorClient.send([
+      await facade.rejectAndFreeze({
+        task: w.task,
+        worker: agentPda,
+        creator: w.creator,
+        rejectionHash: new Uint8Array(32).fill(0x5b),
+      }),
+    ]);
+    const before = w.svm.getBalance(w.workerWallet.address) ?? 0n;
+    await runTickOnce(w.ctx);
+    expect(w.events.find((event) => event.event === "task.turn-down-disputed")).toMatchObject({
+      task: w.task,
+      bondLamports: values.MIN_DISPUTE_BOND_LAMPORTS.toString(),
+    });
+    const bond = await facade.findRejectionDisputeBondPda(w.task);
+    const bondLamports = w.svm.getBalance(bond) ?? 0n;
+    expect(bondLamports).toBe(
+      w.svm.minimumBalanceForRentExemption(186n) + values.MIN_DISPUTE_BOND_LAMPORTS,
+    );
+    expect(before - (w.svm.getBalance(w.workerWallet.address) ?? 0n)).toBe(bondLamports + FEE);
+    // A second pass does not dispute again: the turn-down now awaits a ruling.
+    await runTickOnce(w.ctx);
+    expect(w.events.filter((event) => event.event === "task.turn-down-disputed")).toHaveLength(1);
   });
 });

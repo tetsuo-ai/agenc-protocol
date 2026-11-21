@@ -5,19 +5,24 @@
 //   window has passed. Anyone may send it; the worker sends it for its own
 //   deliveries, so a provider whose buyer goes quiet is still paid.
 // - A claim the worker can no longer use (a job it gave up, or one whose
-//   time ran out) is released: expired once its time is over, or reclaimed
-//   when the task has already ended. That returns the claim's rent and frees
-//   one of the agent's limited active-task slots.
+//   time ran out) is released: given back at once while the program allows
+//   it (release_claim), expired once its time is over, or reclaimed when the
+//   task has already ended. That returns the claim's rent and frees one of
+//   the agent's limited active-task slots.
+// - A delivery the buyer turned down (revision 9) is shown with its dispute
+//   deadline and the bond a dispute would cost. The worker disputes it only
+//   when its operator turned that policy on. Once a turn-down's window is
+//   over, the worker sends the expiry: that returns its claim and submission
+//   rent (and a bond nobody ruled on), or pays it for a revision 8 freeze.
 //
 // Every step reads the chain first and sends at most one transaction per job,
 // signed by the worker's own wallet. Nothing here runs or delivers work.
-import { AccountRole, address, unwrapOption, type Address, type Instruction } from "@solana/kit";
+import { address, unwrapOption, type Address } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencError,
   facade,
   findClaimPda,
-  findExpireClaimAgentStatsPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
@@ -33,6 +38,7 @@ import {
   type Task,
   type TaskClaim,
   type TaskSubmission,
+  values,
 } from "@tetsuo-ai/marketplace-sdk";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import type { WorkerAgent, WorkerContext } from "./runtime.js";
@@ -75,7 +81,12 @@ export type UpkeepReport = {
   /** Deliveries this worker auto-accepted (task PDAs). */
   autoAccepted: Address[];
   /** Claims released, and how. */
-  released: Array<{ task: Address; how: "expired" | "reclaimed" | "closed" }>;
+  released: Array<{
+    task: Address;
+    how: "released" | "expired" | "reclaimed" | "closed";
+  }>;
+  /** Turned-down deliveries this worker disputed or collected. */
+  turnDowns: Array<{ task: Address; action: "disputed" | "collected" }>;
 };
 
 /**
@@ -223,6 +234,68 @@ export async function collectOverdueReviews(
   return accepted;
 }
 
+/** An owner-aware reader for the SDK's turn-down readers. */
+function snapshotReader(ctx: WorkerContext): facade.ReadAccountSnapshot {
+  if (ctx.readAccountInfo !== undefined) {
+    const readInfo = ctx.readAccountInfo;
+    return async (account) => {
+      const info = await readInfo(account);
+      return info === null ? null : { owner: info.owner, data: info.data };
+    };
+  }
+  // Without owners, data at a program-derived address can only have been
+  // written by the program that owns it; an empty account reads as no account.
+  return async (account) => {
+    const data = await ctx.readAccount(account);
+    return data === null || data.byteLength === 0
+      ? null
+      : { owner: AGENC_COORDINATION_PROGRAM_ADDRESS, data };
+  };
+}
+
+/** The live claim's task is a contest or a bid task, which release_claim refuses. */
+function releaseRefusedFor(task: Task): boolean {
+  return (
+    task.taskType === TaskType.Competitive ||
+    task.taskType === TaskType.BidExclusive
+  );
+}
+
+/** The task's validation config, or null when it has none (an Auto task). */
+async function validationConfigOrNull(
+  ctx: WorkerContext,
+  task: Address,
+): Promise<Address | null> {
+  const [config] = await findTaskValidationConfigPda({ task });
+  return (await ctx.readAccount(config)) === null ? null : config;
+}
+
+/**
+ * Give a live, undelivered claim back now (revision 9 `release_claim`). Within
+ * the first hour of the claim the deposit comes back to this worker; later it
+ * goes to the buyer, as an expiry would send it, but the slot is free now.
+ */
+export async function sendReleaseClaim(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  task: Address,
+  decoded: Task,
+): Promise<string> {
+  const { signature } = await ctx.client.send(
+    [
+      await facade.releaseClaim({
+        task,
+        worker: agent.agentPda,
+        creator: decoded.creator,
+        authority: ctx.signer,
+        taskValidationConfig: await validationConfigOrNull(ctx, task),
+      }),
+    ],
+    { maxRetries: 0 },
+  );
+  return signature;
+}
+
 function markReleased(ctx: WorkerContext, task: Address): void {
   const state = loadState(ctx.stateDir);
   const job = state.failedJobs.find((entry) => entry.task === task);
@@ -232,36 +305,15 @@ function markReleased(ctx: WorkerContext, task: Address): void {
 }
 
 /**
- * Release the claims of jobs this worker gave up: an ended task's claim is
- * reclaimed straight away, an open one's is expired once its time is over.
- * Either returns the claim's rent to this worker and frees its slot.
+ * Release the claims of jobs this worker gave up. An ended task's claim is
+ * reclaimed straight away. A live, undelivered claim is given back at once
+ * with release_claim where the program allows it (not contests or bid tasks):
+ * within the first hour of the claim its deposit comes back, later it goes to
+ * the buyer, as an expiry would send it. Any other live claim is expired once
+ * its time is over. Each returns the claim's rent to this worker and frees its
+ * slot. Revision 9 requires the worker's own record on every expiry; the
+ * worker's first claim created it.
  */
-/**
- * Expiring a claim counts the lapse in the agent's own marketplace record of
- * turn-downs and lapses (`AgentStats`), and starts that record when it does
- * not exist yet: the sender pays its rent (about $0.09) for good. That buys
- * the worker nothing, so it counts a lapse only in a record that already
- * exists. Otherwise the record is left out, which the program allows: it
- * then counts nothing and charges nothing.
- */
-export async function withoutNewRecord<T extends Instruction>(
-  ctx: WorkerContext,
-  worker: Address,
-  instruction: T,
-): Promise<T> {
-  const [record] = await findExpireClaimAgentStatsPda({ worker });
-  if ((await ctx.readAccount(record)) !== null) return instruction;
-  return {
-    ...instruction,
-    accounts: (instruction.accounts ?? []).map((meta) =>
-      // An optional account left out is the program's own address, read-only.
-      meta.address === record
-        ? { address: AGENC_COORDINATION_PROGRAM_ADDRESS, role: AccountRole.READONLY }
-        : meta,
-    ),
-  };
-}
-
 export async function releaseOwnClaims(
   ctx: WorkerContext,
   agent: WorkerAgent,
@@ -289,15 +341,15 @@ export async function releaseOwnClaims(
     now ??= await clusterNowSeconds(ctx);
     const ended =
       decoded.status === TaskStatus.Completed || decoded.status === TaskStatus.Cancelled;
-    const expired =
-      (decoded.status === TaskStatus.InProgress ||
-        decoded.status === TaskStatus.PendingValidation) &&
-      claim.expiresAt > 0n &&
-      now > Number(claim.expiresAt);
-    if (!ended && !expired) continue;
-    if (expired) {
+    const live =
+      decoded.status === TaskStatus.InProgress ||
+      decoded.status === TaskStatus.PendingValidation;
+    const expired = live && claim.expiresAt > 0n && now > Number(claim.expiresAt);
+    const releasable = live && !expired && !releaseRefusedFor(decoded);
+    if (!ended && !expired && !releasable) continue;
+    if (expired || releasable) {
       // A claim with a delivery waiting for review is settled by the review,
-      // never expired.
+      // never expired or released.
       const submission = await readSubmission(ctx, agent, task);
       if (submission !== null && submission.status === SubmissionStatus.Submitted) continue;
     }
@@ -305,6 +357,20 @@ export async function releaseOwnClaims(
     if (!due(memory, key, now)) continue;
     memory.set(key, now);
     try {
+      if (releasable) {
+        const signature = await sendReleaseClaim(ctx, agent, task, decoded);
+        markReleased(ctx, task);
+        released.push({ task, how: "released" });
+        ctx.log({
+          event: "claim.released",
+          task,
+          how: "released",
+          signature,
+          depositBack:
+            now <= Number(claim.claimedAt) + Number(values.CLAIM_RELEASE_GRACE_SECS),
+        });
+        continue;
+      }
       treasury ??= await readTreasury(ctx);
       const parent = unwrapOption(decoded.dependsOn);
       const instruction = ended
@@ -314,27 +380,26 @@ export async function releaseOwnClaims(
             worker: agent.agentPda,
             treasury,
             rentRecipient: ctx.signer.address,
+            // A stranded deposit goes to the creator after the claim's expiry.
+            creator: decoded.creator,
           })
-        : await withoutNewRecord(
-            ctx,
-            agent.agentPda,
-            await facade.expireClaim({
-              authority: ctx.signer,
-              task,
-              worker: agent.agentPda,
-              rentRecipient: ctx.signer.address,
-              treasury,
-              // An exclusive no-show must show its (possibly absent) bond.
-              workerCompletionBond: (
-                await findWorkerCompletionBondPda({
-                  task,
-                  workerAuthority: ctx.signer.address,
-                })
-              )[0],
-              bondCreator: decoded.creator,
-              ...(parent !== null ? { dependencyParent: parent } : {}),
-            }),
-          );
+        : await facade.expireClaim({
+            authority: ctx.signer,
+            task,
+            worker: agent.agentPda,
+            rentRecipient: ctx.signer.address,
+            treasury,
+            // An exclusive no-show must show its (possibly absent) bond.
+            workerCompletionBond: (
+              await findWorkerCompletionBondPda({
+                task,
+                workerAuthority: ctx.signer.address,
+              })
+            )[0],
+            // A no-show's deposit goes to the creator.
+            creator: decoded.creator,
+            ...(parent !== null ? { dependencyParent: parent } : {}),
+          });
       const { signature } = await ctx.client.send([instruction], { maxRetries: 0 });
       markReleased(ctx, task);
       const how = ended ? "reclaimed" : "expired";
@@ -347,11 +412,157 @@ export async function releaseOwnClaims(
   return released;
 }
 
+/** Lamports kept free for fees when this worker posts a dispute bond. */
+const DISPUTE_FEE_HEADROOM_LAMPORTS = 100_000n;
+/** On-chain size of a `DisputeBond` account (its rent comes back with it). */
+const DISPUTE_BOND_ACCOUNT_SIZE = 186;
+
 /**
- * One upkeep pass: auto-accept what is overdue, then release unusable claims.
- * It never fails its caller: a step that cannot read the chain is logged
- * (`upkeep.failed`) and done on a later pass, so the worker's own jobs and
- * its search for new ones go on.
+ * Handle this worker's deliveries that a buyer turned down (a task in
+ * RejectFrozen). A revision 9 turn-down refunds the buyer unless the worker
+ * disputes it inside the window and a ruling then goes its way.
+ *
+ * - Inside the dispute window the turn-down is logged once with its deadline
+ *   and the bond a dispute costs. It is disputed only when the operator turned
+ *   `disputeTurnDowns` on, and only when the wallet holds the bond, its account
+ *   rent and fee headroom. The bond is lost if the ruling goes to the buyer.
+ * - Once a window is over (no dispute, an unruled dispute, or a revision 8
+ *   freeze's review time) the worker sends the expiry: it gets its claim and
+ *   submission rent back, and its bond when nobody ruled. On a revision 8
+ *   freeze the expiry pays it. `checkSettlements` then sees the outcome.
+ */
+export async function collectTurnDowns(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  memory: UpkeepMemory = new Map(),
+): Promise<UpkeepReport["turnDowns"]> {
+  if (ctx.dryRun || !agent.registered) return [];
+  const pending = loadState(ctx.stateDir).submissions.filter((record) => !record.settled);
+  if (pending.length === 0) return [];
+  const read = snapshotReader(ctx);
+  const done: UpkeepReport["turnDowns"] = [];
+  let now: number | null = null;
+  let treasury: Address | null = null;
+  for (const record of pending) {
+    const task = record.task as Address;
+    const decoded = await readTask(ctx, task);
+    if (decoded === null || decoded.status !== TaskStatus.RejectFrozen) continue;
+    const turnDown = await facade.readTurnDown(read, { task, worker: agent.agentPda });
+    if (turnDown === null) continue;
+    now ??= await clusterNowSeconds(ctx);
+    const stage = facade.turnDownStage(turnDown, now);
+    const noted = `turn-down:${task}:${stage}`;
+    if (!memory.has(noted)) {
+      memory.set(noted, now);
+      ctx.log({
+        event: "task.turned-down",
+        task,
+        stage,
+        disputeUntil: Number(turnDown.reviewDeadlineAt),
+        ...(turnDown.dispute !== null
+          ? { rulingUntil: Number(turnDown.dispute.rulingDeadline) }
+          : { bondLamports: turnDown.bondToDispute.toString() }),
+        disputePolicy: ctx.config.disputeTurnDowns === true ? "on" : "off",
+      });
+    }
+    if (stage === "dispute_window") {
+      if (ctx.config.disputeTurnDowns !== true) continue;
+      const key = `dispute:${task}`;
+      if (!due(memory, key, now)) continue;
+      memory.set(key, now);
+      try {
+        if (ctx.getBalance !== undefined && ctx.getMinimumBalanceForRentExemption !== undefined) {
+          const bondRent = await ctx.getMinimumBalanceForRentExemption(DISPUTE_BOND_ACCOUNT_SIZE);
+          const needed = turnDown.bondToDispute + bondRent + DISPUTE_FEE_HEADROOM_LAMPORTS;
+          const balance = await ctx.getBalance(ctx.signer.address);
+          if (balance < needed) {
+            ctx.log({
+              event: "task.turn-down-dispute-unfunded",
+              task,
+              neededLamports: needed.toString(),
+              balanceLamports: balance.toString(),
+            });
+            continue;
+          }
+        }
+        const submission = await readSubmission(ctx, agent, task);
+        const evidenceHash =
+          submission !== null && submission.proofHash.some((byte) => byte !== 0)
+            ? new Uint8Array(submission.proofHash)
+            : null;
+        if (evidenceHash === null) continue;
+        const { signature } = await ctx.client.send(
+          [
+            await facade.disputeRejection({
+              task,
+              worker: agent.agentPda,
+              creator: decoded.creator,
+              authority: ctx.signer,
+              // The delivery itself is the evidence: its recorded fingerprint.
+              evidenceHash,
+              evidenceUri: "",
+            }),
+          ],
+          { maxRetries: 0 },
+        );
+        done.push({ task, action: "disputed" });
+        ctx.log({
+          event: "task.turn-down-disputed",
+          task,
+          signature,
+          bondLamports: turnDown.bondToDispute.toString(),
+        });
+      } catch (error) {
+        ctx.log({ event: "task.turn-down-dispute-failed", task, reason: failureText(error) });
+      }
+      continue;
+    }
+    if (
+      stage !== "refund_due" &&
+      stage !== "unruled_refund_due" &&
+      stage !== "legacy_payout_due"
+    ) {
+      continue;
+    }
+    const key = `collect:${task}`;
+    if (!due(memory, key, now)) continue;
+    memory.set(key, now);
+    try {
+      treasury ??= await readTreasury(ctx);
+      const { signature } = await ctx.client.send(
+        [
+          await facade.expireRejectFrozen({
+            task,
+            claim: turnDown.claim,
+            worker: agent.agentPda,
+            treasury,
+            creator: decoded.creator,
+            workerAuthority: ctx.signer.address,
+            authority: ctx.signer,
+            ...legs(decoded),
+          }),
+        ],
+        { maxRetries: 0 },
+      );
+      done.push({ task, action: "collected" });
+      ctx.log({
+        event: "task.turn-down-collected",
+        task,
+        signature,
+        paid: facade.turnDownExpiryPaysWorker(stage),
+      });
+    } catch (error) {
+      ctx.log({ event: "task.turn-down-collect-failed", task, reason: failureText(error) });
+    }
+  }
+  return done;
+}
+
+/**
+ * One upkeep pass: auto-accept what is overdue, handle turned-down
+ * deliveries, then release unusable claims. It never fails its caller: a step
+ * that cannot read the chain is logged (`upkeep.failed`) and done on a later
+ * pass, so the worker's own jobs and its search for new ones go on.
  */
 export async function runUpkeep(
   ctx: WorkerContext,
@@ -369,6 +580,7 @@ export async function runUpkeep(
   const autoAccepted = await step("auto-accept", () =>
     collectOverdueReviews(ctx, agent, memory),
   );
+  const turnDowns = await step("turn-downs", () => collectTurnDowns(ctx, agent, memory));
   const released = await step("release", () => releaseOwnClaims(ctx, agent, memory));
-  return { autoAccepted, released };
+  return { autoAccepted, released, turnDowns };
 }

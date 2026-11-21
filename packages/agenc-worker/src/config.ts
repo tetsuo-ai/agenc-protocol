@@ -160,6 +160,14 @@ export type WorkerConfig = {
   creatorAllowlist: string[] | null;
   /** Explicitly allow tasks from every creator (unsafe; false by default). */
   allowAnyCreator: boolean;
+  /**
+   * Operator policy, off by default: dispute a buyer's turn-down of this
+   * worker's delivery inside the dispute window, posting the bond (10% of the
+   * price, at least 0.01 SOL). The bond goes to the buyer if the ruling does.
+   * Off, a turn-down is only reported, and the buyer is refunded when the
+   * window ends.
+   */
+  disputeTurnDowns: boolean;
   /** Agent endpoint recorded at registration (non-empty http(s); on-chain rule). */
   endpoint: string;
   /** HTTPS content host used to resolve anchored request_changes envelopes. */
@@ -185,6 +193,7 @@ export type WorkerConfigInput = Partial<{
   stateDir: string;
   creatorAllowlist: string[] | string | null;
   allowAnyCreator: boolean | string;
+  disputeTurnDowns: boolean | string;
   endpoint: string;
   taskThreadBaseUrl: string;
   pollIntervalMs: string | number;
@@ -213,6 +222,7 @@ const CONFIG_FILE_KEYS = [
   "stateDir",
   "creatorAllowlist",
   "allowAnyCreator",
+  "disputeTurnDowns",
   "endpoint",
   "taskThreadBaseUrl",
   "pollIntervalMs",
@@ -336,6 +346,7 @@ function validateConfigFileObject(
       }
       case "allowUnboundedReward":
       case "allowAnyCreator":
+      case "disputeTurnDowns":
         if (typeof value !== "boolean") {
           configFileFieldError(filePath, field, "a JSON boolean");
         }
@@ -734,6 +745,9 @@ export function configFromEnv(
   if (env.AGENC_WORKER_ALLOW_ANY_CREATOR !== undefined) {
     input.allowAnyCreator = env.AGENC_WORKER_ALLOW_ANY_CREATOR;
   }
+  if (env.AGENC_WORKER_DISPUTE_TURN_DOWNS !== undefined) {
+    input.disputeTurnDowns = env.AGENC_WORKER_DISPUTE_TURN_DOWNS;
+  }
   if (env.AGENC_WORKER_ENDPOINT !== undefined)
     input.endpoint = env.AGENC_WORKER_ENDPOINT;
   if (env.AGENC_WORKER_TASK_THREAD_BASE_URL !== undefined) {
@@ -944,6 +958,10 @@ export function resolveWorkerConfig(
     merged.allowAnyCreator === undefined
       ? false
       : parseBoolean("allowAnyCreator", merged.allowAnyCreator);
+  const disputeTurnDowns =
+    merged.disputeTurnDowns === undefined
+      ? false
+      : parseBoolean("disputeTurnDowns", merged.disputeTurnDowns);
 
   const usesDefaultStateDir = merged.stateDir === undefined;
   const stateDir = parsePathString(
@@ -988,6 +1006,7 @@ export function resolveWorkerConfig(
     stateDir,
     creatorAllowlist,
     allowAnyCreator,
+    disputeTurnDowns,
     endpoint,
     taskThreadBaseUrl: taskThreadBaseUrl.replace(/\/+$/u, ""),
     pollIntervalMs:
