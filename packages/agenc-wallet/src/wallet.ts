@@ -1058,12 +1058,17 @@ export class AgencWallet {
 
   /** Per paying wallet: what its first turn-down or cancel spends on its record. */
   readonly #recordCosts = new Map<string, { lamports: bigint; at: number }>();
+  /** Per paying wallet: the read of that cost under way, which all its jobs wait on. */
+  readonly #recordCostReads = new Map<string, Promise<bigint | null>>();
 
   /** After a turn-down or cancel the paying wallet has its record: read it again. */
   #forgetRecordCost(job: JobRecord): void {
     const payer =
       job.payer === "main" ? this.mainAddress : this.#store.state.agents[job.agentId]?.address;
-    if (payer !== undefined) this.#recordCosts.delete(payer);
+    if (payer === undefined) return;
+    this.#recordCosts.delete(payer);
+    // A read under way may have looked before the record was made.
+    this.#recordCostReads.delete(payer);
   }
 
   /**
@@ -1071,7 +1076,8 @@ export class AgencWallet {
    * record if it turned the job down or cancelled it now, read from rent. Only
    * read while a buying job can still be turned down or cancelled. A record
    * is never removed, so once it exists the answer stays 0; a missing one is
-   * read again after a minute.
+   * read again after a minute. The jobs one wallet pays for share one read,
+   * so a list of many costs one read per paying wallet.
    */
   async #firstRecordCost(job: JobRecord): Promise<bigint | null> {
     if (job.role !== "buying" || job.payer === null || job.outcome !== null) return null;
@@ -1085,13 +1091,24 @@ export class AgencWallet {
     if (cached !== undefined && (cached.lamports === 0n || this.#now() - cached.at < 60_000)) {
       return cached.lamports;
     }
-    try {
-      const lamports = await creatorRecordCost(this.#chain, payer);
-      this.#recordCosts.set(payer, { lamports, at: this.#now() });
-      return lamports;
-    } catch {
-      return cached?.lamports ?? null;
-    }
+    const pending = this.#recordCostReads.get(payer);
+    if (pending !== undefined) return pending;
+    const read: Promise<bigint | null> = creatorRecordCost(this.#chain, payer).then(
+      (lamports) => {
+        // Not kept when a turn-down or cancel came in between.
+        if (this.#recordCostReads.get(payer) === read) {
+          this.#recordCostReads.delete(payer);
+          this.#recordCosts.set(payer, { lamports, at: this.#now() });
+        }
+        return lamports;
+      },
+      () => {
+        if (this.#recordCostReads.get(payer) === read) this.#recordCostReads.delete(payer);
+        return cached?.lamports ?? null;
+      },
+    );
+    this.#recordCostReads.set(payer, read);
+    return read;
   }
 
   async overview(): Promise<WalletOverview> {
@@ -3190,6 +3207,7 @@ export class AgencWallet {
     }
     records.sort((a, b) => b.createdAt - a.createdAt);
     const limit = Math.min(200, Math.max(1, Math.trunc(params.limit ?? 50)));
+    const shown = records.slice(0, limit);
     const context = {
       usdPerSol: await this.#displayRate(),
       now: this.#now(),
@@ -3198,7 +3216,12 @@ export class AgencWallet {
       ratingCostLamports: await this.#ratingCost(),
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
     };
-    return records.slice(0, limit).map((job) => jobView(job, context));
+    // A panel reads its jobs here only: each says what a first turn-down or
+    // cancel costs, as one job's own view does.
+    const recordCosts = await Promise.all(shown.map((job) => this.#firstRecordCost(job)));
+    return shown.map((job, index) =>
+      jobView(job, { ...context, firstRecordCostLamports: recordCosts[index] ?? null }),
+    );
   }
 
   /** The job, refreshed from the chain first when it is still running. */
