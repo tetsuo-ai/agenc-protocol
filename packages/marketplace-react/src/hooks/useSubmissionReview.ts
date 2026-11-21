@@ -1,11 +1,17 @@
 /**
  * `useSubmissionReview(taskPda)` — buyer-side settlement actions.
  *
- * Exposes the three creator review verbs for a task in `PendingValidation`:
+ * Exposes the creator review verbs for a task in `PendingValidation`:
  * - `accept(...)` — accept the result and settle the escrow to the worker
  *   (`client.acceptTaskResult`, a named client convenience);
+ * - `turnDown(...)`: turn the delivery down on a single-worker review task
+ *   (`facade.rejectAndFreeze` -> `client.send`). The price stays held. Since
+ *   revision 9 the worker may dispute it within 72 hours with a bond; with no
+ *   dispute the buyer is refunded when that time ends;
  * - `reject(...)` — reject the result with a rejection hash
- *   (`facade.rejectTaskResult` -> `client.send`);
+ *   (`facade.rejectTaskResult` -> `client.send`). Revision 9 refuses it on a
+ *   single-worker review task (6418); it stays for Collaborative and contest
+ *   tasks;
  * - `requestChanges(...)` — return the task to the worker with a changes hash
  *   (`facade.requestChanges` -> `client.send`).
  *
@@ -45,6 +51,14 @@ export type RejectInput = Omit<
   creator?: Parameters<typeof facadeNs.rejectTaskResult>[0]["creator"];
 };
 
+/** Per-call input for `turnDown` (pass the claim's worker agent as `worker`). */
+export type TurnDownInput = Omit<
+  Parameters<typeof facadeNs.rejectAndFreeze>[0],
+  "task" | "creator"
+> & {
+  creator?: Parameters<typeof facadeNs.rejectAndFreeze>[0]["creator"];
+};
+
 /** Per-call input for `requestChanges`. */
 export type RequestChangesInput = Omit<
   Parameters<typeof facadeNs.requestChanges>[0],
@@ -71,17 +85,22 @@ export interface ReviewAction<TInput> {
 export interface UseSubmissionReviewResult {
   /** Accept the result and settle to the worker. */
   accept: ReviewAction<AcceptInput>;
-  /** Reject the result (with a rejection hash). */
+  /**
+   * Turn the delivery down on a single-worker review task (a freeze the
+   * worker may dispute within 72 hours; the buyer is refunded if it does not).
+   */
+  turnDown: ReviewAction<TurnDownInput>;
+  /** Reject the result (Collaborative and contest tasks; refused on single-worker review tasks). */
   reject: ReviewAction<RejectInput>;
   /** Request changes (with a changes hash), returning the task to the worker. */
   requestChanges: ReviewAction<RequestChangesInput>;
   /** Aggregate status: `pending` if any verb is in flight, else last settled. */
   status: ReviewStatus;
-  /** The most recent error across the three verbs, or null. */
+  /** The most recent error across the verbs, or null. */
   error: Error | null;
   /** Signature of the last successful action, or null. */
   signature: string | null;
-  /** Reset all three mutations to idle. */
+  /** Reset every verb to idle. */
   reset: () => void;
 }
 
@@ -106,9 +125,9 @@ export function useSubmissionReview(
   taskPda: Parameters<typeof facadeNs.acceptTaskResult>[0]["task"],
 ): UseSubmissionReviewResult {
   const ctx = useAgencContext();
-  const lastAction = useRef<"accept" | "reject" | "requestChanges" | null>(
-    null,
-  );
+  const lastAction = useRef<
+    "accept" | "turnDown" | "reject" | "requestChanges" | null
+  >(null);
 
   const acceptMut = useMutation<string, Error, QueuedReviewInput<AcceptInput>>({
     mutationFn: async ({ client, input }) => {
@@ -126,6 +145,21 @@ export function useSubmissionReview(
         ...input,
         task: taskPda,
       } as Parameters<typeof facadeNs.rejectTaskResult>[0]);
+      const { signature } = await client.send([ix]);
+      return signature;
+    },
+  });
+
+  const turnDownMut = useMutation<
+    string,
+    Error,
+    QueuedReviewInput<TurnDownInput>
+  >({
+    mutationFn: async ({ client, input }) => {
+      const ix = await facade.rejectAndFreeze({
+        ...input,
+        task: taskPda,
+      } as Parameters<typeof facadeNs.rejectAndFreeze>[0]);
       const { signature } = await client.send([ix]);
       return signature;
     },
@@ -187,6 +221,27 @@ export function useSubmissionReview(
     },
     [ctx.client, rejectMut],
   );
+  const turnDown = useCallback<ReviewAction<TurnDownInput>>(
+    async (input) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const creator = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.creator,
+      );
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        creator,
+        rejectionHash: snapshotFixedBytes32(
+          detachedInput.rejectionHash,
+          "useSubmissionReview.turnDown: rejectionHash",
+        ),
+      }) as TurnDownInput;
+      lastAction.current = "turnDown";
+      return turnDownMut.mutateAsync({ client, input: snapshottedInput });
+    },
+    [ctx.client, turnDownMut],
+  );
   const requestChanges = useCallback<ReviewAction<RequestChangesInput>>(
     async (input) => {
       const client = requireClient(ctx.client);
@@ -213,13 +268,18 @@ export function useSubmissionReview(
   );
 
   const anyPending =
-    acceptMut.isPending || rejectMut.isPending || requestChangesMut.isPending;
+    acceptMut.isPending ||
+    turnDownMut.isPending ||
+    rejectMut.isPending ||
+    requestChangesMut.isPending;
   const latest =
-    lastAction.current === "reject"
-      ? rejectMut
-      : lastAction.current === "requestChanges"
-        ? requestChangesMut
-        : acceptMut;
+    lastAction.current === "turnDown"
+      ? turnDownMut
+      : lastAction.current === "reject"
+        ? rejectMut
+        : lastAction.current === "requestChanges"
+          ? requestChangesMut
+          : acceptMut;
   const status: ReviewStatus = anyPending ? "pending" : statusOf(latest);
 
   const error = latest.error ?? null;
@@ -227,6 +287,7 @@ export function useSubmissionReview(
 
   return {
     accept,
+    turnDown,
     reject,
     requestChanges,
     status,
@@ -235,6 +296,7 @@ export function useSubmissionReview(
     reset: () => {
       lastAction.current = null;
       acceptMut.reset();
+      turnDownMut.reset();
       rejectMut.reset();
       requestChangesMut.reset();
     },

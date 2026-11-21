@@ -1,6 +1,9 @@
 /**
- * `<ReviewPanel>` — buyer-side settlement actions (accept / reject / request
- * changes) for a submitted task.
+ * `<ReviewPanel>`: buyer-side settlement actions (accept / turn down or
+ * reject / request changes) for a submitted task. On a single-worker review
+ * task (every hire) pass `onTurnDown` (`useSubmissionReview().turnDown`): a
+ * plain reject is refused there since revision 9. `onReject` stays for
+ * Collaborative and contest tasks.
  *
  * Presentational: it takes the three action handlers and a status/error (map
  * from `useSubmissionReview()`), plus a `hasSubmission` flag that gates the
@@ -30,8 +33,13 @@ export interface ReviewPanelProps extends ThemableProps {
   hasSubmission?: boolean;
   /** Accept handler (`useSubmissionReview().accept`-bound by the host). */
   onAccept?: () => void;
-  /** Reject handler. */
+  /** Reject handler (Collaborative and contest tasks). */
   onReject?: () => void;
+  /**
+   * Turn-down handler for a single-worker review task. When given, the danger
+   * button turns the delivery down instead of rejecting it.
+   */
+  onTurnDown?: () => void;
   /** Request-changes handler. */
   onRequestChanges?: () => void;
   /** Current action status (from `useSubmissionReview().status`). */
@@ -42,7 +50,7 @@ export interface ReviewPanelProps extends ThemableProps {
    * Which verb most recently settled, for the success copy. Optional; when
    * given and `status === "success"` the matching message renders.
    */
-  settledAction?: "accept" | "reject" | "requestChanges";
+  settledAction?: "accept" | "reject" | "turnDown" | "requestChanges";
 }
 
 const SUCCESS_STRING: Record<
@@ -51,6 +59,7 @@ const SUCCESS_STRING: Record<
 > = {
   accept: "components.review.accepted",
   reject: "components.review.rejected",
+  turnDown: "components.review.turnedDown",
   requestChanges: "components.review.changesRequested",
 };
 
@@ -61,6 +70,7 @@ export function ReviewPanel({
   hasSubmission = false,
   onAccept,
   onReject,
+  onTurnDown,
   onRequestChanges,
   status = "idle",
   error = null,
@@ -109,10 +119,14 @@ export function ReviewPanel({
           <Button
             unstyled={unstyled}
             variant="danger"
-            disabled={pending || !onReject}
-            onClick={onReject}
+            disabled={pending || !(onTurnDown ?? onReject)}
+            onClick={onTurnDown ?? onReject}
           >
-            {tc("components.review.reject")}
+            {tc(
+              onTurnDown !== undefined
+                ? "components.review.turnDown"
+                : "components.review.reject",
+            )}
           </Button>
         </div>
       )}

@@ -76,17 +76,22 @@ export function DisputeBanner({
         {tc("components.dispute.none")}
       </p>
       {onInitiate ? (
-        <Button
-          unstyled={unstyled}
-          variant="secondary"
-          loading={pending}
-          disabled={pending}
-          onClick={onInitiate}
-        >
-          {pending
-            ? tc("components.dispute.pending")
-            : tc("components.dispute.initiate")}
-        </Button>
+        <>
+          <p className={unstyled ? undefined : "agenc-dispute__bond"}>
+            {tc("components.dispute.bond")}
+          </p>
+          <Button
+            unstyled={unstyled}
+            variant="secondary"
+            loading={pending}
+            disabled={pending}
+            onClick={onInitiate}
+          >
+            {pending
+              ? tc("components.dispute.pending")
+              : tc("components.dispute.initiate")}
+          </Button>
+        </>
       ) : null}
       <div
         className={unstyled ? undefined : "agenc-dispute__status"}

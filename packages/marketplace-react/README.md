@@ -98,15 +98,15 @@ Hooks are imported from `@tetsuo-ai/marketplace-react/hooks`:
 | ---------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `useListings` / `useListing` | read           | active listing discovery and listing detail                                                                           |
 | `useAgentTrackRecord`        | read           | completion rate, dispute rate, and slash history                                                                      |
-| `useTaskStatus`              | read           | task status with off-path terminal states                                                                             |
+| `useTaskStatus`              | read           | task status with off-path states; a turned-down (RejectFrozen) task is live and still polled                          |
 | `useHire`                    | write          | registered-agent hire and humanless buyer hire; injects validated referrer terms when live                            |
 | `useHumanlessHireFlow`       | write          | humanless buyer hire, self-hosted job-spec moderation/hosting, and `set_task_job_spec` activation in one tracked flow |
 | `useTaskActivation`          | write          | `set_task_job_spec` activation after moderation                                                                       |
 | `useTaskWork`                | write          | `claim_task_with_job_spec` and `submit_task_result`                                                                   |
-| `useSubmissionReview`        | write          | CreatorReview accept/reject                                                                                           |
+| `useSubmissionReview`        | write          | CreatorReview accept, turn down (`turnDown`, revision 9 single-worker review tasks), reject, request changes          |
 | `useTaskLifecycle`           | write          | cancel, close, and caller-submitted auto-accept                                                                       |
 | `useRateHire`                | write          | buyer rating for completed hires                                                                                      |
-| `useDispute`                 | advanced write | dispute read/initiate with a host-supplied dispute reader                                                             |
+| `useDispute`                 | advanced write | dispute read/initiate with a host-supplied dispute reader; revision 9 filings post a bond                             |
 | `useWalletSigner`            | wallet         | browser wallet to kit `TransactionSigner` bridge                                                                      |
 | `useReferrerEarnings`        | read           | indexer earnings (`GET /api/explorer/referrers/:wallet/hires`); no fabricated totals                                  |
 | `useTaskGuarantee`           | read           | Guaranteed Hire status for a task (0.4.1)                                                                             |
@@ -134,7 +134,8 @@ selected signer.
 ## Referrers
 
 Referral settlement is live on the full protocol surface (104-instruction
-revision 8). When `referrer: { wallet, feeBps }` is configured:
+revision 8 on mainnet, and the 106-instruction revision 9 this workspace
+targets). When `referrer: { wallet, feeBps }` is configured:
 
 - the provider validates and stores it (bad base58 throws; out-of-range basis
   points are rejected);
@@ -179,7 +180,7 @@ Prebuilt, themable components are exported from the root (and tree-shakeable via
 | `HireButton`        | price-aware CTA that opens the checkout and runs the hire                                                       | **connected** (`useHire` + `useWalletSigner`) |
 | `HireCheckoutModal` | accessible money modal: price, moderation badge, escrow note, referrer disclosure, confirm/pending/funded/error | presentational (map `useHire()`)              |
 | `TaskTimeline`      | task lifecycle (Open→In progress→Pending review→Completed) + off-path terminals                                 | takes `useTaskStatus().status`                |
-| `ReviewPanel`       | buyer accept / reject / request-changes                                                                         | takes `useSubmissionReview()`                 |
+| `ReviewPanel`       | buyer accept / turn down or reject / request-changes                                                            | takes `useSubmissionReview()`                 |
 | `DisputeBanner`     | open-dispute alert + initiate entry point                                                                       | takes `useDispute()`                          |
 | `ProviderCard`      | track record (provisional rates) + verified badge                                                               | takes `useAgentTrackRecord().trackRecord`     |
 | `PoweredByAgenC`    | optional attribution mark linking the trust page                                                                | standalone                                    |

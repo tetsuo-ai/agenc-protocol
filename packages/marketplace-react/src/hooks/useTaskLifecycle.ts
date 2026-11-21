@@ -12,6 +12,11 @@ import {
   type MutationStatus,
 } from "./internal.js";
 
+/**
+ * Input to `cancel(...)`. Revision 9: the creator's first cancel or turn-down
+ * starts its marketplace record (`CreatorStats`), paid by the creator before
+ * the refund and never returned; `facade.missingRecordCost` reads that cost.
+ */
 export type CancelTaskInput = Omit<
   Parameters<typeof facadeNs.cancelTask>[0],
   "task" | "authority"

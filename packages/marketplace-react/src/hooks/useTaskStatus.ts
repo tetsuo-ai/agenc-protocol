@@ -21,8 +21,10 @@
  * ## Polling vs. subscription (SSR-safe, cleaned up)
  *
  * - Polling: TanStack Query `refetchInterval` re-runs `taskReader` until the
- *   task reaches a terminal status (`Completed`/`Cancelled`/`RejectFrozen`) or
- *   the optional `targetStatus` — then stops.
+ *   task reaches a terminal status (`Completed`/`Cancelled`) or the optional
+ *   `targetStatus`, then stops. `RejectFrozen` is live: since revision 9 a
+ *   turned-down task still moves (the worker may dispute it, a ruling or an
+ *   expiry settles it), so polling goes on.
  * - Subscription: `events` prefers an abort-aware source factory, while still
  *   accepting the original `AsyncIterable` API for compatibility. A browser-
  *   only effect owns its `AbortController`, drains the iterable, retains a
@@ -122,11 +124,13 @@ export interface UseTaskStatusResult {
   refetch: () => void;
 }
 
-/** Statuses after which no further transition is possible (stop polling). */
+/**
+ * Statuses after which no further transition is possible (stop polling).
+ * `RejectFrozen` is not one: a turned-down task ends Completed or Cancelled.
+ */
 const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   TaskStatus.Completed,
   TaskStatus.Cancelled,
-  TaskStatus.RejectFrozen,
 ]);
 const DEFAULT_MAX_EVENTS = 256;
 const MAX_POLL_INTERVAL_MS = 2_147_483_647;

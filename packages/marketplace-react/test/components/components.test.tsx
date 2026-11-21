@@ -331,6 +331,32 @@ describe("ReviewPanel", () => {
     expect(onReject).toHaveBeenCalled();
     expect(onRequestChanges).toHaveBeenCalled();
   });
+  it("turns a single-worker delivery down instead of rejecting it, and says what follows", () => {
+    const onTurnDown = vi.fn();
+    const onReject = vi.fn();
+    const { rerender } = render(
+      <ReviewPanel hasSubmission onTurnDown={onTurnDown} onReject={onReject} />,
+    );
+    expect(screen.queryByRole("button", { name: /^reject$/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^turn down$/i }));
+    expect(onTurnDown).toHaveBeenCalled();
+    expect(onReject).not.toHaveBeenCalled();
+    rerender(
+      <ReviewPanel
+        hasSubmission
+        onTurnDown={onTurnDown}
+        status="success"
+        settledAction="turnDown"
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toMatch(
+      /The worker has 72 hours to dispute this\. If it does not, the price comes back\./,
+    );
+  });
+  it("names a turned-down task as on hold in the timeline", () => {
+    render(<TaskTimeline status={TaskStatus.RejectFrozen} />);
+    expect(screen.getByText(/turned down \(on hold\)/i)).toBeTruthy();
+  });
   it("hides actions and shows the awaiting copy without a submission", () => {
     render(<ReviewPanel hasSubmission={false} />);
     expect(screen.queryByRole("button", { name: /accept/i })).toBeNull();
@@ -342,6 +368,10 @@ describe("DisputeBanner", () => {
   it("renders the open-dispute alert", () => {
     render(<DisputeBanner disputeOpen />);
     expect(screen.getByRole("alert").textContent).toMatch(/in dispute/i);
+  });
+  it("states the bond before a dispute is opened (revision 9)", () => {
+    render(<DisputeBanner onInitiate={() => undefined} />);
+    expect(screen.getByText(/posts a bond of 10% of the price, at least 0\.01 SOL/)).toBeTruthy();
   });
   it("offers initiate when no dispute and a handler is given", () => {
     const onInitiate = vi.fn();
