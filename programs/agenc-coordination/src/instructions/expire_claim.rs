@@ -507,7 +507,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
             Some(creator_info.clone()),
             clock.unix_timestamp,
             AcceptedBidBookDisposition::Reopen,
-            accepted_bid_no_show_bond_disposition(true),
+            // Review R3-3: no no-show slash once a dispute was filed on the task
+            // (it kept the bidder from delivering), as in the cancel drain.
+            accepted_bid_no_show_bond_disposition(!task.dispute_filed()),
         )?;
     }
 
