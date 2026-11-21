@@ -49,7 +49,9 @@ import {
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
 import {
+  findDisputeBondPda,
   findEscrowPda,
+  findExpireDisputeCreatorStatsPda,
   findHireRecordPda,
   findProtocolConfigPda,
   findTaskValidationConfigPda,
@@ -94,6 +96,8 @@ export type ResolveDisputeInstruction<
   TAccountBondTreasury extends string | AccountMeta<string> = string,
   TAccountTaskSubmission extends string | AccountMeta<string> = string,
   TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
+  TAccountDisputeBond extends string | AccountMeta<string> = string,
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -178,6 +182,12 @@ export type ResolveDisputeInstruction<
       TAccountTaskValidationConfig extends string
         ? WritableAccount<TAccountTaskValidationConfig>
         : TAccountTaskValidationConfig,
+      TAccountDisputeBond extends string
+        ? WritableAccount<TAccountDisputeBond>
+        : TAccountDisputeBond,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -259,6 +269,8 @@ export type ResolveDisputeAsyncInput<
   TAccountBondTreasury extends string = string,
   TAccountTaskSubmission extends string = string,
   TAccountTaskValidationConfig extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -297,13 +309,11 @@ export type ResolveDisputeAsyncInput<
   /** Worker agent account for the dispute defendant. */
   worker?: Address<TAccountWorker>;
   /**
-   * OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,
-   * resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was
-   * slashed). Bound to `["agent_stats", dispute.defendant]` (the handler validates
-   * `worker.key() == dispute.defendant`), created lazily on first write. The
-   * `disputes_lost` counter is the SDK slash-history signal. Telemetry only.
+   * here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost` by the
+   * revision 9 outcome rule (records follow the ruling, not the filer). Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
    */
-  agentStats?: Address<TAccountAgentStats>;
+  agentStats: Address<TAccountAgentStats>;
   workerWallet?: Address<TAccountWorkerWallet>;
   /**
    * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
@@ -352,6 +362,19 @@ export type ResolveDisputeAsyncInput<
    * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
+  /**
+   * A system-owned account with no data is a dispute filed before the upgrade (no
+   * bond, nothing moves); a live bond is validated and settled with the ruling by
+   * `settle_dispute_bond`.
+   */
+  disputeBond?: Address<TAccountDisputeBond>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` /
+   * `disputes_lost`, the mirror of the worker's. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
   approve: ResolveDisputeInstructionDataArgs["approve"];
   rationaleHash: ResolveDisputeInstructionDataArgs["rationaleHash"];
   rationaleUri: ResolveDisputeInstructionDataArgs["rationaleUri"];
@@ -384,6 +407,8 @@ export async function getResolveDisputeInstructionAsync<
   TAccountBondTreasury extends string,
   TAccountTaskSubmission extends string,
   TAccountTaskValidationConfig extends string,
+  TAccountDisputeBond extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ResolveDisputeAsyncInput<
@@ -412,7 +437,9 @@ export async function getResolveDisputeInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountBondTreasury,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -443,7 +470,9 @@ export async function getResolveDisputeInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountBondTreasury,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountCreatorStats
   >
 > {
   // Program address.
@@ -499,6 +528,8 @@ export async function getResolveDisputeInstructionAsync<
       value: input.taskValidationConfig ?? null,
       isWritable: true,
     },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -544,6 +575,22 @@ export async function getResolveDisputeInstructionAsync<
       ),
     });
   }
+  if (!accounts.disputeBond.value) {
+    accounts.disputeBond.value = await findDisputeBondPda({
+      dispute: getAddressFromResolvedInstructionAccount(
+        "dispute",
+        accounts.dispute.value,
+      ),
+    });
+  }
+  if (!accounts.creatorStats.value) {
+    accounts.creatorStats.value = await findExpireDisputeCreatorStatsPda({
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -574,6 +621,8 @@ export async function getResolveDisputeInstructionAsync<
       getAccountMeta("bondTreasury", accounts.bondTreasury),
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getResolveDisputeInstructionDataEncoder().encode(
       args as ResolveDisputeInstructionDataArgs,
@@ -606,7 +655,9 @@ export async function getResolveDisputeInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountBondTreasury,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountCreatorStats
   >);
 }
 
@@ -637,6 +688,8 @@ export type ResolveDisputeInput<
   TAccountBondTreasury extends string = string,
   TAccountTaskSubmission extends string = string,
   TAccountTaskValidationConfig extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -675,13 +728,11 @@ export type ResolveDisputeInput<
   /** Worker agent account for the dispute defendant. */
   worker?: Address<TAccountWorker>;
   /**
-   * OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,
-   * resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was
-   * slashed). Bound to `["agent_stats", dispute.defendant]` (the handler validates
-   * `worker.key() == dispute.defendant`), created lazily on first write. The
-   * `disputes_lost` counter is the SDK slash-history signal. Telemetry only.
+   * here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost` by the
+   * revision 9 outcome rule (records follow the ruling, not the filer). Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
    */
-  agentStats?: Address<TAccountAgentStats>;
+  agentStats: Address<TAccountAgentStats>;
   workerWallet?: Address<TAccountWorkerWallet>;
   /**
    * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
@@ -730,6 +781,19 @@ export type ResolveDisputeInput<
    * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
+  /**
+   * A system-owned account with no data is a dispute filed before the upgrade (no
+   * bond, nothing moves); a live bond is validated and settled with the ruling by
+   * `settle_dispute_bond`.
+   */
+  disputeBond: Address<TAccountDisputeBond>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` /
+   * `disputes_lost`, the mirror of the worker's. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
   approve: ResolveDisputeInstructionDataArgs["approve"];
   rationaleHash: ResolveDisputeInstructionDataArgs["rationaleHash"];
   rationaleUri: ResolveDisputeInstructionDataArgs["rationaleUri"];
@@ -762,6 +826,8 @@ export function getResolveDisputeInstruction<
   TAccountBondTreasury extends string,
   TAccountTaskSubmission extends string,
   TAccountTaskValidationConfig extends string,
+  TAccountDisputeBond extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ResolveDisputeInput<
@@ -790,7 +856,9 @@ export function getResolveDisputeInstruction<
     TAccountWorkerCompletionBond,
     TAccountBondTreasury,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): ResolveDisputeInstruction<
@@ -820,7 +888,9 @@ export function getResolveDisputeInstruction<
   TAccountWorkerCompletionBond,
   TAccountBondTreasury,
   TAccountTaskSubmission,
-  TAccountTaskValidationConfig
+  TAccountTaskValidationConfig,
+  TAccountDisputeBond,
+  TAccountCreatorStats
 > {
   // Program address.
   const programAddress =
@@ -875,6 +945,8 @@ export function getResolveDisputeInstruction<
       value: input.taskValidationConfig ?? null,
       isWritable: true,
     },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -923,6 +995,8 @@ export function getResolveDisputeInstruction<
       getAccountMeta("bondTreasury", accounts.bondTreasury),
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getResolveDisputeInstructionDataEncoder().encode(
       args as ResolveDisputeInstructionDataArgs,
@@ -955,7 +1029,9 @@ export function getResolveDisputeInstruction<
     TAccountWorkerCompletionBond,
     TAccountBondTreasury,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountCreatorStats
   >);
 }
 
@@ -1002,13 +1078,11 @@ export type ParsedResolveDisputeInstruction<
     /** Worker agent account for the dispute defendant. */
     worker?: TAccountMetas[8] | undefined;
     /**
-     * OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,
-     * resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was
-     * slashed). Bound to `["agent_stats", dispute.defendant]` (the handler validates
-     * `worker.key() == dispute.defendant`), created lazily on first write. The
-     * `disputes_lost` counter is the SDK slash-history signal. Telemetry only.
+     * here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost` by the
+     * revision 9 outcome rule (records follow the ruling, not the filer). Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
      */
-    agentStats?: TAccountMetas[9] | undefined;
+    agentStats: TAccountMetas[9];
     workerWallet?: TAccountMetas[10] | undefined;
     /**
      * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
@@ -1057,6 +1131,19 @@ export type ParsedResolveDisputeInstruction<
      * submission is still Submitted and therefore carries counter debt.
      */
     taskValidationConfig?: TAccountMetas[25] | undefined;
+    /**
+     * A system-owned account with no data is a dispute filed before the upgrade (no
+     * bond, nothing moves); a live bond is validated and settled with the ruling by
+     * `settle_dispute_bond`.
+     */
+    disputeBond: TAccountMetas[26];
+    /**
+     * to the task creator),
+     * seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` /
+     * `disputes_lost`, the mirror of the worker's. Created when missing by
+     * `ensure_creator_stats`, paid by `authority`.
+     */
+    creatorStats: TAccountMetas[27];
   };
   data: ResolveDisputeInstructionData;
 };
@@ -1069,12 +1156,12 @@ export function parseResolveDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedResolveDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 26) {
+  if (instruction.accounts.length < 28) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 26,
+        expectedAccountMetas: 28,
       },
     );
   }
@@ -1102,7 +1189,7 @@ export function parseResolveDisputeInstruction<
       creator: getNextAccount(),
       workerClaim: getNextOptionalAccount(),
       worker: getNextOptionalAccount(),
-      agentStats: getNextOptionalAccount(),
+      agentStats: getNextAccount(),
       workerWallet: getNextOptionalAccount(),
       hireRecord: getNextAccount(),
       disputeOperator: getNextOptionalAccount(),
@@ -1119,6 +1206,8 @@ export function parseResolveDisputeInstruction<
       bondTreasury: getNextAccount(),
       taskSubmission: getNextOptionalAccount(),
       taskValidationConfig: getNextOptionalAccount(),
+      disputeBond: getNextAccount(),
+      creatorStats: getNextAccount(),
     },
     data: getResolveDisputeInstructionDataDecoder().decode(instruction.data),
   };

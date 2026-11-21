@@ -48,12 +48,14 @@ const STRING_BEARING_MODULES = [
   "events/taskJobSpecSet.ts",
   "instructions/createGoodsListing.ts",
   "instructions/createServiceListing.ts",
+  "instructions/disputeRejection.ts",
   "instructions/initiateDispute.ts",
   "instructions/rateHire.ts",
   "instructions/recordAgentVerification.ts",
   "instructions/registerAgent.ts",
   "instructions/registerStore.ts",
   "instructions/resolveDispute.ts",
+  "instructions/resolveRejectFrozen.ts",
   "instructions/setDefaultTrustList.ts",
   "instructions/setModerationBlock.ts",
   "instructions/setTaskJobSpec.ts",
@@ -166,14 +168,14 @@ describe("generated Borsh string codec coverage", () => {
           count + (source.match(/getBorshStringDecoder\(\)/g)?.length ?? 0),
         0,
       ),
-    ).toBe(37);
+    ).toBe(39);
     expect(
       sources.reduce(
         (count, { source }) =>
           count + (source.match(/getBorshStringEncoder\(\)/g)?.length ?? 0),
         0,
       ),
-    ).toBe(32);
+    ).toBe(34);
     expect(
       sources.filter(({ source }) =>
         /\bgetUtf8(?:Decoder|Encoder)\b/.test(source),

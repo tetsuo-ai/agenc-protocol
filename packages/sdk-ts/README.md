@@ -269,18 +269,39 @@ pin a moderated job spec → claim → submit → accept/close/rate) is in
 [`examples/embeddable-marketplace.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/embeddable-marketplace.ts), and the
 getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
 
-### Workspace status (revision 8)
+### Workspace status (revision 9, not released yet)
 
-- Package version `0.13.0` is released for the revision-8 program (deployed
-  2026-10-28).
-- Generated client covers the live **104-instruction** revision-8 IDL.
-  `SURFACE_REVISION_CURRENT` is 8 (`SURFACE_REVISION_FEE_QUALIFIED_RATINGS`).
+- This workspace targets the revision 9 program and its **106-instruction**
+  IDL. It is not released yet. Package version `0.13.0` on npm is the
+  revision 8 release (104 instructions, deployed 2026-10-28).
+- `SURFACE_REVISION_CURRENT` is 9 (`SURFACE_REVISION_ACCOUNTABLE_REVIEW`).
+  `capabilitiesForRevision(8)` still reads as the full surface, with
+  `accountableReview: false`. Several revision 9 wires changed, so do not send
+  revision 9 writes to a revision 8 program.
+- What revision 9 changes for clients:
+  - A turn-down on a single-worker review task is `rejectAndFreeze`. A plain
+    `rejectTaskResult` there fails with 6418. The worker has 72 hours to
+    dispute the turn-down with `disputeRejection`, posting a bond of 10% of the
+    price, at least 0.01 SOL. With no dispute, the buyer is refunded when that
+    window ends. The 2-of-3 multisig has 72 hours to rule on a dispute. If
+    nobody rules, the buyer is refunded and the worker gets its bond back.
+    `readTurnDown` and `turnDownStage` tell these cases apart, and a revision 8
+    freeze keeps its old rules (after its review time the worker is paid).
+  - Every dispute costs its filer a bond (`values.disputeBondForTask`).
+  - Every non-contest claim puts down a deposit of 10% of the worker's share,
+    at least 0.005 SOL (`values.claimDepositForTask`). It comes back on the
+    first delivery. It goes to the buyer when the claim ends without a delivery
+    after its expiry. `releaseClaim` gives up a claim early: within 1 hour of
+    claiming, the deposit comes back.
+  - Worker and creator records are required on every reject, freeze, cancel,
+    ruling and expiry. The facades derive them. `getCreatorTrackRecord` reads
+    a creator's record.
 - The older 0.12.0 package targets the superseded 101-instruction revision-5
   wire; its changed writes, such as the legacy feed vote, fail closed against
   the live program. Pre-1.0 versioning still applies.
 - Facade intentionally omits bare `claim_task` (program fail-closed).
   `complete_task_private` is not in the production IDL; it exists only in the
-  unsupported 107-instruction `private-zk` development build.
+  unsupported 109-instruction `private-zk` development build.
 
 ### Historical transaction backfills
 
@@ -309,7 +330,9 @@ revision 5.
 | Surface                                 | Facade entry points                                                 | Notes                                                                   |
 | --------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Completion bonds                        | `postCompletionBond`, `reclaimCompletionBond`                       | Exclusive + SOL v1                                                      |
-| Disputes                                | initiate / resolve / expire / `settleDisputeClaim`                  | single-resolver model (no `vote_dispute`); chunked peer crank after a recorded ruling |
+| Disputes                                | initiate / resolve / expire / cancel / `settleDisputeClaim`         | single-resolver model (no `vote_dispute`); chunked peer crank after a recorded ruling; revision 9: every filing posts a bond, and single-worker review tasks take no task dispute |
+| Turn-downs (revision 9)                 | `rejectAndFreeze`, `disputeRejection`, `resolveRejectFrozen`, `expireRejectFrozen`, `readTurnDown` | the worker may dispute within 72 hours with a bond; unruled or undisputed turn-downs refund the buyer |
+| Claim release (revision 9)              | `releaseClaim`                                                      | the deposit comes back within 1 hour of claiming                         |
 | Bids                                    | create / update / cancel / accept / expire, plus `promoteBid` / `demoteIneligibleBest` | Marketplace V2; `acceptBid` is O(1) and does not take competitor pairs |
 | Store identity (0.9.0)                  | `registerStore`, `updateStore`, `closeStore`, `moderationHeartbeat` | batch-2                                                                 |
 | Contests (0.10.0)                       | `createContestTask`, `distributeGhostShare`, `reclaimTerminalClaim` | `createContestTask` is a facade (`create_task` + `configure_task_validation`); there is no `create_contest_task` ix |
@@ -473,7 +496,7 @@ Pre-1.0. The generated client covers all program instructions; the facade wraps 
 core marketplace lifecycle and most advanced instruction groups. It intentionally
 omits legacy `claim_task` (fail-closed in the program) and keeps
 `complete_task_private` out of the production client. That instruction exists
-only in the separate, unsupported 104-instruction `private-zk` development
+only in the separate, unsupported 109-instruction `private-zk` development
 surface. On-chain coverage is via litesvm e2e tests.
 
 ## License

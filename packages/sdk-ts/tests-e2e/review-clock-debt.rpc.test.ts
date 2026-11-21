@@ -113,6 +113,9 @@ describe.skipIf(!RPC_ENABLED)(
           task,
           dispute,
           authority: worker.signer,
+          // A worker filed: the bond's respondent is the task creator.
+          respondent: creator.signer.address,
+          creator: creator.signer.address,
           defendant: worker.agent,
           taskValidationConfig: validation,
         }),

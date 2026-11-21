@@ -25,10 +25,10 @@ import {
   type InstructionWithAccounts,
   type InstructionWithData,
   type ReadonlyAccount,
-  type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
+  type WritableSignerAccount,
 } from "@solana/kit";
 
 import { getFixedBytesEncoder } from "../codecs/fixedBytes";
@@ -39,11 +39,14 @@ import {
 } from "@solana/program-client-core";
 import {
   findCreatorCompletionBondPda,
+  findDisputeRejectionDisputeBondPda,
   findEscrowPda,
+  findExpireDisputeCreatorStatsPda,
   findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findWorkerCompletionBondPda,
+  findWorkerStatsPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -73,6 +76,9 @@ export type ExpireRejectFrozenInstruction<
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountDisputeBond extends string | AccountMeta<string> = string,
+  TAccountWorkerStats extends string | AccountMeta<string> = string,
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -115,7 +121,7 @@ export type ExpireRejectFrozenInstruction<
         ? WritableAccount<TAccountReferrer>
         : TAccountReferrer,
       TAccountAuthority extends string
-        ? ReadonlySignerAccount<TAccountAuthority> &
+        ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
       TAccountCreatorCompletionBond extends string
@@ -127,6 +133,15 @@ export type ExpireRejectFrozenInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountDisputeBond extends string
+        ? WritableAccount<TAccountDisputeBond>
+        : TAccountDisputeBond,
+      TAccountWorkerStats extends string
+        ? WritableAccount<TAccountWorkerStats>
+        : TAccountWorkerStats,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -182,6 +197,9 @@ export type ExpireRejectFrozenAsyncInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -196,7 +214,7 @@ export type ExpireRejectFrozenAsyncInput<
   hireRecord?: Address<TAccountHireRecord>;
   operator?: Address<TAccountOperator>;
   referrer?: Address<TAccountReferrer>;
-  /** Permissionless caller. */
+  /** Permissionless caller. Writable (revision 9): it pays for a missing record. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * refunded on this no-fault timeout exit. Making it omittable would let a caller
@@ -208,6 +226,22 @@ export type ExpireRejectFrozenAsyncInput<
   /** worker authority (audit F5/F12); refunded on this no-fault exit. */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * system-owned account with no data means "not disputed" (whatever lamports
+   * it holds); a live bond is validated and settled by `settle_dispute_bond`.
+   */
+  disputeBond?: Address<TAccountDisputeBond>;
+  /**
+   * here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats?: Address<TAccountWorkerStats>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
 };
 
 export async function getExpireRejectFrozenInstructionAsync<
@@ -227,6 +261,9 @@ export async function getExpireRejectFrozenInstructionAsync<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountSystemProgram extends string,
+  TAccountDisputeBond extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireRejectFrozenAsyncInput<
@@ -245,7 +282,10 @@ export async function getExpireRejectFrozenInstructionAsync<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -266,7 +306,10 @@ export async function getExpireRejectFrozenInstructionAsync<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >
 > {
   // Program address.
@@ -287,7 +330,7 @@ export async function getExpireRejectFrozenInstructionAsync<
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     operator: { value: input.operator ?? null, isWritable: true },
     referrer: { value: input.referrer ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -297,6 +340,9 @@ export async function getExpireRejectFrozenInstructionAsync<
       isWritable: true,
     },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -359,6 +405,30 @@ export async function getExpireRejectFrozenInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.disputeBond.value) {
+    accounts.disputeBond.value = await findDisputeRejectionDisputeBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
+  if (!accounts.workerStats.value) {
+    accounts.workerStats.value = await findWorkerStatsPda({
+      worker: getAddressFromResolvedInstructionAccount(
+        "worker",
+        accounts.worker.value,
+      ),
+    });
+  }
+  if (!accounts.creatorStats.value) {
+    accounts.creatorStats.value = await findExpireDisputeCreatorStatsPda({
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -379,6 +449,9 @@ export async function getExpireRejectFrozenInstructionAsync<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getExpireRejectFrozenInstructionDataEncoder().encode({}),
     programAddress,
@@ -399,7 +472,10 @@ export async function getExpireRejectFrozenInstructionAsync<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >);
 }
 
@@ -420,6 +496,9 @@ export type ExpireRejectFrozenInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -434,7 +513,7 @@ export type ExpireRejectFrozenInput<
   hireRecord: Address<TAccountHireRecord>;
   operator?: Address<TAccountOperator>;
   referrer?: Address<TAccountReferrer>;
-  /** Permissionless caller. */
+  /** Permissionless caller. Writable (revision 9): it pays for a missing record. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * refunded on this no-fault timeout exit. Making it omittable would let a caller
@@ -446,6 +525,22 @@ export type ExpireRejectFrozenInput<
   /** worker authority (audit F5/F12); refunded on this no-fault exit. */
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * system-owned account with no data means "not disputed" (whatever lamports
+   * it holds); a live bond is validated and settled by `settle_dispute_bond`.
+   */
+  disputeBond: Address<TAccountDisputeBond>;
+  /**
+   * here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
 };
 
 export function getExpireRejectFrozenInstruction<
@@ -465,6 +560,9 @@ export function getExpireRejectFrozenInstruction<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountSystemProgram extends string,
+  TAccountDisputeBond extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireRejectFrozenInput<
@@ -483,7 +581,10 @@ export function getExpireRejectFrozenInstruction<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): ExpireRejectFrozenInstruction<
@@ -503,7 +604,10 @@ export function getExpireRejectFrozenInstruction<
   TAccountAuthority,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountDisputeBond,
+  TAccountWorkerStats,
+  TAccountCreatorStats
 > {
   // Program address.
   const programAddress =
@@ -523,7 +627,7 @@ export function getExpireRejectFrozenInstruction<
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     operator: { value: input.operator ?? null, isWritable: true },
     referrer: { value: input.referrer ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -533,6 +637,9 @@ export function getExpireRejectFrozenInstruction<
       isWritable: true,
     },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -564,6 +671,9 @@ export function getExpireRejectFrozenInstruction<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getExpireRejectFrozenInstructionDataEncoder().encode({}),
     programAddress,
@@ -584,7 +694,10 @@ export function getExpireRejectFrozenInstruction<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >);
 }
 
@@ -607,7 +720,7 @@ export type ParsedExpireRejectFrozenInstruction<
     hireRecord: TAccountMetas[9];
     operator?: TAccountMetas[10] | undefined;
     referrer?: TAccountMetas[11] | undefined;
-    /** Permissionless caller. */
+    /** Permissionless caller. Writable (revision 9): it pays for a missing record. */
     authority: TAccountMetas[12];
     /**
      * refunded on this no-fault timeout exit. Making it omittable would let a caller
@@ -619,6 +732,22 @@ export type ParsedExpireRejectFrozenInstruction<
     /** worker authority (audit F5/F12); refunded on this no-fault exit. */
     workerCompletionBond: TAccountMetas[14];
     systemProgram: TAccountMetas[15];
+    /**
+     * system-owned account with no data means "not disputed" (whatever lamports
+     * it holds); a live bond is validated and settled by `settle_dispute_bond`.
+     */
+    disputeBond: TAccountMetas[16];
+    /**
+     * here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
+     */
+    workerStats: TAccountMetas[17];
+    /**
+     * to the task creator),
+     * seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by
+     * `ensure_creator_stats`, paid by `authority`.
+     */
+    creatorStats: TAccountMetas[18];
   };
   data: ExpireRejectFrozenInstructionData;
 };
@@ -631,12 +760,12 @@ export function parseExpireRejectFrozenInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedExpireRejectFrozenInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 16) {
+  if (instruction.accounts.length < 19) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 16,
+        expectedAccountMetas: 19,
       },
     );
   }
@@ -671,6 +800,9 @@ export function parseExpireRejectFrozenInstruction<
       creatorCompletionBond: getNextAccount(),
       workerCompletionBond: getNextAccount(),
       systemProgram: getNextAccount(),
+      disputeBond: getNextAccount(),
+      workerStats: getNextAccount(),
+      creatorStats: getNextAccount(),
     },
     data: getExpireRejectFrozenInstructionDataDecoder().decode(
       instruction.data,

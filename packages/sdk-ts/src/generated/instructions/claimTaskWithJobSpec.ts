@@ -42,6 +42,7 @@ import {
   findHireRecordPda,
   findProtocolConfigPda,
   findTaskJobSpecPda,
+  findWorkerStatsPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -65,6 +66,7 @@ export type ClaimTaskWithJobSpecInstruction<
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountWorkerStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -101,6 +103,9 @@ export type ClaimTaskWithJobSpecInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountWorkerStats extends string
+        ? WritableAccount<TAccountWorkerStats>
+        : TAccountWorkerStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -150,6 +155,7 @@ export type ClaimTaskWithJobSpecAsyncInput<
   TAccountWorker extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountWorkerStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   taskJobSpec?: Address<TAccountTaskJobSpec>;
@@ -177,6 +183,11 @@ export type ClaimTaskWithJobSpecAsyncInput<
   worker: Address<TAccountWorker>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * here. REQUIRED: created at claim; no counter moves here. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats?: Address<TAccountWorkerStats>;
 };
 
 export async function getClaimTaskWithJobSpecInstructionAsync<
@@ -190,6 +201,7 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
   TAccountWorker extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
+  TAccountWorkerStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ClaimTaskWithJobSpecAsyncInput<
@@ -202,7 +214,8 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     TAccountProtocolConfig,
     TAccountWorker,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -217,7 +230,8 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     TAccountProtocolConfig,
     TAccountWorker,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerStats
   >
 > {
   // Program address.
@@ -239,6 +253,7 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     worker: { value: input.worker ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -281,6 +296,14 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.workerStats.value) {
+    accounts.workerStats.value = await findWorkerStatsPda({
+      worker: getAddressFromResolvedInstructionAccount(
+        "worker",
+        accounts.worker.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -295,6 +318,7 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
       getAccountMeta("worker", accounts.worker),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("workerStats", accounts.workerStats),
     ],
     data: getClaimTaskWithJobSpecInstructionDataEncoder().encode({}),
     programAddress,
@@ -309,7 +333,8 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     TAccountProtocolConfig,
     TAccountWorker,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerStats
   >);
 }
 
@@ -324,6 +349,7 @@ export type ClaimTaskWithJobSpecInput<
   TAccountWorker extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountWorkerStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   taskJobSpec: Address<TAccountTaskJobSpec>;
@@ -351,6 +377,11 @@ export type ClaimTaskWithJobSpecInput<
   worker: Address<TAccountWorker>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * here. REQUIRED: created at claim; no counter moves here. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
 };
 
 export function getClaimTaskWithJobSpecInstruction<
@@ -364,6 +395,7 @@ export function getClaimTaskWithJobSpecInstruction<
   TAccountWorker extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
+  TAccountWorkerStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ClaimTaskWithJobSpecInput<
@@ -376,7 +408,8 @@ export function getClaimTaskWithJobSpecInstruction<
     TAccountProtocolConfig,
     TAccountWorker,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): ClaimTaskWithJobSpecInstruction<
@@ -390,7 +423,8 @@ export function getClaimTaskWithJobSpecInstruction<
   TAccountProtocolConfig,
   TAccountWorker,
   TAccountAuthority,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountWorkerStats
 > {
   // Program address.
   const programAddress =
@@ -411,6 +445,7 @@ export function getClaimTaskWithJobSpecInstruction<
     worker: { value: input.worker ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -436,6 +471,7 @@ export function getClaimTaskWithJobSpecInstruction<
       getAccountMeta("worker", accounts.worker),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("workerStats", accounts.workerStats),
     ],
     data: getClaimTaskWithJobSpecInstructionDataEncoder().encode({}),
     programAddress,
@@ -450,7 +486,8 @@ export function getClaimTaskWithJobSpecInstruction<
     TAccountProtocolConfig,
     TAccountWorker,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerStats
   >);
 }
 
@@ -486,6 +523,11 @@ export type ParsedClaimTaskWithJobSpecInstruction<
     worker: TAccountMetas[7];
     authority: TAccountMetas[8];
     systemProgram: TAccountMetas[9];
+    /**
+     * here. REQUIRED: created at claim; no counter moves here. Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
+     */
+    workerStats: TAccountMetas[10];
   };
   data: ClaimTaskWithJobSpecInstructionData;
 };
@@ -498,12 +540,12 @@ export function parseClaimTaskWithJobSpecInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedClaimTaskWithJobSpecInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 10) {
+  if (instruction.accounts.length < 11) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 10,
+        expectedAccountMetas: 11,
       },
     );
   }
@@ -532,6 +574,7 @@ export function parseClaimTaskWithJobSpecInstruction<
       worker: getNextAccount(),
       authority: getNextAccount(),
       systemProgram: getNextAccount(),
+      workerStats: getNextAccount(),
     },
     data: getClaimTaskWithJobSpecInstructionDataDecoder().decode(
       instruction.data,

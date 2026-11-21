@@ -63,6 +63,7 @@ export type ReclaimTerminalClaimInstruction<
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountTreasury extends string | AccountMeta<string> = string,
   TAccountRentRecipient extends string | AccountMeta<string> = string,
+  TAccountCreator extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -96,6 +97,9 @@ export type ReclaimTerminalClaimInstruction<
       TAccountRentRecipient extends string
         ? WritableAccount<TAccountRentRecipient>
         : TAccountRentRecipient,
+      TAccountCreator extends string
+        ? WritableAccount<TAccountCreator>
+        : TAccountCreator,
       ...TRemainingAccounts,
     ]
   >;
@@ -144,6 +148,7 @@ export type ReclaimTerminalClaimAsyncInput<
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
   TAccountRentRecipient extends string = string,
+  TAccountCreator extends string = string,
 > = {
   /** Permissionless caller; pays only the transaction fee. */
   authority: TransactionSigner<TAccountAuthority>;
@@ -181,6 +186,11 @@ export type ReclaimTerminalClaimAsyncInput<
    * closed submission balance. No caller-supplied-account trust.
    */
   rentRecipient: Address<TAccountRentRecipient>;
+  /**
+   * Revision 9 (E): receives a non-contest claim deposit once the claim is past
+   * its expiry (the claim ended without a delivery).
+   */
+  creator: Address<TAccountCreator>;
 };
 
 export async function getReclaimTerminalClaimInstructionAsync<
@@ -193,6 +203,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
   TAccountRentRecipient extends string,
+  TAccountCreator extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ReclaimTerminalClaimAsyncInput<
@@ -204,7 +215,8 @@ export async function getReclaimTerminalClaimInstructionAsync<
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
-    TAccountRentRecipient
+    TAccountRentRecipient,
+    TAccountCreator
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -218,7 +230,8 @@ export async function getReclaimTerminalClaimInstructionAsync<
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
-    TAccountRentRecipient
+    TAccountRentRecipient,
+    TAccountCreator
   >
 > {
   // Program address.
@@ -239,6 +252,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
     rentRecipient: { value: input.rentRecipient ?? null, isWritable: true },
+    creator: { value: input.creator ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -290,6 +304,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("rentRecipient", accounts.rentRecipient),
+      getAccountMeta("creator", accounts.creator),
     ],
     data: getReclaimTerminalClaimInstructionDataEncoder().encode({}),
     programAddress,
@@ -303,7 +318,8 @@ export async function getReclaimTerminalClaimInstructionAsync<
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
-    TAccountRentRecipient
+    TAccountRentRecipient,
+    TAccountCreator
   >);
 }
 
@@ -317,6 +333,7 @@ export type ReclaimTerminalClaimInput<
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
   TAccountRentRecipient extends string = string,
+  TAccountCreator extends string = string,
 > = {
   /** Permissionless caller; pays only the transaction fee. */
   authority: TransactionSigner<TAccountAuthority>;
@@ -354,6 +371,11 @@ export type ReclaimTerminalClaimInput<
    * closed submission balance. No caller-supplied-account trust.
    */
   rentRecipient: Address<TAccountRentRecipient>;
+  /**
+   * Revision 9 (E): receives a non-contest claim deposit once the claim is past
+   * its expiry (the claim ended without a delivery).
+   */
+  creator: Address<TAccountCreator>;
 };
 
 export function getReclaimTerminalClaimInstruction<
@@ -366,6 +388,7 @@ export function getReclaimTerminalClaimInstruction<
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
   TAccountRentRecipient extends string,
+  TAccountCreator extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ReclaimTerminalClaimInput<
@@ -377,7 +400,8 @@ export function getReclaimTerminalClaimInstruction<
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
-    TAccountRentRecipient
+    TAccountRentRecipient,
+    TAccountCreator
   >,
   config?: { programAddress?: TProgramAddress },
 ): ReclaimTerminalClaimInstruction<
@@ -390,7 +414,8 @@ export function getReclaimTerminalClaimInstruction<
   TAccountWorker,
   TAccountProtocolConfig,
   TAccountTreasury,
-  TAccountRentRecipient
+  TAccountRentRecipient,
+  TAccountCreator
 > {
   // Program address.
   const programAddress =
@@ -410,6 +435,7 @@ export function getReclaimTerminalClaimInstruction<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
     rentRecipient: { value: input.rentRecipient ?? null, isWritable: true },
+    creator: { value: input.creator ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -428,6 +454,7 @@ export function getReclaimTerminalClaimInstruction<
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("rentRecipient", accounts.rentRecipient),
+      getAccountMeta("creator", accounts.creator),
     ],
     data: getReclaimTerminalClaimInstructionDataEncoder().encode({}),
     programAddress,
@@ -441,7 +468,8 @@ export function getReclaimTerminalClaimInstruction<
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
-    TAccountRentRecipient
+    TAccountRentRecipient,
+    TAccountCreator
   >);
 }
 
@@ -487,6 +515,11 @@ export type ParsedReclaimTerminalClaimInstruction<
      * closed submission balance. No caller-supplied-account trust.
      */
     rentRecipient: TAccountMetas[8];
+    /**
+     * Revision 9 (E): receives a non-contest claim deposit once the claim is past
+     * its expiry (the claim ended without a delivery).
+     */
+    creator: TAccountMetas[9];
   };
   data: ReclaimTerminalClaimInstructionData;
 };
@@ -499,12 +532,12 @@ export function parseReclaimTerminalClaimInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedReclaimTerminalClaimInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 9) {
+  if (instruction.accounts.length < 10) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 9,
+        expectedAccountMetas: 10,
       },
     );
   }
@@ -532,6 +565,7 @@ export function parseReclaimTerminalClaimInstruction<
       protocolConfig: getNextAccount(),
       treasury: getNextAccount(),
       rentRecipient: getNextAccount(),
+      creator: getNextAccount(),
     },
     data: getReclaimTerminalClaimInstructionDataDecoder().decode(
       instruction.data,

@@ -8,6 +8,7 @@
 
 export * from "./agentStatus";
 export * from "./bidBookState";
+export * from "./creatorRecordCounter";
 export * from "./dependencyType";
 export * from "./disputeStatus";
 export * from "./listingState";

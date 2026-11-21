@@ -5,10 +5,11 @@ import {
   isSkillRatingFeeQualified,
 } from "../src/facade/index.js";
 
-it("exposes fee evidence only on reviewed revision 8", () => {
-  for (const revision of [0, 5, 6, 7, 9, 65535])
+it("exposes fee evidence from reviewed revision 8 on", () => {
+  for (const revision of [0, 5, 6, 7, 10, 65535])
     expect(capabilitiesForRevision(revision).feeQualifiedRatings).toBe(false);
   expect(capabilitiesForRevision(8).feeQualifiedRatings).toBe(true);
+  expect(capabilitiesForRevision(9).feeQualifiedRatings).toBe(true);
 });
 
 it("decodes canonical receipt evidence without interpreting price or unknown reserved flags", () => {

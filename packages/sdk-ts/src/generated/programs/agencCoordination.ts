@@ -43,7 +43,9 @@ import {
   getBidMarketplaceConfigCodec,
   getCompletionBondCodec,
   getCoordinationStateCodec,
+  getCreatorStatsCodec,
   getDefaultTrustListCodec,
+  getDisputeBondCodec,
   getDisputeCodec,
   getDisputeCounterRepairCodec,
   getDisputeResolverCodec,
@@ -98,10 +100,14 @@ import {
   type CompletionBondArgs,
   type CoordinationState,
   type CoordinationStateArgs,
+  type CreatorStats,
+  type CreatorStatsArgs,
   type DefaultTrustList,
   type DefaultTrustListArgs,
   type Dispute,
   type DisputeArgs,
+  type DisputeBond,
+  type DisputeBondArgs,
   type DisputeCounterRepair,
   type DisputeCounterRepairArgs,
   type DisputeResolver,
@@ -204,6 +210,7 @@ import {
   getDelegateReputationInstructionAsync,
   getDemoteIneligibleBestInstructionAsync,
   getDeregisterAgentInstructionAsync,
+  getDisputeRejectionInstructionAsync,
   getDistributeGhostShareInstructionAsync,
   getExecuteProposalInstructionAsync,
   getExpireBidInstructionAsync,
@@ -240,6 +247,7 @@ import {
   getRegisterStoreInstructionAsync,
   getRejectAndFreezeInstructionAsync,
   getRejectTaskResultInstructionAsync,
+  getReleaseClaimInstructionAsync,
   getRepairDisputeInitiatorCounterInstructionAsync,
   getRequestAttestorExitInstruction,
   getRequestChangesInstructionAsync,
@@ -308,6 +316,7 @@ import {
   parseDelegateReputationInstruction,
   parseDemoteIneligibleBestInstruction,
   parseDeregisterAgentInstruction,
+  parseDisputeRejectionInstruction,
   parseDistributeGhostShareInstruction,
   parseExecuteProposalInstruction,
   parseExpireBidInstruction,
@@ -344,6 +353,7 @@ import {
   parseRegisterStoreInstruction,
   parseRejectAndFreezeInstruction,
   parseRejectTaskResultInstruction,
+  parseReleaseClaimInstruction,
   parseRepairDisputeInitiatorCounterInstruction,
   parseRequestAttestorExitInstruction,
   parseRequestChangesInstruction,
@@ -412,6 +422,7 @@ import {
   type DelegateReputationAsyncInput,
   type DemoteIneligibleBestAsyncInput,
   type DeregisterAgentAsyncInput,
+  type DisputeRejectionAsyncInput,
   type DistributeGhostShareAsyncInput,
   type ExecuteProposalAsyncInput,
   type ExpireBidAsyncInput,
@@ -459,6 +470,7 @@ import {
   type ParsedDelegateReputationInstruction,
   type ParsedDemoteIneligibleBestInstruction,
   type ParsedDeregisterAgentInstruction,
+  type ParsedDisputeRejectionInstruction,
   type ParsedDistributeGhostShareInstruction,
   type ParsedExecuteProposalInstruction,
   type ParsedExpireBidInstruction,
@@ -495,6 +507,7 @@ import {
   type ParsedRegisterStoreInstruction,
   type ParsedRejectAndFreezeInstruction,
   type ParsedRejectTaskResultInstruction,
+  type ParsedReleaseClaimInstruction,
   type ParsedRepairDisputeInitiatorCounterInstruction,
   type ParsedRequestAttestorExitInstruction,
   type ParsedRequestChangesInstruction,
@@ -552,6 +565,7 @@ import {
   type RegisterStoreAsyncInput,
   type RejectAndFreezeAsyncInput,
   type RejectTaskResultAsyncInput,
+  type ReleaseClaimAsyncInput,
   type RepairDisputeInitiatorCounterAsyncInput,
   type RequestAttestorExitInput,
   type RequestChangesAsyncInput,
@@ -608,12 +622,15 @@ import {
   findCompletionBondPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
+  findCreatorStatsPda,
   findDefaultTrustListPda,
   findDelegationPda,
+  findDisputeBondPda,
   findDisputePda,
+  findDisputeRejectionDisputeBondPda,
   findDisputeResolverPda,
   findEscrowPda,
-  findExpireClaimAgentStatsPda,
+  findExpireDisputeCreatorStatsPda,
   findGoodPda,
   findGovernanceConfigPda,
   findHireRatingPda,
@@ -649,6 +666,7 @@ import {
   findVotePda,
   findVoteProposalVotePda,
   findWorkerCompletionBondPda,
+  findWorkerStatsPda,
 } from "../pdas";
 
 export const AGENC_COORDINATION_PROGRAM_ADDRESS =
@@ -664,8 +682,10 @@ export enum AgencCoordinationAccount {
   BidderMarketState,
   CompletionBond,
   CoordinationState,
+  CreatorStats,
   DefaultTrustList,
   Dispute,
+  DisputeBond,
   DisputeCounterRepair,
   DisputeResolver,
   FeedAuthorityVote,
@@ -810,6 +830,17 @@ export function identifyAgencCoordinationAccount(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
+        new Uint8Array([239, 158, 112, 237, 227, 82, 97, 129]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.CreatorStats;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([142, 83, 121, 72, 66, 39, 149, 44]),
       ),
       0,
@@ -827,6 +858,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.Dispute;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([52, 102, 115, 175, 111, 220, 8, 79]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.DisputeBond;
   }
   if (
     containsBytes(
@@ -1250,6 +1292,7 @@ export enum AgencCoordinationInstruction {
   DelegateReputation,
   DemoteIneligibleBest,
   DeregisterAgent,
+  DisputeRejection,
   DistributeGhostShare,
   ExecuteProposal,
   ExpireBid,
@@ -1286,6 +1329,7 @@ export enum AgencCoordinationInstruction {
   RegisterStore,
   RejectAndFreeze,
   RejectTaskResult,
+  ReleaseClaim,
   RepairDisputeInitiatorCounter,
   RequestAttestorExit,
   RequestChanges,
@@ -1659,6 +1703,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.DeregisterAgent;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([219, 216, 21, 241, 9, 27, 136, 53]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.DisputeRejection;
   }
   if (
     containsBytes(
@@ -2060,6 +2115,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
+        new Uint8Array([109, 194, 80, 47, 30, 93, 16, 253]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ReleaseClaim;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([225, 75, 211, 96, 189, 248, 128, 146]),
       ),
       0,
@@ -2104,7 +2170,7 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
-        new Uint8Array([247, 17, 223, 213, 12, 193, 235, 127]),
+        new Uint8Array([64, 51, 69, 144, 38, 227, 148, 59]),
       ),
       0,
     )
@@ -2574,6 +2640,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.DeregisterAgent;
     } & ParsedDeregisterAgentInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.DisputeRejection;
+    } & ParsedDisputeRejectionInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.DistributeGhostShare;
     } & ParsedDistributeGhostShareInstruction<TProgram>)
   | ({
@@ -2681,6 +2750,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.RejectTaskResult;
     } & ParsedRejectTaskResultInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.ReleaseClaim;
+    } & ParsedReleaseClaimInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.RepairDisputeInitiatorCounter;
     } & ParsedRepairDisputeInitiatorCounterInstruction<TProgram>)
@@ -3012,6 +3084,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseDeregisterAgentInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.DisputeRejection: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.DisputeRejection,
+        ...parseDisputeRejectionInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.DistributeGhostShare: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3263,6 +3342,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.RejectTaskResult,
         ...parseRejectTaskResultInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.ReleaseClaim: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.ReleaseClaim,
+        ...parseReleaseClaimInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.RepairDisputeInitiatorCounter: {
@@ -3569,10 +3655,14 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<CompletionBondArgs, CompletionBond>;
   coordinationState: ReturnType<typeof getCoordinationStateCodec> &
     SelfFetchFunctions<CoordinationStateArgs, CoordinationState>;
+  creatorStats: ReturnType<typeof getCreatorStatsCodec> &
+    SelfFetchFunctions<CreatorStatsArgs, CreatorStats>;
   defaultTrustList: ReturnType<typeof getDefaultTrustListCodec> &
     SelfFetchFunctions<DefaultTrustListArgs, DefaultTrustList>;
   dispute: ReturnType<typeof getDisputeCodec> &
     SelfFetchFunctions<DisputeArgs, Dispute>;
+  disputeBond: ReturnType<typeof getDisputeBondCodec> &
+    SelfFetchFunctions<DisputeBondArgs, DisputeBond>;
   disputeCounterRepair: ReturnType<typeof getDisputeCounterRepairCodec> &
     SelfFetchFunctions<DisputeCounterRepairArgs, DisputeCounterRepair>;
   disputeResolver: ReturnType<typeof getDisputeResolverCodec> &
@@ -3765,6 +3855,10 @@ export type AgencCoordinationPluginInstructions = {
     input: DeregisterAgentAsyncInput,
   ) => ReturnType<typeof getDeregisterAgentInstructionAsync> &
     SelfPlanAndSendFunctions;
+  disputeRejection: (
+    input: DisputeRejectionAsyncInput,
+  ) => ReturnType<typeof getDisputeRejectionInstructionAsync> &
+    SelfPlanAndSendFunctions;
   distributeGhostShare: (
     input: DistributeGhostShareAsyncInput,
   ) => ReturnType<typeof getDistributeGhostShareInstructionAsync> &
@@ -3907,6 +4001,10 @@ export type AgencCoordinationPluginInstructions = {
   rejectTaskResult: (
     input: RejectTaskResultAsyncInput,
   ) => ReturnType<typeof getRejectTaskResultInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  releaseClaim: (
+    input: ReleaseClaimAsyncInput,
+  ) => ReturnType<typeof getReleaseClaimInstructionAsync> &
     SelfPlanAndSendFunctions;
   repairDisputeInitiatorCounter: (
     input: RepairDisputeInitiatorCounterAsyncInput,
@@ -4078,9 +4176,12 @@ export type AgencCoordinationPluginPdas = {
   disputeResolver: typeof findDisputeResolverPda;
   moderationConfig: typeof findModerationConfigPda;
   moderationAttestor: typeof findModerationAttestorPda;
+  disputeBond: typeof findDisputeBondPda;
   cancelTaskCreatorCompletionBond: typeof findCancelTaskCreatorCompletionBondPda;
   cancelTaskWorkerCompletionBond: typeof findCancelTaskWorkerCompletionBondPda;
   agentStats: typeof findAgentStatsPda;
+  creatorStats: typeof findCreatorStatsPda;
+  workerStats: typeof findWorkerStatsPda;
   store: typeof findStorePda;
   taskQuota: typeof findTaskQuotaPda;
   quotaAuthorityRateLimit: typeof findQuotaAuthorityRateLimitPda;
@@ -4095,7 +4196,8 @@ export type AgencCoordinationPluginPdas = {
   createTaskHumanlessAuthorityRateLimit: typeof findCreateTaskHumanlessAuthorityRateLimitPda;
   delegation: typeof findDelegationPda;
   reputationStake: typeof findReputationStakePda;
-  expireClaimAgentStats: typeof findExpireClaimAgentStatsPda;
+  disputeRejectionDisputeBond: typeof findDisputeRejectionDisputeBondPda;
+  expireDisputeCreatorStats: typeof findExpireDisputeCreatorStatsPda;
   dispute: typeof findDisputePda;
   initiatorClaim: typeof findInitiatorClaimPda;
   post: typeof findPostPda;
@@ -4170,11 +4272,13 @@ export function agencCoordinationProgram() {
             client,
             getCoordinationStateCodec(),
           ),
+          creatorStats: addSelfFetchFunctions(client, getCreatorStatsCodec()),
           defaultTrustList: addSelfFetchFunctions(
             client,
             getDefaultTrustListCodec(),
           ),
           dispute: addSelfFetchFunctions(client, getDisputeCodec()),
+          disputeBond: addSelfFetchFunctions(client, getDisputeBondCodec()),
           disputeCounterRepair: addSelfFetchFunctions(
             client,
             getDisputeCounterRepairCodec(),
@@ -4422,6 +4526,11 @@ export function agencCoordinationProgram() {
               client,
               getDeregisterAgentInstructionAsync(input),
             ),
+          disputeRejection: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getDisputeRejectionInstructionAsync(input),
+            ),
           distributeGhostShare: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4607,6 +4716,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getRejectTaskResultInstructionAsync(input),
+            ),
+          releaseClaim: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getReleaseClaimInstructionAsync(input),
             ),
           repairDisputeInitiatorCounter: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4816,10 +4930,13 @@ export function agencCoordinationProgram() {
           disputeResolver: findDisputeResolverPda,
           moderationConfig: findModerationConfigPda,
           moderationAttestor: findModerationAttestorPda,
+          disputeBond: findDisputeBondPda,
           cancelTaskCreatorCompletionBond:
             findCancelTaskCreatorCompletionBondPda,
           cancelTaskWorkerCompletionBond: findCancelTaskWorkerCompletionBondPda,
           agentStats: findAgentStatsPda,
+          creatorStats: findCreatorStatsPda,
+          workerStats: findWorkerStatsPda,
           store: findStorePda,
           taskQuota: findTaskQuotaPda,
           quotaAuthorityRateLimit: findQuotaAuthorityRateLimitPda,
@@ -4835,7 +4952,8 @@ export function agencCoordinationProgram() {
             findCreateTaskHumanlessAuthorityRateLimitPda,
           delegation: findDelegationPda,
           reputationStake: findReputationStakePda,
-          expireClaimAgentStats: findExpireClaimAgentStatsPda,
+          disputeRejectionDisputeBond: findDisputeRejectionDisputeBondPda,
+          expireDisputeCreatorStats: findExpireDisputeCreatorStatsPda,
           dispute: findDisputePda,
           initiatorClaim: findInitiatorClaimPda,
           post: findPostPda,

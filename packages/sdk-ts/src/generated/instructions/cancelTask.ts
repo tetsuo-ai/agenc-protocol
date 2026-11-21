@@ -40,6 +40,7 @@ import {
 import {
   findCancelTaskCreatorCompletionBondPda,
   findCancelTaskWorkerCompletionBondPda,
+  findCreatorStatsPda,
   findEscrowPda,
   findProtocolConfigPda,
 } from "../pdas";
@@ -72,6 +73,7 @@ export type CancelTaskInstruction<
   TAccountCreatorAgent extends string | AccountMeta<string> = string,
   TAccountAgentStats extends string | AccountMeta<string> = string,
   TAccountTreasury extends string | AccountMeta<string> = string,
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -123,6 +125,9 @@ export type CancelTaskInstruction<
       TAccountTreasury extends string
         ? WritableAccount<TAccountTreasury>
         : TAccountTreasury,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -172,6 +177,7 @@ export type CancelTaskAsyncInput<
   TAccountCreatorAgent extends string = string,
   TAccountAgentStats extends string = string,
   TAccountTreasury extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   /** cancellation can surface protocol-specific errors before Anchor account loading. */
@@ -222,6 +228,12 @@ export type CancelTaskAsyncInput<
    * contest-incapable, so the frozen canary account list is unchanged.
    */
   treasury?: Address<TAccountTreasury>;
+  /**
+   * `authority` the task creator),
+   * seeds-pinned here. REQUIRED: every cancel bumps `cancels`. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
 };
 
 export async function getCancelTaskInstructionAsync<
@@ -240,6 +252,7 @@ export async function getCancelTaskInstructionAsync<
   TAccountCreatorAgent extends string,
   TAccountAgentStats extends string,
   TAccountTreasury extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelTaskAsyncInput<
@@ -257,7 +270,8 @@ export async function getCancelTaskInstructionAsync<
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
     TAccountAgentStats,
-    TAccountTreasury
+    TAccountTreasury,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -277,7 +291,8 @@ export async function getCancelTaskInstructionAsync<
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
     TAccountAgentStats,
-    TAccountTreasury
+    TAccountTreasury,
+    TAccountCreatorStats
   >
 > {
   // Program address.
@@ -313,6 +328,7 @@ export async function getCancelTaskInstructionAsync<
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
     treasury: { value: input.treasury ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -365,6 +381,14 @@ export async function getCancelTaskInstructionAsync<
         ),
       });
   }
+  if (!accounts.creatorStats.value) {
+    accounts.creatorStats.value = await findCreatorStatsPda({
+      authority: getAddressFromResolvedInstructionAccount(
+        "authority",
+        accounts.authority.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -384,6 +408,7 @@ export async function getCancelTaskInstructionAsync<
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("treasury", accounts.treasury),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getCancelTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -403,7 +428,8 @@ export async function getCancelTaskInstructionAsync<
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
     TAccountAgentStats,
-    TAccountTreasury
+    TAccountTreasury,
+    TAccountCreatorStats
   >);
 }
 
@@ -423,6 +449,7 @@ export type CancelTaskInput<
   TAccountCreatorAgent extends string = string,
   TAccountAgentStats extends string = string,
   TAccountTreasury extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   /** cancellation can surface protocol-specific errors before Anchor account loading. */
@@ -473,6 +500,12 @@ export type CancelTaskInput<
    * contest-incapable, so the frozen canary account list is unchanged.
    */
   treasury?: Address<TAccountTreasury>;
+  /**
+   * `authority` the task creator),
+   * seeds-pinned here. REQUIRED: every cancel bumps `cancels`. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
 };
 
 export function getCancelTaskInstruction<
@@ -491,6 +524,7 @@ export function getCancelTaskInstruction<
   TAccountCreatorAgent extends string,
   TAccountAgentStats extends string,
   TAccountTreasury extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelTaskInput<
@@ -508,7 +542,8 @@ export function getCancelTaskInstruction<
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
     TAccountAgentStats,
-    TAccountTreasury
+    TAccountTreasury,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): CancelTaskInstruction<
@@ -527,7 +562,8 @@ export function getCancelTaskInstruction<
   TAccountWorkerBondAuthority,
   TAccountCreatorAgent,
   TAccountAgentStats,
-  TAccountTreasury
+  TAccountTreasury,
+  TAccountCreatorStats
 > {
   // Program address.
   const programAddress =
@@ -562,6 +598,7 @@ export function getCancelTaskInstruction<
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
     treasury: { value: input.treasury ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -596,6 +633,7 @@ export function getCancelTaskInstruction<
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("treasury", accounts.treasury),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getCancelTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -615,7 +653,8 @@ export function getCancelTaskInstruction<
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
     TAccountAgentStats,
-    TAccountTreasury
+    TAccountTreasury,
+    TAccountCreatorStats
   >);
 }
 
@@ -674,6 +713,12 @@ export type ParsedCancelTaskInstruction<
      * contest-incapable, so the frozen canary account list is unchanged.
      */
     treasury?: TAccountMetas[14] | undefined;
+    /**
+     * `authority` the task creator),
+     * seeds-pinned here. REQUIRED: every cancel bumps `cancels`. Created when missing by
+     * `ensure_creator_stats`, paid by `authority`.
+     */
+    creatorStats: TAccountMetas[15];
   };
   data: CancelTaskInstructionData;
 };
@@ -686,12 +731,12 @@ export function parseCancelTaskInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCancelTaskInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 15) {
+  if (instruction.accounts.length < 16) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 15,
+        expectedAccountMetas: 16,
       },
     );
   }
@@ -725,6 +770,7 @@ export function parseCancelTaskInstruction<
       creatorAgent: getNextOptionalAccount(),
       agentStats: getNextOptionalAccount(),
       treasury: getNextOptionalAccount(),
+      creatorStats: getNextAccount(),
     },
     data: getCancelTaskInstructionDataDecoder().decode(instruction.data),
   };

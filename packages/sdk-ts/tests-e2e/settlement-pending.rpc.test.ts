@@ -193,6 +193,7 @@ describe.skipIf(!RPC_ENABLED)(
             worker: worker.agent,
             treasury: h.config.treasury,
             rentRecipient: worker.signer.address,
+            creator: creator.signer.address,
             taskValidationConfig: validation,
           });
         const refund = scenario.name === "refund";

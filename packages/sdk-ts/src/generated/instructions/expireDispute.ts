@@ -25,10 +25,10 @@ import {
   type InstructionWithAccounts,
   type InstructionWithData,
   type ReadonlyAccount,
-  type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
+  type WritableSignerAccount,
 } from "@solana/kit";
 
 import { getFixedBytesEncoder } from "../codecs/fixedBytes";
@@ -38,7 +38,9 @@ import {
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
 import {
+  findDisputeBondPda,
   findEscrowPda,
+  findExpireDisputeCreatorStatsPda,
   findHireRecordPda,
   findProtocolConfigPda,
   findTaskValidationConfigPda,
@@ -77,6 +79,11 @@ export type ExpireDisputeInstruction<
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountTaskSubmission extends string | AccountMeta<string> = string,
   TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
+  TAccountDisputeBond extends string | AccountMeta<string> = string,
+  TAccountWorkerStats extends string | AccountMeta<string> = string,
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
+  TAccountSystemProgram extends string | AccountMeta<string> =
+    "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -98,7 +105,7 @@ export type ExpireDisputeInstruction<
         ? WritableAccount<TAccountCreator>
         : TAccountCreator,
       TAccountAuthority extends string
-        ? ReadonlySignerAccount<TAccountAuthority> &
+        ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
       TAccountWorkerClaim extends string
@@ -146,6 +153,18 @@ export type ExpireDisputeInstruction<
       TAccountTaskValidationConfig extends string
         ? WritableAccount<TAccountTaskValidationConfig>
         : TAccountTaskValidationConfig,
+      TAccountDisputeBond extends string
+        ? WritableAccount<TAccountDisputeBond>
+        : TAccountDisputeBond,
+      TAccountWorkerStats extends string
+        ? WritableAccount<TAccountWorkerStats>
+        : TAccountWorkerStats,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
+      TAccountSystemProgram extends string
+        ? ReadonlyAccount<TAccountSystemProgram>
+        : TAccountSystemProgram,
       ...TRemainingAccounts,
     ]
   >;
@@ -203,12 +222,17 @@ export type ExpireDisputeAsyncInput<
   TAccountWorkerCompletionBond extends string = string,
   TAccountTaskSubmission extends string = string,
   TAccountTaskValidationConfig extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
   escrow?: Address<TAccountEscrow>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   creator: Address<TAccountCreator>;
+  /** Permissionless caller. Writable (revision 9): it pays for a missing record. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Worker's canonical claim on the disputed task.
@@ -250,6 +274,24 @@ export type ExpireDisputeAsyncInput<
    * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
+  /**
+   * An unruled dispute returns the whole bond to the filer. A system-owned
+   * account with no data is a dispute filed before the upgrade (no bond).
+   */
+  disputeBond?: Address<TAccountDisputeBond>;
+  /**
+   * here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
+  /** Required by the record creation (revision 9). */
+  systemProgram?: Address<TAccountSystemProgram>;
 };
 
 export async function getExpireDisputeInstructionAsync<
@@ -274,6 +316,10 @@ export async function getExpireDisputeInstructionAsync<
   TAccountWorkerCompletionBond extends string,
   TAccountTaskSubmission extends string,
   TAccountTaskValidationConfig extends string,
+  TAccountDisputeBond extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireDisputeAsyncInput<
@@ -297,7 +343,11 @@ export async function getExpireDisputeInstructionAsync<
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -323,7 +373,11 @@ export async function getExpireDisputeInstructionAsync<
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >
 > {
   // Program address.
@@ -337,7 +391,7 @@ export async function getExpireDisputeInstructionAsync<
     escrow: { value: input.escrow ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     creator: { value: input.creator ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
     workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     worker: { value: input.worker ?? null, isWritable: true },
     workerWallet: { value: input.workerWallet ?? null, isWritable: true },
@@ -368,6 +422,10 @@ export async function getExpireDisputeInstructionAsync<
       value: input.taskValidationConfig ?? null,
       isWritable: true,
     },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -406,6 +464,26 @@ export async function getExpireDisputeInstructionAsync<
       ),
     });
   }
+  if (!accounts.disputeBond.value) {
+    accounts.disputeBond.value = await findDisputeBondPda({
+      dispute: getAddressFromResolvedInstructionAccount(
+        "dispute",
+        accounts.dispute.value,
+      ),
+    });
+  }
+  if (!accounts.creatorStats.value) {
+    accounts.creatorStats.value = await findExpireDisputeCreatorStatsPda({
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -431,6 +509,10 @@ export async function getExpireDisputeInstructionAsync<
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getExpireDisputeInstructionDataEncoder().encode({}),
     programAddress,
@@ -456,7 +538,11 @@ export async function getExpireDisputeInstructionAsync<
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >);
 }
 
@@ -482,12 +568,17 @@ export type ExpireDisputeInput<
   TAccountWorkerCompletionBond extends string = string,
   TAccountTaskSubmission extends string = string,
   TAccountTaskValidationConfig extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
   escrow: Address<TAccountEscrow>;
   protocolConfig: Address<TAccountProtocolConfig>;
   creator: Address<TAccountCreator>;
+  /** Permissionless caller. Writable (revision 9): it pays for a missing record. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Worker's canonical claim on the disputed task.
@@ -529,6 +620,24 @@ export type ExpireDisputeInput<
    * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
+  /**
+   * An unruled dispute returns the whole bond to the filer. A system-owned
+   * account with no data is a dispute filed before the upgrade (no bond).
+   */
+  disputeBond: Address<TAccountDisputeBond>;
+  /**
+   * here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
+  /** Required by the record creation (revision 9). */
+  systemProgram?: Address<TAccountSystemProgram>;
 };
 
 export function getExpireDisputeInstruction<
@@ -553,6 +662,10 @@ export function getExpireDisputeInstruction<
   TAccountWorkerCompletionBond extends string,
   TAccountTaskSubmission extends string,
   TAccountTaskValidationConfig extends string,
+  TAccountDisputeBond extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireDisputeInput<
@@ -576,7 +689,11 @@ export function getExpireDisputeInstruction<
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
 ): ExpireDisputeInstruction<
@@ -601,7 +718,11 @@ export function getExpireDisputeInstruction<
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
   TAccountTaskSubmission,
-  TAccountTaskValidationConfig
+  TAccountTaskValidationConfig,
+  TAccountDisputeBond,
+  TAccountWorkerStats,
+  TAccountCreatorStats,
+  TAccountSystemProgram
 > {
   // Program address.
   const programAddress =
@@ -614,7 +735,7 @@ export function getExpireDisputeInstruction<
     escrow: { value: input.escrow ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     creator: { value: input.creator ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
     workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     worker: { value: input.worker ?? null, isWritable: true },
     workerWallet: { value: input.workerWallet ?? null, isWritable: true },
@@ -645,6 +766,10 @@ export function getExpireDisputeInstruction<
       value: input.taskValidationConfig ?? null,
       isWritable: true,
     },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -655,6 +780,10 @@ export function getExpireDisputeInstruction<
   if (!accounts.tokenProgram.value) {
     accounts.tokenProgram.value =
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address<"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA">;
+  }
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
@@ -681,6 +810,10 @@ export function getExpireDisputeInstruction<
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getExpireDisputeInstructionDataEncoder().encode({}),
     programAddress,
@@ -706,7 +839,11 @@ export function getExpireDisputeInstruction<
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountTaskSubmission,
-    TAccountTaskValidationConfig
+    TAccountTaskValidationConfig,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >);
 }
 
@@ -721,6 +858,7 @@ export type ParsedExpireDisputeInstruction<
     escrow: TAccountMetas[2];
     protocolConfig: TAccountMetas[3];
     creator: TAccountMetas[4];
+    /** Permissionless caller. Writable (revision 9): it pays for a missing record. */
     authority: TAccountMetas[5];
     /**
      * Worker's canonical claim on the disputed task.
@@ -762,6 +900,24 @@ export type ParsedExpireDisputeInstruction<
      * submission is still Submitted and therefore carries counter debt.
      */
     taskValidationConfig?: TAccountMetas[20] | undefined;
+    /**
+     * An unruled dispute returns the whole bond to the filer. A system-owned
+     * account with no data is a dispute filed before the upgrade (no bond).
+     */
+    disputeBond: TAccountMetas[21];
+    /**
+     * here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
+     */
+    workerStats: TAccountMetas[22];
+    /**
+     * to the task creator),
+     * seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by
+     * `ensure_creator_stats`, paid by `authority`.
+     */
+    creatorStats: TAccountMetas[23];
+    /** Required by the record creation (revision 9). */
+    systemProgram: TAccountMetas[24];
   };
   data: ExpireDisputeInstructionData;
 };
@@ -774,12 +930,12 @@ export function parseExpireDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedExpireDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 21) {
+  if (instruction.accounts.length < 25) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 21,
+        expectedAccountMetas: 25,
       },
     );
   }
@@ -819,6 +975,10 @@ export function parseExpireDisputeInstruction<
       workerCompletionBond: getNextAccount(),
       taskSubmission: getNextOptionalAccount(),
       taskValidationConfig: getNextOptionalAccount(),
+      disputeBond: getNextAccount(),
+      workerStats: getNextAccount(),
+      creatorStats: getNextAccount(),
+      systemProgram: getNextAccount(),
     },
     data: getExpireDisputeInstructionDataDecoder().decode(instruction.data),
   };

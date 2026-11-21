@@ -22,6 +22,7 @@ import {
   getApplyInitiatorSlashInstructionAsync,
   getResolveRejectFrozenInstructionAsync,
   getExpireRejectFrozenInstructionAsync,
+  getDisputeRejectionInstructionAsync,
   getAssignDisputeResolverInstructionAsync,
   getRevokeDisputeResolverInstructionAsync,
   // input types
@@ -36,6 +37,7 @@ import {
   type ApplyInitiatorSlashAsyncInput,
   type ResolveRejectFrozenAsyncInput,
   type ExpireRejectFrozenAsyncInput,
+  type DisputeRejectionAsyncInput,
   // PDA helpers
   findDisputePda,
   findDisputeResolverPda,
@@ -44,10 +46,14 @@ import {
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
   findBidBookPda,
+  findClaimPda,
+  findCreatorStatsPda,
+  findWorkerStatsPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../generated/index.js";
 import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
 import { snapshotFixedBytes } from "../values/fixed-bytes.js";
+import { assertCanonicalHash32 } from "../values/hash.js";
 import {
   snapshotDenseStructuredArray,
   snapshotStructuredClone,
@@ -66,7 +72,17 @@ export {
 
 /**
  * Build an initiate_dispute instruction. The dispute, rate-limit, protocol-config,
- * and initiator-claim PDAs all auto-derive from the supplied ids/accounts.
+ * initiator-claim and dispute-bond PDAs all auto-derive from the supplied
+ * ids/accounts.
+ *
+ * Revision 9: the filer posts a bond into `["dispute_bond", dispute]`:
+ * `values.disputeBondForTask` (10% of the reward, or of the defendant's share on a
+ * Collaborative task, at least 0.01 SOL), plus the bond account's rent, which
+ * always comes back. A ruling for the filer, or no ruling in time, returns the
+ * bond. A ruling against the filer, or the filer cancelling, sends it to the
+ * respondent. Refused on single-worker review tasks
+ * (`DisputeRefusedOnReviewTask`, 6425): there the buyer turns work down with
+ * `rejectAndFreeze` and the worker disputes that with {@link disputeRejection}.
  */
 export async function initiateDispute(input: InitiateDisputeAsyncInput) {
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
@@ -200,7 +216,14 @@ export type ResolveDisputeInput = Omit<
   | "workerWallet"
   | "taskSubmission"
   | "resolverAssignment"
+  | "agentStats"
 > & {
+  /**
+   * The defendant's record (revision 9: required). Defaults to the canonical
+   * `["agent_stats", worker]` PDA; the program creates it when missing, paid by
+   * the ruling authority.
+   */
+  agentStats?: Address;
   /** Canonical defendant claim; mandatory evidence on the live Rust handler. */
   workerClaim: Address;
   /** Defendant AgentRegistration; mandatory on every dispute exit. */
@@ -269,8 +292,11 @@ export async function resolveDispute(input: ResolveDisputeInput) {
   const submission =
     taskSubmission ??
     (await findTaskSubmissionPda({ claim: rest.workerClaim }))[0];
+  const defendantRecord =
+    rest.agentStats ?? (await findWorkerStatsPda({ worker: rest.worker }))[0];
   const instruction = await getResolveDisputeInstructionAsync({
     ...rest,
+    agentStats: defendantRecord,
     rationaleHash: stableRationaleHash,
     creatorCompletionBond: creatorBond,
     workerCompletionBond: workerBond,
@@ -308,7 +334,13 @@ export type ExpireDisputeInput = Omit<
   | "worker"
   | "workerWallet"
   | "taskSubmission"
+  | "workerStats"
 > & {
+  /**
+   * The defendant's record (revision 9: required). Defaults to the canonical
+   * `["agent_stats", worker]` PDA; created when missing, paid by `authority`.
+   */
+  workerStats?: Address;
   workerClaim: Address;
   worker: Address;
   workerWallet: Address;
@@ -365,8 +397,11 @@ export async function expireDispute(input: ExpireDisputeInput) {
   const submission =
     taskSubmission ??
     (await findTaskSubmissionPda({ claim: rest.workerClaim }))[0];
+  const defendantRecord =
+    rest.workerStats ?? (await findWorkerStatsPda({ worker: rest.worker }))[0];
   const instruction = await getExpireDisputeInstructionAsync({
     ...rest,
+    workerStats: defendantRecord,
     creatorCompletionBond: creatorBond,
     workerCompletionBond: workerBond,
     taskSubmission: submission,
@@ -405,7 +440,17 @@ export async function settleDisputeClaim(input: SettleDisputeClaimInput) {
 }
 
 /**
- * Build a cancel_dispute instruction (initiator-only). protocol-config auto-derives.
+ * Build a cancel_dispute instruction (initiator-only). protocol-config and the
+ * dispute bond auto-derive.
+ *
+ * Revision 9 named accounts: the bond `["dispute_bond", dispute]`, the bond's
+ * `respondent` (the task creator when a worker filed, the defendant worker's
+ * wallet when the creator filed), the defendant's record (derived from
+ * `defendant`) and the creator's record (derived from `creator`, the task's
+ * creator wallet). Cancelling sends the bond principal to the respondent and its
+ * rent back to the filer, and counts the filer's `disputesLost`. Records missing
+ * on chain are created, paid by the cancelling filer. A dispute filed before
+ * revision 9 has no bond: any writable `respondent` is accepted and nothing moves.
  *
  * The facade appends the required remaining accounts in their frozen order:
  * - `[0]` `defendant`, the dispute defendant's writable AgentRegistration.
@@ -414,20 +459,48 @@ export async function settleDisputeClaim(input: SettleDisputeClaimInput) {
  *   and for schema-0 manual-validation tasks (pending-submission count).
  *   Non-review tasks may supply the empty canonical PDA; it is not read.
  */
-export type CancelDisputeInput = CancelDisputeAsyncInput & {
+export type CancelDisputeInput = Omit<
+  CancelDisputeAsyncInput,
+  "workerStats" | "creatorStats"
+> & {
   /** The dispute's defendant AgentRegistration; always writable and required. */
   defendant: Address;
+  /** The task's creator wallet (`task.creator`); derives its record. */
+  creator?: Address;
+  /** Override for the defendant's record; derived from `defendant`. */
+  workerStats?: Address;
+  /** Override for the creator's record; derived from `creator`. */
+  creatorStats?: Address;
   /** Defaults to the canonical task validation PDA; always writable. */
   taskValidationConfig?: Address;
 };
 
 export async function cancelDispute(input: CancelDisputeInput) {
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
-  const { defendant, taskValidationConfig, ...generatedInput } = stableInput;
+  const {
+    defendant,
+    creator,
+    workerStats,
+    creatorStats,
+    taskValidationConfig,
+    ...generatedInput
+  } = stableInput;
+  if (creator === undefined && creatorStats === undefined) {
+    throw new Error(
+      "cancelDispute: provide the task's creator wallet as `creator` (or `creatorStats`) so the required creator record can be derived",
+    );
+  }
   const validation =
     taskValidationConfig ??
     (await findTaskValidationConfigPda({ task: generatedInput.task }))[0];
-  const instruction = await getCancelDisputeInstructionAsync(generatedInput);
+  const instruction = await getCancelDisputeInstructionAsync({
+    ...generatedInput,
+    workerStats:
+      workerStats ?? (await findWorkerStatsPda({ worker: defendant }))[0],
+    creatorStats:
+      creatorStats ??
+      (await findCreatorStatsPda({ authority: creator! }))[0],
+  });
   return {
     ...instruction,
     accounts: [
@@ -531,10 +604,38 @@ export async function applyInitiatorSlash(
   );
 }
 
+/** Longest `rationaleUri` a frozen-task ruling takes (keeps the v2 wire small). */
+export const MAX_FROZEN_RATIONALE_URI_BYTES = 128;
+
+/** Longest `evidenceUri` a dispute of a turn-down takes. */
+export const MAX_REJECTION_EVIDENCE_URI_BYTES = 256;
+
+function assertUtf8Within(value: string, max: number, label: string): void {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
+  const length = new TextEncoder().encode(value).length;
+  if (length > max) {
+    throw new RangeError(
+      `${label} must be at most ${max} UTF-8 bytes (got ${length})`,
+    );
+  }
+}
+
 /**
- * Build a resolve_reject_frozen instruction. The completion-bond PDAs here ARE
- * auto-derived by the generated builder (from task/creator and task/worker-authority),
- * along with escrow, the task submission, and protocol-config.
+ * Build a resolve_reject_frozen (v2) instruction: the 2-of-3 multisig rules on a
+ * turned-down task. The completion-bond PDAs, escrow, task submission,
+ * protocol-config, the turn-down's dispute bond `["dispute_bond", task]` and both
+ * records (worker from `worker`, creator from `creator`) auto-derive.
+ *
+ * Revision 9 (new discriminator): a reasoned ruling. `rationaleHash` must be a
+ * non-zero 32-byte hash of the off-chain rationale and `rationaleUri` at most 128
+ * bytes (empty allowed). On a revision 9 turn-down the worker must have disputed
+ * it (`RejectionDisputeRequired`, 6421) and the ruling must land by the bond's
+ * `rulingDeadline` (`RulingWindowClosed`, 6423). Approve pays the worker as on
+ * accept and returns its bond; uphold refunds the buyer and gives it the bond.
+ * Owners who are the creator, the worker wallet, or a live operator or referrer
+ * payee do not count toward the threshold.
  */
 export type ResolveRejectFrozenInput = ResolveRejectFrozenAsyncInput & {
   /** Current ProtocolConfig M-of-N owner approvals, in remaining-account order. */
@@ -544,14 +645,41 @@ export type ResolveRejectFrozenInput = ResolveRejectFrozenAsyncInput & {
 export async function resolveRejectFrozen(input: ResolveRejectFrozenInput) {
   const { generatedInput, multisigSigners: stableMultisigSigners } =
     snapshotMultisigFacadeInput(input, ["authority"]);
-  const instruction =
-    await getResolveRejectFrozenInstructionAsync(generatedInput);
+  const rationaleHash = snapshotFixedBytes(
+    generatedInput.rationaleHash,
+    32,
+    "resolveRejectFrozen: rationaleHash",
+  );
+  assertCanonicalHash32(rationaleHash, "resolveRejectFrozen: rationaleHash");
+  assertUtf8Within(
+    generatedInput.rationaleUri,
+    MAX_FROZEN_RATIONALE_URI_BYTES,
+    "resolveRejectFrozen: rationaleUri",
+  );
+  const instruction = await getResolveRejectFrozenInstructionAsync({
+    ...generatedInput,
+    rationaleHash,
+  });
   return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
- * Build an expire_reject_frozen instruction. Escrow, task submission, protocol config,
- * hire record, and both completion-bond PDAs auto-derive in the generated builder.
+ * Build an expire_reject_frozen instruction. Escrow, task submission, protocol
+ * config, hire record, both completion-bond PDAs, the turn-down's dispute bond and
+ * both records (worker from `worker`, creator from `creator`) auto-derive. Anyone
+ * may send it; a record missing on chain is created, paid by `authority`.
+ *
+ * What it does depends on the freeze:
+ * - Revision 8 freeze (`freeze_kind` 0): after `reviewDeadlineAt`, the worker is
+ *   paid as on accept.
+ * - Revision 9 freeze, not disputed: after the dispute window
+ *   (`reviewDeadlineAt`), the buyer gets the price and escrow rent back and the
+ *   worker gets its claim and submission rent back. The worker is not paid.
+ * - Revision 9 freeze, disputed and not ruled: after the bond's `rulingDeadline`,
+ *   the buyer is refunded and the worker's bond (principal and rent) comes back.
+ *
+ * Read the outcome with `values.isDisputableFreeze` on the frozen submission and
+ * the bond account before reporting it: a refund is never a payment.
  */
 export type ExpireRejectFrozenInput = ExpireRejectFrozenAsyncInput;
 
@@ -559,6 +687,78 @@ export async function expireRejectFrozen(input: ExpireRejectFrozenInput) {
   return getExpireRejectFrozenInstructionAsync(
     canonicalizeFacadeInputSignerFields(input, ["authority"]),
   );
+}
+
+/**
+ * Friendly input for {@link disputeRejection}. `worker` is the claim's worker
+ * agent; `authority` is that agent's wallet, which signs and posts the bond.
+ */
+export type DisputeRejectionInput = Omit<
+  DisputeRejectionAsyncInput,
+  "claim" | "creatorStats"
+> & {
+  /** Defaults to the canonical `["claim", task, worker]` PDA. */
+  claim?: Address;
+  /** The task's creator wallet (`task.creator`); derives its record. */
+  creator?: Address;
+  /** Override for the creator's record; derived from `creator`. */
+  creatorStats?: Address;
+};
+
+/**
+ * Revision 9: the worker disputes a turn-down (a revision 9 `rejectAndFreeze`)
+ * by posting a bond: `values.disputeBondForTask(task)` (10% of the price, at
+ * least 0.01 SOL) into `["dispute_bond", task]`, plus that account's rent. The
+ * 2-of-3 multisig then has the ruling window (72 hours on the production build;
+ * the bond's `rulingDeadline` holds the exact end) to rule with
+ * {@link resolveRejectFrozen}:
+ * - for the worker: it is paid as on accept, and the bond comes back;
+ * - for the buyer: the buyer is refunded and receives the bond principal;
+ * - no ruling in time: the buyer is refunded and the bond comes back.
+ *
+ * One dispute per turn-down, filed while `now <= reviewDeadlineAt` of the frozen
+ * submission (`RejectionDisputeWindowClosed`, 6419). A revision 8 freeze cannot be
+ * disputed (`RejectionNotDisputable`, 6420). The worker agent must be Active.
+ * `evidenceHash` must be non-zero; `evidenceUri` is at most 256 bytes (empty
+ * allowed). Nothing here ever disputes on its own: the bond is at risk, so a
+ * person (or an operator policy that is off by default) must choose to.
+ */
+export async function disputeRejection(input: DisputeRejectionInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { claim, creator, creatorStats, ...generatedInput } = stableInput;
+  if (creator === undefined && creatorStats === undefined) {
+    throw new Error(
+      "disputeRejection: provide the task's creator wallet as `creator` (or `creatorStats`) so its record can be derived",
+    );
+  }
+  const evidenceHash = snapshotFixedBytes(
+    generatedInput.evidenceHash,
+    32,
+    "disputeRejection: evidenceHash",
+  );
+  assertCanonicalHash32(evidenceHash, "disputeRejection: evidenceHash");
+  assertUtf8Within(
+    generatedInput.evidenceUri,
+    MAX_REJECTION_EVIDENCE_URI_BYTES,
+    "disputeRejection: evidenceUri",
+  );
+  const [canonicalClaim] = await findClaimPda({
+    task: generatedInput.task,
+    bidder: generatedInput.worker,
+  });
+  if (claim !== undefined && claim !== canonicalClaim) {
+    throw new Error(
+      "disputeRejection: `claim` is not the canonical claim of `worker` on this task",
+    );
+  }
+  return getDisputeRejectionInstructionAsync({
+    ...generatedInput,
+    claim: canonicalClaim,
+    creatorStats:
+      creatorStats ??
+      (await findCreatorStatsPda({ authority: creator! }))[0],
+    evidenceHash,
+  });
 }
 
 /**

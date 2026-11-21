@@ -403,9 +403,22 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.acceptTaskResult>,
     options?: SendOptions,
   ): Promise<SendResult>;
-  /** Build (facade.rejectTaskResult) and send a reject_task_result transaction. */
+  /**
+   * Build (facade.rejectTaskResult) and send a reject_task_result transaction.
+   * Revision 9 refuses it on a single-worker review task: use `rejectAndFreeze`.
+   */
   rejectTaskResult(
     input: FacadeInput<typeof facade.rejectTaskResult>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.rejectAndFreeze) and send a reject_and_freeze transaction (a turn-down). */
+  rejectAndFreeze(
+    input: FacadeInput<typeof facade.rejectAndFreeze>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.releaseClaim) and send a release_claim transaction (revision 9). */
+  releaseClaim(
+    input: FacadeInput<typeof facade.releaseClaim>,
     options?: SendOptions,
   ): Promise<SendResult>;
   /** Build (facade.autoAcceptTaskResult) and send an auto_accept_task_result transaction. */
@@ -486,6 +499,11 @@ export interface MarketplaceClient {
   /** Build (facade.expireRejectFrozen) and send an expire_reject_frozen transaction. */
   expireRejectFrozen(
     input: FacadeInput<typeof facade.expireRejectFrozen>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.disputeRejection) and send a dispute_rejection transaction (revision 9). */
+  disputeRejection(
+    input: FacadeInput<typeof facade.disputeRejection>,
     options?: SendOptions,
   ): Promise<SendResult>;
   /** Build (facade.assignDisputeResolver) and send an assign_dispute_resolver transaction. */
@@ -943,6 +961,8 @@ export function createMarketplaceClient(
     submitTaskResult: viaFacade(facade.submitTaskResult),
     acceptTaskResult: viaFacade(facade.acceptTaskResult),
     rejectTaskResult: viaFacade(facade.rejectTaskResult),
+    rejectAndFreeze: viaFacade(facade.rejectAndFreeze),
+    releaseClaim: viaFacade(facade.releaseClaim),
     autoAcceptTaskResult: viaFacade(facade.autoAcceptTaskResult),
     validateTaskResult: viaFacade(facade.validateTaskResult),
     cancelTask: viaFacade(facade.cancelTask),
@@ -959,6 +979,7 @@ export function createMarketplaceClient(
     applyInitiatorSlash: viaFacade(facade.applyInitiatorSlash),
     resolveRejectFrozen: viaFacade(facade.resolveRejectFrozen),
     expireRejectFrozen: viaFacade(facade.expireRejectFrozen),
+    disputeRejection: viaFacade(facade.disputeRejection),
     assignDisputeResolver: viaFacade(facade.assignDisputeResolver),
     revokeDisputeResolver: viaFacade(facade.revokeDisputeResolver),
   };

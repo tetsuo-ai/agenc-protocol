@@ -1,16 +1,17 @@
 import { describe, it, expect } from "vitest";
+import type { Address } from "@solana/kit";
 import {
   facade,
   findAgentPda,
   findTaskPda,
   findClaimPda,
-  findDisputePda,
   findModerationBlockPda,
   findTaskSubmissionPda,
-  getDisputeDecoder,
+  findWorkerStatsPda,
+  getAgentStatsDecoder,
   getTaskDecoder,
-  DisputeStatus,
   TaskStatus,
+  values,
 } from "../src/index.js";
 import {
   freshSvm,
@@ -25,30 +26,32 @@ async function moderationBlockFor(contentHash: Uint8Array) {
   return (await findModerationBlockPda({ contentHash }))[0];
 }
 
-// REAL on-chain execution of the dispute -> resolve flow against the compiled
-// agenc-coordination program in litesvm, driven entirely by SDK-built (@solana/kit)
-// instructions.
+/** An owner-aware account reader over the VM, for the SDK's turn-down readers. */
+function svmReader(svm: ReturnType<typeof freshSvm>): facade.ReadAccountSnapshot {
+  return async (account: Address) => {
+    const found = svm.getAccount(account);
+    if (!found || !found.exists) return null;
+    return { owner: found.programAddress, data: Uint8Array.from(found.data) };
+  };
+}
+
+// REAL on-chain execution of the revision 9 turn-down dispute flow against the
+// compiled agenc-coordination program in litesvm, driven entirely by SDK-built
+// (@solana/kit) instructions.
 //
-// P6.3: the arbiter vote/quorum model is RETIRED. `vote_dispute` no longer exists; a
-// dispute is decided by an ASSIGNED RESOLVER on the threshold-approved roster (or by
-// the protocol authority with configured M-of-N approval) calling `resolve_dispute`
-// directly — no per-case arbiter registration, votes, or voting-period wait, and NO
-// (vote, arbiter) remaining accounts. P6.4 also
-// makes a reasoned ruling (`rationaleHash` + `rationaleUri`) REQUIRED on resolve.
+//   reach a submitted CreatorReview hire (hire -> claim -> submit)
+//     -> a task dispute during review is refused      (6425, revision 9)
+//     -> the buyer turns the delivery down             (facade.rejectAndFreeze)
+//     -> the worker disputes the turn-down with a bond (facade.disputeRejection)
+//     -> the 2-of-3 multisig rules for the worker      (facade.resolveRejectFrozen v2)
 //
-//   reach a submitted CreatorReview task (hire -> claim -> submit)
-//     -> worker initiates a COMPLETE dispute        (facade.initiateDispute, resolutionType 1)
-//     -> the protocol authority assigns a resolver  (facade.assignDisputeResolver)
-//     -> the assigned resolver resolves (approve)    (facade.resolveDispute + rationale)
-//
-// On-chain assertions (REAL decoded state after resolve):
-//   (a) the Dispute account decodes to DisputeStatus.Resolved with ZERO voters and the
-//       P6.3 ruling bit (votesFor == 1, votesAgainst == 0 on an APPROVE ruling),
-//   (b) the Task account decodes to TaskStatus.Completed (Complete dispute -> worker wins),
-//   (c) the worker's (provider authority's) lamport balance strictly increased — the
-//       escrow paid out the reward through dispute resolution, not direct completion.
-describe("e2e: dispute -> roster resolve settles the task on the real program", () => {
-  it("drives initiate -> assign resolver -> resolve (Complete) end-to-end on-chain, no votes", async () => {
+// On-chain assertions (exact lamports where nobody else pays a fee): the freeze
+// is disputable, the bond is the 0.01 SOL floor above the bond account's rent,
+// a second dispute fails, the ruling pays the worker as on accept and returns its
+// bond, claim and submission, the buyer gets the escrow rent, and both records
+// count the outcome.
+describe("e2e: a turn-down the worker disputes, ruled by the multisig, on the real program", () => {
+  it("refuses a review-time task dispute, then freezes, disputes with a bond, and rules for the worker", async () => {
     const svm = freshSvm();
 
     // Admin owns ProtocolConfig (treasury) and ModerationConfig authority. Resolver
@@ -209,111 +212,144 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
       );
     }
 
-    // ---- Dispute -> resolve flow ----
+    // ---- Revision 9: no task dispute on a single-worker review task ----
 
-    // 8) Worker opens a COMPLETE dispute (resolutionType 1 -> worker wins on approval).
-    //    The worker is the initiator, so its on-chain claim is the initiatorClaim.
-    const disputeId = new Uint8Array(32).fill(77);
-    const evidenceHash = new Uint8Array(32).fill(1);
-    await send(svm, provider, [
-      await facade.initiateDispute({
+    // 8) The worker may not open a general dispute while the buyer reviews
+    //    (deliberate revision 9 change, DisputeRefusedOnReviewTask 6425). On a
+    //    single-worker review task the buyer turns work down with a freeze, and
+    //    the worker disputes that freeze.
+    await expect(
+      send(svm, provider, [
+        await facade.initiateDispute({
+          task,
+          agent: providerAgent,
+          authority: provider,
+          initiatorClaim: workerClaim,
+          taskSubmission,
+          disputeId: new Uint8Array(32).fill(77),
+          taskId,
+          evidenceHash: new Uint8Array(32).fill(1),
+          resolutionType: 1, // Complete
+          evidence: "evidence",
+        }),
+      ]),
+    ).rejects.toThrow(/code: 6425/);
+
+    // ---- Turn-down -> dispute -> multisig ruling ----
+
+    // 9) The buyer turns the delivery down: a revision 9 freeze.
+    await send(svm, buyer, [
+      await facade.rejectAndFreeze({
         task,
-        agent: providerAgent,
-        authority: provider,
-        initiatorClaim: workerClaim,
-        taskSubmission,
-        disputeId,
-        taskId,
-        evidenceHash,
-        resolutionType: 1, // Complete
-        evidence: "evidence",
+        worker: providerAgent,
+        creator: buyer,
+        rejectionHash: new Uint8Array(32).fill(66),
       }),
     ]);
-    const [dispute] = await findDisputePda({ disputeId });
+    const read = svmReader(svm);
+    let turnDown = await facade.readTurnDown(read, {
+      task,
+      worker: providerAgent,
+    });
+    expect(turnDown).toMatchObject({
+      claim: workerClaim,
+      submission: taskSubmission,
+      freezeKind: values.FREEZE_KIND_DISPUTABLE,
+      disputable: true,
+      // 10% of a 0.001 SOL price is below the 0.01 SOL floor.
+      bondToDispute: values.MIN_DISPUTE_BOND_LAMPORTS,
+      dispute: null,
+    });
+    expect(facade.turnDownStage(turnDown!, svm.getClock().unixTimestamp)).toBe(
+      "dispute_window",
+    );
 
-    // Sanity: the dispute is Active and the task moved to Disputed.
-    {
-      const dBytes = accountData(svm, dispute);
-      expect(dBytes).not.toBeNull();
-      expect(getDisputeDecoder().decode(dBytes!).status).toBe(DisputeStatus.Active);
-    }
+    // 10) The worker disputes the turn-down, posting the bond on top of the
+    //     bond account's rent. The buyer pays nothing.
+    const buyerBeforeDispute = svm.getBalance(buyer.address) ?? 0n;
+    const disputeTurnDown = async () =>
+      facade.disputeRejection({
+        task,
+        worker: providerAgent,
+        creator: buyer.address,
+        authority: provider,
+        evidenceHash: new Uint8Array(32).fill(67),
+        evidenceUri: "agenc://evidence/turn-down",
+      });
+    await send(svm, provider, [await disputeTurnDown()]);
+    const bond = await facade.findRejectionDisputeBondPda(task);
+    const bondLamports = svm.getBalance(bond) ?? 0n;
+    expect(bondLamports).toBe(
+      svm.minimumBalanceForRentExemption(186n) +
+        values.MIN_DISPUTE_BOND_LAMPORTS,
+    );
+    expect(svm.getBalance(buyer.address) ?? 0n).toBe(buyerBeforeDispute);
+    turnDown = await facade.readTurnDown(read, { task, worker: providerAgent });
+    expect(turnDown?.dispute).toMatchObject({
+      bond,
+      amount: values.MIN_DISPUTE_BOND_LAMPORTS,
+      filer: provider.address,
+      respondent: buyer.address,
+    });
+    expect(facade.turnDownStage(turnDown!, svm.getClock().unixTimestamp)).toBe(
+      "awaiting_ruling",
+    );
+    expect(
+      (await facade.getCreatorTrackRecord(read, buyer.address)).counters,
+    ).toMatchObject({ rejections: 1n, rejectionsContested: 1n });
+    // One dispute per turn-down: the bond address is taken.
+    svm.expireBlockhash();
+    await expect(
+      send(svm, provider, [await disputeTurnDown()]),
+    ).rejects.toThrow(/tx failed/);
 
-    // 9) The protocol authority assigns a dedicated dispute resolver to the roster. The
-    //    assigned wallet can then resolve directly — no arbiters, no votes.
-    const resolver = await fundedSigner(svm);
+    // 11) The 2-of-3 multisig rules for the worker: paid as on accept, and its
+    //     bond, claim and submission come back.
+    const providerBefore = svm.getBalance(provider.address) ?? 0n;
+    const buyerBeforeRuling = svm.getBalance(buyer.address) ?? 0n;
+    const claimLamports = svm.getBalance(workerClaim) ?? 0n;
+    const submissionLamports = svm.getBalance(taskSubmission) ?? 0n;
+    const escrowLamports = svm.getBalance(escrow) ?? 0n;
+    const frozenTask = getTaskDecoder().decode(accountData(svm, task)!);
+    const protocolFee =
+      (price * BigInt(frozenTask.protocolFeeBps)) / 10_000n;
     await send(svm, admin, [
-      await facade.assignDisputeResolver({
+      await facade.resolveRejectFrozen({
+        task,
+        claim: workerClaim,
+        worker: providerAgent,
+        treasury: admin.address,
+        creator: buyer.address,
+        workerAuthority: provider.address,
         authority: admin,
-        resolver: resolver.address,
+        approveCompletion: true,
+        rationaleHash: new Uint8Array(32).fill(68),
+        rationaleUri: "agenc://ruling/turn-down",
         multisigSigners: [multisigApproverA, multisigApproverB],
       }),
     ]);
-    const [resolverAssignment] = await facade.findDisputeResolverPda({
-      resolver: resolver.address,
-    });
 
-    // Sanity: the retired voter byte carries counter provenance; it is not a tally.
-    {
-      const dBytes = accountData(svm, dispute);
-      const d = getDisputeDecoder().decode(dBytes!);
-      expect(d.totalVoters).toBe(255);
-    }
-
-    // Snapshot the worker authority balance right before resolution so the delta is
-    // attributable to the escrow payout on the Complete resolution (the worker never
-    // signs the resolve tx — the resolver does — so no fee skews this leg).
-    const workerBalBefore = svm.getBalance(provider.address) ?? 0n;
-
-    // 10) The ASSIGNED resolver resolves the dispute directly — no voting-period wait, no
-    //     remaining accounts. P6.4: a reasoned ruling (rationaleHash + rationaleUri) is
-    //     REQUIRED. The facade derives escrow / protocol-config / hire-record and the
-    //     creator/worker completion-bond PDAs; we pass the resolver's roster assignment so
-    //     its case counters are bumped.
-    await send(svm, resolver, [
-      await facade.resolveDispute({
-        dispute,
-        task,
-        authority: resolver,
-        resolverAssignment,
-        approve: true,
-        rationaleHash: new Uint8Array(32).fill(5),
-        rationaleUri: "agenc://ruling/sha256/complete",
-        creator: buyer.address,
-        workerClaim,
-        worker: providerAgent,
-        workerWallet: provider.address,
-        taskSubmission,
-        bondTreasury: admin.address,
-        // creator/worker completion bonds derive from task+creator / task+workerWallet
-      }),
-    ]);
-
-    // ---- REAL on-chain assertions ----
-
-    // (a) The Dispute account decodes to Resolved (no longer Active) with the
-    //     initiator-counter provenance sentinel and the P6.3 ruling bit set:
-    //     APPROVE -> votesFor == 1, votesAgainst == 0. None of these retired
-    //     fields is an arbiter tally.
-    const disputeBytes = accountData(svm, dispute);
-    expect(disputeBytes).not.toBeNull();
-    const decodedDispute = getDisputeDecoder().decode(disputeBytes!);
-    expect(decodedDispute.status).toBe(DisputeStatus.Resolved);
-    expect(decodedDispute.totalVoters).toBe(255);
-    expect(decodedDispute.votesFor).toBe(1n);
-    expect(decodedDispute.votesAgainst).toBe(0n);
-
-    // (b) The Task account decodes to Completed: a Complete dispute settled in the
-    //     worker's favor, so the task is finalized through dispute resolution.
-    const taskBytes = accountData(svm, task);
-    expect(taskBytes).not.toBeNull();
-    expect(getTaskDecoder().decode(taskBytes!).status).toBe(TaskStatus.Completed);
-
-    // (c) The worker's lamport balance strictly increased: the escrow paid out the
-    //     reward to the worker authority during resolution. (escrow is now drained.)
-    const workerBalAfter = svm.getBalance(provider.address) ?? 0n;
-    expect(workerBalAfter).toBeGreaterThan(workerBalBefore);
-
-    // (d) The escrow account was closed/drained on settlement (no live escrow lamports).
-    expect(svm.getBalance(escrow) ?? 0n).toBe(0n);
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Completed,
+    );
+    expect(svm.getBalance(provider.address) ?? 0n).toBe(
+      providerBefore +
+        (price - protocolFee) +
+        claimLamports +
+        submissionLamports +
+        bondLamports,
+    );
+    // The buyer gets only the escrow's rent back: the price was paid out.
+    expect(svm.getBalance(buyer.address) ?? 0n).toBe(
+      buyerBeforeRuling + (escrowLamports - price),
+    );
+    expect(accountData(svm, bond)).toBeNull();
+    const [workerRecord] = await findWorkerStatsPda({ worker: providerAgent });
+    expect(
+      getAgentStatsDecoder().decode(accountData(svm, workerRecord)!),
+    ).toMatchObject({ tasksRejected: 1n, disputesWon: 1n, disputesLost: 0n });
+    expect(
+      (await facade.getCreatorTrackRecord(read, buyer.address)).counters,
+    ).toMatchObject({ disputesWon: 0n, disputesLost: 1n });
   });
 });

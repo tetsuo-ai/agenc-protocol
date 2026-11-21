@@ -14,6 +14,13 @@ import {
   getExpireRejectFrozenInstructionDataDecoder,
   getAssignDisputeResolverInstructionDataDecoder,
   getRevokeDisputeResolverInstructionDataDecoder,
+  getDisputeRejectionInstructionDataDecoder,
+  findDisputeBondPda,
+  findDisputeRejectionDisputeBondPda,
+  findCreatorStatsPda,
+  findWorkerStatsPda,
+  findClaimPda,
+  findDisputePda,
   // PDA helpers (to assert the facade really derived the bond accounts)
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
@@ -85,8 +92,15 @@ describe("disputes facade (structural)", () => {
     const accs = order(ix);
     expect(accs[1]).toBe(TASK);
     expect(accs[2]).toBe(AGENT);
-    expect(accs[accs.length - 2]).toBe(AUTHORITY_ADDR);
-    expect(accs[accs.length - 1]).toBe(SYSTEM_PROGRAM);
+    expect(accs[9]).toBe(AUTHORITY_ADDR);
+    expect(accs[10]).toBe(SYSTEM_PROGRAM);
+    // Revision 9: the filer's bond account, seeded by the dispute.
+    const [dispute] = await findDisputePda({ disputeId });
+    expect(accs[0]).toBe(dispute);
+    const [bond] = await findDisputeBondPda({ dispute });
+    expect(accs[11]).toBe(bond);
+    expect(ix.accounts[11]?.role).toBe(AccountRole.WRITABLE);
+    expect(accs).toHaveLength(12);
 
     const decoded = getInitiateDisputeInstructionDataDecoder().decode(ix.data);
     expect(decoded.resolutionType).toBe(1);
@@ -171,6 +185,16 @@ describe("disputes facade (structural)", () => {
     expect(accs).toContain(TREASURY);
     const [submission] = await findTaskSubmissionPda({ claim: CLAIM });
     expect(accs).toContain(submission);
+    // Revision 9: the defendant's record (required), the bond and the
+    // creator's record, at their IDL positions.
+    const [defendantRecord] = await findWorkerStatsPda({
+      worker: WORKER_AGENT,
+    });
+    expect(accs[9]).toBe(defendantRecord);
+    const [bond] = await findDisputeBondPda({ dispute: DISPUTE });
+    expect(accs[26]).toBe(bond);
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    expect(accs[27]).toBe(creatorRecord);
     const [bidBook] = await findBidBookPda({ task: TASK });
     expect(accs.slice(-6)).toEqual([
       PARENT_TASK,
@@ -272,6 +296,18 @@ describe("disputes facade (structural)", () => {
     expect(accs).toContain(workerBond);
     const [submission] = await findTaskSubmissionPda({ claim: CLAIM });
     expect(accs).toContain(submission);
+    // Revision 9: the bond, the defendant's record (required) and the
+    // creator's record, then the system program.
+    const [bond] = await findDisputeBondPda({ dispute: DISPUTE });
+    expect(accs[21]).toBe(bond);
+    const [defendantRecord] = await findWorkerStatsPda({
+      worker: WORKER_AGENT,
+    });
+    expect(accs[22]).toBe(defendantRecord);
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    expect(accs[23]).toBe(creatorRecord);
+    expect(accs[24]).toBe(SYSTEM_PROGRAM);
+    expect(ix.accounts[5]?.role).toBe(AccountRole.WRITABLE_SIGNER);
     const [bidBook] = await findBidBookPda({ task: TASK });
     expect(accs.slice(-4)).toEqual([
       PARENT_TASK,
@@ -315,25 +351,43 @@ describe("disputes facade (structural)", () => {
     expect(order(ix).slice(-3)).toEqual([bidBook, ACCEPTED_BID, BIDDER_STATE]);
   });
 
-  it("cancelDispute: program, account order, data round-trip", async () => {
+  it("cancelDispute: program, revision 9 named accounts, frozen suffix, data round-trip", async () => {
     const ix = await facade.cancelDispute({
       dispute: DISPUTE,
       task: TASK,
       authority: AUTHORITY,
+      respondent: CREATOR,
+      creator: CREATOR,
       defendant: WORKER_AGENT,
       taskValidationConfig: CLAIM,
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // protocolConfig, dispute, task, authority
+    // protocolConfig, dispute, task, authority (writable: it may pay for
+    // records), bond, respondent, defendant record, creator record, system
+    // program; then the frozen remaining suffix [defendant, validation].
     const accs = order(ix);
+    expect(accs).toHaveLength(11);
     expect(accs[1]).toBe(DISPUTE);
     expect(accs[2]).toBe(TASK);
     expect(accs[3]).toBe(AUTHORITY_ADDR);
-    expect(accs[4]).toBe(WORKER_AGENT);
+    expect(ix.accounts[3]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    const [bond] = await findDisputeBondPda({ dispute: DISPUTE });
+    expect(accs[4]).toBe(bond);
     expect(ix.accounts[4]?.role).toBe(AccountRole.WRITABLE);
-    expect(accs[5]).toBe(CLAIM);
+    expect(accs[5]).toBe(CREATOR);
     expect(ix.accounts[5]?.role).toBe(AccountRole.WRITABLE);
+    const [defendantRecord] = await findWorkerStatsPda({
+      worker: WORKER_AGENT,
+    });
+    expect(accs[6]).toBe(defendantRecord);
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    expect(accs[7]).toBe(creatorRecord);
+    expect(accs[8]).toBe(SYSTEM_PROGRAM);
+    expect(accs[9]).toBe(WORKER_AGENT);
+    expect(ix.accounts[9]?.role).toBe(AccountRole.WRITABLE);
+    expect(accs[10]).toBe(CLAIM);
+    expect(ix.accounts[10]?.role).toBe(AccountRole.WRITABLE);
 
     expect(() =>
       getCancelDisputeInstructionDataDecoder().decode(ix.data),
@@ -345,13 +399,27 @@ describe("disputes facade (structural)", () => {
       dispute: DISPUTE,
       task: TASK,
       authority: AUTHORITY,
+      respondent: WORKER_WALLET,
+      creator: CREATOR,
       defendant: WORKER_AGENT,
     });
     const [validation] = await findTaskValidationConfigPda({ task: TASK });
-    expect(ix.accounts[5]).toEqual({
+    expect(ix.accounts[10]).toEqual({
       address: validation,
       role: AccountRole.WRITABLE,
     });
+  });
+
+  it("cancelDispute needs the task creator to derive the creator record", async () => {
+    await expect(
+      facade.cancelDispute({
+        dispute: DISPUTE,
+        task: TASK,
+        authority: AUTHORITY,
+        respondent: CREATOR,
+        defendant: WORKER_AGENT,
+      }),
+    ).rejects.toThrow(/creator wallet/);
   });
 
   it("applyDisputeSlash: program, account order, data round-trip", async () => {
@@ -450,6 +518,7 @@ describe("disputes facade (structural)", () => {
   });
 
   it("resolveRejectFrozen: derives bonds and appends a nonzero-threshold multisig suffix", async () => {
+    const rationaleHash = new Uint8Array(32).fill(44);
     const ix = await facade.resolveRejectFrozen({
       task: TASK,
       claim: CLAIM,
@@ -459,6 +528,8 @@ describe("disputes facade (structural)", () => {
       workerAuthority: WORKER_WALLET,
       authority: AUTHORITY,
       approveCompletion: true,
+      rationaleHash,
+      rationaleUri: "agenc://ruling/turn-down",
       operator: AGENT,
       referrer: DISPUTE,
       multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
@@ -467,7 +538,7 @@ describe("disputes facade (structural)", () => {
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
 
     const accs = order(ix);
-    expect(accs).toHaveLength(18);
+    expect(accs).toHaveLength(21);
     expect(accs[0]).toBe(TASK);
     expect(accs[1]).toBe(CLAIM);
     const [hireRecord] = await findHireRecordPda({ task: TASK });
@@ -475,6 +546,7 @@ describe("disputes facade (structural)", () => {
     expect(accs[10]).toBe(AGENT);
     expect(accs[11]).toBe(DISPUTE);
     expect(accs[12]).toBe(AUTHORITY_ADDR);
+    expect(ix.accounts[12]?.role).toBe(AccountRole.WRITABLE_SIGNER);
 
     // The generated base ends with both derived bonds + systemProgram; the
     // facade-owned multisig approvals follow as signer remaining accounts.
@@ -489,6 +561,13 @@ describe("disputes facade (structural)", () => {
     expect(accs[13]).toBe(creatorBond);
     expect(accs[14]).toBe(workerBond);
     expect(accs[15]).toBe(SYSTEM_PROGRAM);
+    // Revision 9: the turn-down's bond and both records.
+    const [bond] = await findDisputeRejectionDisputeBondPda({ task: TASK });
+    expect(accs[16]).toBe(bond);
+    const [workerRecord] = await findWorkerStatsPda({ worker: WORKER_AGENT });
+    expect(accs[17]).toBe(workerRecord);
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    expect(accs[18]).toBe(creatorRecord);
     expect(accs.slice(-2)).toEqual([
       MULTISIG_APPROVER_A.address,
       MULTISIG_APPROVER_B.address,
@@ -497,7 +576,7 @@ describe("disputes facade (structural)", () => {
       MULTISIG_APPROVER_A,
       MULTISIG_APPROVER_B,
     ].entries()) {
-      expect(ix.accounts[16 + index]).toMatchObject({
+      expect(ix.accounts[19 + index]).toMatchObject({
         role: AccountRole.READONLY_SIGNER,
         signer,
       });
@@ -507,6 +586,47 @@ describe("disputes facade (structural)", () => {
       ix.data,
     );
     expect(decoded.approveCompletion).toBe(true);
+    expect(decoded.rationaleHash).toEqual(new Uint8Array(32).fill(44));
+    expect(decoded.rationaleUri).toBe("agenc://ruling/turn-down");
+    // The v2 entry point has its own discriminator.
+    expect(Array.from(ix.data.slice(0, 8))).toEqual([
+      64, 51, 69, 144, 38, 227, 148, 59,
+    ]);
+  });
+
+  it("resolveRejectFrozen refuses an all-zero rationale and an over-long URI", async () => {
+    const base = {
+      task: TASK,
+      claim: CLAIM,
+      worker: WORKER_AGENT,
+      treasury: TREASURY,
+      creator: CREATOR,
+      workerAuthority: WORKER_WALLET,
+      authority: AUTHORITY,
+      approveCompletion: false,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+    };
+    await expect(
+      facade.resolveRejectFrozen({
+        ...base,
+        rationaleHash: new Uint8Array(32),
+        rationaleUri: "",
+      }),
+    ).rejects.toThrow(/must not be all zeroes/);
+    await expect(
+      facade.resolveRejectFrozen({
+        ...base,
+        rationaleHash: new Uint8Array(32).fill(1),
+        rationaleUri: "a".repeat(129),
+      }),
+    ).rejects.toThrow(/at most 128 UTF-8 bytes/);
+    await expect(
+      facade.resolveRejectFrozen({
+        ...base,
+        rationaleHash: new Uint8Array(32).fill(1),
+        rationaleUri: "a".repeat(128),
+      }),
+    ).resolves.toBeDefined();
   });
 
   it("resolveRejectFrozen rejects duplicate multisig approvers", async () => {
@@ -520,6 +640,8 @@ describe("disputes facade (structural)", () => {
         workerAuthority: WORKER_WALLET,
         authority: AUTHORITY,
         approveCompletion: false,
+        rationaleHash: new Uint8Array(32).fill(2),
+        rationaleUri: "",
         operator: AGENT,
         referrer: DISPUTE,
         multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_A],
@@ -541,7 +663,7 @@ describe("disputes facade (structural)", () => {
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
 
     const accs = order(ix);
-    expect(accs).toHaveLength(16);
+    expect(accs).toHaveLength(19);
     expect(accs[0]).toBe(TASK);
     expect(accs[1]).toBe(CLAIM);
     const [hireRecord] = await findHireRecordPda({ task: TASK });
@@ -549,6 +671,8 @@ describe("disputes facade (structural)", () => {
     expect(accs[10]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(accs[11]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(accs[12]).toBe(AUTHORITY_ADDR);
+    // Anyone may send it and pay for a missing record: writable signer.
+    expect(ix.accounts[12]?.role).toBe(AccountRole.WRITABLE_SIGNER);
 
     const [creatorBond] = await findCreatorCompletionBondPda({
       task: TASK,
@@ -558,13 +682,81 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerAuthority: WORKER_WALLET,
     });
-    expect(accs[accs.length - 3]).toBe(creatorBond);
-    expect(accs[accs.length - 2]).toBe(workerBond);
-    expect(accs[accs.length - 1]).toBe(SYSTEM_PROGRAM);
+    expect(accs[13]).toBe(creatorBond);
+    expect(accs[14]).toBe(workerBond);
+    expect(accs[15]).toBe(SYSTEM_PROGRAM);
+    const [bond] = await findDisputeRejectionDisputeBondPda({ task: TASK });
+    expect(accs[16]).toBe(bond);
+    const [workerRecord] = await findWorkerStatsPda({ worker: WORKER_AGENT });
+    expect(accs[17]).toBe(workerRecord);
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    expect(accs[18]).toBe(creatorRecord);
 
     expect(() =>
       getExpireRejectFrozenInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
+  });
+
+  it("disputeRejection: program, derived claim, bond and creator record, data round-trip", async () => {
+    const evidenceHash = new Uint8Array(32).fill(71);
+    const ix = await facade.disputeRejection({
+      task: TASK,
+      worker: WORKER_AGENT,
+      creator: CREATOR,
+      authority: AUTHORITY,
+      evidenceHash,
+      evidenceUri: "agenc://evidence/turn-down",
+    });
+    expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const accs = order(ix);
+    expect(accs).toHaveLength(9);
+    const [claim] = await findClaimPda({ task: TASK, bidder: WORKER_AGENT });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    const [bond] = await findDisputeRejectionDisputeBondPda({ task: TASK });
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    expect(accs[0]).toBe(TASK);
+    expect(accs[1]).toBe(claim);
+    expect(accs[2]).toBe(submission);
+    expect(accs[3]).toBe(WORKER_AGENT);
+    expect(accs[4]).toBe(bond);
+    expect(ix.accounts[4]?.role).toBe(AccountRole.WRITABLE);
+    expect(accs[5]).toBe(creatorRecord);
+    expect(ix.accounts[5]?.role).toBe(AccountRole.WRITABLE);
+    expect(accs[7]).toBe(AUTHORITY_ADDR);
+    expect(ix.accounts[7]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    expect(accs[8]).toBe(SYSTEM_PROGRAM);
+
+    evidenceHash.fill(0);
+    const decoded = getDisputeRejectionInstructionDataDecoder().decode(ix.data);
+    expect(decoded.evidenceHash).toEqual(new Uint8Array(32).fill(71));
+    expect(decoded.evidenceUri).toBe("agenc://evidence/turn-down");
+    expect(Array.from(ix.data.slice(0, 8))).toEqual([
+      219, 216, 21, 241, 9, 27, 136, 53,
+    ]);
+  });
+
+  it("disputeRejection refuses a foreign claim, a zero hash, a long URI and a missing creator", async () => {
+    const base = {
+      task: TASK,
+      worker: WORKER_AGENT,
+      creator: CREATOR,
+      authority: AUTHORITY,
+      evidenceHash: new Uint8Array(32).fill(1),
+      evidenceUri: "",
+    };
+    await expect(
+      facade.disputeRejection({ ...base, claim: CLAIM }),
+    ).rejects.toThrow(/not the canonical claim/);
+    await expect(
+      facade.disputeRejection({ ...base, evidenceHash: new Uint8Array(32) }),
+    ).rejects.toThrow(/must not be all zeroes/);
+    await expect(
+      facade.disputeRejection({ ...base, evidenceUri: "x".repeat(257) }),
+    ).rejects.toThrow(/at most 256 UTF-8 bytes/);
+    const { creator: _creator, ...withoutCreator } = base;
+    await expect(facade.disputeRejection(withoutCreator)).rejects.toThrow(
+      /creator wallet/,
+    );
   });
 
   it("assignDisputeResolver: program, auto-derives the roster PDA, data round-trips", async () => {
