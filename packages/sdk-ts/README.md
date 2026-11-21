@@ -294,8 +294,12 @@ getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tet
     after its expiry. `releaseClaim` gives up a claim early: within 1 hour of
     claiming, the deposit comes back.
   - Worker and creator records are required on every reject, freeze, cancel,
-    ruling and expiry. The facades derive them. `getCreatorTrackRecord` reads
-    a creator's record.
+    ruling and expiry. The facades derive them. A record that does not exist
+    yet is created by the program and paid by the signer, for good: a
+    creator's first cancel or turn-down starts its record (1,305,560 lamports
+    at today's mainnet rent). `missingRecordCost` reads that cost from live
+    rent, so a wallet can show it and warn before it signs.
+    `getCreatorTrackRecord` reads a creator's record.
 - The older 0.12.0 package targets the superseded 101-instruction revision-5
   wire; its changed writes, such as the legacy feed vote, fail closed against
   the live program. Pre-1.0 versioning still applies.

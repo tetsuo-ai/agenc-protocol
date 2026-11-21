@@ -9,6 +9,8 @@ import {
   findCreatorStatsPda,
   findDisputeRejectionDisputeBondPda,
   findTaskSubmissionPda,
+  findWorkerStatsPda,
+  getAgentStatsEncoder,
   getCreatorStatsEncoder,
   getDisputeBondEncoder,
   getTaskEncoder,
@@ -43,6 +45,7 @@ import {
   decodeCreatorStats,
   decodeDisputeBond,
   getCreatorTrackRecord,
+  missingRecordCost,
   readTurnDown,
   turnDownExpiryPaysWorker,
   turnDownStage,
@@ -466,5 +469,65 @@ describe("record decoders", () => {
     const without = await getCreatorTrackRecord(async () => null, CREATOR);
     expect(without.hasStats).toBe(false);
     expect(without.counters.cancels).toBe(0n);
+  });
+});
+
+describe("missingRecordCost", () => {
+  const rent = async (space: number) => BigInt(space) * 1_000n;
+
+  it("charges the live rent of each record that does not exist yet, and nothing for one that does", async () => {
+    const program = AGENC_COORDINATION_PROGRAM_ADDRESS;
+    const [creatorRecord] = await findCreatorStatsPda({ authority: CREATOR });
+    const [workerRecord] = await findWorkerStatsPda({ worker: WORKER_AGENT });
+    const none = await missingRecordCost(async () => null, rent, {
+      creator: CREATOR,
+      workerAgent: WORKER_AGENT,
+    });
+    expect(none.creatorRecord).toEqual({
+      address: creatorRecord,
+      exists: false,
+      lamports: 129_000n,
+    });
+    expect(none.workerRecord).toEqual({
+      address: workerRecord,
+      exists: false,
+      lamports: 121_000n,
+    });
+    expect(none.lamports).toBe(250_000n);
+
+    const workerData = new Uint8Array(
+      getAgentStatsEncoder().encode({
+        agent: WORKER_AGENT,
+        tasksRejected: 0n,
+        disputesWon: 0n,
+        disputesLost: 0n,
+        claimsExpired: 0n,
+        totalCancelled: 0n,
+        lastUpdated: 0n,
+        bump: 255,
+        reserved: new Uint8Array(32),
+      }),
+    );
+    const some = await missingRecordCost(
+      async (account) =>
+        account === workerRecord ? { owner: program, data: workerData } : null,
+      rent,
+      { creator: CREATOR, workerAgent: WORKER_AGENT },
+    );
+    expect(some.workerRecord?.exists).toBe(true);
+    expect(some.lamports).toBe(129_000n);
+
+    // A funded system account at the record address is not a record.
+    const dusted = await missingRecordCost(
+      async (account) =>
+        account === creatorRecord
+          ? { owner: SYSTEM_PROGRAM, data: new Uint8Array() }
+          : null,
+      rent,
+      { creator: CREATOR },
+    );
+    expect(dusted.creatorRecord?.exists).toBe(false);
+    expect(dusted.workerRecord).toBeNull();
+    expect(dusted.lamports).toBe(129_000n);
   });
 });

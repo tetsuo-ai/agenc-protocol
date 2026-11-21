@@ -24,8 +24,12 @@ import {
   findDisputeBondPda,
   findDisputeRejectionDisputeBondPda,
   findTaskSubmissionPda,
+  findWorkerStatsPda,
+  getAgentStatsDiscriminatorBytes,
+  getAgentStatsSize,
   getCreatorStatsDecoder,
   getCreatorStatsDiscriminatorBytes,
+  getCreatorStatsSize,
   getDisputeBondDecoder,
   getDisputeBondDiscriminatorBytes,
   getTaskDecoder,
@@ -271,6 +275,87 @@ export function turnDownStage(
  */
 export function turnDownExpiryPaysWorker(stage: TurnDownStage): boolean {
   return stage === "legacy_payout_due";
+}
+
+/** One revision 9 record a transaction would create when it is missing. */
+export type RecordCostEntry = {
+  address: Address;
+  exists: boolean;
+  /** Its rent-exempt minimum, read live (0 when it exists). Never returned. */
+  lamports: bigint;
+};
+
+/** What a sender pays for records that do not exist yet. */
+export type MissingRecordCost = {
+  /** Total lamports for the missing records, on top of the transaction fee. */
+  lamports: bigint;
+  creatorRecord: RecordCostEntry | null;
+  workerRecord: RecordCostEntry | null;
+};
+
+function hasProgramAccount(
+  account: ProgramAccountSnapshot | null,
+  discriminator: ReadonlyUint8Array,
+): boolean {
+  return (
+    account !== null &&
+    account.owner === AGENC_COORDINATION_PROGRAM_ADDRESS &&
+    startsWith(account.data, discriminator)
+  );
+}
+
+/**
+ * What a revision 9 instruction charges its sender for records that do not
+ * exist yet. The program creates a missing record and the signer pays its rent,
+ * which is never returned:
+ * - the creator's record (`CreatorStats`, keyed by the task creator's wallet):
+ *   at the creator's first `cancelTask` or `rejectAndFreeze`, and on rulings,
+ *   expiries and dispute cancels of a creator that has none yet;
+ * - the worker's record (`AgentStats`): created at every revision 9 claim, so
+ *   only exits of a claim made before revision 9 pay for it.
+ *
+ * Show this before asking a wallet to sign, and warn when the balance cannot
+ * cover it: a nearly empty wallet must add SOL before it can cancel. The rent
+ * is read live from `getMinimumBalanceForRentExemption`; never assume an amount.
+ */
+export async function missingRecordCost(
+  read: ReadAccountSnapshot,
+  getMinimumBalanceForRentExemption: (space: number) => Promise<bigint>,
+  parties: { creator?: Address; workerAgent?: Address },
+): Promise<MissingRecordCost> {
+  const entry = async (
+    address: Address,
+    discriminator: ReadonlyUint8Array,
+    size: number,
+  ): Promise<RecordCostEntry> => {
+    const exists = hasProgramAccount(await read(address), discriminator);
+    return {
+      address,
+      exists,
+      lamports: exists ? 0n : await getMinimumBalanceForRentExemption(size),
+    };
+  };
+  const creatorRecord =
+    parties.creator === undefined
+      ? null
+      : await entry(
+          (await findCreatorStatsPda({ authority: parties.creator }))[0],
+          getCreatorStatsDiscriminatorBytes(),
+          getCreatorStatsSize(),
+        );
+  const workerRecord =
+    parties.workerAgent === undefined
+      ? null
+      : await entry(
+          (await findWorkerStatsPda({ worker: parties.workerAgent }))[0],
+          getAgentStatsDiscriminatorBytes(),
+          getAgentStatsSize(),
+        );
+  return {
+    lamports: (creatorRecord?.lamports ?? 0n) + (workerRecord?.lamports ?? 0n),
+    creatorRecord,
+    workerRecord,
+  };
 }
 
 /** A task creator's revision 9 record, keyed by its wallet. */

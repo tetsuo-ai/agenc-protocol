@@ -718,7 +718,8 @@ export type DisputeRejectionInput = Omit<
  *
  * One dispute per turn-down, filed while `now <= reviewDeadlineAt` of the frozen
  * submission (`RejectionDisputeWindowClosed`, 6419). A revision 8 freeze cannot be
- * disputed (`RejectionNotDisputable`, 6420). The worker agent must be Active.
+ * disputed (`RejectionNotDisputable`, 6420). A suspended worker agent cannot
+ * dispute.
  * `evidenceHash` must be non-zero; `evidenceUri` is at most 256 bytes (empty
  * allowed). Nothing here ever disputes on its own: the bond is at risk, so a
  * person (or an operator policy that is off by default) must choose to.
