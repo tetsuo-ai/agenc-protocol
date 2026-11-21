@@ -23,6 +23,15 @@ For the revision 9 program (`surface_revision = 9`), deployed to mainnet on 2026
   timeline names a frozen task as turned down and on hold. `DisputeBanner`
   states the bond before a dispute is opened.
 
+### Changed
+
+- The Guaranteed Hire detail states the revision 9 rule: a turned-down
+  result is refunded unless the worker disputes and wins, and a worker who
+  disputes and loses forfeits the bond.
+- The hire button reads "Hire for {price}", the guarantee badge
+  "Guaranteed: worker has 25% at stake", and the PoweredByAgenC link's
+  accessible name "Powered by AgenC. Learn how this works".
+
 ## 0.6.0
 
 Released with the coordinated revision-8 package set (deployed 2026-10-28).

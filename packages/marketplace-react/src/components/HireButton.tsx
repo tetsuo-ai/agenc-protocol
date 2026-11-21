@@ -44,7 +44,7 @@ export interface HireButtonProps extends ThemableProps {
   onHired?: (taskPda: Address) => void;
   /** Called when the buyer clicks "View task" on the success screen. */
   onViewTask?: (taskPda: Address) => void;
-  /** Show the price in the button label (`Hire — 1.5 SOL`). Default true. */
+  /** Show the price in the button label (`Hire for 1.5 SOL`). Default true. */
   showPriceInLabel?: boolean;
   /** Override the button label. */
   label?: string;

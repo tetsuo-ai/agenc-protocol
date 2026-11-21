@@ -29,9 +29,9 @@ afterEach(cleanup);
 const TASK_PDA = address("So11111111111111111111111111111111111111112");
 const BOND_PDA = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 
-const BADGE_TEXT = "Guaranteed — worker has 25% at stake";
+const BADGE_TEXT = "Guaranteed: worker has 25% at stake";
 const DETAIL_TEXT =
-  "Worker has 25% at stake — if the result fails review you're refunded and the worker forfeits the bond.";
+  "Worker has 25% at stake. If you turn the result down, you're refunded unless the worker disputes and wins. A worker who disputes and loses forfeits the bond.";
 
 function mockReadTransport(): ReadTransport {
   return {
