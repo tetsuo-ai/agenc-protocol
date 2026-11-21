@@ -39,7 +39,8 @@ type PackageMetadata = {
 };
 
 // Exact first-party relationships declared by the reviewed published
-// revision-4 and revision-5 artifacts and the revision-8 train manifests.
+// revision-4 and revision-5 artifacts and the revision-8 and revision-9 train
+// manifests.
 const PACKAGE_METADATA: Record<string, PackageMetadata> = {
   "@tetsuo-ai/agenc-worker@0.1.1": {
     dependencies: {
@@ -98,6 +99,21 @@ const PACKAGE_METADATA: Record<string, PackageMetadata> = {
     dependencies: {
       "@tetsuo-ai/marketplace-sdk": "^0.13.0",
       "@tetsuo-ai/marketplace-tools": "^0.6.0",
+    },
+  },
+  "@tetsuo-ai/agenc-worker@0.4.0": {
+    dependencies: { "@tetsuo-ai/marketplace-sdk": "^0.14.0" },
+  },
+  "@tetsuo-ai/marketplace-react@0.7.0": {
+    peerDependencies: { "@tetsuo-ai/marketplace-sdk": "^0.14.0" },
+  },
+  "@tetsuo-ai/marketplace-tools@0.7.0": {
+    dependencies: { "@tetsuo-ai/marketplace-sdk": "^0.14.0" },
+  },
+  "@tetsuo-ai/marketplace-mcp@0.7.0": {
+    dependencies: {
+      "@tetsuo-ai/marketplace-sdk": "^0.14.0",
+      "@tetsuo-ai/marketplace-tools": "^0.7.0",
     },
   },
 };
@@ -248,7 +264,7 @@ const REVISION_8_CLIENTS = {
   "@tetsuo-ai/marketplace-moderation": "0.3.0",
 } as const;
 
-/** The revision-9 train (design 9.4); not published yet. */
+/** The revision-9 train (design 9.4). */
 const REVISION_9_CLIENTS = {
   "@tetsuo-ai/protocol": "0.6.0",
   "@tetsuo-ai/marketplace-sdk": "0.14.0",
@@ -272,6 +288,22 @@ function useRevision8Identity(input: PromoteInput): void {
     executableHash: reviewed.executableHash,
     releaseCommit: reviewed.sourceCommit,
     surfaceRevision: 8,
+  });
+}
+
+/** Chain evidence equal to the reviewed revision-9 deployment identity. */
+function useRevision9Identity(input: PromoteInput): void {
+  const reviewed = REVIEWED_MAINNET_RELEASES.find(
+    (release) => release.surfaceRevision === 9,
+  );
+  if (reviewed === undefined) throw new Error("revision 9 is not reviewed");
+  Object.assign(input.chainEvidence!, {
+    programDataAddress: reviewed.programDataAddress,
+    programDataSlot: reviewed.programDataSlot,
+    upgradeAuthority: reviewed.upgradeAuthority,
+    executableHash: reviewed.executableHash,
+    releaseCommit: reviewed.sourceCommit,
+    surfaceRevision: 9,
   });
 }
 
@@ -656,6 +688,25 @@ describe("runPromoteChecks", () => {
     },
   );
 
+  it.each([
+    ["programDataSlot", 462_468_899],
+    [
+      "executableHash",
+      "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
+    ],
+    ["upgradeAuthority", "HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh"],
+    ["releaseCommit", "f39b383e416ec5bc511b0ffb781481a658d137d8"],
+  ] as const)(
+    "rejects a revision-9 stamp whose %s differs from the reviewed identity",
+    (field, value) => {
+      const input = readyInput();
+      useRevision9Identity(input);
+      Object.assign(input.chainEvidence!, { [field]: value });
+      setInstalledTrain(input, REVISION_9_CLIENTS);
+      expect(statusOf(runPromoteChecks(input), "chain:program")).toBe("fail");
+    },
+  );
+
   it("rejects every revision-5 client line against revision 8", () => {
     const input = readyInput();
     useRevision8Identity(input);
@@ -706,30 +757,50 @@ describe("runPromoteChecks", () => {
     }
   });
 
-  it("selects the revision-9 matrix on surface 9, and never unions it with revision 8", () => {
+  it("records the exact revision-9 deployment identity observed after the upgrade", () => {
+    const reviewed = REVIEWED_MAINNET_RELEASES.filter(
+      (release) => (release.surfaceRevision as number) === 9,
+    );
+    expect(reviewed).toEqual([
+      {
+        surfaceRevision: 9,
+        programDataAddress: "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+        programDataSlot: 472_177_819,
+        upgradeAuthority: "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+        executableHash:
+          "baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608",
+        sourceCommit: "154d286659592c799bd111bf416fdba7ccc704b4",
+      },
+    ]);
+  });
+
+  it("promotes the revision-9 client set on the reviewed revision-9 deployment, and never unions it with revision 8", () => {
     const input = readyInput();
-    useRevision8Identity(input);
-    input.chainEvidence!.surfaceRevision = 9;
+    useRevision9Identity(input);
     setInstalledTrain(input, REVISION_9_CLIENTS);
     const report = runPromoteChecks(input);
-    // Revision 9 is a surface this CLI understands...
+    expect(statusOf(report, "chain:program")).toBe("pass");
     expect(statusOf(report, "chain:surface")).toBe("pass");
     for (const pkg of Object.keys(REVISION_9_CLIENTS)) {
       expect(statusOf(report, `pin:${pkg}`), pkg).toBe("pass");
     }
     // The template-SDK gate only reports a failure line; 0.14 emits none.
     expect(statusOf(report, "pin:template-sdk")).toBeUndefined();
-    // ...but no revision-9 deployment identity is reviewed until the verified
-    // cutover, so promotion still fails closed on the program check.
     expect(
-      REVIEWED_MAINNET_RELEASES.some(
-        (release) => (release.surfaceRevision as number) === 9,
-      ),
-    ).toBe(false);
-    expect(statusOf(report, "chain:program")).toBe("fail");
+      report.checks
+        .filter((check) => check.id.startsWith("coherence:"))
+        .every((check) => check.status === "pass"),
+    ).toBe(true);
+
+    // A revision-9 stamp on the revision-8 deployment identity is not reviewed.
+    const stale = readyInput();
+    useRevision8Identity(stale);
+    stale.chainEvidence!.surfaceRevision = 9;
+    setInstalledTrain(stale, REVISION_9_CLIENTS);
+    expect(statusOf(runPromoteChecks(stale), "chain:program")).toBe("fail");
 
     const old = readyInput();
-    old.chainEvidence!.surfaceRevision = 9;
+    useRevision9Identity(old);
     setInstalledTrain(old, REVISION_8_CLIENTS);
     const oldReport = runPromoteChecks(old);
     for (const pkg of Object.keys(REVISION_8_CLIENTS)) {
