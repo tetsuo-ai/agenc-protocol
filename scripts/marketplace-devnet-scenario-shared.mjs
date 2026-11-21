@@ -167,10 +167,10 @@ function normalizeProverHeaders(rawValue, label) {
   if (typeof rawValue === "string") {
     try {
       parsed = JSON.parse(rawValue);
-    } catch (error) {
-      throw new Error(
-        `${label} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    } catch {
+      // Review S-19: a JSON.parse error quotes its input, and this value can
+      // hold an Authorization header. Name the variable only.
+      throw new Error(`${label} must be valid JSON (value not shown)`);
     }
   }
 
