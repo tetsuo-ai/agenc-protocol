@@ -22,6 +22,9 @@ import {
   assertReleaseCommitPreservesVerifiedProgram,
   assertVerifiedBuildStatus,
   assertVerifiableBuildManifest,
+  CUTOVER_READ_ATTEMPTS,
+  CUTOVER_READ_BACKOFF_MS,
+  CUTOVER_READ_TIMEOUT_MS,
   deriveProtocolConfigAddress,
   hashProgramData,
   isPrereleaseVersion,
@@ -768,6 +771,387 @@ test("RPC reader validates mainnet, program/programdata, and protocol revision f
     }),
     /missing finalized context/,
   );
+});
+
+// A finalized RPC that answers every cutover read correctly, plus a hook to
+// break chosen calls. `calls` records every request it received.
+async function cutoverRpcFixture(breakCall = () => null) {
+  const protocolAddress = await deriveProtocolConfigAddress();
+  const programDataAddress = "11111111111111111111111111111111";
+  const program = Buffer.alloc(36);
+  program.writeUInt32LE(2, 0);
+  getAddressEncoder()
+    .encode(programDataAddress)
+    .forEach((byte, index) => {
+      program[4 + index] = byte;
+    });
+  const executable = Buffer.from([9, 8, 7]);
+  const programData = Buffer.concat([
+    Buffer.from([3, 0, 0, 0]),
+    Buffer.alloc(41, 1),
+    executable,
+    Buffer.alloc(10),
+  ]);
+  const protocol = Buffer.alloc(351);
+  createHash("sha256")
+    .update("account:ProtocolConfig")
+    .digest()
+    .subarray(0, 8)
+    .copy(protocol);
+  protocol.writeUInt16LE(9, 349);
+  const account = (owner, data, executableFlag = false) => ({
+    jsonrpc: "2.0",
+    result: {
+      context: { slot: 99 },
+      value: {
+        owner,
+        executable: executableFlag,
+        lamports: 1,
+        data: [data.toString("base64"), "base64"],
+      },
+    },
+  });
+  const calls = [];
+  const fetchFn = async (_url, options) => {
+    assert.ok(options.signal instanceof AbortSignal, "every read has a timeout");
+    const request = JSON.parse(options.body);
+    calls.push(request);
+    const broken = breakCall(request, calls);
+    if (broken) return broken();
+    const result =
+      request.method === "getGenesisHash"
+        ? { jsonrpc: "2.0", result: MAINNET_GENESIS }
+        : request.method === "getSlot"
+          ? { jsonrpc: "2.0", result: 99 }
+          : request.params[0] === PROGRAM_ID
+            ? account(UPGRADEABLE_LOADER, program, true)
+            : request.params[0] === programDataAddress
+              ? account(UPGRADEABLE_LOADER, programData)
+              : request.params[0] === protocolAddress
+                ? account(PROGRAM_ID, protocol)
+                : null;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return result;
+      },
+    };
+  };
+  return {
+    calls,
+    fetchFn,
+    executableHash: createHash("sha256").update(executable).digest("hex"),
+    programDataAddress,
+  };
+}
+
+const timeoutError = () =>
+  new DOMException("The operation was aborted due to timeout", "TimeoutError");
+const countOf = (calls, method) =>
+  calls.filter((request) => request.method === method).length;
+// Fail the first `times` requests that match.
+const failFirst = (times, matches, response) => {
+  let failed = 0;
+  return (request) => {
+    if (!matches(request) || failed >= times) return null;
+    failed += 1;
+    return response;
+  };
+};
+
+test("cutover reads retry a timeout, then pass", async () => {
+  const sleeps = [];
+  const rpc = await cutoverRpcFixture(
+    failFirst(
+      1,
+      ({ method }) => method === "getSlot",
+      () => {
+        throw timeoutError();
+      },
+    ),
+  );
+  const evidence = await readFinalizedCutoverEvidence({
+    url: "https://rpc.example",
+    fetchFn: rpc.fetchFn,
+    sleepFn: async (ms) => sleeps.push(ms),
+  });
+  assert.equal(evidence.surfaceRevision, 9);
+  assert.equal(evidence.executableHash, rpc.executableHash);
+  assert.equal(countOf(rpc.calls, "getSlot"), 2);
+  assert.deepEqual(sleeps, [CUTOVER_READ_BACKOFF_MS[0]]);
+});
+
+test("cutover reads retry a node behind the finalized slot (-32016, -32005), then pass the same request", async () => {
+  for (const code of [-32016, -32005]) {
+  const sleeps = [];
+  const rpc = await cutoverRpcFixture(
+    failFirst(
+      1,
+      ({ method, params }) =>
+        method === "getAccountInfo" && params[0] === "11111111111111111111111111111111",
+      () => ({
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            jsonrpc: "2.0",
+            error: { code, message: "Minimum context slot has not been reached" },
+          };
+        },
+      }),
+    ),
+  );
+  const evidence = await readFinalizedCutoverEvidence({
+    url: "https://rpc.example",
+    fetchFn: rpc.fetchFn,
+    sleepFn: async (ms) => sleeps.push(ms),
+  });
+  assert.equal(evidence.executableHash, rpc.executableHash);
+  const programDataReads = rpc.calls.filter(
+    ({ method, params }) =>
+      method === "getAccountInfo" && params[0] === rpc.programDataAddress,
+  );
+  assert.equal(programDataReads.length, 2);
+  assert.deepEqual(programDataReads[0], programDataReads[1]);
+  assert.equal(programDataReads[1].params[1].minContextSlot, 99);
+  assert.deepEqual(sleeps, [CUTOVER_READ_BACKOFF_MS[0]]);
+  }
+});
+
+test("cutover reads retry HTTP 429, a 5xx and a network error, then pass", async () => {
+  for (const response of [
+    () => ({ ok: false, status: 429, async json() {} }),
+    () => ({ ok: false, status: 503, async json() {} }),
+    () => {
+      throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+    },
+  ]) {
+    const sleeps = [];
+    const rpc = await cutoverRpcFixture(
+      failFirst(1, ({ method }) => method === "getGenesisHash", response),
+    );
+    const evidence = await readFinalizedCutoverEvidence({
+      url: "https://rpc.example",
+      fetchFn: rpc.fetchFn,
+      sleepFn: async (ms) => sleeps.push(ms),
+    });
+    assert.equal(evidence.surfaceRevision, 9);
+    assert.equal(countOf(rpc.calls, "getGenesisHash"), 2);
+    assert.deepEqual(sleeps, [CUTOVER_READ_BACKOFF_MS[0]]);
+  }
+});
+
+test("a cutover read that keeps timing out fails after four attempts", async () => {
+  const sleeps = [];
+  const rpc = await cutoverRpcFixture(({ method }) =>
+    method === "getSlot"
+      ? () => {
+          throw timeoutError();
+        }
+      : null,
+  );
+  await assert.rejects(
+    readFinalizedCutoverEvidence({
+      url: "https://rpc.example",
+      fetchFn: rpc.fetchFn,
+      sleepFn: async (ms) => sleeps.push(ms),
+    }),
+    /getSlot failed after 4 attempts: The operation was aborted due to timeout/,
+  );
+  assert.equal(CUTOVER_READ_ATTEMPTS, 4);
+  assert.equal(countOf(rpc.calls, "getSlot"), 4);
+  assert.deepEqual(sleeps, [1_500, 3_000, 5_000]);
+  assert.equal(CUTOVER_READ_TIMEOUT_MS, 20_000);
+});
+
+test("cutover mismatches and other RPC errors never retry", async () => {
+  const cases = [
+    {
+      name: "wrong genesis",
+      breakCall: ({ method }) =>
+        method === "getGenesisHash"
+          ? () => ({
+              ok: true,
+              status: 200,
+              async json() {
+                return { jsonrpc: "2.0", result: "devnet-genesis" };
+              },
+            })
+          : null,
+      error: /RPC is not Solana mainnet-beta/,
+      method: "getGenesisHash",
+    },
+    {
+      name: "another JSON-RPC error",
+      breakCall: ({ method }) =>
+        method === "getSlot"
+          ? () => ({
+              ok: true,
+              status: 200,
+              async json() {
+                return { jsonrpc: "2.0", error: { code: -32602, message: "Invalid params" } };
+              },
+            })
+          : null,
+      error: /^Error: getSlot returned a malformed\/error JSON-RPC response$/,
+      method: "getSlot",
+    },
+    {
+      name: "a malformed body",
+      breakCall: ({ method }) =>
+        method === "getSlot"
+          ? () => ({
+              ok: true,
+              status: 200,
+              async json() {
+                return { result: 99 };
+              },
+            })
+          : null,
+      error: /^Error: getSlot returned a malformed\/error JSON-RPC response$/,
+      method: "getSlot",
+    },
+    {
+      name: "HTTP 404",
+      breakCall: ({ method }) =>
+        method === "getSlot"
+          ? () => ({ ok: false, status: 404, async json() {} })
+          : null,
+      error: /^Error: getSlot failed with HTTP 404$/,
+      method: "getSlot",
+    },
+    {
+      name: "a wrong program owner",
+      breakCall: ({ method, params }) =>
+        method === "getAccountInfo" && params[0] === PROGRAM_ID
+          ? () => ({
+              ok: true,
+              status: 200,
+              async json() {
+                return {
+                  jsonrpc: "2.0",
+                  result: {
+                    context: { slot: 99 },
+                    value: {
+                      owner: PROGRAM_ID,
+                      executable: true,
+                      lamports: 1,
+                      data: [Buffer.alloc(36).toString("base64"), "base64"],
+                    },
+                  },
+                };
+              },
+            })
+          : null,
+      error: /not the expected executable upgradeable-loader Program/,
+      method: "getAccountInfo",
+    },
+  ];
+  for (const { name, breakCall, error, method } of cases) {
+    const sleeps = [];
+    const rpc = await cutoverRpcFixture(breakCall);
+    await assert.rejects(
+      readFinalizedCutoverEvidence({
+        url: "https://rpc.example",
+        fetchFn: rpc.fetchFn,
+        sleepFn: async (ms) => sleeps.push(ms),
+      }),
+      (thrown) => error.test(String(thrown)),
+      name,
+    );
+    assert.equal(countOf(rpc.calls, method), 1, `${name}: one request`);
+    assert.deepEqual(sleeps, [], `${name}: no retry`);
+  }
+
+  // A hash or revision mismatch is judged after both reads and never re-reads.
+  const reads = [];
+  await assert.rejects(
+    verifyStableCutover({
+      release: resolveReleaseTag("sdk-v0.14.0", train),
+      train,
+      environment: {
+        AGENC_MAINNET_RPC_URLS_JSON: JSON.stringify([
+          "https://rpc-one.example",
+          "https://rpc-two.example",
+        ]),
+        EXPECTED_MAINNET_PROGRAM_SHA256: HASH,
+        EXPECTED_VERIFIED_SOURCE_COMMIT: COMMIT,
+      },
+      readEvidenceFn: async ({ url }) => {
+        reads.push(url);
+        return {
+          genesis: MAINNET_GENESIS,
+          slot: 101,
+          programDataAddress: "program-data",
+          executableHash: "cd".repeat(32),
+          surfaceRevision: train.surfaceRevision,
+        };
+      },
+      fetchFn: async () => assert.fail("verification must not be fetched"),
+      sleepFn: async () => assert.fail("a mismatch must not wait to retry"),
+    }),
+    /does not prove the expected finalized cutover/,
+  );
+  assert.equal(reads.length, 2);
+});
+
+test("the verified-build status read retries a 503 and fails a 404 at once", async () => {
+  const environment = {
+    AGENC_MAINNET_RPC_URLS_JSON: JSON.stringify([
+      "https://rpc-one.example",
+      "https://rpc-two.example",
+    ]),
+    EXPECTED_MAINNET_PROGRAM_SHA256: HASH,
+    EXPECTED_VERIFIED_SOURCE_COMMIT: COMMIT,
+    VERIFICATION_STATUS_BASE_URL: "https://verify.example",
+  };
+  const readEvidenceFn = async () => ({
+    genesis: MAINNET_GENESIS,
+    slot: 101,
+    programDataAddress: "program-data",
+    executableHash: HASH,
+    surfaceRevision: train.surfaceRevision,
+  });
+  const record = [
+    {
+      is_verified: true,
+      on_chain_hash: HASH,
+      executable_hash: HASH,
+      commit: COMMIT,
+      repo_url: "https://github.com/tetsuo-ai/agenc-protocol",
+    },
+  ];
+  for (const [first, expectPass] of [
+    [503, true],
+    [404, false],
+  ]) {
+    let fetches = 0;
+    const sleeps = [];
+    const run = verifyStableCutover({
+      release: resolveReleaseTag("sdk-v0.14.0", train),
+      train,
+      environment,
+      readEvidenceFn,
+      fetchFn: async (_url, options) => {
+        assert.ok(options.signal instanceof AbortSignal);
+        fetches += 1;
+        return fetches === 1
+          ? { ok: false, status: first, async json() {} }
+          : { ok: true, status: 200, async json() { return record; } };
+      },
+      sleepFn: async (ms) => sleeps.push(ms),
+    });
+    if (expectPass) {
+      assert.equal((await run).expectedHash, HASH);
+      assert.equal(fetches, 2);
+      assert.deepEqual(sleeps, [CUTOVER_READ_BACKOFF_MS[0]]);
+    } else {
+      await assert.rejects(run, /^Error: verified-build status failed: HTTP 404$/);
+      assert.equal(fetches, 1);
+      assert.deepEqual(sleeps, []);
+    }
+  }
 });
 
 test("release state matrix resumes safely and rejects inconsistent public state", () => {

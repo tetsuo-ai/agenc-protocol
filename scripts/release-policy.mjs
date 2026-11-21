@@ -704,28 +704,102 @@ export function hashProgramData(data) {
   return createHash("sha256").update(data.subarray(45, end)).digest("hex");
 }
 
-async function rpcCall(fetchFn, url, method, params) {
-  const response = await fetchFn(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response?.ok)
-    fail(`${method} failed with HTTP ${response?.status ?? "unknown"}`);
-  const body = await response.json();
-  if (body?.error || body?.jsonrpc !== "2.0") {
-    fail(`${method} returned a malformed/error JSON-RPC response`);
+// The cutover reads public mainnet RPCs and verify.osec.io. Those can stall,
+// throttle, or answer from a load-balanced node that is behind the finalized
+// slot another node returned. Only such reads are retried, by repeating the
+// same request. Every content check (genesis, owners, hash, revision, size,
+// verification record) runs on the result and fails at once, as before.
+export const CUTOVER_READ_ATTEMPTS = 4;
+export const CUTOVER_READ_BACKOFF_MS = Object.freeze([1_500, 3_000, 5_000]);
+export const CUTOVER_READ_TIMEOUT_MS = 20_000;
+// -32016: minimum context slot not reached. -32005: node is behind.
+const TRANSIENT_JSON_RPC_CODES = new Set([-32016, -32005]);
+
+class TransientCutoverReadError extends Error {}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const transientHttpStatus = (status) =>
+  status === 429 || (Number.isInteger(status) && status >= 500 && status <= 599);
+
+function transientReadReason(error) {
+  if (error instanceof TransientCutoverReadError) return error.message;
+  if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+    return error.name;
   }
-  return body;
+  // fetch reports a failed connection (reset, refused, DNS, closed socket) as
+  // a TypeError.
+  if (error instanceof TypeError) {
+    return `network error (${error.cause?.code ?? error.message})`;
+  }
+  return null;
 }
 
-export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
-  const genesis = (await rpcCall(fetchFn, url, "getGenesisHash", [])).result;
+export async function retryTransientRead(label, read, { sleepFn = sleep } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await read(AbortSignal.timeout(CUTOVER_READ_TIMEOUT_MS));
+    } catch (error) {
+      const reason = transientReadReason(error);
+      if (reason === null) throw error;
+      if (attempt >= CUTOVER_READ_ATTEMPTS) {
+        fail(`${label} failed after ${attempt} attempts: ${error.message}`);
+      }
+      const delay = CUTOVER_READ_BACKOFF_MS[attempt - 1];
+      console.error(
+        `${label}: attempt ${attempt} of ${CUTOVER_READ_ATTEMPTS} failed (${reason}); retrying in ${delay} ms`,
+      );
+      await sleepFn(delay);
+    }
+  }
+}
+
+async function rpcCall(fetchFn, url, method, params, { sleepFn } = {}) {
+  return retryTransientRead(
+    method,
+    async (signal) => {
+      const response = await fetchFn(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        signal,
+      });
+      if (!response?.ok) {
+        const message = `${method} failed with HTTP ${response?.status ?? "unknown"}`;
+        if (transientHttpStatus(response?.status)) {
+          throw new TransientCutoverReadError(message);
+        }
+        fail(message);
+      }
+      const body = await response.json();
+      if (body?.error || body?.jsonrpc !== "2.0") {
+        const message = `${method} returned a malformed/error JSON-RPC response`;
+        if (
+          body?.jsonrpc === "2.0" &&
+          TRANSIENT_JSON_RPC_CODES.has(body?.error?.code)
+        ) {
+          throw new TransientCutoverReadError(
+            `${message} (code ${body.error.code})`,
+          );
+        }
+        fail(message);
+      }
+      return body;
+    },
+    { sleepFn },
+  );
+}
+
+export async function readFinalizedCutoverEvidence({
+  url,
+  fetchFn = fetch,
+  sleepFn,
+}) {
+  const call = (method, params) =>
+    rpcCall(fetchFn, url, method, params, { sleepFn });
+  const genesis = (await call("getGenesisHash", [])).result;
   if (genesis !== MAINNET_GENESIS) fail("RPC is not Solana mainnet-beta");
-  const slot = (
-    await rpcCall(fetchFn, url, "getSlot", [{ commitment: "finalized" }])
-  ).result;
+  const slot = (await call("getSlot", [{ commitment: "finalized" }])).result;
   if (!Number.isSafeInteger(slot) || slot <= 0)
     fail("RPC returned an invalid finalized slot");
   const accountConfig = {
@@ -734,7 +808,7 @@ export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
     minContextSlot: slot,
   };
   const program = decodeRpcAccount(
-    await rpcCall(fetchFn, url, "getAccountInfo", [PROGRAM_ID, accountConfig]),
+    await call("getAccountInfo", [PROGRAM_ID, accountConfig]),
     "program",
     slot,
   );
@@ -752,10 +826,7 @@ export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
     program.data.subarray(4, 36),
   );
   const programData = decodeRpcAccount(
-    await rpcCall(fetchFn, url, "getAccountInfo", [
-      programDataAddress,
-      accountConfig,
-    ]),
+    await call("getAccountInfo", [programDataAddress, accountConfig]),
     "ProgramData",
     slot,
   );
@@ -767,10 +838,7 @@ export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
   }
   const protocolAddress = await deriveProtocolConfigAddress();
   const protocol = decodeRpcAccount(
-    await rpcCall(fetchFn, url, "getAccountInfo", [
-      protocolAddress,
-      accountConfig,
-    ]),
+    await call("getAccountInfo", [protocolAddress, accountConfig]),
     "ProtocolConfig",
     slot,
   );
@@ -1035,6 +1103,7 @@ export async function verifyStableCutover({
   fetchFn = fetch,
   readEvidenceFn = readFinalizedCutoverEvidence,
   gitFn = runRepositoryGit,
+  sleepFn,
 }) {
   if (release?.prerelease) {
     return Object.freeze({ prerelease: true });
@@ -1105,7 +1174,7 @@ export async function verifyStableCutover({
     });
   }
   const evidence = await Promise.all(
-    rpcUrls.map((url) => readEvidenceFn({ url, fetchFn })),
+    rpcUrls.map((url) => readEvidenceFn({ url, fetchFn, sleepFn })),
   );
   assertIndependentCutoverEvidence(evidence, {
     expectedHash,
@@ -1113,17 +1182,25 @@ export async function verifyStableCutover({
   });
   const verificationBase =
     environment.VERIFICATION_STATUS_BASE_URL ?? "https://verify.osec.io";
-  const verificationResponse = await fetchFn(
-    `${verificationBase}/status-all/${PROGRAM_ID}`,
-    {
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
+  const statuses = await retryTransientRead(
+    "verified-build status",
+    async (signal) => {
+      const verificationResponse = await fetchFn(
+        `${verificationBase}/status-all/${PROGRAM_ID}`,
+        { headers: { accept: "application/json" }, signal },
+      );
+      if (!verificationResponse.ok) {
+        const message = `verified-build status failed: HTTP ${verificationResponse.status}`;
+        if (transientHttpStatus(verificationResponse.status)) {
+          throw new TransientCutoverReadError(message);
+        }
+        fail(message);
+      }
+      return verificationResponse.json();
     },
+    { sleepFn },
   );
-  if (!verificationResponse.ok) {
-    fail(`verified-build status failed: HTTP ${verificationResponse.status}`);
-  }
-  assertVerifiedBuildStatus(await verificationResponse.json(), {
+  assertVerifiedBuildStatus(statuses, {
     expectedHash,
     expectedCommit,
   });
