@@ -15,6 +15,9 @@
  * - a kit RPC: `(pda) => getTaskDecoder().decode(...)` over `getAccountInfo`
  *   (the SDK's `waitForTaskStatus` uses exactly this `getAccountInfo` shape);
  * - litesvm e2e: `(pda) => decode(svm.getAccount(pda))`.
+ * Revision 9: a task its creator closed is compacted into a TaskMarker, which
+ * the Task decoder cannot read. Decode with `facade.decodeTaskAccount` and
+ * return null for a `closed` result: its status never changes again.
  * A reader-less call returns the idle state (and a clear `error` if `poll` was
  * requested) rather than guessing a transport.
  *

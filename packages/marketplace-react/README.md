@@ -99,7 +99,7 @@ Hooks are imported from `@tetsuo-ai/marketplace-react/hooks`:
 | `useListings` / `useListing` | read           | active listing discovery and listing detail                                                                           |
 | `useAgentTrackRecord`        | read           | completion rate, dispute rate, and slash history                                                                      |
 | `useTaskStatus`              | read           | task status with off-path states; a turned-down (RejectFrozen) task is live and still polled                          |
-| `useHire`                    | write          | registered-agent hire and humanless buyer hire; injects validated referrer terms when live                            |
+| `useHire`                    | write          | registered-agent hire and humanless buyer hire, both review tasks on revision 9 (`reviewWindowSecs`); injects validated referrer terms when live |
 | `useHumanlessHireFlow`       | write          | humanless buyer hire, self-hosted job-spec moderation/hosting, and `set_task_job_spec` activation in one tracked flow |
 | `useTaskActivation`          | write          | `set_task_job_spec` activation after moderation                                                                       |
 | `useTaskWork`                | write          | `claim_task_with_job_spec` and `submit_task_result`                                                                   |

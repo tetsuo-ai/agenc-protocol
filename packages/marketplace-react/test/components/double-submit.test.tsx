@@ -90,6 +90,7 @@ function ConnectedHarness({
           taskId: new Uint8Array(32).fill(7),
           expectedPrice: l.account.price,
           expectedVersion: 3n,
+          reviewWindowSecs: 3_600n,
           taskJobSpecHash: l.account.specHash,
           moderator: FIXTURE_AGENT,
         })}
