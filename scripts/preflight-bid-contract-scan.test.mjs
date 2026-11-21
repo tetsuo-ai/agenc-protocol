@@ -522,3 +522,43 @@ test("empty live bid surface is valid and non-mainnet is rejected first", async 
   );
   assert.equal(enumerated, false);
 });
+
+// Item 34: a bid's task compacted by revision 9's close_task is a 56-byte
+// TaskMarker, a closed task: the bid principal has no live task to exit
+// through, and the reason says so instead of a Task layout error.
+function markerFixture({ creator, status = 4 }) {
+  const data = Buffer.alloc(56);
+  Buffer.from("c10bc0c833d06cff", "hex").copy(data, 0);
+  creator.toBuffer().copy(data, 8);
+  data[40] = status;
+  data.writeBigInt64LE(1_700_000_000n, 42);
+  return data;
+}
+
+test("a bid on a compacted task reads its task as closed, not malformed (item 34)", async () => {
+  const task = taskFixture();
+  const book = bookFixture(task);
+  const bid = bidFixture(task, book, { state: 0 });
+  const closed = { ...task, data: markerFixture({ creator: task.creator }) };
+  const result = await scanBidContracts(
+    connectionFor({ tasks: [closed], books: [book], bids: [bid] }),
+  );
+  assert.equal(result.closedTaskCount, 1);
+  const unavailable = result.blockers.find(
+    (item) => item.kind === "bid-principal-task-unavailable",
+  );
+  assert.ok(unavailable, "the bond still has no live task to exit through");
+  assert.match(unavailable.detail, /task closed \(TaskMarker status=4\)/);
+  assert.ok(!result.blockers.some((item) => /Task: unsupported account size/.test(item.detail ?? "")));
+
+  const malformed = markerFixture({ creator: task.creator });
+  malformed[41] = 0b100;
+  const bad = await scanBidContracts(
+    connectionFor({ tasks: [{ ...task, data: malformed }], books: [book], bids: [bid] }),
+  );
+  assert.equal(bad.closedTaskCount, 0);
+  assert.match(
+    bad.blockers.find((item) => item.kind === "bid-principal-task-unavailable").detail,
+    /TaskMarker\.flags: unknown bits/,
+  );
+});

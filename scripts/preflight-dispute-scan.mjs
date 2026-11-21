@@ -271,6 +271,18 @@ export function decodeTaskMarker(dataLike) {
   };
 }
 
+/// Decode a program-owned account read at a Task address. A revision 9
+/// TaskMarker is a closed task (`{ closed: true, marker }`), never a Task and
+/// never an error; anything else must decode as a Task (`{ closed: false,
+/// task }`). A malformed marker or Task throws (fail closed).
+export function decodeTaskOrMarker(dataLike) {
+  const data = Buffer.from(dataLike);
+  if (isTaskMarkerData(data)) {
+    return { closed: true, marker: decodeTaskMarker(data) };
+  }
+  return { closed: false, task: decodeTaskBinding(data) };
+}
+
 export function decodeTaskBinding(dataLike) {
   const data = Buffer.from(dataLike);
   if (!TASK_SIZES.has(data.length)) {

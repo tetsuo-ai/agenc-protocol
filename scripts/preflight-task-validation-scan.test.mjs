@@ -255,3 +255,60 @@ test("AGNC-03 review debt is valid across pending, completed and orphaned config
     }
   }
 });
+
+// Item 34: a task compacted by revision 9's close_task is a 56-byte TaskMarker,
+// a closed task. Its leftover config is an orphan child, never a Task layout
+// error; a pending-count orphan still blocks.
+function markerFixture({ creator, status = 3 }) {
+  const data = Buffer.alloc(56);
+  Buffer.from("c10bc0c833d06cff", "hex").copy(data, 0);
+  creator.toBuffer().copy(data, 8);
+  data[40] = status;
+  data.writeBigInt64LE(1_700_000_000n, 42);
+  return data;
+}
+
+test("a config whose task was compacted is a closed-task orphan, not a layout error (item 34)", async () => {
+  const creator = new PublicKey(Buffer.alloc(32, 32));
+  const rentOnly = scenario({ mode: 1, status: 3 });
+  let result = await scanTaskValidationConfigs(
+    connectionFor(rentOnly, { taskData: markerFixture({ creator }) }),
+  );
+  assert.deepEqual(result.blockers, []);
+  assert.equal(result.orphanCount, 1);
+  assert.equal(result.orphans[0].taskState, "closed");
+  assert.equal(result.orphans[0].risk, "rent-only");
+
+  const pending = scenario({ mode: 1, status: 2, pendingSubmissionCount: 1 });
+  result = await scanTaskValidationConfigs(
+    connectionFor(pending, { taskData: markerFixture({ creator, status: 4 }) }),
+  );
+  assert.ok(
+    result.blockers.some((item) => item.kind === "orphaned-active-validation-config"),
+  );
+  assert.ok(!result.blockers.some((item) => item.kind === "invalid-validation-task-layout"));
+
+  const quorum = scenario({ mode: 2, status: 3 });
+  result = await scanTaskValidationConfigs(
+    connectionFor(quorum, { taskData: markerFixture({ creator }) }),
+  );
+  assert.ok(
+    result.blockers.some((item) => item.kind === "validator-quorum-terminal-config"),
+    "a quorum config on a closed task is a terminal config",
+  );
+
+  const foreign = scenario({ mode: 1, status: 3 });
+  result = await scanTaskValidationConfigs(
+    connectionFor(foreign, {
+      taskData: markerFixture({ creator: new PublicKey(Buffer.alloc(32, 99)) }),
+    }),
+  );
+  assert.ok(result.blockers.some((item) => item.kind === "invalid-validation-task-binding"));
+
+  const malformed = markerFixture({ creator });
+  malformed[40] = 0;
+  result = await scanTaskValidationConfigs(
+    connectionFor(foreign, { taskData: malformed }),
+  );
+  assert.ok(result.blockers.some((item) => item.kind === "invalid-validation-task-layout"));
+});

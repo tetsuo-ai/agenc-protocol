@@ -20,6 +20,7 @@ import {
   MAINNET_GENESIS,
   PROGRAM_ID,
   decodeTaskBinding,
+  decodeTaskOrMarker,
   redactRpcText,
 } from "./preflight-dispute-scan.mjs";
 
@@ -117,7 +118,14 @@ function classifyParentAccount(address, account) {
     };
   }
   try {
-    const task = decodeTaskBinding(account.data);
+    const decoded = decodeTaskOrMarker(account.data);
+    if (decoded.closed) {
+      // Revision 9: a parent compacted by close_task is a 56-byte TaskMarker at
+      // the same address, a closed task. As the program reads it, a Completed
+      // marker is a completed parent and a Cancelled one is not.
+      return { kind: "closed", marker: decoded.marker };
+    }
+    const task = decoded.task;
     const [expected, bump] = PublicKey.findProgramAddressSync(
       [Buffer.from("task"), task.creator.toBuffer(), task.taskId],
       PROGRAM_ID,
@@ -247,8 +255,13 @@ export async function scanTaskDependencies(connection) {
     );
     const bonds = bondsByTask.get(task.address.toBase58()) ?? [];
     const bondPrincipal = bonds.reduce((sum, bond) => sum + bond.amount, 0n);
-    const parentCompleted =
-      parentState.kind === "live" && parentState.task.status === COMPLETED_STATUS;
+    const parentStatus =
+      parentState.kind === "live"
+        ? parentState.task.status
+        : parentState.kind === "closed"
+          ? parentState.marker.status
+          : null;
+    const parentCompleted = parentStatus === COMPLETED_STATUS;
     const obligated =
       task.currentWorkers > 0 || task.status !== 0 || bondPrincipal > 0n;
     const record = {
@@ -259,7 +272,7 @@ export async function scanTaskDependencies(connection) {
       dependencyName: DEPENDENCY_NAMES[task.dependencyType],
       parent: task.dependsOn,
       parentState: parentState.kind,
-      parentStatus: parentState.kind === "live" ? parentState.task.status : null,
+      parentStatus,
       parentCompleted,
       completionBondCount: bonds.length,
       completionBondPrincipal: bondPrincipal,

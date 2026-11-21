@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MAINNET_GENESIS,
   PROGRAM_ID,
-  decodeTaskBinding,
+  decodeTaskOrMarker,
   redactRpcText,
 } from "./preflight-dispute-scan.mjs";
 
@@ -219,7 +219,10 @@ export async function scanTaskValidationConfigs(connection) {
       const { pubkey, config, lamports } = chunk[index];
       const account = taskAccounts[index];
       let task = null;
-      if (!account || account.lamports === 0) {
+      // Revision 9: a task compacted by close_task (a TaskMarker) is a closed
+      // task. Its leftover config is an orphan child, like one whose task is gone.
+      let closedTask = null;
+      const inventoryOrphan = (taskState) => {
         const active =
           config.mode === MODE_VALIDATOR_QUORUM ||
           config.pendingSubmissionCount > 0;
@@ -231,6 +234,7 @@ export async function scanTaskValidationConfigs(connection) {
           pendingSubmissionCount: config.pendingSubmissionCount,
           lamports,
           risk: active ? "active" : "rent-only",
+          taskState,
         });
         if (active) {
           blockers.push(
@@ -238,17 +242,47 @@ export async function scanTaskValidationConfigs(connection) {
               "orphaned-active-validation-config",
               pubkey,
               config.task,
-              `mode=${config.mode} pending_submissions=${config.pendingSubmissionCount}`,
+              `mode=${config.mode} pending_submissions=${config.pendingSubmissionCount} task=${taskState}`,
             ),
           );
         }
+      };
+      if (!account || account.lamports === 0) {
+        inventoryOrphan("missing");
       } else if (!account.owner.equals(PROGRAM_ID)) {
         blockers.push(
           blocker("invalid-validation-task-owner", pubkey, config.task),
         );
       } else {
+        let decoded = null;
         try {
-          task = decodeTaskBinding(account.data);
+          decoded = decodeTaskOrMarker(account.data);
+        } catch (error) {
+          blockers.push(
+            blocker(
+              "invalid-validation-task-layout",
+              pubkey,
+              config.task,
+              error instanceof Error ? error.message : String(error),
+            ),
+          );
+        }
+        if (decoded?.closed) {
+          closedTask = decoded.marker;
+          if (!closedTask.creator.equals(config.creator)) {
+            blockers.push(
+              blocker(
+                "invalid-validation-task-binding",
+                pubkey,
+                config.task,
+                `marker_creator=${closedTask.creator.toBase58()} config_creator=${config.creator.toBase58()}`,
+              ),
+            );
+          } else {
+            inventoryOrphan("closed");
+          }
+        } else if (decoded) {
+          task = decoded.task;
           const [expectedTask, expectedBump] = PublicKey.findProgramAddressSync(
             [Buffer.from("task"), task.creator.toBuffer(), task.taskId],
             PROGRAM_ID,
@@ -276,24 +310,15 @@ export async function scanTaskValidationConfigs(connection) {
               ),
             );
           }
-        } catch (error) {
-          blockers.push(
-            blocker(
-              "invalid-validation-task-layout",
-              pubkey,
-              config.task,
-              error instanceof Error ? error.message : String(error),
-            ),
-          );
-          task = null;
         }
       }
 
       if (config.mode === MODE_VALIDATOR_QUORUM) {
-        const status = task ? TASK_STATUS_NAMES[task.status] : "Unknown";
+        const known = task ?? (closedTask ? { status: closedTask.status } : null);
+        const status = known ? TASK_STATUS_NAMES[known.status] : "Unknown";
         blockers.push(
           blocker(
-            quorumBlockerKind(task),
+            quorumBlockerKind(known),
             pubkey,
             config.task,
             `status=${status} validator_quorum=${config.validatorQuorum} ` +
@@ -332,7 +357,7 @@ async function main() {
   for (const item of result.orphans.slice(0, 10)) {
     console.warn(
       `  ORPHAN ${item.risk}: config=${item.config.toBase58()} ` +
-        `task=${item.task.toBase58()} creator=${item.creator.toBase58()} ` +
+        `task=${item.task.toBase58()} (${item.taskState}) creator=${item.creator.toBase58()} ` +
         `mode=${item.mode} pending_submissions=${item.pendingSubmissionCount} ` +
         `lamports=${item.lamports}`,
     );

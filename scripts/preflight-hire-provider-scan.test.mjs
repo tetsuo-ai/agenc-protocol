@@ -275,3 +275,48 @@ test("fails closed on missing/malformed listing state and non-mainnet", async ()
   );
   assert.equal(enumerated, false);
 });
+
+// Item 34: a hired task compacted by revision 9's close_task is a 56-byte
+// TaskMarker, a closed task: terminal, never a Task layout error.
+function markerFixture({ creator, status = 3 }) {
+  const data = Buffer.alloc(56);
+  Buffer.from("c10bc0c833d06cff", "hex").copy(data, 0);
+  creator.toBuffer().copy(data, 8);
+  data[40] = status;
+  data.writeBigInt64LE(1_700_000_000n, 42);
+  return data;
+}
+
+test("a hired task that was compacted reads as a closed, terminal task (item 34)", async () => {
+  for (const designated of ["provider", "default"]) {
+    const value = scenario({ status: 3, designated });
+    const records = new Map(value.records);
+    records.set(
+      value.task.address.toBase58(),
+      account(markerFixture({ creator: new PublicKey(Buffer.alloc(32, 92)) })),
+    );
+    const result = await scanHireProviderBindings(connectionFor(value, { records }));
+    assert.equal(result.closedTaskCount, 1);
+    assert.ok(
+      !result.blockers.some((item) => item.kind === "invalid-hired-task-layout"),
+      "a marker is never a Task layout error",
+    );
+    if (designated === "default") {
+      assert.equal(result.terminalBackfillCount, 1);
+      assert.equal(result.backfill[0].taskClosed, true);
+      assert.equal(result.backfill[0].taskStatus, 3);
+    } else {
+      assert.equal(result.boundCount, 1);
+      assert.equal(result.bound[0].taskClosed, true);
+    }
+    assert.equal(result.cancelRehireCount + result.settlementOnlyCount + result.committedCount, 0);
+  }
+
+  const value = scenario({ status: 3 });
+  const records = new Map(value.records);
+  const malformed = markerFixture({ creator: new PublicKey(Buffer.alloc(32, 92)) });
+  malformed[50] = 1;
+  records.set(value.task.address.toBase58(), account(malformed));
+  const result = await scanHireProviderBindings(connectionFor(value, { records }));
+  assert.ok(result.blockers.some((item) => item.kind === "invalid-hired-task-layout"));
+});
