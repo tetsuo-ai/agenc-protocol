@@ -16,6 +16,11 @@ import {
   isTaskMarkerData,
   scanDisputes,
 } from "./preflight-dispute-scan.mjs";
+import {
+  assertRevision5DisputeCutover,
+  createDisputeCounterRepairAllowance,
+  loadDisputeCounterRepairRecord,
+} from "./mainnet-upgrade.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(
@@ -924,4 +929,45 @@ test("an Active dispute on a compacted task blocks, and a malformed marker is in
   assert.ok(
     malformedResult.blockers.some((item) => item.kind === "invalid-task-layout"),
   );
+});
+
+// Item 32 (build QUESTIONS 32): nothing on chain stops close_task from
+// compacting the deployed 097ded1 Refund shape (a live losing claim,
+// Task.current_workers == 0, no pending-slash bit), after which its
+// apply_dispute_slash would fail on the marker. The deploy preflight is the
+// guard: `inconsistent-resolved-worker-state` stops the cutover at every stage,
+// and no repair allowance relaxes it.
+test("item 32: inconsistent-resolved-worker-state is a hard deploy gate at every stage", async () => {
+  const record = loadDisputeCounterRepairRecord();
+  const allowance = createDisputeCounterRepairAllowance({
+    record,
+    env: { AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: "1" },
+    livePayloadSha256: record.priorRevision.payloadSha256,
+    warn: () => {},
+  });
+  for (const value of [
+    scenario({ pending: false, missingClaim: false, currentWorkers: 0 }),
+    withCompactedTask(scenario({ pending: true })),
+  ]) {
+    const result = await scanDisputes(connectionFor(value), {
+      nowUnixTimestamp: 100n,
+    });
+    assert.equal(result.statusCounts.active, 0, "a Resolved dispute, not an Active one");
+    assert.ok(
+      result.blockers.some((item) => item.kind === "inconsistent-resolved-worker-state"),
+    );
+    for (const stage of [
+      "Predeploy cutover snapshot",
+      "Immediate predeploy rescan",
+      "Postdeploy/prestamp rescan",
+    ]) {
+      for (const options of [{}, { repairAllowance: allowance }]) {
+        assert.throws(
+          () => assertRevision5DisputeCutover(result, stage, options),
+          /dispute cutover requires zero Active and no incompatible finalizers.*inconsistent-resolved-worker-state/,
+          `${stage}${options.repairAllowance ? " with the old repair allowance" : ""}`,
+        );
+      }
+    }
+  }
 });
