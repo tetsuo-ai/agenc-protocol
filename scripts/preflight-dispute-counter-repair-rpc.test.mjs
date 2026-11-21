@@ -40,9 +40,16 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { Connection, PublicKey, SystemProgram } = web3;
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+// Revision 9 retires the revision 8 repair rail (build QUESTIONS 14 and 52):
+// it builds expire_dispute from the committed IDL, which now carries the
+// revision 9 accounts the rail was never taught, so this rehearsal cannot run
+// on this tree. It stays as the record of the revision 8 rehearsal.
 test(
   "local RPC: historical 1/1 deficit, prepare, atomic repair, receipt and clean scanner",
-  { skip: process.env.AGENC_RPC_E2E !== "1", timeout: 180_000 },
+  {
+    skip: "revision 8 rail, retired with revision 9: expire_dispute needs the revision 9 accounts",
+    timeout: 180_000,
+  },
   async () => {
     const ports = repairValidatorPorts();
     await assertRepairValidatorAvailable(ports);

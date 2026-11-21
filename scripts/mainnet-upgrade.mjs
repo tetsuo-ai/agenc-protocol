@@ -2519,6 +2519,11 @@ export function loadDisputeCounterRepairRecord(
   );
 }
 
+// Revision 9 (lead item 52): the revision 8 upgrade could deploy over the
+// reviewed pending repair and run the repair right after it. Revision 9 retires
+// that allowance with the repair rail: the allowance is never active, and a
+// pending repair-record shape is a hard predeploy gate
+// (`assertRevision5DisputeCutover`).
 export function createDisputeCounterRepairAllowance({
   livePayloadSha256,
   record = loadDisputeCounterRepairRecord(),
@@ -2527,15 +2532,13 @@ export function createDisputeCounterRepairAllowance({
 } = {}) {
   validateDisputeCounterRepairRecord(record);
   const accepted = env.AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR === "1";
-  const revision5Live =
-    livePayloadSha256 === record.priorRevision.payloadSha256.toLowerCase();
-  if (accepted && !revision5Live) {
+  if (accepted) {
     warn(
-      "WARNING: ignoring AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: live ProgramData payload is not the reviewed revision-5 payload.",
+      "WARNING: ignoring AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR: revision 9 retires the revision 8 repair allowance; a pending repair-record shape stops the preflight.",
     );
   }
   return {
-    active: accepted && revision5Live,
+    active: false,
     accepted,
     livePayloadSha256,
     record,
@@ -2584,36 +2587,26 @@ export function assertRevision5DisputeCutover(
   options = {},
 ) {
   if (disputes.blockers.length > 0 || disputes.statusCounts.active !== 0) {
-    const allowance = options.repairAllowance;
     const record = validateDisputeCounterRepairRecord(
-      allowance?.record ?? loadDisputeCounterRepairRecord(),
+      options.repairAllowance?.record ?? loadDisputeCounterRepairRecord(),
     );
     const pendingRepair = reviewedDisputeCounterRepairShape(disputes, record);
-    // Postdeploy and prestamp callers never receive an allowance. Also refuse
-    // an accidentally forwarded one at these irreversible release boundaries.
-    const prestamp = /postdeploy|prestamp/i.test(stage);
-    if (
-      pendingRepair &&
-      !prestamp &&
-      allowance?.active === true &&
-      allowance.accepted === true &&
-      allowance.livePayloadSha256 ===
-        record.priorRevision.payloadSha256.toLowerCase()
-    ) {
-      console.warn(
-        `WARNING: ${stage}: REVIEWED DISPUTE COUNTER REPAIR PENDING: agent=${pendingRepair.agent} pending=${pendingRepair.pendingDispute} incident=${pendingRepair.incidentDispute}. Run scripts/mainnet-repair-dispute-counter.mjs --phase repair right after the upgrade, BEFORE ANY STAMP. Keep the protocol paused.`,
+    // Lead item 52: a hard gate at every stage. No allowance applies.
+    if (pendingRepair) {
+      throw new Error(
+        `${stage}: PENDING REVISION 8 DISPUTE COUNTER REPAIR (pending-revision8-dispute-counter-repair): ` +
+          `agent=${pendingRepair.agent} pending=${pendingRepair.pendingDispute} ` +
+          `incident=${pendingRepair.incidentDispute}. The reviewed 2026-10 repair is not finished on ` +
+          "mainnet. Revision 9 retires its rail and allowance: finish the repair on the live revision 8 " +
+          "program with the revision 8 release tree's scripts/mainnet-repair-dispute-counter.mjs, then " +
+          "rerun this preflight.",
       );
-      return pendingRepair;
     }
     const kinds = [...new Set(disputes.blockers.map((item) => item.kind))];
-    const repairHelp = pendingRepair
-      ? " Set AGENC_ACCEPT_DISPUTE_COUNTER_REPAIR=1 for the predeploy run only while the reviewed revision-5 payload is live; run scripts/mainnet-repair-dispute-counter.mjs --phase repair right after the upgrade, before any stamp. Postdeploy/prestamp gates never allow this state."
-      : "";
     throw new Error(
       `${stage}: dispute cutover requires zero Active and no incompatible finalizers; ` +
         `found ${disputes.blockers.length} blocker(s) (${kinds.join(", ") || "active-count invariant failure"}). ` +
-        "Run scripts/preflight-dispute-scan.mjs and remediate before continuing." +
-        repairHelp,
+        "Run scripts/preflight-dispute-scan.mjs and remediate before continuing.",
     );
   }
 }
