@@ -17,6 +17,7 @@ use crate::instructions::agent_stats_helpers::Counter;
 use crate::instructions::claim_deposit_helpers::{
     forfeit_claim_deposit, refund_claim_deposit, release_refunds_deposit,
 };
+use crate::instructions::close_task::completion_bond_is_live;
 use crate::instructions::record_account_helpers::{count_agent_stats, ensure_agent_stats};
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_contest_configured_task, is_manual_validation_task,
@@ -149,8 +150,11 @@ pub fn handler(ctx: Context<ReleaseClaim>) -> Result<()> {
             !is_contest_configured_task(task) && task.task_type != TaskType::BidExclusive,
             CoordinationError::ClaimNotReleasable
         );
+        // Review R3-6: only a live bond blocks the release. A settled bond's
+        // tombstone stays program-owned and anyone can send it lamports; it is
+        // not a bond, as `close_task` reads it.
         require!(
-            ctx.accounts.worker_completion_bond.owner != &crate::ID,
+            !completion_bond_is_live(&ctx.accounts.worker_completion_bond.to_account_info())?,
             CoordinationError::ClaimNotReleasable
         );
     }

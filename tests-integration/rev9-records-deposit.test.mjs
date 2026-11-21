@@ -1093,3 +1093,27 @@ test("rev9 deposit: the cancel_task drain forfeits the deposit only while the pa
     }
   }
 });
+
+// Review R3-6: a settled completion bond leaves a [255; 8] tombstone at its PDA,
+// and anyone can send it lamports (R1-8). close_task reads that tombstone as
+// settled; release_claim refused any program-owned account there, so a worker
+// that re-claimed the task could never release it. It now uses the same
+// liveness rule. A live bond still blocks the release.
+test("rev9 deposit: a revived bond tombstone does not block release_claim (review R3-6; e89a4a6: ClaimNotReleasable)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await publishedTask(w, { taskType: 0, reward: 200_000_000, review: false });
+  t.review = false;
+  const { ix, claim } = await claimIx(w, t);
+  expectOk(send(w.svm, ix, [w.provider]), "claim");
+  const tombstone = Buffer.alloc(139);
+  tombstone.fill(0xff, 0, 8);
+  w.svm.setAccount(completionBond(t.task, w.provider.publicKey), {
+    lamports: 1_595_120, data: tombstone, owner: PID, executable: false, rentEpoch: 0,
+  });
+  const claimLamports = bal(w, claim);
+  const before = bal(w, w.provider.publicKey);
+  expectOk(send(w.svm, await releaseIx(w, t, claim), [w.provider]), "release over a revived tombstone");
+  assert.ok(isClosed(w.svm, claim), "claim closed");
+  assert.equal(bal(w, w.provider.publicKey) - before, claimLamports - TX_FEE, "rent and deposit back, within the grace");
+  assert.equal(bal(w, completionBond(t.task, w.provider.publicKey)), 1_595_120n, "the tombstone's lamports stay where they were sent");
+});
