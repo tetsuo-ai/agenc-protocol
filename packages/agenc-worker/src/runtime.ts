@@ -31,7 +31,6 @@ import {
   getProtocolConfigDecoder,
   getTaskClaimDecoder,
   getTaskSubmissionDecoder,
-  getTaskDecoder,
   listOpenTasks,
   listPinnedJobSpecTasks,
   settlementReceiptUrl,
@@ -91,6 +90,7 @@ import {
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import {
   clusterNowSeconds,
+  readTaskAccount,
   runUpkeep,
   sendReleaseClaim,
   type UpkeepMemory,
@@ -774,12 +774,17 @@ export type ProcessOutcome =
   | { status: "claim-failed"; task: Address; reason: string }
   | { status: "execution-failed"; task: Address; reason: string };
 
+/**
+ * The Task, or null when it is gone or closed. Revision 9: `close_task`
+ * compacts a finished task into a TaskMarker; `readTaskAccount` tells the two
+ * apart where it matters (settlements).
+ */
 async function readTask(
   ctx: WorkerContext,
   task: Address,
 ): Promise<Task | null> {
-  const data = await ctx.readAccount(task);
-  return data === null ? null : getTaskDecoder().decode(data);
+  const read = await readTaskAccount(ctx, task);
+  return read.kind === "task" ? read.task : null;
 }
 
 /**
@@ -2437,7 +2442,8 @@ export async function checkSettlements(
   const wouldPay = new Map<SubmissionRecord, bigint | null>();
   for (const record of pending) {
     const task = record.task as Address;
-    const decodedTask = await readTask(ctx, task);
+    const taskRead = await readTaskAccount(ctx, task);
+    const decodedTask = taskRead.kind === "task" ? taskRead.task : null;
     if (decodedTask === null) {
       wouldPay.set(record, recordedReward(record));
     } else if (unwrapOption(decodedTask.rewardMint) === null) {
@@ -2447,6 +2453,50 @@ export async function checkSettlements(
     const insideReconciliationGrace =
       Number.isFinite(submittedAt) &&
       Date.now() - submittedAt < TRANSACTION_RECONCILIATION_GRACE_MS;
+    if (taskRead.kind === "closed") {
+      // Revision 9: the creator closed the finished task and close_task
+      // compacted it into a TaskMarker, which keeps only its final status.
+      // The worker's own accounts decide what happened to this job.
+      if (taskRead.status === "cancelled") {
+        resolved.push({ record, outcome: "cancelled", solDenominated: false });
+        continue;
+      }
+      const [claim, submission] = await Promise.all([
+        readClaim(ctx, agent, task),
+        readSubmission(ctx, agent, task),
+      ]);
+      if (
+        submission !== null &&
+        submission.account.status === SubmissionStatus.Rejected
+      ) {
+        delete record.terminalEvidence;
+        resolved.push({ record, outcome: "rejected", solDenominated: false });
+      } else if (
+        submission !== null &&
+        submission.account.status === SubmissionStatus.Submitted
+      ) {
+        if (record.terminalEvidence === "collaborative-straggler") {
+          resolved.push({ record, outcome: "straggler", solDenominated: false });
+        } else {
+          ctx.log({ event: "settlement.chain-state-incoherent", task });
+        }
+      } else if (claim !== null && claimLooksLive(claim)) {
+        // A compacted task cannot keep a live claim.
+        ctx.log({ event: "settlement.chain-state-incoherent", task });
+      } else if (
+        claim === null &&
+        record.terminalEvidence === "collaborative-straggler"
+      ) {
+        resolved.push({ record, outcome: "straggler", solDenominated: false });
+      } else {
+        // The accept closed the claim and the submission to this worker. The
+        // worker only takes SOL tasks, and the AgentRegistration delta below
+        // is the second piece of evidence before anything counts as paid.
+        delete record.terminalEvidence;
+        resolved.push({ record, outcome: "accepted", solDenominated: true });
+      }
+      continue;
+    }
     if (decodedTask === null) {
       // One null Task read is not evidence that a just-landed record closed.
       // After grace, corroborate it with the canonical submission; if that is
