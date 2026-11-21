@@ -1043,8 +1043,9 @@ export type AgencCoordination = {
     {
       "name": "assignModerationAttestor",
       "docs": [
-        "Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The",
-        "assigned wallet may then record moderation attestations",
+        "Assign a wallet to the moderation-attestor roster (P6.8; the protocol",
+        "multisig threshold since revision 9). The assigned wallet may then record",
+        "moderation attestations",
         "(`record_task_moderation` / `record_listing_moderation`) in addition to the single",
         "global moderation authority. P1.2 also added permissionless bonded",
         "self-registration; see `docs/P1_2_OPEN_ROSTER_SPEC.md`."
@@ -1131,9 +1132,8 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Must be the moderation authority that owns the moderation config. Unlike the",
-            "threshold-approved dispute-resolver roster, this moderation roster remains",
-            "authority-managed under its separate trust model."
+            "Fee payer and proposer; pays the entry's rent. The approval is the multisig",
+            "threshold over `remaining_accounts` (revision 9)."
           ],
           "writable": true,
           "signer": true
@@ -1141,6 +1141,30 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "protocolConfig",
+          "docs": [
+            "Revision 9 (G), appended: the protocol config whose multisig owners must",
+            "approve the assignment."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -3599,6 +3623,11 @@ export type AgencCoordination = {
         },
         {
           "name": "authority",
+          "docs": [
+            "Fee payer and proposer. On the full surface the approval is the multisig",
+            "threshold over `remaining_accounts`; the canary requires the protocol",
+            "authority itself."
+          ],
           "writable": true,
           "signer": true
         },
@@ -9566,11 +9595,12 @@ export type AgencCoordination = {
     {
       "name": "moderationHeartbeat",
       "docs": [
-        "P1.3 moderation liveness heartbeat (batch-2 A2). The config authority or",
-        "the moderation authority bumps the deadman timestamp; the config authority",
-        "may also retune the liveness window (floored at 1 day). Silence past the",
-        "window relaxes the moderation ALLOW gates to moderation-optional",
-        "(docs/MODERATION_LIVENESS.md); the multisig BLOCK floor never relaxes."
+        "P1.3 moderation liveness heartbeat (batch-2 A2). The config authority,",
+        "the moderation authority or a multisig owner bumps the deadman timestamp;",
+        "retuning the liveness window (floored at 1 day) needs the multisig",
+        "threshold. Silence past the window relaxes the moderation ALLOW gates to",
+        "moderation-optional (docs/MODERATION_LIVENESS.md); the multisig BLOCK",
+        "floor never relaxes."
       ],
       "discriminator": [
         215,
@@ -9616,6 +9646,33 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "signer": true
+        },
+        {
+          "name": "protocolConfig",
+          "docs": [
+            "Revision 9 (G), appended and optional: the protocol config. A plain",
+            "heartbeat from the config authority or the moderation authority works",
+            "without it; a heartbeat from another multisig owner needs it, and a",
+            "window change needs it plus the threshold over remaining accounts."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -14854,9 +14911,10 @@ export type AgencCoordination = {
     {
       "name": "revokeModerationAttestor",
       "docs": [
-        "Remove a wallet from the moderation-attestor roster (P1.2: scoped — the caller",
-        "may remove only entries it itself created, so a self-registered attestor can be",
-        "removed from chain by no one but itself), closing its assignment PDA."
+        "Remove a deputized wallet from the moderation-attestor roster under the",
+        "protocol multisig threshold (revision 9), closing its assignment PDA. A",
+        "self-registered (bonded) attestor can be removed from chain by no one but",
+        "itself, through its two-step exit (P1.2)."
       ],
       "discriminator": [
         192,
@@ -14902,10 +14960,10 @@ export type AgencCoordination = {
           "name": "moderationAttestor",
           "docs": [
             "Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA",
-            "is enforced; `close = authority` returns the rent to the moderation authority.",
-            "P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered",
-            "entry (`assigned_by == attestor`) can never be closed by the authority, so its",
-            "bond can never be confiscated through this path."
+            "is enforced; `close = authority` returns the rent to the proposer. P1.2 §4.7:",
+            "only a deputized entry (no bond, no registration time) can be closed here,",
+            "so a self-registered attestor's bond can never be confiscated through this",
+            "path."
           ],
           "writable": true,
           "pda": {
@@ -14945,10 +15003,35 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Must be the moderation authority that owns the moderation config."
+            "Fee payer and proposer; receives the entry's rent. The approval is the",
+            "multisig threshold over `remaining_accounts` (revision 9)."
           ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "protocolConfig",
+          "docs": [
+            "Revision 9 (G), appended: the protocol config whose multisig owners must",
+            "approve the revoke."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -16187,7 +16270,7 @@ export type AgencCoordination = {
     {
       "name": "suspendAgent",
       "docs": [
-        "Suspend an agent (protocol authority only, fix #819).",
+        "Suspend an agent (protocol multisig threshold, revision 9; fix #819).",
         "Prevents the agent from claiming tasks or participating in disputes."
       ],
       "discriminator": [
@@ -16226,6 +16309,11 @@ export type AgencCoordination = {
         },
         {
           "name": "protocolConfig",
+          "docs": [
+            "Revision 9 (G): on the full surface the approval is the multisig threshold",
+            "over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single",
+            "protocol-authority signer."
+          ],
           "pda": {
             "seeds": [
               {
@@ -16246,10 +16334,10 @@ export type AgencCoordination = {
         },
         {
           "name": "authority",
-          "signer": true,
-          "relations": [
-            "protocolConfig"
-          ]
+          "docs": [
+            "Fee payer and proposer (the protocol authority in the canary build)."
+          ],
+          "signer": true
         }
       ],
       "args": []
@@ -16257,7 +16345,7 @@ export type AgencCoordination = {
     {
       "name": "unsuspendAgent",
       "docs": [
-        "Unsuspend an agent (protocol authority only, fix #819).",
+        "Unsuspend an agent (protocol multisig threshold, revision 9; fix #819).",
         "Restores the agent to Inactive status."
       ],
       "discriminator": [
@@ -16296,6 +16384,11 @@ export type AgencCoordination = {
         },
         {
           "name": "protocolConfig",
+          "docs": [
+            "Revision 9 (G): on the full surface the approval is the multisig threshold",
+            "over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single",
+            "protocol-authority signer."
+          ],
           "pda": {
             "seeds": [
               {
@@ -16316,10 +16409,10 @@ export type AgencCoordination = {
         },
         {
           "name": "authority",
-          "signer": true,
-          "relations": [
-            "protocolConfig"
-          ]
+          "docs": [
+            "Fee payer and proposer (the protocol authority in the canary build)."
+          ],
+          "signer": true
         }
       ],
       "args": []
@@ -23017,6 +23110,11 @@ export type AgencCoordination = {
       "code": 6433,
       "name": "invalidModerationRentPayer",
       "msg": "Moderation rent payer must be the task creator or the moderator"
+    },
+    {
+      "code": 6434,
+      "name": "moderatorIsListingProvider",
+      "msg": "A listing provider cannot moderate its own listing"
     }
   ],
   "types": [

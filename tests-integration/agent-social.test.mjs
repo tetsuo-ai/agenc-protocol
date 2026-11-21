@@ -15,6 +15,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, deregisterRemaining, setSurfaceRevision, setProtocolPaused, sendMany,
   BN, Keypair, PublicKey, SystemProgram, FailedTransactionMetadata,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------------------
@@ -225,8 +226,9 @@ test("deregister_agent: a suspended agent cannot erase the operator sanction", a
           protocolConfig: w.protocolPda,
           authority: w.admin.publicKey,
         })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "suspend agent before attempted deregistration",
   );
@@ -268,8 +270,9 @@ test("suspend_agent: protocol authority suspends an agent (status -> Suspended)"
       await adminProg.methods
         .suspendAgent()
         .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "suspend agent",
   );
@@ -277,21 +280,24 @@ test("suspend_agent: protocol authority suspends an agent (status -> Suspended)"
   assert.ok(agent.status.Suspended !== undefined, "status is Suspended");
 });
 
-test("suspend_agent: a non-protocol-authority cannot suspend (UnauthorizedUpgrade)", async () => {
+test("suspend_agent: one signer cannot suspend, not even the protocol authority (revision 9: the multisig threshold)", async () => {
   const w = await freshWorld({});
-  // The provider owns the agent but is NOT the protocol authority (admin is).
-  expectFail(
-    send(
-      w.svm,
-      await w.providerProg.methods
-        .suspendAgent()
-        .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
-        .instruction(),
-      [w.provider],
-    ),
-    "UnauthorizedUpgrade",
-    "non-authority suspend",
-  );
+  await configureTestMultisig(w);
+  // The provider owns the agent but is not an owner; the admin is one owner of 3.
+  for (const [prog, signer] of [[w.providerProg, w.provider], [makeProgram(w.admin), w.admin]]) {
+    expectFail(
+      send(
+        w.svm,
+        await prog.methods
+          .suspendAgent()
+          .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: signer.publicKey })
+          .instruction(),
+        [signer],
+      ),
+      "MultisigNotEnoughSigners",
+      "single-signer suspend",
+    );
+  }
   assert.ok(decode(w.svm, "AgentRegistration", w.providerAgent).status.Active !== undefined, "still Active");
 });
 
@@ -302,10 +308,12 @@ test("suspend_agent: suspending an already-suspended agent is rejected (AgentSus
     adminProg.methods
       .suspendAgent()
       .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+      .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
       .instruction();
-  expectOk(send(w.svm, await suspendIx(), [w.admin]), "first suspend");
+  const signers = approvalSigners(await configureTestMultisig(w), w.admin);
+  expectOk(send(w.svm, await suspendIx(), signers), "first suspend");
   w.svm.expireBlockhash(); // identical second tx would be deduped
-  expectFail(send(w.svm, await suspendIx(), [w.admin]), "AgentSuspended", "double suspend");
+  expectFail(send(w.svm, await suspendIx(), signers), "AgentSuspended", "double suspend");
 });
 
 // ---------------------------------------------------------------------------
@@ -321,8 +329,9 @@ test("unsuspend_agent: protocol authority restores a suspended agent to Inactive
       await adminProg.methods
         .suspendAgent()
         .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "suspend before unsuspend",
   );
@@ -334,8 +343,9 @@ test("unsuspend_agent: protocol authority restores a suspended agent to Inactive
       await adminProg.methods
         .unsuspendAgent()
         .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "unsuspend agent",
   );
@@ -352,15 +362,16 @@ test("unsuspend_agent: unsuspending a non-suspended agent is rejected (InvalidIn
       await adminProg.methods
         .unsuspendAgent()
         .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "InvalidInput",
     "unsuspend non-suspended agent",
   );
 });
 
-test("unsuspend_agent: a non-protocol-authority cannot unsuspend (UnauthorizedUpgrade)", async () => {
+test("unsuspend_agent: one signer cannot unsuspend (revision 9: the multisig threshold)", async () => {
   const w = await freshWorld({});
   const adminProg = makeProgram(w.admin);
   expectOk(
@@ -369,24 +380,27 @@ test("unsuspend_agent: a non-protocol-authority cannot unsuspend (UnauthorizedUp
       await adminProg.methods
         .suspendAgent()
         .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "suspend agent",
   );
-  // The provider (agent owner, not protocol authority) cannot unsuspend.
-  expectFail(
-    send(
-      w.svm,
-      await w.providerProg.methods
-        .unsuspendAgent()
-        .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
-        .instruction(),
-      [w.provider],
-    ),
-    "UnauthorizedUpgrade",
-    "non-authority unsuspend",
-  );
+  // Revision 9: one signer cannot unsuspend, not even the protocol authority.
+  for (const [prog, signer] of [[w.providerProg, w.provider], [adminProg, w.admin]]) {
+    expectFail(
+      send(
+        w.svm,
+        await prog.methods
+          .unsuspendAgent()
+          .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: signer.publicKey })
+          .instruction(),
+        [signer],
+      ),
+      "MultisigNotEnoughSigners",
+      "single-signer unsuspend",
+    );
+  }
   assert.ok(decode(w.svm, "AgentRegistration", w.providerAgent).status.Suspended !== undefined, "still Suspended");
 });
 
@@ -654,7 +668,7 @@ test("#275: suspended voters cannot vote even with sufficient age and reputation
   const voter = await eligibleVoter(w);
   expectOk(send(w.svm, await makeProgram(w.admin).methods.suspendAgent().accounts({
     agent: voter.agentPda, protocolConfig: w.protocolPda, authority: w.admin.publicKey,
-  }).instruction(), [w.admin]), "suspend voter");
+  }).remainingAccounts((await configureTestMultisig(w)).remainingAccounts).instruction(), approvalSigners(await configureTestMultisig(w), w.admin)), "suspend voter");
   expectFail(send(w.svm, await walletVote(w, post, voter), [voter.kp]), "AgentNotActive", "suspended voter");
   assert.equal(w.svm.getAccount(receiptAddress(post, voter)), null);
 });

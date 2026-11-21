@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**434 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**435 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -445,3 +445,4 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6431 | 0x191f | `InvalidTaskMarker` | Account is neither a Task nor a TaskMarker |
 | 6432 | 0x1920 | `ModeratorIsTaskCreator` | A task creator cannot moderate its own task |
 | 6433 | 0x1921 | `InvalidModerationRentPayer` | Moderation rent payer must be the task creator or the moderator |
+| 6434 | 0x1922 | `ModeratorIsListingProvider` | A listing provider cannot moderate its own listing |

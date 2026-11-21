@@ -38,6 +38,7 @@ import {
   enc, pda,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, BN, Keypair, SystemProgram,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 // Verification methods (mirror state.rs agent_verification_method::*).
@@ -62,8 +63,9 @@ async function assign(w, attestor) {
         authority: w.admin.publicKey,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
       .instruction(),
-    [w.admin],
+    approvalSigners(await configureTestMultisig(w), w.admin),
   );
 }
 

@@ -4,6 +4,7 @@ import {
   freshWorld, hireIx, makeProgram, send, expectOk, expectFail, decode,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   id32, arr, enc, pda, BN, SystemProgram, warpSeconds,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 // Unknown schema bytes cannot be produced by valid instructions. Corrupt only
@@ -13,9 +14,12 @@ for (const byte of [4, 5]) {
     test(`#278: unknown ModerationConfig byte ${byte} fails closed, relaxed=${relaxed}`, async () => {
       const w = await freshWorld();
       const admin = makeProgram(w.admin);
+      // Revision 9: a window change needs the protocol config and 2 of 3.
+      const approvals = await configureTestMultisig(w);
       expectOk(send(w.svm, await admin.methods.moderationHeartbeat(86400)
-        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey })
-        .instruction(), [w.admin]), "set supported liveness carve");
+        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey, protocolConfig: w.protocolPda })
+        .remainingAccounts(approvals.remainingAccounts)
+        .instruction(), approvalSigners(approvals, w.admin)), "set supported liveness carve");
       const jobHash = id32();
       const existing = await hireIx(w, { taskJobSpecHash: jobHash });
       expectOk(send(w.svm, existing.ix, [w.buyer]), "fund while config is valid");
@@ -68,12 +72,13 @@ for (const byte of [4, 5]) {
           moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
         .instruction(), [w.modAuth]), "InvalidModerationConfig", "listing attestation");
       expectFail(send(w.svm, await admin.methods.moderationHeartbeat(null)
-        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey })
+        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey, protocolConfig: null })
         .instruction(), [w.admin]), "InvalidModerationConfig", "heartbeat cannot reinterpret unknown schema");
       expectFail(send(w.svm, await admin.methods.configureTaskModeration(w.modAuth.publicKey, true)
         .accounts({ protocolConfig: w.protocolPda, moderationConfig: w.modCfg,
           authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
-        .instruction(), [w.admin]), "InvalidModerationConfig", "configure cannot erase unknown schema");
+        .remainingAccounts(approvals.remainingAccounts)
+        .instruction(), approvalSigners(approvals, w.admin)), "InvalidModerationConfig", "configure cannot erase unknown schema");
       assert.deepEqual(Buffer.from(w.svm.getAccount(w.modCfg).data), corrupted);
     });
   }

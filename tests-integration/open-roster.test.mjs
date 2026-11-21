@@ -26,6 +26,7 @@ import {
   freshWorld, setMultisig, taskModV2Pda, moderationBlockPda,
   coder, PID,
   BN, Keypair, PublicKey, SystemProgram,
+  configureTestMultisig, approvalSigners,
 } from "./harness.mjs";
 
 const BOND = 250_000_000n; // REGISTRATION_BOND_LAMPORTS (0.25 SOL, hardcoded)
@@ -64,8 +65,9 @@ async function assign(w, attestorPub, signer = w.admin) {
         authority: signer.publicKey,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
       .instruction(),
-    [signer],
+    approvalSigners(await configureTestMultisig(w), signer),
   );
 }
 
@@ -255,10 +257,11 @@ test("revoke_moderation_attestor is scoped (§4.7): the authority cannot close a
   const revokeIx = async () => makeProgram(w.admin).methods
     .revokeModerationAttestor()
     .accounts({ moderationConfig: w.modCfg, moderationAttestor: entry, authority: w.admin.publicKey })
+    .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
     .instruction();
 
   expectFail(
-    send(w.svm, await revokeIx(), [w.admin]),
+    send(w.svm, await revokeIx(), approvalSigners(await configureTestMultisig(w), w.admin)),
     "UnauthorizedAttestorRevocation",
     "authority revoke of a SELF-REGISTERED entry rejected — confiscation lever removed",
   );
@@ -273,8 +276,9 @@ test("revoke_moderation_attestor is scoped (§4.7): the authority cannot close a
       await makeProgram(w.admin).methods
         .revokeModerationAttestor()
         .accounts({ moderationConfig: w.modCfg, moderationAttestor: deputyEntry, authority: w.admin.publicKey })
+        .remainingAccounts((await configureTestMultisig(w)).remainingAccounts)
         .instruction(),
-      [w.admin],
+      approvalSigners(await configureTestMultisig(w), w.admin),
     ),
     "authority revoke of its own deputized entry still works",
   );

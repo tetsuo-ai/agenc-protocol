@@ -1226,8 +1226,9 @@ pub enum CoordinationError {
     DisputeCounterRepairNotApplicable,
     #[msg("Initiator counter still holds a unit; finalize the outcomes that own one first")]
     DisputeCounterNotDeficient,
-    // Appended (revision 9, accountable review): codes 6418 to 6433 in this
-    // exact order. Append-only: preserve every existing Anchor error code.
+    // Appended (revision 9, accountable review): codes 6418 to 6434 in this
+    // exact order (6434 from design open question 13). Append-only: preserve
+    // every existing Anchor error code.
     #[msg("A single-worker review task must be refused with reject_and_freeze")]
     SingleWorkerRejectMustFreeze,
     #[msg("The window to dispute this rejection has closed")]
@@ -1260,4 +1261,6 @@ pub enum CoordinationError {
     ModeratorIsTaskCreator,
     #[msg("Moderation rent payer must be the task creator or the moderator")]
     InvalidModerationRentPayer,
+    #[msg("A listing provider cannot moderate its own listing")]
+    ModeratorIsListingProvider,
 }

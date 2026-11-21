@@ -13,14 +13,18 @@ for (const enabled of [false, true]) {
     test(`#274: enabled=${enabled}, humanless=${humanless}: exact liveness boundary, publish, claim, BLOCK, re-arm`, async () => {
       const w = await freshWorld({ moderationEnabled: enabled });
       const admin = makeProgram(w.admin);
+      // Revision 9: configuration and window changes need 2 of 3.
+      const multisig = await configureTestMultisig(w);
       expectOk(send(w.svm, await admin.methods
         .configureTaskModeration(w.modAuth.publicKey, enabled)
         .accounts({ protocolConfig: w.protocolPda, moderationConfig: w.modCfg,
           authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
-        .instruction(), [w.admin]), "set actual config");
+        .remainingAccounts(multisig.remainingAccounts)
+        .instruction(), multisig.approvers), "set actual config");
       expectOk(send(w.svm, await admin.methods.moderationHeartbeat(86400)
-        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey })
-        .instruction(), [w.admin]), "set one-day window");
+        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey, protocolConfig: w.protocolPda })
+        .remainingAccounts(multisig.remainingAccounts)
+        .instruction(), multisig.approvers), "set one-day window");
       const jobHash = id32();
       async function hire() {
         if (!humanless) return hireIx(w, { taskJobSpecHash: jobHash });
@@ -66,7 +70,6 @@ for (const enabled of [false, true]) {
         .instruction(), [w.provider]), "relaxed task is claimable");
       assert.equal(decode(w.svm, "Task", relaxed.task).current_workers, 1);
 
-      const multisig = await configureTestMultisig(w);
       expectOk(send(w.svm, await admin.methods.setModerationBlock(arr(w.specHash), arr(id32()), "agenc://ruling/274")
         .accounts({ protocolConfig: w.protocolPda, moderationBlock: moderationBlockPda(w.specHash)[0],
           authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
@@ -77,7 +80,7 @@ for (const enabled of [false, true]) {
           authority: w.admin.publicKey })
         .remainingAccounts(multisig.remainingAccounts).instruction(), multisig.approvers), "clear BLOCK");
       expectOk(send(w.svm, await admin.methods.moderationHeartbeat(null)
-        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey })
+        .accounts({ moderationConfig: w.modCfg, authority: w.admin.publicKey, protocolConfig: null })
         .instruction(), [w.admin]), "heartbeat re-arms");
       expectFail(send(w.svm, (await hire()).ix, [w.buyer]), "TaskModerationRequired", "re-armed hire fails closed");
     });

@@ -248,20 +248,22 @@ then call `resolve_dispute` directly — no per-case vote tally or quorum.
 
 ## assign_moderation_attestor
 
-Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The
-assigned wallet may then record moderation attestations
+Assign a wallet to the moderation-attestor roster (P6.8; the protocol
+multisig threshold since revision 9). The assigned wallet may then record
+moderation attestations
 (`record_task_moderation` / `record_listing_moderation`) in addition to the single
 global moderation authority. P1.2 also added permissionless bonded
 self-registration; see `docs/P1_2_OPEN_ROSTER_SPEC.md`.
 
-### Accounts (4)
+### Accounts (5)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `moderation_config` |  |  |  | PDA ["moderation_config"] |  |
 | 2 | `moderation_attestor` | yes |  |  | PDA ["moderation_attestor", arg:attestor] | Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. |
-| 3 | `authority` | yes | yes |  |  | Must be the moderation authority that owns the moderation config. Unlike the threshold-approved dispute-resolver roster, this moderation roster remains authority-managed under its separate trust model. |
+| 3 | `authority` | yes | yes |  |  | Fee payer and proposer; pays the entry's rent. The approval is the multisig threshold over `remaining_accounts` (revision 9). |
 | 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 5 | `protocol_config` |  |  |  | PDA ["protocol"] | Revision 9 (G), appended: the protocol config whose multisig owners must approve the assignment. |
 
 ### Args (1)
 
@@ -578,7 +580,7 @@ Configure the moderation authority required before task job-spec publication.
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 2 | `moderation_config` | yes |  |  | PDA ["moderation_config"] |  |
-| 3 | `authority` | yes | yes |  |  |  |
+| 3 | `authority` | yes | yes |  |  | Fee payer and proposer. On the full surface the approval is the multisig threshold over `remaining_accounts`; the canary requires the protocol authority itself. |
 | 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (2)
@@ -1433,18 +1435,20 @@ Idempotent / re-runnable.
 
 ## moderation_heartbeat
 
-P1.3 moderation liveness heartbeat (batch-2 A2). The config authority or
-the moderation authority bumps the deadman timestamp; the config authority
-may also retune the liveness window (floored at 1 day). Silence past the
-window relaxes the moderation ALLOW gates to moderation-optional
-(docs/MODERATION_LIVENESS.md); the multisig BLOCK floor never relaxes.
+P1.3 moderation liveness heartbeat (batch-2 A2). The config authority,
+the moderation authority or a multisig owner bumps the deadman timestamp;
+retuning the liveness window (floored at 1 day) needs the multisig
+threshold. Silence past the window relaxes the moderation ALLOW gates to
+moderation-optional (docs/MODERATION_LIVENESS.md); the multisig BLOCK
+floor never relaxes.
 
-### Accounts (2)
+### Accounts (3)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `moderation_config` | yes |  |  | PDA ["moderation_config"] |  |
 | 2 | `authority` |  | yes |  |  |  |
+| 3 | `protocol_config` |  |  | yes | PDA ["protocol"] | Revision 9 (G), appended and optional: the protocol config. A plain heartbeat from the config authority or the moderation authority works without it; a heartbeat from another multisig owner needs it, and a window change needs it plus the threshold over remaining accounts. |
 
 ### Args (1)
 
@@ -2203,17 +2207,19 @@ _None._
 
 ## revoke_moderation_attestor
 
-Remove a wallet from the moderation-attestor roster (P1.2: scoped — the caller
-may remove only entries it itself created, so a self-registered attestor can be
-removed from chain by no one but itself), closing its assignment PDA.
+Remove a deputized wallet from the moderation-attestor roster under the
+protocol multisig threshold (revision 9), closing its assignment PDA. A
+self-registered (bonded) attestor can be removed from chain by no one but
+itself, through its two-step exit (P1.2).
 
-### Accounts (3)
+### Accounts (4)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `moderation_config` |  |  |  | PDA ["moderation_config"] |  |
-| 2 | `moderation_attestor` | yes |  |  | PDA ["moderation_attestor", account:moderation_attestor.attestor (ModerationAttestor)] | Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA is enforced; `close = authority` returns the rent to the moderation authority. P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered entry (`assigned_by == attestor`) can never be closed by the authority, so its bond can never be confiscated through this path. |
-| 3 | `authority` | yes | yes |  |  | Must be the moderation authority that owns the moderation config. |
+| 2 | `moderation_attestor` | yes |  |  | PDA ["moderation_attestor", account:moderation_attestor.attestor (ModerationAttestor)] | Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA is enforced; `close = authority` returns the rent to the proposer. P1.2 §4.7: only a deputized entry (no bond, no registration time) can be closed here, so a self-registered attestor's bond can never be confiscated through this path. |
+| 3 | `authority` | yes | yes |  |  | Fee payer and proposer; receives the entry's rent. The approval is the multisig threshold over `remaining_accounts` (revision 9). |
+| 4 | `protocol_config` |  |  |  | PDA ["protocol"] | Revision 9 (G), appended: the protocol config whose multisig owners must approve the revoke. |
 
 ### Args (0)
 
@@ -2421,7 +2427,7 @@ Submit a result for creator review before final settlement.
 
 ## suspend_agent
 
-Suspend an agent (protocol authority only, fix #819).
+Suspend an agent (protocol multisig threshold, revision 9; fix #819).
 Prevents the agent from claiming tasks or participating in disputes.
 
 ### Accounts (3)
@@ -2429,8 +2435,8 @@ Prevents the agent from claiming tasks or participating in disputes.
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `agent` | yes |  |  | PDA ["agent", account:agent.agent_id (AgentRegistration)] |  |
-| 2 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 3 | `authority` |  | yes |  |  | has_one → protocol_config |
+| 2 | `protocol_config` |  |  |  | PDA ["protocol"] | Revision 9 (G): on the full surface the approval is the multisig threshold over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single protocol-authority signer. |
+| 3 | `authority` |  | yes |  |  | Fee payer and proposer (the protocol authority in the canary build). |
 
 ### Args (0)
 
@@ -2438,7 +2444,7 @@ _None._
 
 ## unsuspend_agent
 
-Unsuspend an agent (protocol authority only, fix #819).
+Unsuspend an agent (protocol multisig threshold, revision 9; fix #819).
 Restores the agent to Inactive status.
 
 ### Accounts (3)
@@ -2446,8 +2452,8 @@ Restores the agent to Inactive status.
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `agent` | yes |  |  | PDA ["agent", account:agent.agent_id (AgentRegistration)] |  |
-| 2 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 3 | `authority` |  | yes |  |  | has_one → protocol_config |
+| 2 | `protocol_config` |  |  |  | PDA ["protocol"] | Revision 9 (G): on the full surface the approval is the multisig threshold over `remaining_accounts` (2 of 3 on mainnet); the canary keeps the single protocol-authority signer. |
+| 3 | `authority` |  | yes |  |  | Fee payer and proposer (the protocol authority in the canary build). |
 
 ### Args (0)
 

@@ -4,7 +4,7 @@
 // Runs, IN ORDER, AFTER the binary deploy (step 1) and the migrate sweep (steps 2–3):
 //   4. initialize_bid_marketplace   (creates BidMarketplaceConfig) — MULTISIG-gated
 //   4. ZK activation                DISABLED/DEFERRED — never initializes or rotates ZkConfig
-//   4. configure_task_moderation     (verify/realign ModerationConfig authority) — single authority
+//   4. configure_task_moderation     (verify/realign ModerationConfig authority; multisig co-signers since revision 9)
 //   5. publish + fetch-verify the reviewed compact on-chain IDL (parent orchestrator)
 //   6. stamp_release_surface         (atomic surface_revision = CURRENT boundary) — MULTISIG-gated  [LAST]
 //
@@ -907,7 +907,7 @@ async function main() {
       `ZkConfig ${zkConfigPda.toBase58()} is ${existingZkConfig ? `present (len=${existingZkConfig.data.length}; legacy inventory only)` : "absent"}.`,
   );
 
-  // === Step 4c: configure_task_moderation (single authority; verify/realign) ===============
+  // === Step 4c: configure_task_moderation (verify/realign; the multisig threshold since revision 9) ===
   if (skipModeration) {
     const expectedPolicy = reviewedModerationPolicyFromEnv(process.env);
     const existing = await connection.getAccountInfo(moderationPda);
@@ -986,7 +986,10 @@ async function main() {
             authority: authority.publicKey,
             systemProgram: SystemProgram.programId,
           })
-          .instruction(); // single authority signer
+          // Revision 9 (G): the threshold over the owner co-signers decides; a
+          // revision 8 program ignores the extra accounts.
+          .remainingAccounts(signerMetas)
+          .instruction();
         await processIx(ix, "configure_task_moderation");
         if (EXECUTE) {
           const postImage = await connection.getAccountInfo(

@@ -1,11 +1,8 @@
 //! Assign a wallet to the moderation-attestor roster (P6.8 — registry MECHANISM only).
 //!
-//! Mirrors only the PDA-roster mechanics of `assign_dispute_resolver`; moderation keeps
-//! its separate authority-managed trust model rather than inheriting resolver M-of-N.
-//! The moderation authority (the wallet that configures the moderation gate,
-//! `ModerationConfig.authority`) designates specific wallets that may
-//! record moderation attestations in addition to the single global
-//! `ModerationConfig.moderation_authority`. Each assignment is its own PDA
+//! Mirrors the PDA-roster mechanics of `assign_dispute_resolver`. The protocol
+//! multisig designates specific wallets that may record moderation attestations
+//! in addition to the single global `ModerationConfig.moderation_authority`. Each assignment is its own PDA
 //! (`["moderation_attestor", attestor]`); its existence authorizes that wallet to call
 //! `record_task_moderation` / `record_listing_moderation`. Revoke by closing it via
 //! `revoke_moderation_attestor`. Re-assigning an already-assigned attestor fails at `init`
@@ -14,10 +11,16 @@
 //! This builds ONLY the roster. The neutrality decision (a curated roster merely adds
 //! deputies; it does not by itself retract the "one company pre-approves every hire"
 //! objection) is a separate [HUMAN] decision documented in `docs/MODERATION_NEUTRALITY.md`.
+//!
+//! Revision 9 (G, design open question 13): no single key over the roster. An
+//! assignment needs the `ProtocolConfig` multisig threshold over remaining
+//! accounts, exactly like `set_moderation_block`; the signer is the fee payer and
+//! proposer, pays the entry's rent and is recorded as `assigned_by`.
 
 use crate::errors::CoordinationError;
 use crate::events::ModerationAttestorAssigned;
-use crate::state::{ModerationAttestor, ModerationConfig};
+use crate::state::{ModerationAttestor, ModerationConfig, ProtocolConfig};
+use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -40,20 +43,25 @@ pub struct AssignModerationAttestor<'info> {
     )]
     pub moderation_attestor: Box<Account<'info, ModerationAttestor>>,
 
-    /// Must be the moderation authority that owns the moderation config. Unlike the
-    /// threshold-approved dispute-resolver roster, this moderation roster remains
-    /// authority-managed under its separate trust model.
-    #[account(
-        mut,
-        constraint = authority.key() == moderation_config.authority
-            @ CoordinationError::UnauthorizedTaskModerator
-    )]
+    /// Fee payer and proposer; pays the entry's rent. The approval is the multisig
+    /// threshold over `remaining_accounts` (revision 9).
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// Revision 9 (G), appended: the protocol config whose multisig owners must
+    /// approve the assignment.
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 }
 
 pub fn handler(ctx: Context<AssignModerationAttestor>, attestor: Pubkey) -> Result<()> {
+    let unique_signers = unique_account_infos(ctx.remaining_accounts);
+    require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
     require!(
         attestor != Pubkey::default(),
         CoordinationError::InvalidModerationAttestor

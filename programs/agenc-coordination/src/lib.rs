@@ -117,13 +117,13 @@ pub mod agenc_coordination {
         instructions::update_agent::handler(ctx, capabilities, endpoint, metadata_uri, status)
     }
 
-    /// Suspend an agent (protocol authority only, fix #819).
+    /// Suspend an agent (protocol multisig threshold, revision 9; fix #819).
     /// Prevents the agent from claiming tasks or participating in disputes.
     pub fn suspend_agent(ctx: Context<SuspendAgent>) -> Result<()> {
         instructions::suspend_agent::handler(ctx)
     }
 
-    /// Unsuspend an agent (protocol authority only, fix #819).
+    /// Unsuspend an agent (protocol multisig threshold, revision 9; fix #819).
     /// Restores the agent to Inactive status.
     pub fn unsuspend_agent(ctx: Context<UnsuspendAgent>) -> Result<()> {
         instructions::unsuspend_agent::handler(ctx)
@@ -689,8 +689,9 @@ pub mod agenc_coordination {
         instructions::revoke_dispute_resolver::handler(ctx)
     }
 
-    /// Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The
-    /// assigned wallet may then record moderation attestations
+    /// Assign a wallet to the moderation-attestor roster (P6.8; the protocol
+    /// multisig threshold since revision 9). The assigned wallet may then record
+    /// moderation attestations
     /// (`record_task_moderation` / `record_listing_moderation`) in addition to the single
     /// global moderation authority. P1.2 also added permissionless bonded
     /// self-registration; see `docs/P1_2_OPEN_ROSTER_SPEC.md`.
@@ -702,9 +703,10 @@ pub mod agenc_coordination {
         instructions::assign_moderation_attestor::handler(ctx, attestor)
     }
 
-    /// Remove a wallet from the moderation-attestor roster (P1.2: scoped — the caller
-    /// may remove only entries it itself created, so a self-registered attestor can be
-    /// removed from chain by no one but itself), closing its assignment PDA.
+    /// Remove a deputized wallet from the moderation-attestor roster under the
+    /// protocol multisig threshold (revision 9), closing its assignment PDA. A
+    /// self-registered (bonded) attestor can be removed from chain by no one but
+    /// itself, through its two-step exit (P1.2).
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn revoke_moderation_attestor(ctx: Context<RevokeModerationAttestor>) -> Result<()> {
         instructions::revoke_moderation_attestor::handler(ctx)
@@ -1773,11 +1775,12 @@ pub mod agenc_coordination {
         instructions::store_identity::close_handler(ctx)
     }
 
-    /// P1.3 moderation liveness heartbeat (batch-2 A2). The config authority or
-    /// the moderation authority bumps the deadman timestamp; the config authority
-    /// may also retune the liveness window (floored at 1 day). Silence past the
-    /// window relaxes the moderation ALLOW gates to moderation-optional
-    /// (docs/MODERATION_LIVENESS.md); the multisig BLOCK floor never relaxes.
+    /// P1.3 moderation liveness heartbeat (batch-2 A2). The config authority,
+    /// the moderation authority or a multisig owner bumps the deadman timestamp;
+    /// retuning the liveness window (floored at 1 day) needs the multisig
+    /// threshold. Silence past the window relaxes the moderation ALLOW gates to
+    /// moderation-optional (docs/MODERATION_LIVENESS.md); the multisig BLOCK
+    /// floor never relaxes.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn moderation_heartbeat(
         ctx: Context<ModerationHeartbeat>,
