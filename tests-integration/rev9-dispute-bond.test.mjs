@@ -19,7 +19,7 @@ import {
   taskModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats, creatorStatsCreationCost,
   disputeBondPda, disputeRespondent, findEvents, coder, sendMany,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, FailedTransactionMetadata,
 } from "./harness.mjs";
 
 const TX_FEE = 5_000n;
@@ -629,4 +629,146 @@ test("rev9 dispute bond: a creator's dispute then [cancel_dispute, cancel_task] 
   for (const settled of findEvents(res, "ClaimDepositSettled")) {
     assert.equal(settled.forfeited, false, "every deposit went back");
   }
+});
+
+// ---------------------------------------------------------------------------
+// Review R3-2: the R1-1 fix must survive a second filing. A creator files
+// against a live claim, waits until the claim lapses (the dispute kept the
+// worker from delivering), then cancels and files again in one transaction.
+// The second dispute's expiry would read the lapse as a no-show and forfeit the
+// deposit and any completion bond. After any filing, a creator filing against a
+// claim that has lapsed since is refused with ClaimExpired.
+// ---------------------------------------------------------------------------
+async function creatorFilesAgainstIx(w, t, defendant, { disputeId, dispute } = newDispute()) {
+  const tid = decode(w.svm, "Task", t.task).task_id;
+  const ix = await w.buyerProg.methods
+    .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), 0, "creator evidence")
+    .accounts({ dispute, task: t.task, agent: w.buyerAgent,
+      authorityRateLimit: pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0],
+      protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: defendant.agent, workerClaim: defendant.claim,
+      taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+      disputeBond: disputeBondPda(dispute) })
+    .instruction();
+  return { ix, dispute };
+}
+
+function expireAgainstIx(w, t, dispute, crank, defendant) {
+  return makeProgram(crank).methods
+    .expireDispute()
+    .accounts({ dispute, task: t.task, escrow: t.escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey,
+      authority: crank.publicKey, workerClaim: defendant.claim, worker: defendant.agent, workerWallet: defendant.wallet,
+      hireRecord: t.hireRecord, disputeOperator: null, disputeReferrer: null, tokenEscrowAta: null, creatorTokenAccount: null,
+      workerTokenAccountAta: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: completionBond(t.task, w.buyer.publicKey), workerCompletionBond: completionBond(t.task, defendant.wallet),
+      taskSubmission: pda([enc("task_submission"), defendant.claim.toBuffer()])[0], taskValidationConfig: t.validation,
+      disputeBond: disputeBondPda(dispute), workerStats: agentStatsPda(defendant.agent),
+      creatorStats: creatorStatsPda(w.buyer.publicKey), systemProgram: SystemProgram.programId })
+    .instruction();
+}
+
+function expireClaimForIx(w, t, crank, defendant) {
+  return makeProgram(crank).methods
+    .expireClaim()
+    .accounts({ creatorStats: null, authority: crank.publicKey, task: t.task, escrow: t.escrow, claim: defendant.claim,
+      worker: defendant.agent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      taskSubmission: pda([enc("task_submission"), defendant.claim.toBuffer()])[0], rentRecipient: defendant.wallet,
+      workerCompletionBond: completionBond(t.task, defendant.wallet), bondCreator: w.buyer.publicKey,
+      agentStats: agentStatsPda(defendant.agent), treasury: null, systemProgram: SystemProgram.programId })
+    .instruction();
+}
+
+// The pair [cancel_dispute #1, initiate_dispute #2] after the defendant's claim
+// lapsed. A program without the fix accepts it; then, for the record of what the
+// finding claims, the second dispute is left to expire and the defendant's
+// wallet is checked (it fails there: the creator took the deposit or the bond).
+// With the fix the pair fails ClaimExpired, the creator cancels alone, and the
+// lapsed claim expires with everything back to its worker.
+async function secondFilingOutcome(w, t, first, defendant, label) {
+  const cancelFirst = await cancelIx(w, t, first, w.buyer);
+  const second = newDispute();
+  const { ix: fileSecond } = await creatorFilesAgainstIx(w, t, defendant, second);
+  const pair = sendMany(w.svm, [cancelFirst, fileSecond], [w.buyer]);
+  if (!(pair instanceof FailedTransactionMetadata)) {
+    warpTo(w, lastRulingSecond(w, second.dispute) + 1);
+    const crank = crankerFor(w);
+    const claimBalance = bal(w, defendant.claim);
+    const bondBalance = bal(w, completionBond(t.task, defendant.wallet));
+    const before = bal(w, defendant.wallet);
+    expectOk(send(w.svm, await expireAgainstIx(w, t, second.dispute, crank, defendant), [crank]), `${label}: dispute #2 expires`);
+    assert.equal(bal(w, defendant.wallet) - before, claimBalance + bondBalance,
+      `${label}: the worker the first dispute blocked keeps its deposit and bond`);
+    return;
+  }
+  expectFail(pair, "ClaimExpired", `${label}: [cancel_dispute, initiate_dispute] against the lapsed claim`);
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, cancelFirst, [w.buyer]), `${label}: the creator cancels its dispute`);
+  w.svm.expireBlockhash();
+  const { ix: again } = await creatorFilesAgainstIx(w, t, defendant);
+  expectFail(send(w.svm, again, [w.buyer]), "ClaimExpired", `${label}: a later filing against the lapsed claim`);
+  warpTo(w, Number(decode(w.svm, "TaskClaim", defendant.claim).expires_at.toString()) + 61);
+  const crank = crankerFor(w);
+  const claimBalance = bal(w, defendant.claim);
+  const bondBalance = bal(w, completionBond(t.task, defendant.wallet));
+  const before = { worker: bal(w, defendant.wallet), creator: bal(w, w.buyer.publicKey) };
+  const res = expectOk(send(w.svm, await expireClaimForIx(w, t, crank, defendant), [crank]), `${label}: the lapsed claim expires`);
+  assert.equal(bal(w, defendant.wallet) - before.worker, claimBalance + bondBalance,
+    `${label}: the worker gets its claim rent, deposit and any bond back`);
+  assert.equal(bal(w, w.buyer.publicKey), before.creator, `${label}: the creator gets nothing`);
+  for (const settled of findEvents(res, "ClaimDepositSettled")) {
+    assert.equal(settled.forfeited, false, `${label}: the deposit went back`);
+  }
+}
+
+test("rev9 dispute bond: after a filing the creator cannot refile against a claim that lapsed meanwhile; B keeps its deposit (review R3-2; 2414888: the second expiry takes it)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const t = { task, escrow: pda([enc("escrow"), task.toBuffer()])[0], hireRecord: pda([enc("hire"), task.toBuffer()])[0], validation: null };
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  const deadline = Number(w.svm.getClock().unixTimestamp) + 4 * 3600;
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(1_000_000_000), 2, new BN(deadline), 1, null, 0, null, null, 0)
+    .accounts({ task, escrow: t.escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
+      authorityRateLimit: pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0],
+      authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+      rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "db:create a Collaborative Auto task");
+  Object.assign(t, await publish(w, task));
+  await claim(w, t); // worker A (the provider)
+  const b = await registerWorker(w);
+  const claimB = pda([enc("claim"), task.toBuffer(), b.agent.toBuffer()])[0];
+  expectOk(send(w.svm, await b.prog.methods
+    .claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: t.jobSpec, hireRecord: t.hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(t.jobHash)[0], claim: claimB, protocolConfig: w.protocolPda,
+      worker: b.agent, authority: b.kp.publicKey, systemProgram: SystemProgram.programId,
+      workerStats: agentStatsPda(b.agent) })
+    .instruction(), [b.kp]), "db:worker B claims");
+  const depositB = bal(w, claimB) - BigInt(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(claimB).data.length)));
+  assert.equal(depositB, 50_000_000n, "10% of a 0.5 SOL share");
+
+  // #1 against A half an hour before the deadline; both claims lapse at D + 3,600.
+  warpTo(w, deadline - 1_800);
+  const { ix: fileIx, dispute } = await creatorFilesIx(w, t, 0);
+  expectOk(send(w.svm, fileIx, [w.buyer]), "db:creator files against A");
+  warpTo(w, deadline + 3_601);
+  await secondFilingOutcome(w, t, dispute, { agent: b.agent, claim: claimB, wallet: b.kp.publicKey }, "Collaborative, B");
+});
+
+test("rev9 dispute bond: the same chain on an Exclusive task takes no completion bond (review R3-2; 2414888: the creator gets the bond)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await hiredClaimed(w, { reward: 1_000_000_000 });
+  expectOk(send(w.svm, await w.providerProg.methods
+    .postCompletionBond(1)
+    .accounts({ task: t.task, protocolConfig: w.protocolPda, completionBond: completionBond(t.task, w.provider.publicKey),
+      worker: w.providerAgent, workerClaim: t.claim, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "db:the worker posts a completion bond");
+  assert.ok(bal(w, completionBond(t.task, w.provider.publicKey)) > 0n, "a live worker bond");
+  const deadline = Number(decode(w.svm, "Task", t.task).deadline.toString());
+  warpTo(w, deadline - 1_800);
+  const { ix: fileIx, dispute } = await creatorFilesIx(w, t, 0);
+  expectOk(send(w.svm, fileIx, [w.buyer]), "db:creator files against the worker");
+  warpTo(w, deadline + 3_601);
+  await secondFilingOutcome(w, t, dispute, { agent: w.providerAgent, claim: t.claim, wallet: w.provider.publicKey }, "Exclusive with a bond");
 });
