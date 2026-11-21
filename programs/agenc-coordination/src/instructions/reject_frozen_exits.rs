@@ -18,8 +18,9 @@
 //!   worker's bond. Not ruled in time: as if no dispute had been filed (the buyer
 //!   is refunded, the bond goes back to the worker).
 //!
-//! Every ruling needs the threshold of owners WITHOUT a stake in it: the creator,
-//! the worker wallet and live operator or referrer payees do not count.
+//! Every ruling needs the threshold of owners WITHOUT a stake in it: the creator
+//! and the worker wallet do not count. Operator and referrer payees do (review
+//! R2-1), so naming an owner as a payee cannot make a ruling impossible.
 
 use crate::errors::CoordinationError;
 use crate::events::{

@@ -229,7 +229,8 @@ pub struct CloseTask<'info> {
 
 /// A program-owned, non-tombstoned account at the bond PDA means a completion bond is
 /// still live and must be settled (reclaim_completion_bond) before the Task can be closed.
-fn completion_bond_is_live(info: &AccountInfo) -> Result<bool> {
+/// Also used by `release_claim` (review R3-6).
+pub(crate) fn completion_bond_is_live(info: &AccountInfo) -> Result<bool> {
     if info.owner != &crate::ID {
         return Ok(false);
     }
