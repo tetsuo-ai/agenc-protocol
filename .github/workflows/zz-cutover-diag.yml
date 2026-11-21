@@ -1,0 +1,25 @@
+name: Cutover endpoint timing (temporary branch only)
+on:
+  push:
+    branches: [release-dry-run/rev9-diag]
+permissions:
+  contents: read
+jobs:
+  timing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Time the cutover's endpoints from a hosted runner
+        shell: bash
+        run: |
+          PD=E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw
+          P=HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
+          echo "runner ip: $(curl -s --max-time 10 https://api.ipify.org)"
+          for R in https://api.mainnet-beta.solana.com https://solana-rpc.publicnode.com https://solana-mainnet.public.blastapi.io https://solana.api.onfinality.io/public https://api.mainnet.solana.com; do
+            for t in 1 2 3; do
+              curl -s -o /tmp/g.json -w "$R genesis try$t: %{http_code} %{time_total}s\n" --max-time 30 -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}' $R
+              curl -s -o /tmp/pd.json -w "$R programdata try$t: %{http_code} %{size_download}B ttfb=%{time_starttransfer}s total=%{time_total}s\n" --max-time 30 -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$PD\",{\"encoding\":\"base64\",\"commitment\":\"finalized\"}]}" $R
+              head -c 160 /tmp/pd.json | tr -d '\n' | sed 's/"data":\["[A-Za-z0-9+\/=]*/"data":["~/'; echo
+            done
+          done
+          for t in 1 2 3; do curl -s -o /dev/null -w "osec status-all try$t: %{http_code} %{time_total}s\n" --max-time 30 https://verify.osec.io/status-all/$P; done
