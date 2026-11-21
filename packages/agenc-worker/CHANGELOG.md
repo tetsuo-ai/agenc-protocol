@@ -5,7 +5,33 @@ All notable changes to `@tetsuo-ai/agenc-worker` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.4.0
+
+This release depends on `@tetsuo-ai/marketplace-sdk@^0.14.0` and targets the
+revision 9 program (`surface_revision = 9`). Older 0.3.0 is the revision-8
+pin.
+
+### Revision 9
+
+- The claim funding gate charges the task's exact claim deposit (10% of the
+  worker's share, at least 0.005 SOL; the entry deposit for a contest) and the
+  worker record's rent on a first claim. Registration budgets the record and a
+  0.01 SOL deposit.
+- `expire_claim` passes the required worker record and the task's creator (the
+  no-show deposit recipient), and `reclaim_terminal_claim` passes the creator.
+  `withoutNewRecord` is gone: the record can no longer be left out.
+- A given-up job's live, undelivered claim is given back at once with
+  `release_claim` (contests and bid tasks still wait for expiry). When a spec
+  cannot be fetched after the claim, the worker retries until ten minutes
+  before the first hour ends, then releases, so the deposit comes back.
+- Turned-down deliveries are reported with their deadline and bond. They are
+  disputed only under the `disputeTurnDowns` operator policy, off by default,
+  and only when the wallet holds the bond. Once a window is over the worker
+  sends `expire_reject_frozen` to collect its rents, its bond or, for a
+  revision 8 freeze, its pay.
+- A closed task (a revision 9 `TaskMarker`) reads as closed: a Completed
+  marker counts as paid once the agent's `totalEarned` shows it, a Cancelled
+  one as not paid, and upkeep skips it.
 
 ### Fixed
 

@@ -3,8 +3,8 @@
 // with the exact next action for each gap.
 //
 // The version matrix mirrors docs/VERSIONING.md §1.1 (revision-8 train), the
-// planned revision-9 set (§1.1.3) and the historical revision-4 and revision-5
-// sets. Update both the document and this constant on a lockstep publish.
+// revision-9 set this CLI ships with (§1.1.3) and the historical revision-4
+// and revision-5 sets. Update both the document and this constant on a lockstep publish.
 // REVIEWED_MAINNET_RELEASES holds the deployment identities observed on
 // finalized mainnet after each upgrade; the revision-9 identity is added only
 // after its verified cutover. Compatibility is selected by the finalized
@@ -126,8 +126,8 @@ export const SUPPORT_MATRIX_BY_SURFACE_REVISION = {
     // entry an installed store-core fails closed instead of matching a
     // revision-5 artifact whose SDK peer range rejects SDK 0.13.
   },
-  // The planned revision-9 train (design 9.4). Moderation keeps 0.3 unless
-  // its policy hash changes. No store-core entry until a reviewed release
+  // The revision-9 train (design 9.4). Moderation keeps 0.3: its policy hash
+  // did not change. No store-core entry until a reviewed release
   // targets revision 9.
   9: {
     "@tetsuo-ai/protocol": ["0.6"],
@@ -935,29 +935,29 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
   const sdkVersion = installedVersion(input, SDK_PACKAGE);
   if (
     config !== null &&
-    (sdkVersion == null || !versionInMatrix(sdkVersion, ["0.13"]))
+    (sdkVersion == null || !versionInMatrix(sdkVersion, ["0.14"]))
   ) {
     checks.push({
       id: "pin:template-sdk",
       label: "generated-template SDK API",
       status: "fail",
-      detail: `generated ${config.kind} code requires @tetsuo-ai/marketplace-sdk 0.13.x (installed: ${sdkVersion ?? "missing"})`,
+      detail: `generated ${config.kind} code requires @tetsuo-ai/marketplace-sdk 0.14.x (installed: ${sdkVersion ?? "missing"})`,
       action:
-        "npm install @tetsuo-ai/marketplace-sdk@^0.13.0 and rebuild the generated surface",
+        "npm install @tetsuo-ai/marketplace-sdk@^0.14.0 and rebuild the generated surface",
     });
   }
   const workerVersion = installedVersion(input, WORKER_RUNTIME_PACKAGE);
   if (
     config?.kind === "worker" &&
-    (workerVersion == null || !versionInMatrix(workerVersion, ["0.3"]))
+    (workerVersion == null || !versionInMatrix(workerVersion, ["0.4"]))
   ) {
     checks.push({
       id: "pin:template-worker",
       label: "generated-worker runtime API",
       status: "fail",
-      detail: `generated worker.mjs requires @tetsuo-ai/agenc-worker 0.3.x (installed: ${workerVersion ?? "missing"})`,
+      detail: `generated worker.mjs requires @tetsuo-ai/agenc-worker 0.4.x (installed: ${workerVersion ?? "missing"})`,
       action:
-        "npm install @tetsuo-ai/agenc-worker@^0.3.0 and rebuild worker.mjs",
+        "npm install @tetsuo-ai/agenc-worker@^0.4.0 and rebuild worker.mjs",
     });
   }
 

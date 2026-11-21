@@ -36,10 +36,10 @@ Raw artifact subpaths are also exported:
 - `@tetsuo-ai/protocol/verifier-router.json`
 - `@tetsuo-ai/protocol/daemon-json-rpc.schema.json`
 
-**Version:** this workspace carries the **106-instruction revision 9** IDL. It
-is not released yet. The released `0.5.2` package is the **104-instruction
-revision-8** IDL that matches the live mainnet program (deployed 2026-10-28,
-release commit `f39b383`). The older `0.4.0` package is the superseded
+**Version:** `0.6.0` carries the **106-instruction revision 9** IDL. It is
+published after mainnet is stamped 9. Until then the `0.5.2` package on npm is
+the **104-instruction revision-8** IDL that matches the live mainnet program
+(deployed 2026-10-28, release commit `f39b383`). The older `0.4.0` package is the superseded
 revision-5 **101-instruction** IDL. Requires **Node ≥ 22.23.1**.
 
 ## Consumer Guidance

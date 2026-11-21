@@ -130,17 +130,17 @@ surface.
 
 | Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.5.2** | Committed 104-instruction revision-8 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Older 0.4.0 is the superseded revision-5 101-ix wire. |
-| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.13.0** | Codama-generated `@solana/kit` client for the **104-instruction revision-8 surface** + ergonomic facade. Older 0.12.0 is the superseded revision-5 wire. |
-| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.6.0** | React hooks/components for embeddable marketplace UIs; requires the revision-8 SDK (`^0.13.0`) and buyer job-spec commitment. |
-| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.6.0** | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
-| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.6.1** | MCP server exposing marketplace tools. |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.6.0** | Committed 106-instruction revision 9 IDL + TS types + manifest, derived from `artifacts/anchor/*`. On npm, 0.5.2 is the 104-instruction revision-8 IDL. |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.14.0** | Codama-generated `@solana/kit` client for the **106-instruction revision 9 surface** + ergonomic facade. On npm, 0.13.0 is the revision-8 client. |
+| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.7.0** | React hooks/components for embeddable marketplace UIs; requires the revision 9 SDK (`^0.14.0`) and buyer job-spec commitment. |
+| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.7.0** | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
+| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.7.0** | MCP server exposing marketplace tools. |
 | `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | **0.3.0** | Shared moderation canon / test vectors. |
-| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | **0.4.0** | `init` / `dev` / `promote` developer CLI. |
-| `agenc-cli`                         | `packages/agenc-cli-alias`        | **0.4.0** | Thin unscoped alias for the scoped CLI. |
-| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | **0.3.0** | Worker claim/submit runtime loop. |
+| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | **0.5.0** | `init` / `dev` / `promote` developer CLI. |
+| `agenc-cli`                         | `packages/agenc-cli-alias`        | **0.5.0** | Thin unscoped alias for the scoped CLI. |
+| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | **0.4.0** | Worker claim/submit runtime loop. |
 
-These versions form the coordinated revision-8 train for the program deployed on 2026-10-28. They are published through the tag-driven release workflow. The revision-5 set (protocol 0.4.0, SDK 0.12.0 and the rest) is the superseded wire for flows that changed.
+These versions form the coordinated revision 9 train. They publish through the tag-driven release workflow after mainnet is stamped 9 ([docs/VERSIONING.md](docs/VERSIONING.md) §1.1.3). Until then npm serves the revision-8 train for the program deployed on 2026-10-28: protocol 0.5.2, SDK 0.13.0, React and tools 0.6.0, MCP 0.6.1, moderation and worker 0.3.0, and CLI 0.4.0 (the unscoped alias stayed at 0.2.0). Moderation stays 0.3.0 for revision 9.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 

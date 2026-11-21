@@ -272,9 +272,9 @@ getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tet
 
 ### Workspace status (revision 9, not released yet)
 
-- This workspace targets the revision 9 program and its **106-instruction**
-  IDL. It is not released yet. Package version `0.13.0` on npm is the
-  revision 8 release (104 instructions, deployed 2026-10-28).
+- Version `0.14.0` targets the revision 9 program and its **106-instruction**
+  IDL. It is published after mainnet is stamped 9. Until then `0.13.0` on npm
+  is the revision 8 release (104 instructions, deployed 2026-10-28).
 - `SURFACE_REVISION_CURRENT` is 9 (`SURFACE_REVISION_ACCOUNTABLE_REVIEW`).
   `capabilitiesForRevision(8)` still reads as the full surface, with
   `accountableReview: false`. Several revision 9 wires changed, so do not send

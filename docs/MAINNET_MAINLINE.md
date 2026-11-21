@@ -169,8 +169,9 @@ The coordinated revision-8 client release train is `@tetsuo-ai/protocol` 0.5.2,
 `@tetsuo-ai/marketplace-sdk` 0.13.0, `@tetsuo-ai/marketplace-react` and
 `@tetsuo-ai/marketplace-tools` 0.6.0, `@tetsuo-ai/marketplace-mcp` 0.6.1,
 `@tetsuo-ai/marketplace-moderation` and `@tetsuo-ai/agenc-worker` 0.3.0, and
-`@tetsuo-ai/agenc-cli` plus the unscoped `agenc-cli` alias 0.4.0. It is released
-through the tag-driven release workflow. See [`VERSIONING.md`](./VERSIONING.md).
+`@tetsuo-ai/agenc-cli` 0.4.0. It was released through the tag-driven release
+workflow. The unscoped `agenc-cli` alias was not published for revision 8 (npm
+still has 0.2.0). See [`VERSIONING.md`](./VERSIONING.md).
 
 ## Revision 5 (deployed 2026-07-22, superseded 2026-10-28)
 

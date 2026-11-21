@@ -49,8 +49,8 @@
     "test:e2e": "vitest run tests-e2e/"
   },
   "dependencies": {
-    "@tetsuo-ai/agenc-worker": "^0.3.0",
-    "@tetsuo-ai/marketplace-sdk": "^0.13.0"
+    "@tetsuo-ai/agenc-worker": "^0.4.0",
+    "@tetsuo-ai/marketplace-sdk": "^0.14.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"

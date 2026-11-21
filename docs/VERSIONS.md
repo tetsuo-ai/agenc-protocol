@@ -18,8 +18,9 @@ the deployment preflight rejects a production build or IDL that contains it.
 
 This source is the revision-9 candidate (accountable review,
 `SURFACE_REVISION_CURRENT = 9`): 106 production instructions, 109 with
-`private-zk`, and the 25-instruction canary. It is not deployed; its client train
-is pending. See [Revision 9 notes](./PROGRAM_SURFACE.md#revision-9-notes).
+`private-zk`, and the 25-instruction canary. It is not deployed. Its client train
+(protocol 0.6.0, SDK 0.14.0 and the rest, see [`VERSIONING.md`](./VERSIONING.md)
+§1.1.3) is in the package manifests but not published. See [Revision 9 notes](./PROGRAM_SURFACE.md#revision-9-notes).
 
 > **As of 2026-10-28 the full 104-instruction revision-8 surface is deployed on
 > mainnet** (`surface_revision = 8` / `SURFACE_REVISION_FEE_QUALIFIED_RATINGS`,
@@ -114,7 +115,7 @@ unpaused on that conservative surface.
 
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
 |---|---|---|---|---|---|---|
-| full (revision 9, candidate) | **106 ix** | not deployed | `9` (ACCOUNTABLE_REVIEW) | revision-9 client train, pending (`@tetsuo-ai/marketplace-sdk` **0.14.x** planned) | `true` | `true` |
+| full (revision 9, candidate) | **106 ix** | not deployed | `9` (ACCOUNTABLE_REVIEW) | revision-9 client train (`@tetsuo-ai/marketplace-sdk` **0.14.x**), not published yet | `true` | `true` |
 | full (revision 8) | **104 ix** | **mainnet** (live since 2026-10-28) | `8` (FEE_QUALIFIED_RATINGS) | `@tetsuo-ai/marketplace-sdk` **0.13.x** (revision-8 client) | `true` | `true` |
 | full (revision 7) | **103 ix** | disposable local validation only; never stamped on mainnet on its own (part of revision 8) | `7` (TASK_QUOTAS) | same SDK **0.13.x** train | `true` | `true` |
 | full (revision 6) | **102 ix** | disposable local validation only; never stamped on mainnet on its own (part of revision 8) | `6` (AUTHORITY_FEED) | same SDK **0.13.x** train | `true` | `true` |
