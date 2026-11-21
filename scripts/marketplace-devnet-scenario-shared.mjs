@@ -134,7 +134,9 @@ function validateProverEndpoint(proverEndpoint) {
   try {
     parsed = new URL(proverEndpoint);
   } catch {
-    throw new Error(`Security: Invalid prover endpoint URL: ${proverEndpoint}`);
+    // Review S-19: the endpoint can carry a token in its query string, so the
+    // error never quotes it (and drops the URL error, which keeps the input).
+    throw new Error("Security: Invalid prover endpoint URL (value not shown)");
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
