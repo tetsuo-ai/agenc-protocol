@@ -1711,7 +1711,7 @@ even while paused (money never locks).
 | 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 8 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |
 | 9 | `rent_recipient` | yes |  |  |  | Receives the eligible claim refund (rent minimum for an empty or Rejected record; full balance for a Submitted Collaborative straggler) and any closed submission balance. No caller-supplied-account trust. |
-| 10 | `creator` | yes |  |  |  | Revision 9 (E): receives a non-contest claim deposit once the claim is past its expiry (the claim ended without a delivery). |
+| 10 | `creator` | yes |  |  |  | Revision 9 (E): receives a non-contest claim deposit once the claim is past its expiry (the claim ended without a delivery). A Competitive claim stranded on a Completed task lost the race and keeps it (review R2-6). |
 
 ### Args (0)
 

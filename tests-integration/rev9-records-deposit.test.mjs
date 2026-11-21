@@ -731,7 +731,13 @@ test("rev9 deposit: a contest claim carries only the 0.01 SOL entry deposit, for
 // creator after the claim's expiry, back to the worker before it. fed99ab: any
 // surplus on an empty claim went to the treasury.
 // ---------------------------------------------------------------------------
-test("rev9 deposit: reclaim_terminal_claim gives a stranded claim's deposit to the creator after its expiry, to the worker before (fed99ab: treasury)", async () => {
+// Review R2-6. On an Auto Competitive task the first completion wins and leaves
+// the other claim stranded on the Completed task. That worker lost the race; it
+// was not a no-show, and the buyer got its work from the winner, so the deposit
+// comes back whatever the time, even when the creator itself cranks after the
+// claim's expiry. (Collaborative stragglers keep design 5.5: the creator gets
+// the deposit after the claim's expiry.)
+test("rev9 deposit: reclaim_terminal_claim returns a Competitive race loser's deposit on a Completed task, before and after its expiry (fed99ab: treasury; review R2-6, 94c43a5: the creator after the expiry)", async () => {
   for (const pastExpiry of [false, true]) {
     const w = await freshWorld({ moderationEnabled: true });
     // Auto-mode Competitive (not a contest): the first completion wins and leaves
@@ -752,11 +758,12 @@ test("rev9 deposit: reclaim_terminal_claim gives a stranded claim's deposit to t
     assert.equal(surplusOf(w, strandedClaim), 20_000_000n, "the stranded claim still holds its deposit");
     if (pastExpiry) warpTo(w, Number(decode(w.svm, "TaskClaim", strandedClaim).expires_at.toString()) + 1);
 
-    const caller = crank(w);
+    // After the expiry the creator itself cranks (the reviewer's case).
+    const caller = pastExpiry ? w.buyer : crank(w);
     const deposit = surplusOf(w, strandedClaim);
     const rentBack = claimRentOf(w, strandedClaim);
     const before = { creator: bal(w, w.buyer.publicKey), worker: bal(w, second.kp.publicKey), treasury: bal(w, w.admin.publicKey) };
-    expectOk(send(w.svm, await makeProgram(caller).methods
+    const res = expectOk(send(w.svm, await makeProgram(caller).methods
       .reclaimTerminalClaim()
       .accounts({ authority: caller.publicKey, task: t.task, claim: strandedClaim,
         taskSubmission: pda([enc("task_submission"), strandedClaim.toBuffer()])[0], taskValidationConfig: null,
@@ -764,14 +771,13 @@ test("rev9 deposit: reclaim_terminal_claim gives a stranded claim's deposit to t
         rentRecipient: second.kp.publicKey, creator: w.buyer.publicKey })
       .instruction(), [caller]), `reclaim ${pastExpiry ? "after" : "before"} the claim's expiry`);
     const d = { creator: bal(w, w.buyer.publicKey) - before.creator, worker: bal(w, second.kp.publicKey) - before.worker, treasury: bal(w, w.admin.publicKey) - before.treasury };
+    const when = pastExpiry ? "after the claim's expiry" : "before the claim's expiry";
     assert.equal(d.treasury, 0n, "nothing to the treasury: this is not a contest");
-    if (pastExpiry) {
-      assert.equal(d.creator, deposit, "creator: the deposit");
-      assert.equal(d.worker, rentBack, "worker: claim rent only");
-    } else {
-      assert.equal(d.creator, 0n, "creator: nothing before the claim's expiry");
-      assert.equal(d.worker, rentBack + deposit, "worker: rent and deposit");
-    }
+    assert.equal(d.worker, rentBack + deposit, `${when}, worker: rent and deposit`);
+    assert.equal(d.creator, pastExpiry ? -TX_FEE : 0n, `${when}, creator: nothing (it pays only its fee when it cranks)`);
+    const settled = findEvents(res, "ClaimDepositSettled");
+    assert.equal(settled.length, 1, "one deposit settled");
+    assert.equal(settled[0].forfeited, false, "refunded, not forfeited");
   }
 });
 
