@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import * as anchor from "@coral-xyz/anchor";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -55,9 +56,11 @@ async function loadJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
 }
 
-async function loadKeypair(filePath) {
-  const secret = await loadJson(filePath);
-  return Keypair.fromSecretKey(Uint8Array.from(secret));
+// The error names the path only, never the file's content (review S-19).
+async function loadKeypair(configuredPath) {
+  return Keypair.fromSecretKey(
+    readPlainKeypairFile(resolveFromRoot(configuredPath), configuredPath),
+  );
 }
 
 function expectPublicKeyStrings(values, label) {
@@ -221,14 +224,13 @@ async function main() {
   const expectedProgramId = new PublicKey(config.programId);
   assert(rawIdl.address === expectedProgramId.toBase58(), "IDL address does not match config.programId");
 
-  const authority = await loadKeypair(resolveFromRoot(config.authorityKeypairPath));
-  const secondSigner = await loadKeypair(resolveFromRoot(config.secondSignerKeypairPath));
-  const treasury = await loadKeypair(resolveFromRoot(config.treasuryKeypairPath));
+  const authority = await loadKeypair(config.authorityKeypairPath);
+  const secondSigner = await loadKeypair(config.secondSignerKeypairPath);
+  const treasury = await loadKeypair(config.treasuryKeypairPath);
 
-  const thirdSignerPath = config.thirdSignerKeypairPath
-    ? resolveFromRoot(config.thirdSignerKeypairPath)
+  const thirdSigner = config.thirdSignerKeypairPath
+    ? await loadKeypair(config.thirdSignerKeypairPath)
     : null;
-  const thirdSigner = thirdSignerPath ? await loadKeypair(thirdSignerPath) : null;
 
   const multisigOwners = expectPublicKeyStrings(config.protocol.multisigOwners, "protocol.multisigOwners");
   const activeImageId = expectImageId(config.zkConfig.activeImageId);
