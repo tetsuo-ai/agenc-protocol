@@ -14,7 +14,8 @@
 //! address may already hold lamports someone sent to it; Anchor's `init`
 //! allocates over such an address, so that cannot block a dispute.
 //!
-//! Exit gate: a pause must not make the worker miss its window.
+//! Exit gate: a pause must not make the worker miss its window. A suspended
+//! worker cannot dispute; any other agent status can.
 
 use crate::errors::CoordinationError;
 use crate::events::{CreatorTrackRecordUpdated, RejectionDisputed};
@@ -129,9 +130,12 @@ pub fn handler(
         rejection_dispute_window_open(now, submission.review_deadline_at),
         CoordinationError::RejectionDisputeWindowClosed
     );
+    // Only a suspension takes the dispute away. Busy and Inactive are flags the
+    // worker sets itself, and the frozen claim keeps it from becoming Active
+    // again (review R2-2); unsuspend leaves it Inactive.
     require!(
-        ctx.accounts.worker.status == AgentStatus::Active,
-        CoordinationError::AgentNotActive
+        ctx.accounts.worker.status != AgentStatus::Suspended,
+        CoordinationError::AgentSuspended
     );
 
     let task_key = ctx.accounts.task.key();

@@ -22,7 +22,7 @@ import path from "node:path";
 import {
   REPO, enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, setMultisig, setProtocolPaused,
+  freshWorld, setMultisig, setProtocolPaused, configureTestMultisig, approvalSigners,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats, disputeBondPda, injectRevision8Freeze,
   Program, AnchorProvider, Wallet, Connection, BN, Keypair, SystemProgram,
@@ -608,7 +608,9 @@ test("rev9 turn-down: a pre-funded empty bond address blocks neither the refund 
 
 // ---------------------------------------------------------------------------
 // Exit gate: a pause cannot make the worker miss its window or lock the refund.
-// A worker that is not Active cannot dispute; the default refund then applies.
+// A suspended worker cannot dispute; the default refund then applies. Busy and
+// Inactive are availability flags the worker sets itself, not sanctions, so they
+// keep the dispute (review R2-2).
 // ---------------------------------------------------------------------------
 test("rev9 turn-down: a pause stops neither the dispute nor the unruled refund (fed99ab: unknown instruction)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
@@ -623,7 +625,7 @@ test("rev9 turn-down: a pause stops neither the dispute nor the unruled refund (
   assert.equal(status(w, t.task), "Cancelled", "refunded");
 });
 
-test("rev9 turn-down: a suspended worker cannot dispute (fed99ab: unknown instruction)", async () => {
+test("rev9 turn-down: a suspended worker cannot dispute, AgentSuspended (fed99ab: unknown instruction; review R2-2, 639a4c0: AgentNotActive)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const t = await frozenTask(w);
   const acct = w.svm.getAccount(w.providerAgent);
@@ -632,6 +634,58 @@ test("rev9 turn-down: a suspended worker cannot dispute (fed99ab: unknown instru
   const data = Buffer.from(acct.data);
   (await coder.accounts.encode("AgentRegistration", agent)).copy(data, 0);
   w.svm.setAccount(w.providerAgent, { ...acct, data });
-  expectFail(send(w.svm, await disputeIx(w, t), [w.provider]), "AgentNotActive", "a suspended worker cannot dispute");
+  expectFail(send(w.svm, await disputeIx(w, t), [w.provider]), "AgentSuspended", "a suspended worker cannot dispute");
   assert.ok(isClosed(w.svm, disputeBondPda(t.task)), "no bond");
+});
+
+function setStatusIx(w, statusCode) {
+  return w.providerProg.methods.updateAgent(null, null, null, statusCode)
+    .accounts({ agent: w.providerAgent, authority: w.provider.publicKey }).instruction();
+}
+
+const agentStatus = (w) => Object.keys(decode(w.svm, "AgentRegistration", w.providerAgent).status)[0];
+
+function suspensionIx(w, method, approvals) {
+  return makeProgram(w.admin).methods[method]()
+    .accounts({ agent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction();
+}
+
+// Review R2-2. The frozen claim keeps `active_tasks` at 1 until a frozen exit
+// runs, so a worker that is Busy or Inactive cannot make itself Active again.
+test("rev9 turn-down: a Busy or an Inactive worker still disputes; it cannot become Active while the frozen claim is held (review R2-2; 639a4c0: AgentNotActive)", async () => {
+  for (const [label, code] of [["Busy", 2], ["Inactive", 0]]) {
+    const w = await freshWorld({ moderationEnabled: true });
+    const t = await frozenTask(w);
+    expectOk(send(w.svm, await setStatusIx(w, code), [w.provider]), `the worker sets itself ${label}`);
+    assert.equal(agentStatus(w), label, label);
+    warpTo(w, now(w) + 61); // past update_agent's cooldown
+    expectFail(send(w.svm, await setStatusIx(w, 1), [w.provider]), "AgentBusyWithTasks",
+      `a ${label} worker cannot become Active while the frozen claim is held`);
+    const workerBefore = bal(w, w.provider.publicKey);
+    expectOk(send(w.svm, await disputeIx(w, t), [w.provider]), `a ${label} worker disputes the freeze`);
+    const bond = decode(w.svm, "DisputeBond", disputeBondPda(t.task));
+    assert.equal(bond.filer.toBase58(), w.provider.publicKey.toBase58(), "the worker filed");
+    assert.equal(workerBefore - bal(w, w.provider.publicKey), BOND_FLOOR + rent(w, BOND_SIZE) + TX_FEE, "the worker posted the bond");
+    assert.equal(status(w, t.task), "RejectFrozen", "the task stays frozen for the ruling");
+  }
+});
+
+test("rev9 turn-down: a worker suspended inside the window cannot dispute until it is unsuspended, then it can (review R2-2; 639a4c0: AgentNotActive)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await frozenTask(w);
+  const approvals = await configureTestMultisig(w);
+  expectOk(send(w.svm, await suspensionIx(w, "suspendAgent", approvals), approvalSigners(approvals, w.admin)), "2 of 3 suspend");
+  expectFail(send(w.svm, await disputeIx(w, t), [w.provider]), "AgentSuspended", "a suspended worker cannot dispute");
+  assert.ok(isClosed(w.svm, disputeBondPda(t.task)), "no bond");
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await suspensionIx(w, "unsuspendAgent", approvals), approvalSigners(approvals, w.admin)), "2 of 3 unsuspend");
+  assert.equal(agentStatus(w), "Inactive", "unsuspend leaves the worker Inactive");
+  warpTo(w, now(w) + 61);
+  expectFail(send(w.svm, await setStatusIx(w, 1), [w.provider]), "AgentBusyWithTasks", "it cannot become Active while the frozen claim is held");
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await disputeIx(w, t), [w.provider]), "the unsuspended worker disputes inside the window");
+  assert.ok(now(w) < t.disputeDeadline, "still inside the dispute window");
+  assert.equal(decode(w.svm, "DisputeBond", disputeBondPda(t.task)).filer.toBase58(), w.provider.publicKey.toBase58());
 });
