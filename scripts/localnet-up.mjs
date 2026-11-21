@@ -205,6 +205,46 @@ export function parseArgs(argv) {
   return args;
 }
 
+/**
+ * The `.localnet/env.json` record this script writes. Every reader of the
+ * file must accept it: `scripts/localnet-status.mjs` parses it with an exact
+ * schema, and its test checks this record against that parser.
+ */
+export function localnetEnvironmentRecord({
+  rpcUrl,
+  rpcSubscriptionsUrl,
+  programId,
+  programSha256,
+  programSize,
+  validationTimings,
+  attestorUrl,
+  legacyLoaderDrill,
+  fixturesPath,
+  keypairs,
+}) {
+  return {
+    cluster: "localnet",
+    rpcUrl,
+    rpcSubscriptionsUrl,
+    programId,
+    programSha256,
+    programSize,
+    // Which build the operator says is deployed; the validation-timings RPC
+    // suites refuse any other label.
+    programProfile: validationTimings ? "validation-timings" : "production",
+    attestorUrl,
+    deactivatedFeatures: legacyLoaderDrill
+      ? [LEGACY_LOADER_DEPLOY_FEATURE]
+      : [],
+    fixturesPath,
+    keypairs: {
+      authority: keypairs.authority,
+      moderator: keypairs.moderator,
+      seeder: keypairs.seeder,
+    },
+  };
+}
+
 export function expectedLocalnetProtocolMode(devReady, currentSurfaceRevision) {
   if (
     typeof devReady !== "boolean" ||
@@ -1411,27 +1451,18 @@ async function mainLocked(args, lifecycleLock) {
   } catch {
     // no previous env file — fresh write
   }
-  const env = {
-    cluster: "localnet",
+  const env = localnetEnvironmentRecord({
     rpcUrl,
     rpcSubscriptionsUrl,
     programId,
     programSha256: soSha256,
     programSize: soBytes,
-    // Which build the operator says is deployed; the validation-timings RPC
-    // suites refuse any other label.
-    programProfile: args.validationTimings ? "validation-timings" : "production",
+    validationTimings: args.validationTimings,
     attestorUrl,
-    deactivatedFeatures: args.legacyLoaderDrill
-      ? [LEGACY_LOADER_DEPLOY_FEATURE]
-      : [],
+    legacyLoaderDrill: args.legacyLoaderDrill,
     fixturesPath: FIXTURES_PATH,
-    keypairs: {
-      authority: keyPaths.authority,
-      moderator: keyPaths.moderator,
-      seeder: keyPaths.seeder,
-    },
-  };
+    keypairs: keyPaths,
+  });
   await mkdir(path.dirname(args.envFile), { recursive: true });
   const tmpPath = `${args.envFile}.tmp`;
   await writeFile(tmpPath, `${JSON.stringify(env, null, 2)}\n`);

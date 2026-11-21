@@ -4,3 +4,12 @@ export const LOCALNET_PROGRAM_ID =
 export const LOCALNET_PROGRAM_FD = 5;
 export const LOCALNET_PROGRAM_DESCRIPTOR_PATH = `/proc/self/fd/${LOCALNET_PROGRAM_FD}`;
 export const LOCALNET_PROGRAM_LOAD_METHOD = "private-unlinked-fd-v1";
+/**
+ * The build label a launcher records in `.localnet/env.json` as
+ * `programProfile`: the default-feature program, or one built with
+ * `--features validation-timings` (300-second dispute windows).
+ */
+export const LOCALNET_PROGRAM_PROFILES = Object.freeze([
+  "production",
+  "validation-timings",
+]);

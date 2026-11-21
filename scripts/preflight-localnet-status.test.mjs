@@ -8,7 +8,12 @@ import {
   LOCALNET_PROGRAM_DESCRIPTOR_PATH,
   LOCALNET_PROGRAM_ID,
   LOCALNET_PROGRAM_LOAD_METHOD,
+  LOCALNET_PROGRAM_PROFILES,
 } from "./localnet-program-binding.mjs";
+import {
+  LEGACY_LOADER_DEPLOY_FEATURE,
+  localnetEnvironmentRecord,
+} from "./localnet-up.mjs";
 import { captureLocalnetProgramArtifact } from "./localnet-program-snapshot.mjs";
 import {
   assertExpectedLocalnetBidMarketplace,
@@ -89,6 +94,55 @@ test("status environment parser rejects drift and unknown schema fields", () => 
     (error) =>
       /contains invalid JSON/u.test(error.message) &&
       !error.message.includes(secret),
+  );
+});
+
+test("status accepts every environment file localnet-up writes", () => {
+  // CI regression: localnet-up began recording programProfile, and the exact
+  // status schema refused the file ("invalid or unsupported schema").
+  const keypairs = environment().keypairs;
+  for (const validationTimings of [false, true]) {
+    for (const legacyLoaderDrill of [false, true]) {
+      for (const attestorUrl of [null, "http://127.0.0.1:8787"]) {
+        const record = localnetEnvironmentRecord({
+          rpcUrl: "http://127.0.0.1:8899",
+          rpcSubscriptionsUrl: "ws://127.0.0.1:8900",
+          programId: LOCALNET_PROGRAM_ID,
+          programSha256: "ab".repeat(32),
+          programSize: 123,
+          validationTimings,
+          attestorUrl,
+          legacyLoaderDrill,
+          fixturesPath: path.join(ROOT, ".localnet/fixtures.json"),
+          keypairs,
+        });
+        const parsed = parseLocalnetStatusEnvironment(
+          `${JSON.stringify(record, null, 2)}\n`,
+        );
+        assert.equal(
+          parsed.programProfile,
+          validationTimings ? "validation-timings" : "production",
+        );
+        assert.ok(LOCALNET_PROGRAM_PROFILES.includes(parsed.programProfile));
+        assert.deepEqual(
+          parsed.deactivatedFeatures,
+          legacyLoaderDrill ? [LEGACY_LOADER_DEPLOY_FEATURE] : [],
+        );
+      }
+    }
+  }
+  // A file from before program profiles still parses; an unknown profile
+  // does not.
+  assert.equal(
+    parseLocalnetStatusEnvironment(JSON.stringify(environment())).programProfile,
+    undefined,
+  );
+  assert.throws(
+    () =>
+      parseLocalnetStatusEnvironment(
+        JSON.stringify(environment({ programProfile: "fast" })),
+      ),
+    /malformed/u,
   );
 });
 
