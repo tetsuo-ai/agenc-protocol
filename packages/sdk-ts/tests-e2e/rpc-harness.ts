@@ -35,6 +35,41 @@ export const id32 = () => new Uint8Array(randomBytes(32));
 // One ledger compaction at a time in this process (see waitForClock).
 let compacting: Promise<void> | null = null;
 
+/**
+ * Run the launcher's status check. On failure, the thrown error carries the
+ * check's own report (stdout) and any error output (stderr), which
+ * execFileSync leaves out of its message. The report names files, public
+ * addresses, hashes and the loopback RPC; it never prints key material.
+ */
+export function runStatusCheck(statusScript: readonly string[]): void {
+  try {
+    execFileSync(process.execPath, [...statusScript], {
+      cwd: ROOT,
+      stdio: "pipe",
+    });
+  } catch (error) {
+    const failure = error as {
+      status?: number | null;
+      stdout?: unknown;
+      stderr?: unknown;
+    };
+    const text = (stream: unknown) =>
+      (Buffer.isBuffer(stream) ? stream.toString("utf8") : String(stream ?? ""))
+        .trim();
+    throw new Error(
+      [
+        `localnet status check failed (exit ${failure.status ?? "unknown"}): ` +
+          statusScript.join(" "),
+        text(failure.stdout),
+        text(failure.stderr),
+      ]
+        .filter((part) => part.length > 0)
+        .join("\n"),
+      { cause: error },
+    );
+  }
+}
+
 export async function localRpcHarness(label: string) {
   const env = JSON.parse(
     readFileSync(resolve(ROOT, ".localnet/env.json"), "utf8"),
@@ -58,7 +93,7 @@ export async function localRpcHarness(label: string) {
     env.launcher === "localnet-mac"
       ? [resolve(ROOT, "scripts/localnet-mac.mjs"), "status"]
       : [resolve(ROOT, "scripts/localnet-status.mjs")];
-  execFileSync(process.execPath, statusScript, { cwd: ROOT, stdio: "pipe" });
+  runStatusCheck(statusScript);
   // The cluster brand enables the faucet RPC type. The URL remains loopback.
   const rpc = createSolanaRpc(devnet(env.rpcUrl));
   // Broadcast even expected failures, so rejection/rollback is demonstrated by
