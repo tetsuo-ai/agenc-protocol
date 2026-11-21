@@ -1,0 +1,909 @@
+# Temporary release dry run, generated from release.yml by
+# .github/release-dry-run/generate.mjs. Scratch branch release-dry-run/rev9
+# only; never merge to main. It signs nothing and publishes nothing: no
+# environment, no OIDC token, no npm publish, no GitHub release.
+name: Release dry run, revision 9 (temporary branch only)
+on:
+  push:
+    branches:
+      - release-dry-run/rev9
+permissions:
+  contents: read
+concurrency:
+  group: release-dry-run-rev9
+  cancel-in-progress: true
+env:
+  AGAVE_VERSION: v4.1.0
+  AGAVE_INSTALL_INIT_SHA256: 47364bcbe524d8e5cb33eb64ed448d3d4ea8a8cc4d1073e04e04ef9e4c5abacb
+  RELEASE_PACKAGE_GATES_JSON: '[{"id":"protocol","name":"@tetsuo-ai/protocol","directory":"packages/protocol"},{"id":"sdk","name":"@tetsuo-ai/marketplace-sdk","directory":"packages/sdk-ts"},{"id":"react","name":"@tetsuo-ai/marketplace-react","directory":"packages/marketplace-react"},{"id":"tools","name":"@tetsuo-ai/marketplace-tools","directory":"packages/marketplace-tools"},{"id":"mcp","name":"@tetsuo-ai/marketplace-mcp","directory":"packages/marketplace-mcp"},{"id":"moderation","name":"@tetsuo-ai/marketplace-moderation","directory":"packages/marketplace-moderation"},{"id":"worker","name":"@tetsuo-ai/agenc-worker","directory":"packages/agenc-worker"},{"id":"cli","name":"@tetsuo-ai/agenc-cli","directory":"packages/agenc-cli"},{"id":"cli-alias","name":"agenc-cli","directory":"packages/agenc-cli-alias"}]'
+jobs:
+  protocol_verifiable_build:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+  rust_supply_chain:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust-supply-chain.yml
+  pack_protocol:
+    needs:
+      - protocol_verifiable_build
+      - rust_supply_chain
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tag:
+          - protocol-v0.6.0
+        attempt:
+          - a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Pin declared npm release toolchain
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+      - name: Install dependencies
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm ci
+      - name: Install independent npm license evidence
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm ci --prefix tests-integration --ignore-scripts
+      - name: Enforce release-time npm license policy
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/check-npm-licenses.mjs
+      - name: Resolve package from tag
+        id: pkg
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs resolve
+      - name: Reconfirm exact package gate coverage
+        env:
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs gates
+      - name: Setup Rust (e2e)
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.85.0
+      - name: Install Solana platform tools (e2e)
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Build program for e2e
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+      - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
+        if: steps.pkg.outputs.id == 'sdk'
+        working-directory: packages/sdk-ts
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: sdk
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run sdk:drift
+          npx tsc --noEmit
+          npm test
+          npm run build
+          npm run examples:check
+          node scripts/pack-smoke.mjs
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Build workspace sdk (react/tools/mcp gates)
+        if: steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'tools' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        working-directory: packages/sdk-ts
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run build
+      - name: React gate (typecheck, tests, build)
+        if: steps.pkg.outputs.id == 'react'
+        working-directory: packages/marketplace-react
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: react
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node ../sdk-ts/scripts/sync-testing-so.mjs
+          npm run typecheck
+          npm test
+          npm run test:localnet
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Tools gate (typecheck, tests, build)
+        if: steps.pkg.outputs.id == 'tools'
+        working-directory: packages/marketplace-tools
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: tools
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Build workspace tools (mcp gate)
+        if: steps.pkg.outputs.id == 'mcp'
+        working-directory: packages/marketplace-tools
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run build
+      - name: MCP gate (typecheck, tests incl. e2e, build)
+        if: steps.pkg.outputs.id == 'mcp'
+        working-directory: packages/marketplace-mcp
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: mcp
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node ../sdk-ts/scripts/sync-testing-so.mjs
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Moderation gate (typecheck, tests, build)
+        if: steps.pkg.outputs.id == 'moderation'
+        working-directory: packages/marketplace-moderation
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: moderation
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Sync production program into SDK test assets (worker/CLI gates)
+        if: steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        working-directory: packages/sdk-ts
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run testing:sync-so
+      - name: Worker gate (typecheck, unit/e2e tests, build)
+        if: steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        working-directory: packages/agenc-worker
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: worker
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          if [ "${RESOLVED_PACKAGE_ID}" = "${RELEASE_COMPLETES_PACKAGE_ID}" ]; then
+            node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+          fi
+      - name: CLI gate (typecheck, unit/e2e tests, build)
+        if: steps.pkg.outputs.id == 'cli'
+        working-directory: packages/agenc-cli
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: cli
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: CLI alias dependency and entrypoint gate
+        if: steps.pkg.outputs.id == 'cli-alias'
+        working-directory: packages/agenc-cli-alias
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: cli-alias
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node -e 'const p=require("./package.json"); if (p.dependencies["@tetsuo-ai/agenc-cli"] !== `^${p.version}`) process.exit(1)'
+          node --check bin/agenc-cli.js
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Install deployment/preflight dependencies
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm ci
+        working-directory: tests-integration
+      - name: Audit independent deployment/preflight dependencies
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run audit:tests-integration
+      - name: Setup Rust (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.85.0
+          components: rustfmt, clippy
+      - name: Protocol Rust release matrix
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary
+          cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml --all-targets
+          npm run test:deployment-scripts
+      - name: Reject mixed release surfaces
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          if bare_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features 2>&1); then
+            echo "bare --no-default-features unexpectedly compiled an unnamed full surface" >&2
+            exit 1
+          fi
+          grep -F "the full protocol surface requires spl-token-rewards" <<<"${bare_output}"
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --features mainnet-canary 2>&1); then
+            echo "default features + mainnet-canary unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary must be built with --no-default-features" <<<"${mixed_output}"
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary,private-zk 2>&1); then
+            echo "mainnet-canary + private-zk unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary and private-zk are mutually exclusive" <<<"${mixed_output}"
+      - name: Cache anchor CLI binary (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        id: cache-anchor-protocol
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-0.32.1-${{ runner.os }}
+      - name: Install Anchor native build dependencies (cache miss only)
+        if: steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev pkg-config
+      - name: Install anchor CLI (cache miss only)
+        if: steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          cargo install anchor-cli@0.32.1 --locked --force
+      - name: Install Solana platform tools (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Anchor build (protocol gate — fresh IDL/types for the drift check)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          anchor build
+      - name: Reject SBF stack-frame overflows (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run check:stack
+      - name: Compiled-program integration suite (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node --test tests-integration/*.test.mjs
+      - name: Protocol gate (artifacts check, build, typecheck, pack smoke)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run artifacts:check:built
+          npm run build
+          npm run typecheck
+          npm run pack:smoke
+      - name: Build mainnet-canary SBF (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run canary:build
+      - name: Build mainnet-canary IDL (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run canary:idl
+      - name: Verify frozen canary IDL surface (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run canary:check-idl
+      - name: Compiled mainnet-canary LiteSVM regression (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        env:
+          AGENC_CANARY_LITESVM: "1"
+          RELEASE_COMPLETES_PACKAGE_ID: protocol
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node --test tests-integration/canary-*.test.mjs
+          node scripts/release-policy.mjs complete-gate
+      - name: Require completed routed package gate
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs verify-gate
+      - name: Audit runtime npm dependencies
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm audit --omit=dev --workspaces
+      - name: Download required verifiable-build hashes
+        if: ${{ !cancelled() && steps.pkg.outputs.id == 'protocol' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verifiable-build-hashes
+      - name: Require finalized mainnet cutover for stable releases
+        env:
+          AGENC_MAINNET_RPC_URLS_JSON: ${{ vars.AGENC_MAINNET_RPC_URLS_JSON }}
+          EXPECTED_MAINNET_PROGRAM_SHA256: ${{ vars.AGENC_MAINNET_PROGRAM_SHA256 }}
+          EXPECTED_VERIFIED_SOURCE_COMMIT: ${{ vars.AGENC_VERIFIED_SOURCE_COMMIT }}
+          VERIFIABLE_BUILD_MANIFEST: verifiable-build-hashes.txt
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs cutover
+        if: ${{ !cancelled() && steps.pkg.outcome == 'success' }}
+      - name: Run reviewed package prepack lifecycle
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run prepack --if-present
+        if: ${{ !cancelled() && steps.pkg.outcome == 'success' }}
+      - name: Build reviewed npm tarball
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm pack --ignore-scripts --json > "${RUNNER_TEMP}/package-pack.json"
+        id: pack
+        if: ${{ !cancelled() && steps.pkg.outcome == 'success' }}
+      - name: Report the CI-built pack integrity
+        id: report
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        env:
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+          DRY_RUN_TAG: ${{ matrix.tag }}
+          DRY_RUN_ATTEMPT: ${{ matrix.attempt }}
+          PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: node "${GITHUB_WORKSPACE}/.github/release-dry-run/report.mjs"
+      - name: Upload the CI-built tarball and its integrity
+        if: ${{ !cancelled() && steps.report.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dry-run-pack-${{ matrix.tag }}-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/dry-run-pack
+          if-no-files-found: error
+      - name: Smoke the exact reviewed tarball surface
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-pack-smoke.mjs
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
+      - name: Generate deterministic SPDX release SBOM
+        id: sbom
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          SOURCE_COMMIT_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")
+          export SOURCE_COMMIT_DATE
+          node scripts/release-sbom.mjs generate
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
+      - name: Upload the SPDX release SBOM
+        if: ${{ !cancelled() && steps.sbom.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dry-run-sbom-${{ matrix.tag }}-${{ matrix.attempt }}
+          path: ${{ steps.sbom.outputs.path }}
+          if-no-files-found: error
+  pack_clients:
+    needs:
+      - rust_supply_chain
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tag:
+          - sdk-v0.14.0
+          - react-v0.7.0
+          - tools-v0.7.0
+          - worker-v0.4.0
+          - mcp-v0.7.0
+          - cli-v0.5.0
+          - cli-alias-v0.5.0
+        attempt:
+          - a
+        include:
+          - tag: sdk-v0.14.0
+            attempt: b
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Pin declared npm release toolchain
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+      - name: Install dependencies
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm ci
+      - name: Install independent npm license evidence
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm ci --prefix tests-integration --ignore-scripts
+      - name: Enforce release-time npm license policy
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/check-npm-licenses.mjs
+      - name: Resolve package from tag
+        id: pkg
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs resolve
+      - name: Reconfirm exact package gate coverage
+        env:
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs gates
+      - name: Setup Rust (e2e)
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.85.0
+      - name: Install Solana platform tools (e2e)
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Build program for e2e
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+      - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
+        if: steps.pkg.outputs.id == 'sdk'
+        working-directory: packages/sdk-ts
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: sdk
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run sdk:drift
+          npx tsc --noEmit
+          npm test
+          npm run build
+          npm run examples:check
+          node scripts/pack-smoke.mjs
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Build workspace sdk (react/tools/mcp gates)
+        if: steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'tools' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        working-directory: packages/sdk-ts
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run build
+      - name: React gate (typecheck, tests, build)
+        if: steps.pkg.outputs.id == 'react'
+        working-directory: packages/marketplace-react
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: react
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node ../sdk-ts/scripts/sync-testing-so.mjs
+          npm run typecheck
+          npm test
+          npm run test:localnet
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Tools gate (typecheck, tests, build)
+        if: steps.pkg.outputs.id == 'tools'
+        working-directory: packages/marketplace-tools
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: tools
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Build workspace tools (mcp gate)
+        if: steps.pkg.outputs.id == 'mcp'
+        working-directory: packages/marketplace-tools
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run build
+      - name: MCP gate (typecheck, tests incl. e2e, build)
+        if: steps.pkg.outputs.id == 'mcp'
+        working-directory: packages/marketplace-mcp
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: mcp
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node ../sdk-ts/scripts/sync-testing-so.mjs
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Moderation gate (typecheck, tests, build)
+        if: steps.pkg.outputs.id == 'moderation'
+        working-directory: packages/marketplace-moderation
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: moderation
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Sync production program into SDK test assets (worker/CLI gates)
+        if: steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        working-directory: packages/sdk-ts
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run testing:sync-so
+      - name: Worker gate (typecheck, unit/e2e tests, build)
+        if: steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
+        working-directory: packages/agenc-worker
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: worker
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          if [ "${RESOLVED_PACKAGE_ID}" = "${RELEASE_COMPLETES_PACKAGE_ID}" ]; then
+            node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+          fi
+      - name: CLI gate (typecheck, unit/e2e tests, build)
+        if: steps.pkg.outputs.id == 'cli'
+        working-directory: packages/agenc-cli
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: cli
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run typecheck
+          npm test
+          npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: CLI alias dependency and entrypoint gate
+        if: steps.pkg.outputs.id == 'cli-alias'
+        working-directory: packages/agenc-cli-alias
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: cli-alias
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node -e 'const p=require("./package.json"); if (p.dependencies["@tetsuo-ai/agenc-cli"] !== `^${p.version}`) process.exit(1)'
+          node --check bin/agenc-cli.js
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+      - name: Install deployment/preflight dependencies
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm ci
+        working-directory: tests-integration
+      - name: Audit independent deployment/preflight dependencies
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run audit:tests-integration
+      - name: Setup Rust (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.85.0
+          components: rustfmt, clippy
+      - name: Protocol Rust release matrix
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary
+          cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml --all-targets
+          npm run test:deployment-scripts
+      - name: Reject mixed release surfaces
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          if bare_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features 2>&1); then
+            echo "bare --no-default-features unexpectedly compiled an unnamed full surface" >&2
+            exit 1
+          fi
+          grep -F "the full protocol surface requires spl-token-rewards" <<<"${bare_output}"
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --features mainnet-canary 2>&1); then
+            echo "default features + mainnet-canary unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary must be built with --no-default-features" <<<"${mixed_output}"
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary,private-zk 2>&1); then
+            echo "mainnet-canary + private-zk unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary and private-zk are mutually exclusive" <<<"${mixed_output}"
+      - name: Cache anchor CLI binary (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        id: cache-anchor-protocol
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-0.32.1-${{ runner.os }}
+      - name: Install Anchor native build dependencies (cache miss only)
+        if: steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev pkg-config
+      - name: Install anchor CLI (cache miss only)
+        if: steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          cargo install anchor-cli@0.32.1 --locked --force
+      - name: Install Solana platform tools (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Anchor build (protocol gate — fresh IDL/types for the drift check)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          anchor build
+      - name: Reject SBF stack-frame overflows (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run check:stack
+      - name: Compiled-program integration suite (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node --test tests-integration/*.test.mjs
+      - name: Protocol gate (artifacts check, build, typecheck, pack smoke)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run artifacts:check:built
+          npm run build
+          npm run typecheck
+          npm run pack:smoke
+      - name: Build mainnet-canary SBF (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run canary:build
+      - name: Build mainnet-canary IDL (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run canary:idl
+      - name: Verify frozen canary IDL surface (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run canary:check-idl
+      - name: Compiled mainnet-canary LiteSVM regression (protocol gate)
+        if: steps.pkg.outputs.id == 'protocol'
+        env:
+          AGENC_CANARY_LITESVM: "1"
+          RELEASE_COMPLETES_PACKAGE_ID: protocol
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node --test tests-integration/canary-*.test.mjs
+          node scripts/release-policy.mjs complete-gate
+      - name: Require completed routed package gate
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs verify-gate
+      - name: Audit runtime npm dependencies
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm audit --omit=dev --workspaces
+      - name: Download required verifiable-build hashes
+        if: ${{ !cancelled() && steps.pkg.outputs.id == 'protocol' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verifiable-build-hashes
+      - name: Require finalized mainnet cutover for stable releases
+        env:
+          AGENC_MAINNET_RPC_URLS_JSON: ${{ vars.AGENC_MAINNET_RPC_URLS_JSON }}
+          EXPECTED_MAINNET_PROGRAM_SHA256: ${{ vars.AGENC_MAINNET_PROGRAM_SHA256 }}
+          EXPECTED_VERIFIED_SOURCE_COMMIT: ${{ vars.AGENC_VERIFIED_SOURCE_COMMIT }}
+          VERIFIABLE_BUILD_MANIFEST: verifiable-build-hashes.txt
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          node scripts/release-policy.mjs cutover
+        if: ${{ !cancelled() && steps.pkg.outcome == 'success' }}
+      - name: Run reviewed package prepack lifecycle
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm run prepack --if-present
+        if: ${{ !cancelled() && steps.pkg.outcome == 'success' }}
+      - name: Build reviewed npm tarball
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |-
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          npm pack --ignore-scripts --json > "${RUNNER_TEMP}/package-pack.json"
+        id: pack
+        if: ${{ !cancelled() && steps.pkg.outcome == 'success' }}
+      - name: Report the CI-built pack integrity
+        id: report
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        env:
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+          DRY_RUN_TAG: ${{ matrix.tag }}
+          DRY_RUN_ATTEMPT: ${{ matrix.attempt }}
+          PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: node "${GITHUB_WORKSPACE}/.github/release-dry-run/report.mjs"
+      - name: Upload the CI-built tarball and its integrity
+        if: ${{ !cancelled() && steps.report.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dry-run-pack-${{ matrix.tag }}-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/dry-run-pack
+          if-no-files-found: error
+      - name: Generate deterministic SPDX release SBOM
+        id: sbom
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+        run: |
+          export GITHUB_REF_NAME="${{ matrix.tag }}"
+          SOURCE_COMMIT_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")
+          export SOURCE_COMMIT_DATE
+          node scripts/release-sbom.mjs generate
+        if: ${{ !cancelled() && steps.pack.outcome == 'success' }}
+      - name: Upload the SPDX release SBOM
+        if: ${{ !cancelled() && steps.sbom.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dry-run-sbom-${{ matrix.tag }}-${{ matrix.attempt }}
+          path: ${{ steps.sbom.outputs.path }}
+          if-no-files-found: error
+  smoke_clients:
+    needs:
+      - pack_clients
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tag:
+          - sdk-v0.14.0
+          - react-v0.7.0
+          - tools-v0.7.0
+          - worker-v0.4.0
+          - mcp-v0.7.0
+          - cli-v0.5.0
+          - cli-alias-v0.5.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+      - name: Pin declared npm release toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+      - name: Download this run's artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: ${{ runner.temp }}/dry-run-artifacts
+      - name: Smoke the reviewed tarball with this run's first-party tarballs
+        env:
+          DRY_RUN_TAG: ${{ matrix.tag }}
+          DRY_RUN_ARTIFACTS: ${{ runner.temp }}/dry-run-artifacts
+        run: node .github/release-dry-run/smoke.mjs
+  summary:
+    needs:
+      - protocol_verifiable_build
+      - rust_supply_chain
+      - pack_protocol
+      - pack_clients
+      - smoke_clients
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+      - name: Download this run's artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: ${{ runner.temp }}/dry-run-artifacts
+      - name: Collect the pins and every job result
+        env:
+          DRY_RUN_ARTIFACTS: ${{ runner.temp }}/dry-run-artifacts
+          RESULT_VERIFY: ${{ needs.protocol_verifiable_build.result }}
+          RESULT_RUST: ${{ needs.rust_supply_chain.result }}
+          RESULT_PACK_PROTOCOL: ${{ needs.pack_protocol.result }}
+          RESULT_PACK_CLIENTS: ${{ needs.pack_clients.result }}
+          RESULT_SMOKE: ${{ needs.smoke_clients.result }}
+        run: node .github/release-dry-run/summary.mjs
+      - name: Upload the pins
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dry-run-pins
+          path: ${{ runner.temp }}/dry-run-pins
+          if-no-files-found: error
