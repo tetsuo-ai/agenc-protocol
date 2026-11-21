@@ -27,6 +27,7 @@ import {
   LOCALNET_PROGRAM_DESCRIPTOR_PATH,
   LOCALNET_PROGRAM_ID,
   LOCALNET_PROGRAM_LOAD_METHOD,
+  LOCALNET_PROGRAM_PROFILES,
 } from "./localnet-program-binding.mjs";
 import {
   assertLocalnetProgramAccountLinksProgramData,
@@ -118,6 +119,10 @@ export function parseLocalnetStatusEnvironment(body, label = "env file") {
       ...(Object.hasOwn(value ?? {}, "deactivatedFeatures")
         ? ["deactivatedFeatures"]
         : []),
+      // Recorded by localnet-up since revision 9; older files lack it.
+      ...(Object.hasOwn(value ?? {}, "programProfile")
+        ? ["programProfile"]
+        : []),
     ],
     label,
   );
@@ -135,6 +140,8 @@ export function parseLocalnetStatusEnvironment(body, label = "env file") {
     !Number.isSafeInteger(value.programSize) ||
     value.programSize < 1 ||
     value.programSize > MAX_PROGRAM_BYTES ||
+    (value.programProfile !== undefined &&
+      !LOCALNET_PROGRAM_PROFILES.includes(value.programProfile)) ||
     (value.deactivatedFeatures !== undefined &&
       (!Array.isArray(value.deactivatedFeatures) ||
         !["[]", '["B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g"]'].includes(
@@ -532,7 +539,11 @@ export async function runLocalnetStatus(argv = process.argv.slice(2)) {
       await readFile(args.envFile, "utf8"),
       args.envFile,
     );
-    report(true, "environment", args.envFile);
+    report(
+      true,
+      "environment",
+      `${args.envFile} (program profile ${env.programProfile ?? "not recorded"})`,
+    );
   } catch (error) {
     report(false, "environment", `${args.envFile} (${error.message})`);
     return conclude(false);
