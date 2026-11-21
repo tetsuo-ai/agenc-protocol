@@ -29,7 +29,7 @@ export type ClaimReleasedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ClaimReleasedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ClaimReleasedEventData} event payload: the bytes
  * AFTER the 8-byte `CLAIM_RELEASED_EVENT_DISCRIMINATOR`.
  */
 export function getClaimReleasedEventDecoder(): Decoder<ClaimReleasedEventData> {

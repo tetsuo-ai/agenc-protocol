@@ -31,7 +31,7 @@ export type ModerationBlockClearedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ModerationBlockClearedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ModerationBlockClearedEventData} event payload: the bytes
  * AFTER the 8-byte `MODERATION_BLOCK_CLEARED_EVENT_DISCRIMINATOR`.
  */
 export function getModerationBlockClearedEventDecoder(): Decoder<ModerationBlockClearedEventData> {

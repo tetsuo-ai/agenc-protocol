@@ -39,7 +39,7 @@ export type ReputationDelegationRetiredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReputationDelegationRetiredEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReputationDelegationRetiredEventData} event payload: the bytes
  * AFTER the 8-byte `REPUTATION_DELEGATION_RETIRED_EVENT_DISCRIMINATOR`.
  */
 export function getReputationDelegationRetiredEventDecoder(): Decoder<ReputationDelegationRetiredEventData> {

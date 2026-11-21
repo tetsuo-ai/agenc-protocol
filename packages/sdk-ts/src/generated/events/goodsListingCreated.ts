@@ -42,7 +42,7 @@ export type GoodsListingCreatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link GoodsListingCreatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link GoodsListingCreatedEventData} event payload: the bytes
  * AFTER the 8-byte `GOODS_LISTING_CREATED_EVENT_DISCRIMINATOR`.
  */
 export function getGoodsListingCreatedEventDecoder(): Decoder<GoodsListingCreatedEventData> {

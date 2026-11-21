@@ -35,7 +35,7 @@ export type DisputeExpiredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DisputeExpiredEventData} event payload — the bytes
+ * Gets the decoder for the {@link DisputeExpiredEventData} event payload: the bytes
  * AFTER the 8-byte `DISPUTE_EXPIRED_EVENT_DISCRIMINATOR`.
  */
 export function getDisputeExpiredEventDecoder(): Decoder<DisputeExpiredEventData> {

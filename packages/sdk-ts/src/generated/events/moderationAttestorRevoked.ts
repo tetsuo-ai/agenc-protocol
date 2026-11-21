@@ -26,7 +26,7 @@ export type ModerationAttestorRevokedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ModerationAttestorRevokedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ModerationAttestorRevokedEventData} event payload: the bytes
  * AFTER the 8-byte `MODERATION_ATTESTOR_REVOKED_EVENT_DISCRIMINATOR`.
  */
 export function getModerationAttestorRevokedEventDecoder(): Decoder<ModerationAttestorRevokedEventData> {

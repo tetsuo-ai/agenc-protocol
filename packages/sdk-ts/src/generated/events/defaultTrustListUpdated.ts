@@ -36,7 +36,7 @@ export type DefaultTrustListUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DefaultTrustListUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link DefaultTrustListUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `DEFAULT_TRUST_LIST_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getDefaultTrustListUpdatedEventDecoder(): Decoder<DefaultTrustListUpdatedEventData> {

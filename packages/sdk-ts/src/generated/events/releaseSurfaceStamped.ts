@@ -43,7 +43,7 @@ export type ReleaseSurfaceStampedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReleaseSurfaceStampedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReleaseSurfaceStampedEventData} event payload: the bytes
  * AFTER the 8-byte `RELEASE_SURFACE_STAMPED_EVENT_DISCRIMINATOR`.
  */
 export function getReleaseSurfaceStampedEventDecoder(): Decoder<ReleaseSurfaceStampedEventData> {

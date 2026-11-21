@@ -39,7 +39,11 @@ import {
   getNonNullResolvedInstructionInput,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findModerationAttestorPda, findModerationConfigPda } from "../pdas";
+import {
+  findModerationAttestorPda,
+  findModerationConfigPda,
+  findProtocolConfigPda,
+} from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const ASSIGN_MODERATION_ATTESTOR_DISCRIMINATOR: ReadonlyUint8Array =
@@ -58,6 +62,7 @@ export type AssignModerationAttestorInstruction<
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -76,6 +81,9 @@ export type AssignModerationAttestorInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       ...TRemainingAccounts,
     ]
   >;
@@ -122,17 +130,22 @@ export type AssignModerationAttestorAsyncInput<
   TAccountModerationAttestor extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   /** Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. */
   moderationAttestor?: Address<TAccountModerationAttestor>;
   /**
-   * Must be the moderation authority that owns the moderation config. Unlike the
-   * threshold-approved dispute-resolver roster, this moderation roster remains
-   * authority-managed under its separate trust model.
+   * Fee payer and proposer; pays the entry's rent. The approval is the multisig
+   * threshold over `remaining_accounts` (revision 9).
    */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Revision 9 (G), appended: the protocol config whose multisig owners must
+   * approve the assignment.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
   attestor: AssignModerationAttestorInstructionDataArgs["attestor"];
 };
 
@@ -141,13 +154,15 @@ export async function getAssignModerationAttestorInstructionAsync<
   TAccountModerationAttestor extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: AssignModerationAttestorAsyncInput<
     TAccountModerationConfig,
     TAccountModerationAttestor,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -156,7 +171,8 @@ export async function getAssignModerationAttestorInstructionAsync<
     TAccountModerationConfig,
     TAccountModerationAttestor,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountProtocolConfig
   >
 > {
   // Program address.
@@ -175,6 +191,7 @@ export async function getAssignModerationAttestorInstructionAsync<
     },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -197,6 +214,9 @@ export async function getAssignModerationAttestorInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -205,6 +225,7 @@ export async function getAssignModerationAttestorInstructionAsync<
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getAssignModerationAttestorInstructionDataEncoder().encode(
       args as AssignModerationAttestorInstructionDataArgs,
@@ -215,7 +236,8 @@ export async function getAssignModerationAttestorInstructionAsync<
     TAccountModerationConfig,
     TAccountModerationAttestor,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountProtocolConfig
   >);
 }
 
@@ -224,17 +246,22 @@ export type AssignModerationAttestorInput<
   TAccountModerationAttestor extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   /** Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. */
   moderationAttestor: Address<TAccountModerationAttestor>;
   /**
-   * Must be the moderation authority that owns the moderation config. Unlike the
-   * threshold-approved dispute-resolver roster, this moderation roster remains
-   * authority-managed under its separate trust model.
+   * Fee payer and proposer; pays the entry's rent. The approval is the multisig
+   * threshold over `remaining_accounts` (revision 9).
    */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Revision 9 (G), appended: the protocol config whose multisig owners must
+   * approve the assignment.
+   */
+  protocolConfig: Address<TAccountProtocolConfig>;
   attestor: AssignModerationAttestorInstructionDataArgs["attestor"];
 };
 
@@ -243,13 +270,15 @@ export function getAssignModerationAttestorInstruction<
   TAccountModerationAttestor extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: AssignModerationAttestorInput<
     TAccountModerationConfig,
     TAccountModerationAttestor,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): AssignModerationAttestorInstruction<
@@ -257,7 +286,8 @@ export function getAssignModerationAttestorInstruction<
   TAccountModerationConfig,
   TAccountModerationAttestor,
   TAccountAuthority,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountProtocolConfig
 > {
   // Program address.
   const programAddress =
@@ -275,6 +305,7 @@ export function getAssignModerationAttestorInstruction<
     },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -297,6 +328,7 @@ export function getAssignModerationAttestorInstruction<
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getAssignModerationAttestorInstructionDataEncoder().encode(
       args as AssignModerationAttestorInstructionDataArgs,
@@ -307,7 +339,8 @@ export function getAssignModerationAttestorInstruction<
     TAccountModerationConfig,
     TAccountModerationAttestor,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountProtocolConfig
   >);
 }
 
@@ -321,12 +354,16 @@ export type ParsedAssignModerationAttestorInstruction<
     /** Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. */
     moderationAttestor: TAccountMetas[1];
     /**
-     * Must be the moderation authority that owns the moderation config. Unlike the
-     * threshold-approved dispute-resolver roster, this moderation roster remains
-     * authority-managed under its separate trust model.
+     * Fee payer and proposer; pays the entry's rent. The approval is the multisig
+     * threshold over `remaining_accounts` (revision 9).
      */
     authority: TAccountMetas[2];
     systemProgram: TAccountMetas[3];
+    /**
+     * Revision 9 (G), appended: the protocol config whose multisig owners must
+     * approve the assignment.
+     */
+    protocolConfig: TAccountMetas[4];
   };
   data: AssignModerationAttestorInstructionData;
 };
@@ -339,12 +376,12 @@ export function parseAssignModerationAttestorInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedAssignModerationAttestorInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 4) {
+  if (instruction.accounts.length < 5) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 4,
+        expectedAccountMetas: 5,
       },
     );
   }
@@ -361,6 +398,7 @@ export function parseAssignModerationAttestorInstruction<
       moderationAttestor: getNextAccount(),
       authority: getNextAccount(),
       systemProgram: getNextAccount(),
+      protocolConfig: getNextAccount(),
     },
     data: getAssignModerationAttestorInstructionDataDecoder().decode(
       instruction.data,

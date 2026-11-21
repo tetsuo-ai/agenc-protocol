@@ -44,7 +44,7 @@ export type GoodPurchasedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link GoodPurchasedEventData} event payload — the bytes
+ * Gets the decoder for the {@link GoodPurchasedEventData} event payload: the bytes
  * AFTER the 8-byte `GOOD_PURCHASED_EVENT_DISCRIMINATOR`.
  */
 export function getGoodPurchasedEventDecoder(): Decoder<GoodPurchasedEventData> {

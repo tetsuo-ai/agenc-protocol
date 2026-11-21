@@ -37,7 +37,7 @@ export type TaskClaimExpiredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskClaimExpiredEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskClaimExpiredEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_CLAIM_EXPIRED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskClaimExpiredEventDecoder(): Decoder<TaskClaimExpiredEventData> {

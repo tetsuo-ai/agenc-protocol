@@ -882,6 +882,8 @@ export const AGENC_COORDINATION_ERROR__INVALID_TASK_MARKER = 0x191f; // 6431
 export const AGENC_COORDINATION_ERROR__MODERATOR_IS_TASK_CREATOR = 0x1920; // 6432
 /** InvalidModerationRentPayer: Moderation rent payer must be the task creator or the moderator */
 export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RENT_PAYER = 0x1921; // 6433
+/** ModeratorIsListingProvider: A listing provider cannot moderate its own listing */
+export const AGENC_COORDINATION_ERROR__MODERATOR_IS_LISTING_PROVIDER = 0x1922; // 6434
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -1140,6 +1142,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS
   | typeof AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__MODERATOR_IS_LISTING_PROVIDER
   | typeof AGENC_COORDINATION_ERROR__MODERATOR_IS_TASK_CREATOR
   | typeof AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER
   | typeof AGENC_COORDINATION_ERROR__MULTISIG_DUPLICATE_SIGNER
@@ -1580,6 +1583,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT]: `Referrer payee account is missing for a task that carries a referrer fee`,
     [AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS]: `Token accounts not provided for token-denominated task`,
     [AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH]: `Supplied moderation attestor entry does not match the signing moderator`,
+    [AGENC_COORDINATION_ERROR__MODERATOR_IS_LISTING_PROVIDER]: `A listing provider cannot moderate its own listing`,
     [AGENC_COORDINATION_ERROR__MODERATOR_IS_TASK_CREATOR]: `A task creator cannot moderate its own task`,
     [AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER]: `Multisig signer cannot be default pubkey`,
     [AGENC_COORDINATION_ERROR__MULTISIG_DUPLICATE_SIGNER]: `Duplicate multisig signer provided`,

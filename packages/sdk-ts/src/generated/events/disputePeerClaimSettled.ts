@@ -36,7 +36,7 @@ export type DisputePeerClaimSettledEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DisputePeerClaimSettledEventData} event payload — the bytes
+ * Gets the decoder for the {@link DisputePeerClaimSettledEventData} event payload: the bytes
  * AFTER the 8-byte `DISPUTE_PEER_CLAIM_SETTLED_EVENT_DISCRIMINATOR`.
  */
 export function getDisputePeerClaimSettledEventDecoder(): Decoder<DisputePeerClaimSettledEventData> {

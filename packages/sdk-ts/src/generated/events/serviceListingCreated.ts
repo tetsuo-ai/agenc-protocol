@@ -38,7 +38,7 @@ export type ServiceListingCreatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ServiceListingCreatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ServiceListingCreatedEventData} event payload: the bytes
  * AFTER the 8-byte `SERVICE_LISTING_CREATED_EVENT_DISCRIMINATOR`.
  */
 export function getServiceListingCreatedEventDecoder(): Decoder<ServiceListingCreatedEventData> {

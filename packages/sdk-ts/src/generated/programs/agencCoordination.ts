@@ -78,6 +78,7 @@ import {
   getTaskCodec,
   getTaskEscrowCodec,
   getTaskJobSpecCodec,
+  getTaskMarkerCodec,
   getTaskModerationCodec,
   getTaskSubmissionCodec,
   getTaskValidationConfigCodec,
@@ -170,6 +171,8 @@ import {
   type TaskEscrowArgs,
   type TaskJobSpec,
   type TaskJobSpecArgs,
+  type TaskMarker,
+  type TaskMarkerArgs,
   type TaskModeration,
   type TaskModerationArgs,
   type TaskSubmission,
@@ -717,6 +720,7 @@ export enum AgencCoordinationAccount {
   TaskClaim,
   TaskEscrow,
   TaskJobSpec,
+  TaskMarker,
   TaskModeration,
   TaskSubmission,
   TaskValidationConfig,
@@ -1210,6 +1214,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.TaskJobSpec;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([193, 11, 192, 200, 51, 208, 108, 255]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.TaskMarker;
   }
   if (
     containsBytes(
@@ -1796,7 +1811,7 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
-        new Uint8Array([241, 94, 127, 7, 104, 174, 240, 116]),
+        new Uint8Array([72, 38, 44, 237, 3, 93, 253, 108]),
       ),
       0,
     )
@@ -3724,6 +3739,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<TaskEscrowArgs, TaskEscrow>;
   taskJobSpec: ReturnType<typeof getTaskJobSpecCodec> &
     SelfFetchFunctions<TaskJobSpecArgs, TaskJobSpec>;
+  taskMarker: ReturnType<typeof getTaskMarkerCodec> &
+    SelfFetchFunctions<TaskMarkerArgs, TaskMarker>;
   taskModeration: ReturnType<typeof getTaskModerationCodec> &
     SelfFetchFunctions<TaskModerationArgs, TaskModeration>;
   taskSubmission: ReturnType<typeof getTaskSubmissionCodec> &
@@ -4358,6 +4375,7 @@ export function agencCoordinationProgram() {
           taskClaim: addSelfFetchFunctions(client, getTaskClaimCodec()),
           taskEscrow: addSelfFetchFunctions(client, getTaskEscrowCodec()),
           taskJobSpec: addSelfFetchFunctions(client, getTaskJobSpecCodec()),
+          taskMarker: addSelfFetchFunctions(client, getTaskMarkerCodec()),
           taskModeration: addSelfFetchFunctions(
             client,
             getTaskModerationCodec(),

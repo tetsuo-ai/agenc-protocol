@@ -26,7 +26,7 @@ export type AgentVerificationRevokedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link AgentVerificationRevokedEventData} event payload — the bytes
+ * Gets the decoder for the {@link AgentVerificationRevokedEventData} event payload: the bytes
  * AFTER the 8-byte `AGENT_VERIFICATION_REVOKED_EVENT_DISCRIMINATOR`.
  */
 export function getAgentVerificationRevokedEventDecoder(): Decoder<AgentVerificationRevokedEventData> {

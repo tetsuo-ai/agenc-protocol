@@ -35,7 +35,7 @@ export type DependentTaskCreatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link DependentTaskCreatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link DependentTaskCreatedEventData} event payload: the bytes
  * AFTER the 8-byte `DEPENDENT_TASK_CREATED_EVENT_DISCRIMINATOR`.
  */
 export function getDependentTaskCreatedEventDecoder(): Decoder<DependentTaskCreatedEventData> {

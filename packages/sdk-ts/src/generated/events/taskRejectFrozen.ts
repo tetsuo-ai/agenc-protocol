@@ -31,7 +31,7 @@ export type TaskRejectFrozenEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskRejectFrozenEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskRejectFrozenEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_REJECT_FROZEN_EVENT_DISCRIMINATOR`.
  */
 export function getTaskRejectFrozenEventDecoder(): Decoder<TaskRejectFrozenEventData> {

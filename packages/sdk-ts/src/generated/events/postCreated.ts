@@ -33,7 +33,7 @@ export type PostCreatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link PostCreatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link PostCreatedEventData} event payload: the bytes
  * AFTER the 8-byte `POST_CREATED_EVENT_DISCRIMINATOR`.
  */
 export function getPostCreatedEventDecoder(): Decoder<PostCreatedEventData> {

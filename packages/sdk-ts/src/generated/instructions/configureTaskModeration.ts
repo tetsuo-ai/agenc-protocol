@@ -132,6 +132,11 @@ export type ConfigureTaskModerationAsyncInput<
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
   moderationConfig?: Address<TAccountModerationConfig>;
+  /**
+   * Fee payer and proposer. On the full surface the approval is the multisig
+   * threshold over `remaining_accounts`; the canary requires the protocol
+   * authority itself.
+   */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
   moderationAuthority: ConfigureTaskModerationInstructionDataArgs["moderationAuthority"];
@@ -224,6 +229,11 @@ export type ConfigureTaskModerationInput<
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
   moderationConfig: Address<TAccountModerationConfig>;
+  /**
+   * Fee payer and proposer. On the full surface the approval is the multisig
+   * threshold over `remaining_accounts`; the canary requires the protocol
+   * authority itself.
+   */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
   moderationAuthority: ConfigureTaskModerationInstructionDataArgs["moderationAuthority"];
@@ -308,6 +318,11 @@ export type ParsedConfigureTaskModerationInstruction<
   accounts: {
     protocolConfig: TAccountMetas[0];
     moderationConfig: TAccountMetas[1];
+    /**
+     * Fee payer and proposer. On the full surface the approval is the multisig
+     * threshold over `remaining_accounts`; the canary requires the protocol
+     * authority itself.
+     */
     authority: TAccountMetas[2];
     systemProgram: TAccountMetas[3];
   };

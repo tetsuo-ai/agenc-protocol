@@ -188,7 +188,8 @@ export type ReclaimTerminalClaimAsyncInput<
   rentRecipient: Address<TAccountRentRecipient>;
   /**
    * Revision 9 (E): receives a non-contest claim deposit once the claim is past
-   * its expiry (the claim ended without a delivery).
+   * its expiry (the claim ended without a delivery). A Competitive claim
+   * stranded on a Completed task lost the race and keeps it (review R2-6).
    */
   creator: Address<TAccountCreator>;
 };
@@ -373,7 +374,8 @@ export type ReclaimTerminalClaimInput<
   rentRecipient: Address<TAccountRentRecipient>;
   /**
    * Revision 9 (E): receives a non-contest claim deposit once the claim is past
-   * its expiry (the claim ended without a delivery).
+   * its expiry (the claim ended without a delivery). A Competitive claim
+   * stranded on a Completed task lost the race and keeps it (review R2-6).
    */
   creator: Address<TAccountCreator>;
 };
@@ -517,7 +519,8 @@ export type ParsedReclaimTerminalClaimInstruction<
     rentRecipient: TAccountMetas[8];
     /**
      * Revision 9 (E): receives a non-contest claim deposit once the claim is past
-     * its expiry (the claim ended without a delivery).
+     * its expiry (the claim ended without a delivery). A Competitive claim
+     * stranded on a Completed task lost the race and keeps it (review R2-6).
      */
     creator: TAccountMetas[9];
   };

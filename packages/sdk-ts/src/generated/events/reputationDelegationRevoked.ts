@@ -28,7 +28,7 @@ export type ReputationDelegationRevokedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ReputationDelegationRevokedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ReputationDelegationRevokedEventData} event payload: the bytes
  * AFTER the 8-byte `REPUTATION_DELEGATION_REVOKED_EVENT_DISCRIMINATOR`.
  */
 export function getReputationDelegationRevokedEventDecoder(): Decoder<ReputationDelegationRevokedEventData> {

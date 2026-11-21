@@ -65,8 +65,9 @@ export type DisputeBond = {
   kind: number;
   filedAt: bigint;
   /**
-   * End of the ruling window (kind 0). Zero for a task dispute, whose window
-   * lives on the Dispute account.
+   * The last second a ruling can land: the end of the ruling window for a
+   * dispute of a freeze (kind 0), and the dispute's `last_ruling_second()`
+   * for a task dispute (kind 1), stored when it is filed (review R2-8).
    */
   rulingDeadline: bigint;
   bump: number;
@@ -89,8 +90,9 @@ export type DisputeBondArgs = {
   kind: number;
   filedAt: number | bigint;
   /**
-   * End of the ruling window (kind 0). Zero for a task dispute, whose window
-   * lives on the Dispute account.
+   * The last second a ruling can land: the end of the ruling window for a
+   * dispute of a freeze (kind 0), and the dispute's `last_ruling_second()`
+   * for a task dispute (kind 1), stored when it is filed (review R2-8).
    */
   rulingDeadline: number | bigint;
   bump: number;

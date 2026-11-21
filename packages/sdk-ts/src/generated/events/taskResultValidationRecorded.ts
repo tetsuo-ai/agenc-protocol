@@ -35,7 +35,7 @@ export type TaskResultValidationRecordedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskResultValidationRecordedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskResultValidationRecordedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_RESULT_VALIDATION_RECORDED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskResultValidationRecordedEventDecoder(): Decoder<TaskResultValidationRecordedEventData> {

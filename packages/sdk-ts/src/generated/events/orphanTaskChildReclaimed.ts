@@ -35,7 +35,7 @@ export type OrphanTaskChildReclaimedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link OrphanTaskChildReclaimedEventData} event payload — the bytes
+ * Gets the decoder for the {@link OrphanTaskChildReclaimedEventData} event payload: the bytes
  * AFTER the 8-byte `ORPHAN_TASK_CHILD_RECLAIMED_EVENT_DISCRIMINATOR`.
  */
 export function getOrphanTaskChildReclaimedEventDecoder(): Decoder<OrphanTaskChildReclaimedEventData> {

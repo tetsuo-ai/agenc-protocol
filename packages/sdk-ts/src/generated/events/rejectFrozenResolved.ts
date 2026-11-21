@@ -27,7 +27,7 @@ export type RejectFrozenResolvedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link RejectFrozenResolvedEventData} event payload — the bytes
+ * Gets the decoder for the {@link RejectFrozenResolvedEventData} event payload: the bytes
  * AFTER the 8-byte `REJECT_FROZEN_RESOLVED_EVENT_DISCRIMINATOR`.
  */
 export function getRejectFrozenResolvedEventDecoder(): Decoder<RejectFrozenResolvedEventData> {

@@ -40,7 +40,7 @@ export type MarketplaceFeeForfeitedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link MarketplaceFeeForfeitedEventData} event payload — the bytes
+ * Gets the decoder for the {@link MarketplaceFeeForfeitedEventData} event payload: the bytes
  * AFTER the 8-byte `MARKETPLACE_FEE_FORFEITED_EVENT_DISCRIMINATOR`.
  */
 export function getMarketplaceFeeForfeitedEventDecoder(): Decoder<MarketplaceFeeForfeitedEventData> {

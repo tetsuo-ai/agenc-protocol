@@ -27,7 +27,7 @@ export type RejectFrozenExpiredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link RejectFrozenExpiredEventData} event payload — the bytes
+ * Gets the decoder for the {@link RejectFrozenExpiredEventData} event payload: the bytes
  * AFTER the 8-byte `REJECT_FROZEN_EXPIRED_EVENT_DISCRIMINATOR`.
  */
 export function getRejectFrozenExpiredEventDecoder(): Decoder<RejectFrozenExpiredEventData> {

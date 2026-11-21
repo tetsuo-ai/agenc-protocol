@@ -36,7 +36,7 @@ export type ModerationBlockSetEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ModerationBlockSetEventData} event payload — the bytes
+ * Gets the decoder for the {@link ModerationBlockSetEventData} event payload: the bytes
  * AFTER the 8-byte `MODERATION_BLOCK_SET_EVENT_DISCRIMINATOR`.
  */
 export function getModerationBlockSetEventDecoder(): Decoder<ModerationBlockSetEventData> {

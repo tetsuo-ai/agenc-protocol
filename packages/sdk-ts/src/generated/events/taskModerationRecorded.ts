@@ -38,7 +38,7 @@ export type TaskModerationRecordedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link TaskModerationRecordedEventData} event payload — the bytes
+ * Gets the decoder for the {@link TaskModerationRecordedEventData} event payload: the bytes
  * AFTER the 8-byte `TASK_MODERATION_RECORDED_EVENT_DISCRIMINATOR`.
  */
 export function getTaskModerationRecordedEventDecoder(): Decoder<TaskModerationRecordedEventData> {

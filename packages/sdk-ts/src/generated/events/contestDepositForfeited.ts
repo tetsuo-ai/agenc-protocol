@@ -36,7 +36,7 @@ export type ContestDepositForfeitedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ContestDepositForfeitedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ContestDepositForfeitedEventData} event payload: the bytes
  * AFTER the 8-byte `CONTEST_DEPOSIT_FORFEITED_EVENT_DISCRIMINATOR`.
  */
 export function getContestDepositForfeitedEventDecoder(): Decoder<ContestDepositForfeitedEventData> {

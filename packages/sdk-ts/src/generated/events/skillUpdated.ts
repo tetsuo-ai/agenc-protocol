@@ -33,7 +33,7 @@ export type SkillUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link SkillUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link SkillUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `SKILL_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getSkillUpdatedEventDecoder(): Decoder<SkillUpdatedEventData> {

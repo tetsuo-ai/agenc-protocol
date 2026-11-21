@@ -117,6 +117,11 @@ export type ReclaimCompletionBondAsyncInput<
   TAccountParty extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
+  /**
+   * The task PDA: a Task (which must be Completed or Cancelled, checked at its
+   * canonical PDA with its stored bump) or the TaskMarker that close_task left
+   * there, loaded by hand in the handler (`load_task_or_marker`).
+   */
   task: Address<TAccountTask>;
   /** validated by settle_completion_bond in the handler. */
   completionBond?: Address<TAccountCompletionBond>;
@@ -212,6 +217,11 @@ export type ReclaimCompletionBondInput<
   TAccountParty extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
+  /**
+   * The task PDA: a Task (which must be Completed or Cancelled, checked at its
+   * canonical PDA with its stored bump) or the TaskMarker that close_task left
+   * there, loaded by hand in the handler (`load_task_or_marker`).
+   */
   task: Address<TAccountTask>;
   /** validated by settle_completion_bond in the handler. */
   completionBond: Address<TAccountCompletionBond>;
@@ -293,6 +303,11 @@ export type ParsedReclaimCompletionBondInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
+    /**
+     * The task PDA: a Task (which must be Completed or Cancelled, checked at its
+     * canonical PDA with its stored bump) or the TaskMarker that close_task left
+     * there, loaded by hand in the handler (`load_task_or_marker`).
+     */
     task: TAccountMetas[0];
     /** validated by settle_completion_bond in the handler. */
     completionBond: TAccountMetas[1];

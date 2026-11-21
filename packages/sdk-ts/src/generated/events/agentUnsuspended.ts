@@ -28,7 +28,7 @@ export type AgentUnsuspendedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link AgentUnsuspendedEventData} event payload — the bytes
+ * Gets the decoder for the {@link AgentUnsuspendedEventData} event payload: the bytes
  * AFTER the 8-byte `AGENT_UNSUSPENDED_EVENT_DISCRIMINATOR`.
  */
 export function getAgentUnsuspendedEventDecoder(): Decoder<AgentUnsuspendedEventData> {

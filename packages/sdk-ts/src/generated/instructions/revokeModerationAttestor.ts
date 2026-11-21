@@ -36,7 +36,7 @@ import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findModerationConfigPda } from "../pdas";
+import { findModerationConfigPda, findProtocolConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const REVOKE_MODERATION_ATTESTOR_DISCRIMINATOR: ReadonlyUint8Array =
@@ -53,6 +53,7 @@ export type RevokeModerationAttestorInstruction<
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -68,6 +69,9 @@ export type RevokeModerationAttestorInstruction<
         ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       ...TRemainingAccounts,
     ]
   >;
@@ -110,30 +114,41 @@ export type RevokeModerationAttestorAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountAuthority extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   /**
    * Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA
-   * is enforced; `close = authority` returns the rent to the moderation authority.
-   * P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered
-   * entry (`assigned_by == attestor`) can never be closed by the authority, so its
-   * bond can never be confiscated through this path.
+   * is enforced; `close = authority` returns the rent to the proposer. P1.2 §4.7:
+   * only a deputized entry (no bond, no registration time) can be closed here,
+   * so a self-registered attestor's bond can never be confiscated through this
+   * path.
    */
   moderationAttestor: Address<TAccountModerationAttestor>;
-  /** Must be the moderation authority that owns the moderation config. */
+  /**
+   * Fee payer and proposer; receives the entry's rent. The approval is the
+   * multisig threshold over `remaining_accounts` (revision 9).
+   */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Revision 9 (G), appended: the protocol config whose multisig owners must
+   * approve the revoke.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
 };
 
 export async function getRevokeModerationAttestorInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountModerationAttestor extends string,
   TAccountAuthority extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RevokeModerationAttestorAsyncInput<
     TAccountModerationConfig,
     TAccountModerationAttestor,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -141,7 +156,8 @@ export async function getRevokeModerationAttestorInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountModerationAttestor,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >
 > {
   // Program address.
@@ -159,6 +175,7 @@ export async function getRevokeModerationAttestorInstructionAsync<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -169,6 +186,9 @@ export async function getRevokeModerationAttestorInstructionAsync<
   if (!accounts.moderationConfig.value) {
     accounts.moderationConfig.value = await findModerationConfigPda();
   }
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -176,6 +196,7 @@ export async function getRevokeModerationAttestorInstructionAsync<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getRevokeModerationAttestorInstructionDataEncoder().encode({}),
     programAddress,
@@ -183,7 +204,8 @@ export async function getRevokeModerationAttestorInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountModerationAttestor,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >);
 }
 
@@ -191,37 +213,49 @@ export type RevokeModerationAttestorInput<
   TAccountModerationConfig extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountAuthority extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   /**
    * Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA
-   * is enforced; `close = authority` returns the rent to the moderation authority.
-   * P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered
-   * entry (`assigned_by == attestor`) can never be closed by the authority, so its
-   * bond can never be confiscated through this path.
+   * is enforced; `close = authority` returns the rent to the proposer. P1.2 §4.7:
+   * only a deputized entry (no bond, no registration time) can be closed here,
+   * so a self-registered attestor's bond can never be confiscated through this
+   * path.
    */
   moderationAttestor: Address<TAccountModerationAttestor>;
-  /** Must be the moderation authority that owns the moderation config. */
+  /**
+   * Fee payer and proposer; receives the entry's rent. The approval is the
+   * multisig threshold over `remaining_accounts` (revision 9).
+   */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Revision 9 (G), appended: the protocol config whose multisig owners must
+   * approve the revoke.
+   */
+  protocolConfig: Address<TAccountProtocolConfig>;
 };
 
 export function getRevokeModerationAttestorInstruction<
   TAccountModerationConfig extends string,
   TAccountModerationAttestor extends string,
   TAccountAuthority extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RevokeModerationAttestorInput<
     TAccountModerationConfig,
     TAccountModerationAttestor,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): RevokeModerationAttestorInstruction<
   TProgramAddress,
   TAccountModerationConfig,
   TAccountModerationAttestor,
-  TAccountAuthority
+  TAccountAuthority,
+  TAccountProtocolConfig
 > {
   // Program address.
   const programAddress =
@@ -238,6 +272,7 @@ export function getRevokeModerationAttestorInstruction<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -250,6 +285,7 @@ export function getRevokeModerationAttestorInstruction<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getRevokeModerationAttestorInstructionDataEncoder().encode({}),
     programAddress,
@@ -257,7 +293,8 @@ export function getRevokeModerationAttestorInstruction<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountModerationAttestor,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >);
 }
 
@@ -270,14 +307,22 @@ export type ParsedRevokeModerationAttestorInstruction<
     moderationConfig: TAccountMetas[0];
     /**
      * Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA
-     * is enforced; `close = authority` returns the rent to the moderation authority.
-     * P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered
-     * entry (`assigned_by == attestor`) can never be closed by the authority, so its
-     * bond can never be confiscated through this path.
+     * is enforced; `close = authority` returns the rent to the proposer. P1.2 §4.7:
+     * only a deputized entry (no bond, no registration time) can be closed here,
+     * so a self-registered attestor's bond can never be confiscated through this
+     * path.
      */
     moderationAttestor: TAccountMetas[1];
-    /** Must be the moderation authority that owns the moderation config. */
+    /**
+     * Fee payer and proposer; receives the entry's rent. The approval is the
+     * multisig threshold over `remaining_accounts` (revision 9).
+     */
     authority: TAccountMetas[2];
+    /**
+     * Revision 9 (G), appended: the protocol config whose multisig owners must
+     * approve the revoke.
+     */
+    protocolConfig: TAccountMetas[3];
   };
   data: RevokeModerationAttestorInstructionData;
 };
@@ -290,12 +335,12 @@ export function parseRevokeModerationAttestorInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRevokeModerationAttestorInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 3) {
+  if (instruction.accounts.length < 4) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 3,
+        expectedAccountMetas: 4,
       },
     );
   }
@@ -311,6 +356,7 @@ export function parseRevokeModerationAttestorInstruction<
       moderationConfig: getNextAccount(),
       moderationAttestor: getNextAccount(),
       authority: getNextAccount(),
+      protocolConfig: getNextAccount(),
     },
     data: getRevokeModerationAttestorInstructionDataDecoder().decode(
       instruction.data,

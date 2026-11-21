@@ -40,7 +40,7 @@ export type RejectionDisputeSettledEventData = {
 };
 
 /**
- * Gets the decoder for the {@link RejectionDisputeSettledEventData} event payload — the bytes
+ * Gets the decoder for the {@link RejectionDisputeSettledEventData} event payload: the bytes
  * AFTER the 8-byte `REJECTION_DISPUTE_SETTLED_EVENT_DISCRIMINATOR`.
  */
 export function getRejectionDisputeSettledEventDecoder(): Decoder<RejectionDisputeSettledEventData> {

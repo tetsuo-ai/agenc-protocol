@@ -33,7 +33,7 @@ export type BidWinnerDemotedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link BidWinnerDemotedEventData} event payload — the bytes
+ * Gets the decoder for the {@link BidWinnerDemotedEventData} event payload: the bytes
  * AFTER the 8-byte `BID_WINNER_DEMOTED_EVENT_DISCRIMINATOR`.
  */
 export function getBidWinnerDemotedEventDecoder(): Decoder<BidWinnerDemotedEventData> {

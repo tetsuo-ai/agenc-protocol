@@ -46,7 +46,7 @@ export type ServiceListingHiredEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ServiceListingHiredEventData} event payload — the bytes
+ * Gets the decoder for the {@link ServiceListingHiredEventData} event payload: the bytes
  * AFTER the 8-byte `SERVICE_LISTING_HIRED_EVENT_DISCRIMINATOR`.
  */
 export function getServiceListingHiredEventDecoder(): Decoder<ServiceListingHiredEventData> {

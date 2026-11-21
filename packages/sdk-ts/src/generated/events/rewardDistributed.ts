@@ -31,7 +31,7 @@ export type RewardDistributedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link RewardDistributedEventData} event payload — the bytes
+ * Gets the decoder for the {@link RewardDistributedEventData} event payload: the bytes
  * AFTER the 8-byte `REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR`.
  */
 export function getRewardDistributedEventDecoder(): Decoder<RewardDistributedEventData> {

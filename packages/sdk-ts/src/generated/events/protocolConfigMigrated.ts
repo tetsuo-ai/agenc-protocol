@@ -32,7 +32,7 @@ export type ProtocolConfigMigratedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ProtocolConfigMigratedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ProtocolConfigMigratedEventData} event payload: the bytes
  * AFTER the 8-byte `PROTOCOL_CONFIG_MIGRATED_EVENT_DISCRIMINATOR`.
  */
 export function getProtocolConfigMigratedEventDecoder(): Decoder<ProtocolConfigMigratedEventData> {

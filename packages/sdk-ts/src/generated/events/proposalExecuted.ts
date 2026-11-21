@@ -32,7 +32,7 @@ export type ProposalExecutedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link ProposalExecutedEventData} event payload — the bytes
+ * Gets the decoder for the {@link ProposalExecutedEventData} event payload: the bytes
  * AFTER the 8-byte `PROPOSAL_EXECUTED_EVENT_DISCRIMINATOR`.
  */
 export function getProposalExecutedEventDecoder(): Decoder<ProposalExecutedEventData> {

@@ -32,7 +32,7 @@ export type StoreUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link StoreUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link StoreUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `STORE_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getStoreUpdatedEventDecoder(): Decoder<StoreUpdatedEventData> {

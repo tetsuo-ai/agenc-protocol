@@ -34,7 +34,7 @@ export type CreatorTrackRecordUpdatedEventData = {
 };
 
 /**
- * Gets the decoder for the {@link CreatorTrackRecordUpdatedEventData} event payload — the bytes
+ * Gets the decoder for the {@link CreatorTrackRecordUpdatedEventData} event payload: the bytes
  * AFTER the 8-byte `CREATOR_TRACK_RECORD_UPDATED_EVENT_DISCRIMINATOR`.
  */
 export function getCreatorTrackRecordUpdatedEventDecoder(): Decoder<CreatorTrackRecordUpdatedEventData> {

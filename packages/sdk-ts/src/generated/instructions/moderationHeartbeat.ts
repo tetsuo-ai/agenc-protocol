@@ -30,6 +30,7 @@ import {
   type InstructionWithData,
   type Option,
   type OptionOrNullable,
+  type ReadonlyAccount,
   type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
@@ -41,7 +42,7 @@ import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findModerationConfigPda } from "../pdas";
+import { findModerationConfigPda, findProtocolConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const MODERATION_HEARTBEAT_DISCRIMINATOR: ReadonlyUint8Array =
@@ -55,6 +56,7 @@ export type ModerationHeartbeatInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -67,6 +69,9 @@ export type ModerationHeartbeatInstruction<
         ? ReadonlySignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       ...TRemainingAccounts,
     ]
   >;
@@ -113,27 +118,38 @@ export function getModerationHeartbeatInstructionDataCodec(): Codec<
 export type ModerationHeartbeatAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountAuthority extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Revision 9 (G), appended and optional: the protocol config. A plain
+   * heartbeat from the config authority or the moderation authority works
+   * without it; a heartbeat from another multisig owner needs it, and a
+   * window change needs it plus the threshold over remaining accounts.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
   newWindowSecs: ModerationHeartbeatInstructionDataArgs["newWindowSecs"];
 };
 
 export async function getModerationHeartbeatInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountAuthority extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ModerationHeartbeatAsyncInput<
     TAccountModerationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
   ModerationHeartbeatInstruction<
     TProgramAddress,
     TAccountModerationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >
 > {
   // Program address.
@@ -147,6 +163,7 @@ export async function getModerationHeartbeatInstructionAsync<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: false },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -160,12 +177,16 @@ export async function getModerationHeartbeatInstructionAsync<
   if (!accounts.moderationConfig.value) {
     accounts.moderationConfig.value = await findModerationConfigPda();
   }
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
     accounts: [
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getModerationHeartbeatInstructionDataEncoder().encode(
       args as ModerationHeartbeatInstructionDataArgs,
@@ -174,30 +195,45 @@ export async function getModerationHeartbeatInstructionAsync<
   } as ModerationHeartbeatInstruction<
     TProgramAddress,
     TAccountModerationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >);
 }
 
 export type ModerationHeartbeatInput<
   TAccountModerationConfig extends string = string,
   TAccountAuthority extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Revision 9 (G), appended and optional: the protocol config. A plain
+   * heartbeat from the config authority or the moderation authority works
+   * without it; a heartbeat from another multisig owner needs it, and a
+   * window change needs it plus the threshold over remaining accounts.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
   newWindowSecs: ModerationHeartbeatInstructionDataArgs["newWindowSecs"];
 };
 
 export function getModerationHeartbeatInstruction<
   TAccountModerationConfig extends string,
   TAccountAuthority extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
-  input: ModerationHeartbeatInput<TAccountModerationConfig, TAccountAuthority>,
+  input: ModerationHeartbeatInput<
+    TAccountModerationConfig,
+    TAccountAuthority,
+    TAccountProtocolConfig
+  >,
   config?: { programAddress?: TProgramAddress },
 ): ModerationHeartbeatInstruction<
   TProgramAddress,
   TAccountModerationConfig,
-  TAccountAuthority
+  TAccountAuthority,
+  TAccountProtocolConfig
 > {
   // Program address.
   const programAddress =
@@ -210,6 +246,7 @@ export function getModerationHeartbeatInstruction<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: false },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -224,6 +261,7 @@ export function getModerationHeartbeatInstruction<
     accounts: [
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getModerationHeartbeatInstructionDataEncoder().encode(
       args as ModerationHeartbeatInstructionDataArgs,
@@ -232,7 +270,8 @@ export function getModerationHeartbeatInstruction<
   } as ModerationHeartbeatInstruction<
     TProgramAddress,
     TAccountModerationConfig,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >);
 }
 
@@ -244,6 +283,13 @@ export type ParsedModerationHeartbeatInstruction<
   accounts: {
     moderationConfig: TAccountMetas[0];
     authority: TAccountMetas[1];
+    /**
+     * Revision 9 (G), appended and optional: the protocol config. A plain
+     * heartbeat from the config authority or the moderation authority works
+     * without it; a heartbeat from another multisig owner needs it, and a
+     * window change needs it plus the threshold over remaining accounts.
+     */
+    protocolConfig?: TAccountMetas[2] | undefined;
   };
   data: ModerationHeartbeatInstructionData;
 };
@@ -256,12 +302,12 @@ export function parseModerationHeartbeatInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedModerationHeartbeatInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 2) {
+  if (instruction.accounts.length < 3) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 2,
+        expectedAccountMetas: 3,
       },
     );
   }
@@ -271,11 +317,18 @@ export function parseModerationHeartbeatInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
       moderationConfig: getNextAccount(),
       authority: getNextAccount(),
+      protocolConfig: getNextOptionalAccount(),
     },
     data: getModerationHeartbeatInstructionDataDecoder().decode(
       instruction.data,
