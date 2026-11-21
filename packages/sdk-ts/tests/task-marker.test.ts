@@ -230,18 +230,19 @@ describe("taskModerationRentRecipient", () => {
 describe("closeTask wire (revision 9)", () => {
   const authority = createNoopSigner(CREATOR);
 
-  it("derives the creator bond from the signer and leaves the escrow out by default", async () => {
+  it("derives the creator bond from the signer and passes the canonical escrow by default", async () => {
     const ix = await closeTask({ task: TASK, authority });
     const [bond] = await findCreatorCompletionBondPda({
       task: TASK,
       creator: CREATOR,
     });
     const [jobSpec] = await findTaskJobSpecPda({ task: TASK });
+    const [escrow] = await findEscrowPda({ task: TASK });
     const [hire] = await findHireRecordPda({ task: TASK });
     expect(ix.accounts.map((account) => account.address)).toEqual([
       TASK,
       jobSpec,
-      PROGRAM,
+      escrow,
       hire,
       PROGRAM,
       bond,
@@ -250,26 +251,27 @@ describe("closeTask wire (revision 9)", () => {
       expect.any(String),
     ]);
     expect(ix.accounts[0]!.role).toBe(AccountRole.WRITABLE);
-    expect(ix.accounts[2]!.role).toBe(AccountRole.READONLY);
+    // Review R3-1: a settled escrow that still exists closes in the same
+    // call, so the canonical address goes in writable whether or not it is
+    // there.
+    expect(ix.accounts[2]!.role).toBe(AccountRole.WRITABLE);
     expect(ix.accounts[5]!.role).toBe(AccountRole.READONLY);
   });
 
-  it("passes the canonical escrow for a token task, and an explicit escrow wins", async () => {
-    const [escrow] = await findEscrowPda({ task: TASK });
-    const token = await closeTask({ task: TASK, authority, tokenEscrow: true });
-    expect(token.accounts[2]).toEqual({
-      address: escrow,
-      role: AccountRole.WRITABLE,
-    });
+  it("takes an explicit escrow, and null leaves the slot as the placeholder", async () => {
     const explicit = await closeTask({
       task: TASK,
       authority,
-      tokenEscrow: true,
       escrow: MODERATOR,
     });
     expect(explicit.accounts[2]).toEqual({
       address: MODERATOR,
       role: AccountRole.WRITABLE,
+    });
+    const omitted = await closeTask({ task: TASK, authority, escrow: null });
+    expect(omitted.accounts[2]).toEqual({
+      address: PROGRAM,
+      role: AccountRole.READONLY,
     });
   });
 

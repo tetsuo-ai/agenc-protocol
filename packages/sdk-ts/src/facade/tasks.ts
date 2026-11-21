@@ -1139,19 +1139,15 @@ export type CloseTaskInput = Omit<
    */
   taskJobSpec?: Address | null;
   /**
-   * Defaults to `None`: SOL settlement paths close the escrow before the task
-   * becomes closable. Pass a still-alive, already-drained escrow for
-   * dispute-expiry cleanup. A token-reward task sets `tokenEscrow` instead.
+   * Defaults to the canonical escrow address (`["escrow", task]`), passed
+   * whether the escrow still exists or not. Revision 9 closes a settled
+   * escrow that still exists in the same call (a ruling leaves one behind),
+   * an empty canonical address proves it is gone, and a token-reward task is
+   * compacted only with it (else `TaskNotCompactable`, 6430). A later call on
+   * the marker passes it too, so a leftover settled escrow is recovered. Pass
+   * `null` only to leave the slot empty.
    */
   escrow?: Address | null;
-  /**
-   * Set for a token-reward task. Revision 9 compacts a token task only when
-   * its canonical escrow address is passed (else `TaskNotCompactable`, 6430),
-   * whether the escrow still exists (it then closes in the same call) or is
-   * already gone. The facade derives that address. Ignored when `escrow` is
-   * an address.
-   */
-  tokenEscrow?: boolean;
   /** Source listing for hired tasks; pass `null` for non-hired tasks. */
   listing?: Address | null;
   /** Optional live worker bond to liveness-check before close. */
@@ -1298,12 +1294,12 @@ function optionalAddress(value: Address | null | undefined): Address {
  * still blocks the task id from being reused and still anchors children that
  * were not passed: a later call on the marker sweeps children only. Read a
  * closed task with {@link readTask}. Compaction is refused (6430) while peer
- * settlement is pending and for a token task without `tokenEscrow`.
+ * settlement is pending and for a token task without its escrow address.
  *
- * Auto-derives the optional job-spec pointer on the first pass, the creator's
- * completion-bond address, and the required hire-record address when
- * omitted; omits the normally-closed escrow by default. Pass `listing` while
- * a live hired-task record still needs its capacity slot released.
+ * Auto-derives the optional job-spec pointer on the first pass, the canonical
+ * escrow address, the creator's completion-bond address, and the required
+ * hire-record address when omitted. Pass `listing` while a live hired-task
+ * record still needs its capacity slot released.
  *
  * One standalone client transaction supports at most 19 remaining metas: the
  * optional bid book plus weighted `children` (creator-funded=1,
@@ -1346,11 +1342,13 @@ export async function closeTask(input: CloseTaskInput) {
         creator: stableInput.authority.address,
       })
     )[0];
+  // Review R3-1: a settled escrow can outlive its task (a ruling leaves it),
+  // and a tidy that leaves it out strands its rent, so the canonical address
+  // goes in by default.
   const escrow =
-    stableInput.escrow ??
-    (stableInput.tokenEscrow
+    stableInput.escrow === undefined
       ? (await findEscrowPda({ task: stableInput.task }))[0]
-      : null);
+      : stableInput.escrow;
   const [protocolConfig] = await findProtocolConfigPda();
 
   const remainingAccounts: { address: Address; role: AccountRole }[] = [];

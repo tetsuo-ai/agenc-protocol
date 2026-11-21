@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
-import type { Address, KeyPairSigner } from "@solana/kit";
+import { lamports, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   facade,
   findAgentPda,
+  findEscrowPda,
+  getTaskEscrowEncoder,
+  getTaskEscrowSize,
   findTaskPda,
   findTaskJobSpecPda,
   findTaskValidationConfigPda,
@@ -26,6 +29,7 @@ import {
   send,
   accountData,
   readTaskAccount,
+  PROGRAM,
 } from "./harness.js";
 
 // REAL on-chain execution of revision 9 C (close_task compaction and
@@ -187,12 +191,34 @@ describe("revision 9 C: close_task keeps only the marker", () => {
 
     const [validationConfig] = await findTaskValidationConfigPda({ task });
     const [jobSpec] = await findTaskJobSpecPda({ task });
+    // Review R3-1: a settled escrow can outlive its task (mainnet holds two
+    // such Completed SOL tasks). Put one back at the canonical address; the
+    // default close passes that address and closes it to the creator.
+    const [escrow, escrowBump] = await findEscrowPda({ task });
+    expect(accountData(svm, escrow)).toBeNull();
+    svm.setAccount({
+      address: escrow,
+      data: new Uint8Array(
+        getTaskEscrowEncoder().encode({
+          task,
+          amount: 100_000_000n,
+          distributed: 100_000_000n,
+          isClosed: true,
+          bump: escrowBump,
+        }),
+      ),
+      executable: false,
+      lamports: lamports(rent(svm, getTaskEscrowSize())),
+      programAddress: PROGRAM,
+      space: BigInt(getTaskEscrowSize()),
+    });
     const taskLamports = lamportsOf(svm, task);
     const markerRent = rent(svm, getTaskMarkerSize());
     const children =
       lamportsOf(svm, validationConfig) +
       lamportsOf(svm, jobSpec) +
-      lamportsOf(svm, moderationRecord);
+      lamportsOf(svm, moderationRecord) +
+      lamportsOf(svm, escrow);
     expect(lamportsOf(svm, moderationRecord)).toBe(recordRent);
     const creatorBeforeClose = lamportsOf(svm, creator.address);
     await send(svm, payer, [
@@ -219,6 +245,7 @@ describe("revision 9 C: close_task keeps only the marker", () => {
     expect(accountData(svm, moderationRecord)).toBeNull();
     expect(accountData(svm, validationConfig)).toBeNull();
     expect(accountData(svm, jobSpec)).toBeNull();
+    expect(accountData(svm, escrow)).toBeNull();
     expect(readTaskAccount(svm, task)).toMatchObject({
       kind: "closed",
       status: "completed",

@@ -43,6 +43,7 @@ import {
   getReleaseClaimInstructionDataDecoder,
   findClaimPda,
   findCreatorStatsPda,
+  findEscrowPda,
   findWorkerStatsPda,
   findTaskValidationConfigPda,
   findTaskPda,
@@ -1530,10 +1531,12 @@ describe("closeTask facade instruction", () => {
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const names = ix.accounts.map((a) => a.address);
     expect(names[0]).toBe(A); // task
-    // taskJobSpec derives by default, but normal terminal close omits the
-    // already-closed escrow slot unless a still-live drained escrow is passed.
-    expect(names[2]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    expect(ix.accounts[2]?.role).toBe(AccountRole.READONLY);
+    // taskJobSpec derives by default, and so does the canonical escrow
+    // (revision 9, review R3-1): a settled escrow that still exists closes
+    // in the same call, and an empty address proves it is gone.
+    const [escrow] = await findEscrowPda({ task: A });
+    expect(names[2]).toBe(escrow);
+    expect(ix.accounts[2]?.role).toBe(AccountRole.WRITABLE);
     expect(names).toContain(B); // hireRecord
     expect(names).toContain(C); // listing
     expect(names).toContain(D); // creatorCompletionBond
@@ -1836,11 +1839,14 @@ describe("expireClaim facade instruction", () => {
     const decoded = getExpireClaimInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
     // Revision 9: the worker's record is required (11); the creator's record
-    // is optional (14) and left out without `creator`.
+    // is optional (14). Without `creator` its slot is still sent, as the
+    // program-ID placeholder (review R4-2: the account list never shrinks).
     const [workerRecord] = await findWorkerStatsPda({ worker: B });
     expect(names[11]).toBe(workerRecord);
     expect(names[13]).toBe(SYSTEM_PROGRAM);
+    expect(names).toHaveLength(15);
     expect(names[14]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.accounts[14]?.role).toBe(AccountRole.READONLY);
     expect(names[10]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // no bondCreator
   });
 

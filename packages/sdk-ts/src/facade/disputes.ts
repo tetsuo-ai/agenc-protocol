@@ -195,11 +195,14 @@ async function appendDisputeRemainingAccounts<
  * 256 bytes) — both are part of `ResolveDisputeAsyncInput` and flow straight through
  * to the generated builder. When an ASSIGNED resolver decides (rather than the protocol
  * authority), pass their roster PDA as `resolverAssignment` so their case counters
- * (`resolvedCount`, `lastResolvedAt`) are recorded. The protocol authority resolving
- * directly omits `resolverAssignment` and supplies the current ProtocolConfig owner
- * threshold through `multisigSigners`; those signer metas are appended after every
+ * (`resolvedCount`, `lastResolvedAt`) are recorded. A direct ruling omits
+ * `resolverAssignment` and supplies the current ProtocolConfig owner threshold
+ * through `multisigSigners`; those signer metas are appended after every
  * dependency/peer/bid settlement account so Rust can remove approvals before parsing
- * the economic suffix. The deciding resolver + rationale hash are persisted on the
+ * the economic suffix. Revision 9 (review R4-1): any wallet may propose a direct
+ * ruling as `authority`, exactly as for `resolveRejectFrozen`; two unconflicted
+ * owners decide, and neither the task's creator nor the worker's wallet counts
+ * toward the threshold. The deciding resolver + rationale hash are persisted on the
  * dispute and emitted in `DisputeResolved`.
  *
  * Audit F-9: to sweep the defendant's TaskSubmission on exit (decrement the review

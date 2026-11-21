@@ -762,6 +762,28 @@ describe("revision 9 moderation wires (G and buyer-paid rent)", () => {
       protocolConfig,
     ]);
 
+    // Review R4-2: the revision 9 wire never shrinks to the two revision 8
+    // accounts. A sender that does not use the config sends the placeholder.
+    const placeholder = await moderationHeartbeat({
+      authority: proposer,
+      newWindowSecs: null,
+      protocolConfig: null,
+    });
+    expect(placeholder.accounts.map((account) => account.address)).toEqual([
+      moderationConfig,
+      proposer.address,
+      AGENC_COORDINATION_PROGRAM_ADDRESS,
+    ]);
+    expect(placeholder.accounts[2]?.role).toBe(AccountRole.READONLY);
+    await expect(
+      moderationHeartbeat({
+        authority: proposer,
+        newWindowSecs: 172_800,
+        protocolConfig: null,
+        multisigSigners: [proposer, ownerB],
+      }),
+    ).rejects.toThrow(/window change needs the ProtocolConfig/);
+
     const retune = await moderationHeartbeat({
       authority: proposer,
       newWindowSecs: 172_800,
