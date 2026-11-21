@@ -3,7 +3,7 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskResultSubmitted;
 #[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::claim_deposit_helpers::settle_claim_deposit;
+use crate::instructions::claim_deposit_helpers::refund_claim_deposit;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::task_validation_helpers::is_contest_configured_task;
 use crate::instructions::task_validation_helpers::{
@@ -188,12 +188,12 @@ pub fn handler(
     // deposit until its settlement. Full surface only.
     #[cfg(not(feature = "mainnet-canary"))]
     if !is_contest_configured_task(task) {
-        settle_claim_deposit(
+        refund_claim_deposit(
             &claim.to_account_info(),
             &ctx.accounts.authority.to_account_info(),
+            task,
             task.key(),
             ctx.accounts.worker.key(),
-            false,
             clock.unix_timestamp,
         )?;
     }

@@ -28,6 +28,10 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{ClaimDepositSettled, TerminalClaimReclaimed};
+use crate::instructions::claim_deposit_helpers::{
+    forfeitable_deposit, posted_claim_deposit_lamports,
+};
+use crate::instructions::constants::CONTEST_ENTRY_DEPOSIT_LAMPORTS;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, is_contest_configured_task,
     note_submission_left_review, saturating_dec_counter,
@@ -293,10 +297,18 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         clock.unix_timestamp,
         claim.expires_at,
     );
+    // Review R1-2 / R2-3: a forfeit takes exactly the posted deposit (the entry
+    // deposit for a contest), and only when the surplus reaches it; old-rate
+    // rent above today's minimum closes to the worker with the claim.
+    let due = if recipient == ReclaimSurplus::Treasury {
+        CONTEST_ENTRY_DEPOSIT_LAMPORTS
+    } else {
+        posted_claim_deposit_lamports(task)?
+    };
     let forfeited = if recipient == ReclaimSurplus::Worker {
         0
     } else {
-        surplus
+        forfeitable_deposit(surplus, due)
     };
     if forfeited > 0 {
         let recipient_info = if recipient == ReclaimSurplus::Treasury {
@@ -312,18 +324,23 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
             .checked_add(forfeited)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
     }
-    if surplus > 0 && recipient != ReclaimSurplus::Treasury {
+    // The event reports a real deposit only: a forfeit to the creator, or a
+    // surplus that holds the posted deposit going back to the worker.
+    let deposit_event = match recipient {
+        ReclaimSurplus::Creator if forfeited > 0 => Some((task.creator, forfeited, true)),
+        ReclaimSurplus::Worker if surplus > 0 && surplus >= due => {
+            Some((ctx.accounts.rent_recipient.key(), surplus, false))
+        }
+        _ => None,
+    };
+    if let Some((recipient_key, amount, was_forfeited)) = deposit_event {
         emit!(ClaimDepositSettled {
             task: task.key(),
             claim: claim.key(),
             worker_agent: worker.key(),
-            recipient: if recipient == ReclaimSurplus::Creator {
-                task.creator
-            } else {
-                ctx.accounts.rent_recipient.key()
-            },
-            amount: surplus,
-            forfeited: recipient == ReclaimSurplus::Creator,
+            recipient: recipient_key,
+            amount,
+            forfeited: was_forfeited,
             timestamp: clock.unix_timestamp,
         });
     }

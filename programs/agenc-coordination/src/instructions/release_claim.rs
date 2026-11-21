@@ -14,7 +14,9 @@
 use crate::errors::CoordinationError;
 use crate::events::ClaimReleased;
 use crate::instructions::agent_stats_helpers::Counter;
-use crate::instructions::claim_deposit_helpers::{release_refunds_deposit, settle_claim_deposit};
+use crate::instructions::claim_deposit_helpers::{
+    forfeit_claim_deposit, refund_claim_deposit, release_refunds_deposit,
+};
 use crate::instructions::record_account_helpers::{count_agent_stats, ensure_agent_stats};
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_contest_configured_task, is_manual_validation_task,
@@ -193,21 +195,23 @@ pub fn handler(ctx: Context<ReleaseClaim>) -> Result<()> {
         )?;
     }
     if deposit_refunded {
-        settle_claim_deposit(
+        refund_claim_deposit(
             &claim_info,
             &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.task,
             task_key,
             worker_key,
-            false,
             now,
         )?;
     } else {
-        settle_claim_deposit(
+        // Review R1-2 / R2-3: exactly the posted deposit; anything else closes
+        // to the worker with the claim.
+        forfeit_claim_deposit(
             &claim_info,
             &ctx.accounts.creator.to_account_info(),
+            &ctx.accounts.task,
             task_key,
             worker_key,
-            true,
             now,
         )?;
     }

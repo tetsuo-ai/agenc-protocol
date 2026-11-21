@@ -12,6 +12,8 @@ use crate::instructions::bid_settlement_helpers::{
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::constants::CONTEST_ENTRY_DEPOSIT_LAMPORTS;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -699,29 +701,30 @@ fn process_cancel_task_impl<'info>(
         // to the squatter. The claim's rent still returns to the worker below.
         // Full-surface only: canary builds are contest-incapable, so no canary
         // claim can ever carry a deposit.
+        // Review R1-2 / R2-3: exactly the entry deposit, never older rent.
         #[cfg(not(feature = "mainnet-canary"))]
         if is_contest_configured_task(task) {
-            let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
-            let surplus = claim_info.lamports().saturating_sub(rent_min);
-            if surplus > 0 {
+            let surplus =
+                crate::instructions::claim_deposit_helpers::claim_surplus_lamports(claim_info)?;
+            if crate::instructions::claim_deposit_helpers::forfeitable_deposit(
+                surplus,
+                CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+            ) > 0
+            {
                 let treasury = accounts
                     .treasury
                     .as_ref()
                     .ok_or(CoordinationError::ContestForfeitTreasuryRequired)?;
-                let treasury_info = treasury.to_account_info();
-                **claim_info.try_borrow_mut_lamports()? = claim_info
-                    .lamports()
-                    .checked_sub(surplus)
-                    .ok_or(CoordinationError::ArithmeticOverflow)?;
-                **treasury_info.try_borrow_mut_lamports()? = treasury_info
-                    .lamports()
-                    .checked_add(surplus)
-                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                let amount = crate::instructions::claim_deposit_helpers::take_forfeitable_deposit(
+                    claim_info,
+                    &treasury.to_account_info(),
+                    CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+                )?;
                 emit!(crate::events::ContestDepositForfeited {
                     task: task.key(),
                     claim: claim_info.key(),
                     worker_agent: worker_info.key(),
-                    amount: surplus,
+                    amount,
                     timestamp: clock.unix_timestamp,
                 });
             }
@@ -736,20 +739,27 @@ fn process_cancel_task_impl<'info>(
         // to the worker instead. Full surface only.
         #[cfg(not(feature = "mainnet-canary"))]
         if !is_contest_configured_task(task) && task.task_type != TaskType::BidExclusive {
-            let forfeit = !dispute_filed;
-            let authority_info = accounts.authority.to_account_info();
-            crate::instructions::claim_deposit_helpers::settle_claim_deposit(
-                claim_info,
-                if forfeit {
-                    &authority_info
-                } else {
-                    rent_recipient_info
-                },
-                task.key(),
-                worker_info.key(),
-                forfeit,
-                clock.unix_timestamp,
-            )?;
+            if dispute_filed {
+                crate::instructions::claim_deposit_helpers::refund_claim_deposit(
+                    claim_info,
+                    rent_recipient_info,
+                    task,
+                    task.key(),
+                    worker_info.key(),
+                    clock.unix_timestamp,
+                )?;
+            } else {
+                // Review R1-2 / R2-3: exactly the posted deposit; old-rate rent
+                // stays on the claim and closes to the worker below.
+                crate::instructions::claim_deposit_helpers::forfeit_claim_deposit(
+                    claim_info,
+                    &accounts.authority.to_account_info(),
+                    task,
+                    task.key(),
+                    worker_info.key(),
+                    clock.unix_timestamp,
+                )?;
+            }
         }
 
         // Close claim account and return rent to worker authority.
