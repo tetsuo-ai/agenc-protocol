@@ -42,21 +42,13 @@ impl MarketplaceTerms {
 }
 
 /// Revision 9: the owners with a stake in a ruling, who never count toward the
-/// multisig threshold: the task creator, the worker wallet, and each live
-/// (non-zero fee, non-default payee) operator or referrer.
-pub(crate) fn ruling_conflicts(
-    creator: Pubkey,
-    worker_wallet: Pubkey,
-    terms: &MarketplaceTerms,
-) -> Vec<Pubkey> {
-    let mut conflicted = vec![creator, worker_wallet];
-    if terms.operator_fee_bps > 0 && terms.operator != Pubkey::default() {
-        conflicted.push(terms.operator);
-    }
-    if terms.referrer_fee_bps > 0 && terms.referrer != Pubkey::default() {
-        conflicted.push(terms.referrer);
-    }
-    conflicted
+/// multisig threshold: the task creator and the worker wallet. Review R2-1: fee
+/// payees (operator, referrer) are not listed. The buyer picks the referrer and
+/// the provider picks the operator, so counting them as conflicted would let
+/// either party name an owner and make the ruling impossible, which leaves the
+/// unruled default to the party that chose it.
+pub(crate) fn ruling_conflicts(creator: Pubkey, worker_wallet: Pubkey) -> Vec<Pubkey> {
+    vec![creator, worker_wallet]
 }
 
 /// Resolve the marketplace terms (operator + referrer payees and fee bps) for a task
@@ -628,40 +620,12 @@ pub(crate) fn settle_dispute_submission_evidence<'info>(
 mod tests {
     use super::*;
 
-    // Revision 9 (lead check 3): the conflicted set is the parties plus the live
-    // fee payees only; a zero-fee or default leg is not an interest.
+    // Revision 9: the conflicted set is the two parties only (review R2-1: the
+    // fee payees are not conflicted, so a payee choice cannot block a ruling).
     #[test]
-    fn ruling_conflicts_lists_parties_and_live_payees() {
-        let (creator, worker, operator, referrer) = (
-            Pubkey::new_unique(),
-            Pubkey::new_unique(),
-            Pubkey::new_unique(),
-            Pubkey::new_unique(),
-        );
-        assert_eq!(
-            ruling_conflicts(creator, worker, &MarketplaceTerms::NONE),
-            vec![creator, worker]
-        );
-        let live = MarketplaceTerms {
-            operator,
-            operator_fee_bps: 100,
-            referrer,
-            referrer_fee_bps: 50,
-        };
-        assert_eq!(
-            ruling_conflicts(creator, worker, &live),
-            vec![creator, worker, operator, referrer]
-        );
-        let dead = MarketplaceTerms {
-            operator,
-            operator_fee_bps: 0,
-            referrer: Pubkey::default(),
-            referrer_fee_bps: 50,
-        };
-        assert_eq!(
-            ruling_conflicts(creator, worker, &dead),
-            vec![creator, worker]
-        );
+    fn ruling_conflicts_lists_only_the_parties() {
+        let (creator, worker) = (Pubkey::new_unique(), Pubkey::new_unique());
+        assert_eq!(ruling_conflicts(creator, worker), vec![creator, worker]);
     }
 
     #[test]

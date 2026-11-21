@@ -515,14 +515,14 @@ pub fn handler<'info>(
         CoordinationError::ResolverConflictOfInterest
     );
     // Revision 9 (B): on the direct protocol-authority branch, owners with a stake
-    // in the ruling (the creator, the worker wallet, live operator or referrer
-    // payees) do not count toward the multisig threshold. Duplicates count once.
+    // in the ruling (the creator and the worker wallet) do not count toward the
+    // multisig threshold; review R2-1: fee payees do. Duplicates count once.
     if uses_direct_protocol_authority {
         let unique_signers = unique_account_infos(ctx.remaining_accounts);
         require_unconflicted_multisig_threshold(
             config,
             &unique_signers,
-            &ruling_conflicts(task.creator, worker_wallet_key, &dispute_terms),
+            &ruling_conflicts(task.creator, worker_wallet_key),
         )?;
     }
 

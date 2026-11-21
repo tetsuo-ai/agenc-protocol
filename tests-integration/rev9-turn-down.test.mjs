@@ -473,7 +473,10 @@ test("rev9 turn-down: owners who are the creator or the worker wallet do not cou
   }
 });
 
-test("rev9 turn-down: live operator and referrer payees do not count toward the threshold; the ruling for the worker pays their legs (fed99ab: unknown v2)", async () => {
+// Review R2-1: only the task creator and the worker wallet are conflicted. A
+// buyer or a provider could otherwise name an owner as a fee payee and make every
+// ruling impossible (the unruled default then favours the party that chose it).
+test("rev9 turn-down: owners who are operator or referrer payees count toward the threshold; the ruling for the worker pays their legs (review R2-1; 89ca18a: not counted)", async () => {
   const operatorKp = Keypair.generate();
   const referrerKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
@@ -486,16 +489,25 @@ test("rev9 turn-down: live operator and referrer payees do not count toward the 
   assert.equal(task.referrer.toBase58(), referrerKp.publicKey.toBase58(), "referrer terms stamped");
   expectOk(send(w.svm, await disputeIx(w, t), [w.provider]), "dispute");
 
-  expectFail(send(w.svm, await resolveIx(w, t, true, [operatorKp, referrerKp]), txSigners(w.admin, operatorKp, referrerKp)),
-    "MultisigNotEnoughSigners", "two payees are not two approvals");
-  expectFail(send(w.svm, await resolveIx(w, t, true, [operatorKp, w.admin]), txSigners(w.admin, operatorKp)),
-    "MultisigNotEnoughSigners", "a payee and one owner are one approval");
-
   const before = { operator: bal(w, operatorKp.publicKey), referrer: bal(w, referrerKp.publicKey) };
-  expectOk(send(w.svm, await resolveIx(w, t, true, [w.admin, owner2]), [w.admin, owner2]), "two unconflicted owners rule for the worker");
+  expectOk(send(w.svm, await resolveIx(w, t, true, [operatorKp, referrerKp]), txSigners(w.admin, operatorKp, referrerKp)),
+    "two payee owners are two approvals");
   assert.equal(status(w, t.task), "Completed", "paid as on accept");
   assert.equal(bal(w, operatorKp.publicKey) - before.operator, BigInt(w.price) * 1000n / 10_000n, "operator leg paid");
   assert.equal(bal(w, referrerKp.publicKey) - before.referrer, BigInt(w.price) * 500n / 10_000n, "referrer leg paid");
+});
+
+test("rev9 turn-down: a buyer that names an owner as a 1 bps referrer cannot make its turn-down unrulable (review R2-1; 89ca18a: MultisigNotEnoughSigners)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const ownerB = Keypair.generate();
+  const ownerC = Keypair.generate();
+  w.svm.airdrop(ownerB.publicKey, 1_000_000_000n);
+  await setMultisig(w.svm, [w.admin.publicKey, ownerB.publicKey, ownerC.publicKey], 2);
+  const t = await freeze(w, await hiredReviewTask(w, { referrer: ownerB.publicKey, referrerFeeBps: 1 }));
+  expectOk(send(w.svm, await disputeIx(w, t), [w.provider]), "the provider disputes the turn-down");
+  expectOk(send(w.svm, await resolveIx(w, t, true, [w.admin, ownerB]), [w.admin, ownerB]),
+    "the admin and owner B rule for the worker");
+  assert.equal(status(w, t.task), "Completed", "ruled and paid");
 });
 
 // ---------------------------------------------------------------------------

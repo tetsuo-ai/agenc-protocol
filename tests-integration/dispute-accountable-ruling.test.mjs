@@ -388,10 +388,11 @@ test("accountable ruling: threshold-approved protocol authority resolves directl
 
 // ---------------------------------------------------------------------------
 // Revision 9 (B): on the direct protocol-authority branch, an owner with a stake
-// in the ruling (the creator, the worker wallet, a live operator payee) does not
-// count toward the threshold. fed99ab counted every listed owner.
+// in the ruling (the creator or the worker wallet) does not count toward the
+// threshold. fed99ab counted every listed owner. Review R2-1: an owner who is a
+// fee payee still counts, so a payee choice cannot make a ruling impossible.
 // ---------------------------------------------------------------------------
-test("accountable ruling: owners who are the creator, the worker wallet or a live payee do not count toward the direct threshold", async () => {
+test("accountable ruling: owners who are the creator or the worker wallet do not count toward the direct threshold; a payee owner does (review R2-1)", async () => {
   const operator = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operator.publicKey, operatorFeeBps: 1000 });
   const owner5 = Keypair.generate();
@@ -422,7 +423,7 @@ test("accountable ruling: owners who are the creator, the worker wallet or a liv
     .remainingAccounts(approvers.map(signerMeta))
     .instruction();
 
-  for (const [party, label] of [[w.buyer, "creator"], [w.provider, "worker wallet"], [operator, "operator payee"]]) {
+  for (const [party, label] of [[w.buyer, "creator"], [w.provider, "worker wallet"]]) {
     w.svm.expireBlockhash();
     expectFail(
       send(w.svm, await buildDirectResolution([party, w.admin]), [w.admin, party]),
@@ -432,9 +433,10 @@ test("accountable ruling: owners who are the creator, the worker wallet or a liv
   }
   assert.ok(decode(w.svm, "Dispute", r.dispute).status.Active !== undefined, "still Active");
   const operatorBefore = BigInt(w.svm.getBalance(operator.publicKey));
+  w.svm.expireBlockhash();
   expectOk(
-    send(w.svm, await buildDirectResolution([w.admin, owner5]), [w.admin, owner5]),
-    "rev9: two unconflicted owners resolve directly",
+    send(w.svm, await buildDirectResolution([operator, w.admin]), [w.admin, operator]),
+    "review R2-1: the operator payee owner and the admin resolve directly",
   );
   assert.ok(decode(w.svm, "Dispute", r.dispute).status.Resolved !== undefined, "dispute Resolved");
   assert.ok(BigInt(w.svm.getBalance(operator.publicKey)) > operatorBefore, "the operator leg is paid on the approved Complete");
