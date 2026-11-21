@@ -8,6 +8,7 @@ import {
   ListingState,
   TaskStatus,
   findTaskJobSpecPda,
+  getTaskMarkerEncoder,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   encodeListing,
@@ -164,6 +165,37 @@ describe("get_listing / get_task handlers", () => {
     )) as { task: Record<string, unknown> | null };
     expect(out.task).not.toBeNull();
     expect(out.task!.rewardAmount).toBe("99000000");
+  });
+
+  it("get_task reads a task its creator closed (revision 9 TaskMarker) as closed", async () => {
+    const marker = {
+      address: A_TASK_PDA,
+      data: new Uint8Array(
+        getTaskMarkerEncoder().encode({
+          creator: A_TASK_PDA,
+          status: TaskStatus.Completed,
+          flags: 0b11,
+          closedAt: 1_800_000_000n,
+          reserved: new Uint8Array(6),
+        }),
+      ),
+    };
+    const ctx: MarketplaceToolContext = {
+      read: fakeTransport([]),
+      rpc: fakeRpc([marker]) as never,
+    };
+    const out = (await getTool("get_task")!.handler(
+      { pda: A_TASK_PDA },
+      ctx,
+    )) as { task: unknown; closed?: Record<string, unknown> };
+    expect(out.task).toBeNull();
+    expect(out.closed).toEqual({
+      creator: A_TASK_PDA,
+      status: "completed",
+      endedLiveHire: true,
+      feeQualified: true,
+      closedAt: "1800000000",
+    });
   });
 
   // Finding #5: an Open task WITH a pinned job-spec account at

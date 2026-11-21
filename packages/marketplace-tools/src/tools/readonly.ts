@@ -14,7 +14,6 @@
 import {
   listActiveListings,
   listOpenTasks,
-  fetchMaybeTask,
   fetchMaybeServiceListing,
   fetchMaybeTaskJobSpec,
   findTaskJobSpecPda,
@@ -22,7 +21,7 @@ import {
   ListingState,
   TaskStatus,
 } from "@tetsuo-ai/marketplace-sdk";
-import type { Address } from "@solana/kit";
+import { fetchEncodedAccount, type Address } from "@solana/kit";
 import {
   MarketplaceToolError,
   defineTool,
@@ -222,12 +221,27 @@ interface GetTaskArgs {
   pda: string;
 }
 
-const getTask = defineTool<GetTaskArgs, { task: TaskView | null }>({
+/** Revision 9: what close_task left at a task's address. */
+interface ClosedTaskView {
+  creator: string;
+  status: "completed" | "cancelled";
+  endedLiveHire: boolean;
+  feeQualified: boolean;
+  closedAt: string;
+}
+
+const getTask = defineTool<
+  GetTaskArgs,
+  { task: TaskView | null; closed?: ClosedTaskView }
+>({
   name: "get_task",
   kind: "readonly",
   description:
     "Fetch and decode a single task by its Task PDA. Returns null when no task " +
-    "exists at that address. Use this to inspect status, reward, capabilities, and deadline. " +
+    "exists at that address. Revision 9: a task its creator closed is compacted into a " +
+    "56-byte TaskMarker; then `task` is null and `closed` says how it ended (completed or " +
+    "cancelled), its creator and when it was closed. " +
+    "Use this to inspect status, reward, capabilities, and deadline. " +
     "For an Open task it ALSO confirms jobSpecPinned (whether a job-spec account exists at " +
     '["task_job_spec", task]) with one extra read. That pin is necessary for a claim, but ' +
     "does not prove that the pointer fields or task/worker execution-time gates will pass. " +
@@ -243,8 +257,26 @@ const getTask = defineTool<GetTaskArgs, { task: TaskView | null }>({
   },
   async handler(args, ctx) {
     const rpc = requireRpc(ctx, "get_task");
-    const maybe = await fetchMaybeTask(rpc, args.pda as Address);
-    if (!maybe.exists) return { task: null };
+    const encoded = await fetchEncodedAccount(rpc, args.pda as Address);
+    const read = facade.decodeTaskAccount(
+      encoded.exists
+        ? { owner: encoded.programAddress, data: encoded.data }
+        : null,
+    );
+    if (read.kind === "missing") return { task: null };
+    if (read.kind === "closed") {
+      return {
+        task: null,
+        closed: {
+          creator: read.marker.creator,
+          status: read.status,
+          endedLiveHire: read.endedLiveHire,
+          feeQualified: read.feeQualified,
+          closedAt: read.marker.closedAt.toString(),
+        },
+      };
+    }
+    const maybe = { address: args.pda as Address, data: read.task };
     // Only Open tasks are claim candidates; confirm the necessary pin-account
     // precondition with one extra read. This does not simulate the pointer-field
     // or task/worker gates enforced by the claim transaction. For non-Open tasks

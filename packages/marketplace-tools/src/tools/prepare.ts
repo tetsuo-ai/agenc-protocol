@@ -371,6 +371,7 @@ interface PrepareHireArgs {
   taskJobSpecHash: string;
   moderatorIsAttestor?: boolean;
   listingModeration?: string;
+  reviewWindowSecs?: string;
   referrer?: string;
   referrerFeeBps?: number;
 }
@@ -381,9 +382,12 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
   description:
     "Build an UNSIGNED registered-agent hire_from_listing instruction (the buyer hires an agent from a " +
     "standing listing, funding an escrowed task). Returns the unsigned instruction " +
-    "(program id, account metas, base64 data) — it is NOT signed and NOT sent. The " +
+    "(program id, account metas, base64 data); it is NOT signed and NOT sent. The " +
     "caller must sign with the buyer wallet behind their own policy gate and broadcast " +
-    "it. Pass expectedPrice/expectedVersion from the listing as compare-and-swap guards.",
+    "it. Pass expectedPrice/expectedVersion from the listing as compare-and-swap guards. " +
+    "Revision 9: the hire is a CreatorReview task. The provider submits, and the buyer " +
+    "accepts, asks for changes or turns the delivery down within reviewWindowSecs " +
+    "(default 86400); complete_task refuses it.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -452,6 +456,9 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
           "(derive via facade.findLegacyListingModerationPda); defaults to the v2 " +
           "moderator-keyed PDA derived from listingSpecHash.",
       ),
+      reviewWindowSecs: int64(
+        "Revision 9: the buyer's CreatorReview window in seconds, from 1 through 604800 (default 86400).",
+      ),
       referrer: solanaAddress("Optional referrer wallet."),
       referrerFeeBps: {
         type: "integer",
@@ -477,6 +484,14 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       "expectedPrice",
       "prepare_hire",
     );
+    const reviewWindowSecs = BigInt(args.reviewWindowSecs ?? "86400");
+    assertBigIntRange(
+      reviewWindowSecs,
+      1n,
+      MAX_REVIEW_WINDOW_SECONDS,
+      "reviewWindowSecs",
+      "prepare_hire",
+    );
     const buyer = createNoopSigner(args.buyer as Address);
     const input: Parameters<typeof facade.hireFromListing>[0] = {
       listing: args.listing as Address,
@@ -487,6 +502,7 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       taskId: hex32(args.taskId, "taskId", "prepare_hire"),
       expectedPrice,
       expectedVersion: BigInt(args.expectedVersion),
+      reviewWindowSecs,
       moderator: args.moderator as Address,
       listingSpecHash: hex32(
         args.listingSpecHash,
@@ -1245,6 +1261,7 @@ interface PrepareCancelArgs {
   task: string;
   authority: string;
   workerBondAuthority?: string;
+  dependencyParent?: string;
 }
 
 const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
@@ -1265,6 +1282,9 @@ const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
       workerBondAuthority: solanaAddress(
         "Wallet whose worker completion bond PDA is settled (refunded, or forfeited on a no-show cancel — must then be a live claim worker, audit F-1). Defaults to the task PDA, which can never be a bond poster (empty no-op PDA).",
       ),
+      dependencyParent: solanaAddress(
+        "Revision 9: the parent task (task.dependsOn, a Task or a closed TaskMarker) of a dependent task. Pass it so a real no-show forfeits its claim deposit; without it, or with a parent that is not Completed, the deposit goes back to the worker.",
+      ),
     },
   },
   async handler(args) {
@@ -1274,6 +1294,9 @@ const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
       // audit F5/F12: required bond PDAs are facade-derived; default to the
       // guaranteed bond-free task PDA for the worker side.
       workerBondAuthority: (args.workerBondAuthority ?? args.task) as Address,
+      ...(args.dependencyParent
+        ? { dependencyParent: args.dependencyParent as Address }
+        : {}),
     });
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },
@@ -1290,7 +1313,9 @@ const prepareClose = defineTool<PrepareCloseArgs, UnsignedInstructionView>({
   name: "prepare_close_task",
   kind: "prepare",
   description:
-    "Build an UNSIGNED close_task instruction for terminal tasks. Pass hireRecord/listing for hired tasks to free listing capacity.",
+    "Build an UNSIGNED close_task instruction for terminal tasks. Pass hireRecord/listing for hired tasks to free listing capacity. " +
+    "Revision 9: close_task compacts the Task into a 56-byte TaskMarker and returns the rest of its rent to the creator; " +
+    "the canonical escrow address is always passed, so a settled escrow left behind closes too. A later close on the marker sweeps what is left.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
