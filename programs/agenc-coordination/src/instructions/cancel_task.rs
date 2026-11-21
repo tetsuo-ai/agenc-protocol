@@ -736,10 +736,16 @@ fn process_cancel_task_impl<'info>(
         // delivered claim already had its deposit back at submit. Bid claims
         // carry a bid bond instead (settled above). Review R1-1: once a dispute
         // was filed on the task (it blocked every worker), the deposit goes back
-        // to the worker instead. Full surface only.
+        // to the worker instead. Review R1-5: so does a claim still inside its
+        // release grace, as `release_claim` would refund it. Full surface only.
         #[cfg(not(feature = "mainnet-canary"))]
         if !is_contest_configured_task(task) && task.task_type != TaskType::BidExclusive {
-            if dispute_filed {
+            if dispute_filed
+                || crate::instructions::claim_deposit_helpers::release_refunds_deposit(
+                    claim.claimed_at,
+                    clock.unix_timestamp,
+                )
+            {
                 crate::instructions::claim_deposit_helpers::refund_claim_deposit(
                     claim_info,
                     rent_recipient_info,

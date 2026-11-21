@@ -558,7 +558,8 @@ test("rev9 deposit: a no-show expire_claim pays the deposit to the creator, exac
 // ---------------------------------------------------------------------------
 test("rev9 deposit: the cancel_task no-show drain pays the deposit to the creator (fed99ab: worker keeps it)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 600 });
+  // Cancelled 7,201 s after the claim, past its release grace (review R1-5).
+  const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 7_200 });
   const { ix, claim } = await claimIx(w, t);
   expectOk(send(w.svm, ix, [w.provider]), "claim");
   warpTo(w, Number(decode(w.svm, "Task", t.task).deadline.toString()) + 1);
@@ -578,6 +579,54 @@ test("rev9 deposit: the cancel_task no-show drain pays the deposit to the creato
   assert.equal(bal(w, w.buyer.publicKey) - before.creator, escrowBefore + deposit - TX_FEE - recordCost, "creator: escrow and the deposit, less fee and its first record");
   assert.equal(bal(w, w.provider.publicKey) - before.worker, rentBack, "worker: claim rent only");
   assert.equal(findEvents(res, "ClaimDepositSettled")[0].forfeited, true, "forfeited to the creator");
+});
+
+// Review R1-5. A worker that claims two minutes before the deadline still has
+// its release grace when the creator cancels right after the deadline: the drain
+// returns the deposit inside the grace, as release_claim would, and forfeits it
+// from the first second after.
+test("rev9 deposit: a cancel_task drain inside the claim's release grace returns the deposit to the worker, after it the creator gets it (review R1-5; 14dccf0: to the creator)", async () => {
+  for (const { sinceClaim, refunded } of [
+    { sinceClaim: 121, refunded: true }, // claimed at D - 120, cancelled at D + 1
+    { sinceClaim: GRACE, refunded: true }, // the last second of the grace
+    { sinceClaim: GRACE + 1, refunded: false },
+  ]) {
+    const w = await freshWorld({ moderationEnabled: true });
+    const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 7_200 });
+    const deadline = Number(decode(w.svm, "Task", t.task).deadline.toString());
+    warpTo(w, deadline - 120);
+    const { ix, claim } = await claimIx(w, t);
+    expectOk(send(w.svm, ix, [w.provider]), "claim two minutes before the deadline");
+    const claimedAt = Number(decode(w.svm, "TaskClaim", claim).claimed_at.toString());
+    assert.equal(claimedAt, deadline - 120, "claimed at D - 120");
+    warpTo(w, claimedAt + sinceClaim);
+    const claimLamports = bal(w, claim);
+    const deposit = surplusOf(w, claim);
+    assert.equal(deposit, 20_000_000n, "10% of 0.2 SOL");
+    const escrowBefore = bal(w, t.escrow);
+    const recordCost = creatorStatsCost(w);
+    const before = { creator: bal(w, w.buyer.publicKey), worker: bal(w, w.provider.publicKey) };
+    const cancel = await cancelIx(w, t);
+    cancel.keys.push(
+      { pubkey: claim, isSigner: false, isWritable: true },
+      { pubkey: w.providerAgent, isSigner: false, isWritable: true },
+      { pubkey: w.provider.publicKey, isSigner: false, isWritable: true },
+    );
+    const res = expectOk(send(w.svm, cancel, [w.buyer]), `cancel ${sinceClaim} s after the claim`);
+    const d = { creator: bal(w, w.buyer.publicKey) - before.creator, worker: bal(w, w.provider.publicKey) - before.worker };
+    assert.ok(isClosed(w.svm, claim), "claim closed");
+    const settled = findEvents(res, "ClaimDepositSettled");
+    assert.equal(settled.length, 1, "one deposit settled");
+    if (refunded) {
+      assert.equal(d.worker, claimLamports, `+${sinceClaim} s: the worker gets its rent and deposit back`);
+      assert.equal(d.creator, escrowBefore - TX_FEE - recordCost, `+${sinceClaim} s: the creator gets the escrow refund only`);
+      assert.equal(settled[0].forfeited, false, "refunded");
+    } else {
+      assert.equal(d.worker, claimLamports - deposit, `+${sinceClaim} s: the worker gets its rent back only`);
+      assert.equal(d.creator, escrowBefore + deposit - TX_FEE - recordCost, `+${sinceClaim} s: the creator gets the deposit`);
+      assert.equal(settled[0].forfeited, true, "forfeited");
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -831,7 +880,8 @@ function makeOldRateClaim(w, claim) {
 
 test("rev9 deposit: a cancel_task drain of an old-rate claim returns all 2,303,760 lamports to the worker (review R2-3; e04878b: 622,280 to the creator)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 600 });
+  // Past the claim's release grace, so the drain takes its forfeit path (review R1-5).
+  const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 7_200 });
   const { ix, claim } = await claimIx(w, t);
   expectOk(send(w.svm, ix, [w.provider]), "claim");
   makeOldRateClaim(w, claim);
