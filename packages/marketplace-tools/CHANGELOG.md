@@ -5,6 +5,33 @@ All notable changes to `@tetsuo-ai/marketplace-tools` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0
+
+This release depends on `@tetsuo-ai/marketplace-sdk@^0.14.0` and targets the
+revision 9 program (`surface_revision = 9`). Older 0.6.0 is the revision-8
+pin.
+
+### Added
+
+- Keyless prepare tools: `prepare_reject_and_freeze` (the turn-down on a
+  single-worker review task), `prepare_dispute_rejection` (the worker's bonded
+  dispute), `prepare_expire_reject_frozen` (settle a turn-down once its time
+  is over) and `prepare_release_claim`.
+
+### Changed
+
+- `prepare_hire` takes the buyer's `reviewWindowSecs` (1 second to 7 days,
+  default one day) for the v3 agent hire, which is a review task.
+- `get_task` reads a closed (compacted) task as `closed`, with its status,
+  creator, flags and close time.
+- `prepare_cancel_task` passes a dependent task's parent, so a real no-show
+  forfeits its deposit. `prepare_close_task` documents compaction and the
+  canonical escrow it always passes.
+- Existing prepare tools take the new revision 9 accounts through the SDK
+  facades, and their descriptions state the revision 9 rules: a plain reject
+  is refused on single-worker review tasks, a claim posts a deposit, and a
+  first cancel or freeze starts the creator's record.
+
 ## 0.6.0
 
 This release depends on `@tetsuo-ai/marketplace-sdk@^0.13.0` and belongs to

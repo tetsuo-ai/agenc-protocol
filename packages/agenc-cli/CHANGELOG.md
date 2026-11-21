@@ -1,5 +1,22 @@
 # @tetsuo-ai/agenc-cli
 
+## 0.5.0
+
+For the revision 9 program (`surface_revision = 9`).
+
+### Release coordination
+
+- Generated projects and runtime dependencies use
+  `@tetsuo-ai/marketplace-sdk@^0.14.0` and `@tetsuo-ai/agenc-worker@^0.4.0`.
+  `promote` checks generated code against SDK 0.14.x and generated workers
+  against worker 0.4.x.
+- `promote` selects the revision 9 set on a finalized surface revision 9:
+  protocol 0.6.x, SDK 0.14.x, worker 0.4.x, React, tools and MCP 0.7.x and
+  moderation 0.3.x. It is never unioned with revision 8.
+- The revision 9 deployment identity (ProgramData slot, executable hash and
+  source commit) is added only after the verified cutover. Until it is in the
+  reviewed release table, `promote` fails closed on a revision 9 deployment.
+
 ## 0.4.0
 
 Released for the revision-8 mainnet program (deployed 2026-10-28).

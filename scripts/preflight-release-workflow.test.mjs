@@ -518,7 +518,7 @@ test("package resolver accepts only canonical semver and covers every release ro
   assert.equal(validateReleaseWorkflowGateIdentities(train, gates), true);
   const gateEnvironment = {
     ...process.env,
-    GITHUB_REF_NAME: "sdk-v0.13.0",
+    GITHUB_REF_NAME: "sdk-v0.14.0",
     RESOLVED_PACKAGE_ID: "sdk",
     RELEASE_PACKAGE_GATES_JSON: JSON.stringify(gates),
   };

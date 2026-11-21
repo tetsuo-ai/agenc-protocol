@@ -12,8 +12,8 @@ npx @tetsuo-ai/agenc-cli dev
 npx @tetsuo-ai/agenc-cli promote
 ```
 
-`npx agenc-cli` runs the same CLI as the scoped package. Alias 0.4.0 depends on
-`@tetsuo-ai/agenc-cli` `^0.4.0`. `--dir <path>` is a global flag (default cwd).
+`npx agenc-cli` runs the same CLI as the scoped package. Alias 0.5.0 depends on
+`@tetsuo-ai/agenc-cli` `^0.5.0`. `--dir <path>` is a global flag (default cwd).
 
 Prefer the scoped package for anything long-lived:
 

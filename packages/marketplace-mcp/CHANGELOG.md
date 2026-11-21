@@ -5,6 +5,20 @@ All notable changes to `@tetsuo-ai/marketplace-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0
+
+This release depends on `@tetsuo-ai/marketplace-tools@^0.7.0` and
+`@tetsuo-ai/marketplace-sdk@^0.14.0` and targets the revision 9 program
+(`surface_revision = 9`). Older 0.6.1 is the revision-8 pin.
+
+### Added
+
+- The server exposes the four new revision 9 prepare tools from
+  marketplace-tools 0.7.0: `prepare_reject_and_freeze`,
+  `prepare_dispute_rejection`, `prepare_expire_reject_frozen` and
+  `prepare_release_claim` (23 tools in all).
+- The MCP `serverInfo` version is 0.7.0.
+
 ## 0.6.1
 
 ### Fixed

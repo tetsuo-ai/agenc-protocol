@@ -164,8 +164,8 @@ RPC configured (and not localhost; inject secret-bearing provider URLs with
 support matrix (a package may have multiple compatible minor lines — sdk
 0.8.x through 0.11.x all speak the revision-4 wire (see `docs/VERSIONING.md`
 §1.1); revision 5 instead requires the coordinated SDK 0.12.x / React 0.5.x
-client train, revision 8 the SDK 0.13.x / React 0.6.x train, the planned
-revision 9 the SDK 0.14.x / React 0.7.x train, and a directly installed
+client train, revision 8 the SDK 0.13.x / React 0.6.x train, revision 9 the
+SDK 0.14.x / React 0.7.x train, and a directly installed
 `@tetsuo-ai/protocol` artifact must be 0.3.x for revision 4, 0.4.x for
 revision 5, 0.5.x for revision 8 or 0.6.x for revision 9). Those version buckets are not a
 permissive Cartesian product: `promote` also reads each installed first-party
@@ -190,13 +190,15 @@ A new surface revision stays blocked until operators capture the actual
 finalized post-upgrade deployment identity, patch it into the CLI's reviewed
 release table, rebuild/repack the CLI, and independently re-audit that artifact
 before publishing it. Candidate or predicted deployment values are never
-accepted as release evidence. CLI 0.4.0 carries the reviewed revision-8 identity
+accepted as release evidence. CLI 0.5.0 carries the reviewed revision-8 identity
 (ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, slot 462468899,
 normalized executable hash `ffb8f3cb…`, commit `f39b383`). No reviewed
 store-core release targets revision 8 yet, so an installed store-core fails
 closed there. The revision-9 package matrix is in place, but its deployment
 identity is added only after the verified cutover, so `promote` fails closed
-on a revision-9 deployment until then.
+on a revision-9 deployment until then. Projects that `agenc init` generates pin
+`@tetsuo-ai/marketplace-sdk@^0.14.0` and `@tetsuo-ai/agenc-worker@^0.4.0`, and
+`promote` checks generated code against those lines.
 
 `promote` deliberately cannot return production-ready for a generated checkout
 or worker based on local files alone. It reports an explicit blocker until an

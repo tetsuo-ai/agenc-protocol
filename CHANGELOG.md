@@ -83,9 +83,10 @@ authoritative deployed-state record is
 - **Client release train:** protocol 0.5.2 (0.5.0 and 0.5.1 were tagged but
   never published), marketplace-sdk 0.13.0, marketplace-react and
   marketplace-tools 0.6.0, marketplace-mcp 0.6.1 (0.6.0 was tagged but never
-  published), marketplace-moderation and agenc-worker 0.3.0, and agenc-cli plus the
-  unscoped alias 0.4.0, released through the tag-driven release workflow
-  (`.github/workflows/release.yml`) with npm trusted publishing. The published
+  published), marketplace-moderation and agenc-worker 0.3.0, and agenc-cli 0.4.0,
+  released through the tag-driven release workflow
+  (`.github/workflows/release.yml`) with npm trusted publishing. The unscoped
+  `agenc-cli` alias was not published (npm still has 0.2.0). The published
   revision-5 packages are the superseded wire for flows that changed; for
   example, legacy `upvote_post` writes fail closed.
 - **Explorer security metadata (issue #199):** Squads proposal 14 created the

@@ -1,5 +1,72 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.14.0
+
+For the revision 9 program (`surface_revision = 9`, 106 instructions). SDK
+0.13.0 stays the revision-8 client. Revision 9 changed the wire of 18
+instructions: 0.13 writes fail against revision 9, and 0.14 writes fail
+against revision 8.
+
+### Release coordination
+
+- Regenerated for the revision 9 IDL in protocol 0.6.0.
+- `SURFACE_REVISION_CURRENT` is 9 (`SURFACE_REVISION_ACCOUNTABLE_REVIEW`). A
+  revision 9 stamp reads as the full surface with `accountableReview: true`.
+  A revision 8 stamp still reads as the full surface, with
+  `accountableReview: false`.
+- The testing sandbox ships the revision 9 production program.
+
+### Breaking changes
+
+- A turn-down on a single-worker review task is `rejectAndFreeze`. A plain
+  `rejectTaskResult` there fails with 6418. The worker may dispute the
+  turn-down within 72 hours with `disputeRejection` and a bond. With no
+  dispute, or with no ruling 72 hours after one, the buyer is refunded.
+  `resolveRejectFrozen` sends the new v2 wire.
+- Every dispute filing posts a bond: 10% of the price, at least 0.01 SOL
+  (`disputeBondForTask`). The loser's bond goes to the winner.
+- Every non-contest claim posts a deposit: 10% of the worker's share, at least
+  0.005 SOL (`claimDepositForTask`). It comes back on the first delivery. It
+  goes to the buyer when the claim ends without a delivery after its expiry.
+- Worker and creator records are required on claims, rejects, freezes,
+  cancels, rulings and expiries. The facades derive them. A record that does
+  not exist yet is created by the program and paid by the signer.
+- `hireFromListing` sends the v3 wire. An agent hire is a review task: it
+  takes `reviewWindowSecs`, and `completeTask` refuses it. The indexer's
+  `buildHireTransaction` takes the window too.
+- `configureTaskModeration`, `suspendAgent`, `unsuspendAgent`, the attestor
+  roster and a heartbeat that changes the window need 2 of the 3
+  ProtocolConfig owners, passed in `multisigSigners`.
+- A direct `resolveDispute` ruling takes `multisigOwners`, and only their
+  approvals go in the remaining accounts. Any wallet but the dispute's
+  initiator may propose it.
+- `settleDisputeClaim` names the peer's wallet (`workerAuthority`), which gets
+  the peer's claim and submission rent.
+- The generated `findExpireClaimAgentStatsPda` and
+  `ExpireClaimAgentStatsSeeds` are now `findWorkerStatsPda` and
+  `WorkerStatsSeeds`, with the same seeds.
+
+### Added
+
+- `disputeRejection` and `releaseClaim` (the deposit comes back within 1 hour
+  of claiming), plus `readTurnDown`, `turnDownStage` and `isDisputableFreeze`.
+- `closeTask` compacts a finished task into a 56-byte `TaskMarker` and returns
+  the rest of its rent. `readTask` and `decodeTaskAccount` read a closed task
+  as `closed`.
+- `recordTaskModeration` takes a `rentPayer`. `taskModerationRentRecipient`
+  says who gets that rent back when the task closes.
+- Decoders and fetchers for `CreatorStats`, `DisputeBond` and `TaskMarker`,
+  the PDA helpers `findCreatorStatsPda`, `findTaskDisputeBondPda` and
+  `findRejectionDisputeBondPda`, `getCreatorTrackRecord`, and the new event
+  codecs.
+- `missingRecordCost` reads what a missing worker or creator record costs
+  from live rent, so a wallet can show it before it signs.
+- Deposit and bond math: `claimDepositForTask`, `claimDepositLamports`,
+  `disputeBondForTask`, `disputeBondLamports` and `workerShareLamports`, with
+  `CLAIM_DEPOSIT_BPS`, `MIN_CLAIM_DEPOSIT_LAMPORTS`, `DISPUTE_BOND_BPS`,
+  `MIN_DISPUTE_BOND_LAMPORTS`, `CLAIM_RELEASE_GRACE_SECS`,
+  `REJECT_DISPUTE_WINDOW_SECS` and `REJECT_RULING_WINDOW_SECS`.
+
 ## 0.13.0
 
 Released for the revision-8 mainnet program (release commit `f39b383`,

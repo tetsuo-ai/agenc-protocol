@@ -33,11 +33,12 @@ deployment evidence; they do not describe the revision-8 IDL.
 The generated instruction/error references describe the revision-8 IDL
 committed at the release commit.
 
-The coordinated revision-8 client set is protocol 0.5.2, SDK 0.13.0,
-React/tools 0.6.0, MCP 0.6.1, moderation/worker 0.3.0, and CLI plus its alias
-0.4.0. The package manifests carry these versions and are released through the
-tag-driven release workflow (`.github/workflows/release.yml`), in dependency
-order: protocol, then SDK and moderation, then React, tools and worker, then
+The coordinated revision-8 client set on npm is protocol 0.5.2, SDK 0.13.0,
+React/tools 0.6.0, MCP 0.6.1, moderation/worker 0.3.0, and CLI 0.4.0. The
+unscoped `agenc-cli` alias was not published for revision 8; npm still has
+0.2.0. The package manifests now carry the revision-9 versions (§1.1.3).
+Packages are released through the tag-driven release workflow
+(`.github/workflows/release.yml`), in dependency order: protocol, then SDK and moderation, then React, tools and worker, then
 MCP and the CLI, then the alias. External store-core, scaffolder, hosted
 builders and marketplace binary releases still require their own tested pins
 and breaking-change announcements under §2.
@@ -217,20 +218,23 @@ or peer:
 | revision 5 | external store-core `0.6.2`                | React `^0.5.0` and SDK `^0.12.0`              |
 | revision 8 | React/tools/worker `0.6.0`/`0.6.0`/`0.3.0` | SDK `^0.13.0`                                 |
 | revision 8 | MCP `0.6.0`                                | tools `^0.6.0` and SDK `^0.13.0`              |
+| revision 9 | React/tools/worker `0.7.0`/`0.7.0`/`0.4.0` | SDK `^0.14.0`                                 |
+| revision 9 | MCP `0.7.0`                                | tools `^0.7.0` and SDK `^0.14.0`              |
 
 This means a full revision-4 installation containing all published consumers
 uses SDK 0.8.2 (or another version admitted by every installed range), even
 though SDK 0.9–0.11 remain valid for applications whose installed consumers
 declare compatible ranges. Revision 5 had one coordinated combination: SDK
 0.12 with the published train in §1.1.1. Revision 8 has one: SDK 0.13 with the
-revision-8 train above.
+revision-8 train above. Revision 9 has one: SDK 0.14 with the train in §1.1.3.
 
-### 1.1.3 Revision-9 coordinated client set (planned, not deployed)
+### 1.1.3 Revision-9 coordinated client set (prepared, not published)
 
 Revision 9 (106 instructions, `surface_revision = 9`) is built and reviewed
-but not deployed. Its coordinated client set is planned as protocol 0.6.0,
-SDK 0.14.0, React, tools and MCP 0.7.0, worker 0.4.0, and CLI plus its alias
-0.5.0; moderation stays 0.3.x unless its policy hash changes. The packages
+but not deployed. The package manifests carry its coordinated client set:
+protocol 0.6.0, SDK 0.14.0, React, tools and MCP 0.7.0, worker 0.4.0, and CLI
+plus its alias 0.5.0. Moderation stays 0.3.0, because its policy hash did not
+change. The packages
 publish after the revision-9 stamp and before the unpause, because SDK 0.13
 does not speak the revision-9 wire. `agenc promote` already carries this
 matrix for surface revision 9; its reviewed-deployment identity is added

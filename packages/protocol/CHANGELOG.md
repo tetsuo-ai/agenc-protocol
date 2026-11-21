@@ -1,5 +1,37 @@
 # @tetsuo-ai/protocol
 
+## 0.6.0
+
+For the revision 9 program (`surface_revision = 9`). Protocol 0.5.2 stays the
+revision-8 IDL. The two wires do not mix: revision 9 appends accounts to 18
+existing instructions and changes the data of two of them.
+
+### Release coordination
+
+- The committed IDL, types and manifest describe the revision 9 program: 106
+  production instructions, 49 accounts, 117 events and 435 error variants
+  (6000 to 6434).
+- New instructions: `dispute_rejection`, the worker's bonded dispute of a
+  turn-down, and `release_claim`, which gives up a claim.
+- New accounts: `CreatorStats` (the creator's record), `DisputeBond`, and
+  `TaskMarker`, the 56-byte account that `close_task` leaves of a finished
+  task. The IDL lists `TaskMarker`, so a client built from it can decode a
+  closed task.
+- New events: `ClaimDepositPosted`, `ClaimDepositSettled`, `ClaimReleased`,
+  `CreatorTrackRecordUpdated`, `DisputeBondPosted`, `DisputeBondSettled`,
+  `RejectionDisputed`, `RejectionDisputeSettled` and `TaskCompacted`.
+- New errors 6418 to 6434, from `SingleWorkerRejectMustFreeze` to
+  `ModeratorIsListingProvider`.
+- New data and discriminators: `hire_from_listing` v3 (it also takes
+  `task_validation_config`) and `resolve_reject_frozen`.
+- Appended accounts: the worker record (`worker_stats`) on claims and on the
+  turn-down and dispute settlements; the creator record (`creator_stats`) on
+  rejects, freezes, cancels, rulings and expiries; the dispute bond on dispute
+  filings, rulings, expiries and cancels; `rent_payer` on
+  `record_task_moderation`; `protocol_config` on `moderation_heartbeat` and the
+  attestor roster instructions; `creator` on `reclaim_terminal_claim`;
+  `worker_authority` on `settle_dispute_claim`.
+
 ## 0.5.2
 
 Released for the revision-8 mainnet program (release commit `f39b383`,

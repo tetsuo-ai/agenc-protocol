@@ -1,5 +1,28 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.7.0
+
+For the revision 9 program (`surface_revision = 9`).
+
+### Breaking changes
+
+- Require the revision 9 SDK peer (`@tetsuo-ai/marketplace-sdk@^0.14.0`).
+  React 0.6.0 stays the revision-8 pin.
+- The registered-agent hire in `useHire` passes the buyer's
+  `reviewWindowSecs` and settles through the buyer's review, as the humanless
+  hire does.
+
+### Added
+
+- `useSubmissionReview` gains `turnDown`, the revision 9 turn-down on a
+  single-worker review task. A plain reject is refused there; it stays for
+  Collaborative and contest tasks.
+- `useTaskStatus` treats a turned-down (RejectFrozen) task as live and keeps
+  polling until it ends.
+- `ReviewPanel` takes `onTurnDown` and says what follows a turn-down. The
+  timeline names a frozen task as turned down and on hold. `DisputeBanner`
+  states the bond before a dispute is opened.
+
 ## 0.6.0
 
 Released with the coordinated revision-8 package set (deployed 2026-10-28).

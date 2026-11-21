@@ -48,7 +48,7 @@ import { sanitizeDiagnostic } from "./redact.js";
 
 /** This package's name + version, surfaced in the MCP `serverInfo`. */
 export const SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
-export const SERVER_VERSION = "0.6.1";
+export const SERVER_VERSION = "0.7.0";
 
 /** Options for {@link createMarketplaceMcpServer}. */
 export interface CreateMcpServerOptions {

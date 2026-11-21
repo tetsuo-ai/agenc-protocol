@@ -248,7 +248,7 @@ const REVISION_8_CLIENTS = {
   "@tetsuo-ai/marketplace-moderation": "0.3.0",
 } as const;
 
-/** The planned revision-9 train (design 9.4); not published yet. */
+/** The revision-9 train (design 9.4); not published yet. */
 const REVISION_9_CLIENTS = {
   "@tetsuo-ai/protocol": "0.6.0",
   "@tetsuo-ai/marketplace-sdk": "0.14.0",
@@ -331,7 +331,7 @@ describe("versionInMatrix", () => {
 });
 
 describe("runPromoteChecks", () => {
-  it("accepts the published revision-4 SDK pin but gates this revision-8 CLI template", () => {
+  it("accepts the published revision-4 SDK pin but gates this revision-9 CLI template", () => {
     const report = runPromoteChecks(readyInput());
     expect(report.ready).toBe(false);
     expect(report.failed).toBe(2);
@@ -627,8 +627,9 @@ describe("runPromoteChecks", () => {
     for (const pkg of Object.keys(REVISION_8_CLIENTS)) {
       expect(statusOf(report, `pin:${pkg}`), pkg).toBe("pass");
     }
-    // The template-SDK gate only reports a failure line; 0.13 emits none.
-    expect(statusOf(report, "pin:template-sdk")).toBeUndefined();
+    // This CLI generates code for the revision-9 SDK, so a generated project
+    // on the revision-8 train fails the template-SDK gate, and only that gate.
+    expect(statusOf(report, "pin:template-sdk")).toBe("fail");
     expect(
       report.checks
         .filter((check) => check.id.startsWith("coherence:"))
@@ -705,7 +706,7 @@ describe("runPromoteChecks", () => {
     }
   });
 
-  it("selects the planned revision-9 matrix on surface 9, and never unions it with revision 8", () => {
+  it("selects the revision-9 matrix on surface 9, and never unions it with revision 8", () => {
     const input = readyInput();
     useRevision8Identity(input);
     input.chainEvidence!.surfaceRevision = 9;
@@ -716,6 +717,8 @@ describe("runPromoteChecks", () => {
     for (const pkg of Object.keys(REVISION_9_CLIENTS)) {
       expect(statusOf(report, `pin:${pkg}`), pkg).toBe("pass");
     }
+    // The template-SDK gate only reports a failure line; 0.14 emits none.
+    expect(statusOf(report, "pin:template-sdk")).toBeUndefined();
     // ...but no revision-9 deployment identity is reviewed until the verified
     // cutover, so promotion still fails closed on the program check.
     expect(
