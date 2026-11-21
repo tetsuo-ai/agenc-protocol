@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 This release depends on `@tetsuo-ai/marketplace-tools@^0.7.0` and
 `@tetsuo-ai/marketplace-sdk@^0.14.0` and targets the revision 9 program
-(`surface_revision = 9`). Older 0.6.1 is the revision-8 pin.
+(`surface_revision = 9`), deployed to mainnet on 2026-11-21 from release commit `154d286`. Older 0.6.1 is the revision-8 pin.
 
 ### Added
 

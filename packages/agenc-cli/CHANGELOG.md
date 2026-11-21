@@ -2,7 +2,7 @@
 
 ## 0.5.0
 
-For the revision 9 program (`surface_revision = 9`).
+For the revision 9 program (`surface_revision = 9`), deployed to mainnet on 2026-11-21 from release commit `154d286`.
 
 ### Release coordination
 

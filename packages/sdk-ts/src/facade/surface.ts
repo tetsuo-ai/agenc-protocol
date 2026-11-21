@@ -77,18 +77,20 @@ export const SURFACE_REVISION_AUTHORITY_FEED = 6;
 export const SURFACE_REVISION_TASK_QUOTAS = 7;
 
 /**
- * Revision 8, live on mainnet since 2026-10-28: ratings backed by an actual SOL
- * fee floor. It also carries the revision-6 and revision-7 surfaces.
+ * Revision 8, live on mainnet from 2026-10-28 to 2026-11-21: ratings backed by
+ * an actual SOL fee floor. It also carries the revision-6 and revision-7
+ * surfaces.
  */
 export const SURFACE_REVISION_FEE_QUALIFIED_RATINGS = 8;
 
 /**
- * Revision 9: accountable review. A turn-down on a single-worker review task is
- * a freeze the worker may dispute with a bond, every dispute costs its filer a
- * bond, every claim carries a deposit, and worker and creator records are
- * required. Several instructions changed their wires (new accounts, a new
- * `resolve_reject_frozen` discriminator), so revision 9 writers must not send to
- * a revision 8 program. Mirrors `ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW`.
+ * Revision 9, deployed to mainnet on 2026-11-21: accountable review. A
+ * turn-down on a single-worker review task is a freeze the worker may dispute
+ * with a bond, every dispute costs its filer a bond, every claim carries a
+ * deposit, and worker and creator records are required. Several instructions
+ * changed their wires (new accounts, a new `resolve_reject_frozen`
+ * discriminator), so revision 9 writers must not send to a revision 8 program.
+ * Mirrors `ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW`.
  */
 export const SURFACE_REVISION_ACCOUNTABLE_REVIEW = 9;
 

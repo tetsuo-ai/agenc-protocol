@@ -2,8 +2,8 @@
 
 ## 0.14.0
 
-For the revision 9 program (`surface_revision = 9`, 106 instructions). SDK
-0.13.0 stays the revision-8 client. Revision 9 changed the wire of 18
+For the revision 9 program (`surface_revision = 9`, 106 instructions),
+deployed to mainnet on 2026-11-21 from release commit `154d286`. SDK 0.13.0 stays the revision-8 client. Revision 9 changed the wire of 18
 instructions: 0.13 writes fail against revision 9, and 0.14 writes fail
 against revision 8.
 
