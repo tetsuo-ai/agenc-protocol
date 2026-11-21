@@ -2921,7 +2921,8 @@ export function assertRevision5CutoverResults(
     throw new Error(
       `${stage}: task-validation cutover found ${validation.blockers.length} blocker(s) ` +
         `(${kinds.join(", ") || "quorum-count invariant failure"}). Run ` +
-        "scripts/preflight-task-validation-scan.mjs and settle/remove every ValidatorQuorum config.",
+        "scripts/preflight-task-validation-scan.mjs, settle/remove every ValidatorQuorum config and " +
+        "settle or cancel every claimable or pending ExternalAttestation task (review R2-5).",
     );
   }
   if (governance.blockers.length > 0 || governance.statusCounts.active !== 0) {
@@ -3094,7 +3095,9 @@ export async function verifyRevision5CutoverState(
       const validation = await scanTaskValidationConfigs(connection);
       info(
         `${stage}: TaskValidationConfig=${validation.accountCount}, ` +
-          `ValidatorQuorum=${validation.modeCounts.validatorQuorum}, blockers=${validation.blockers.length}`,
+          `ValidatorQuorum=${validation.modeCounts.validatorQuorum}, ` +
+          `ExternalAttestation=${validation.modeCounts.externalAttestation}, ` +
+          `live_attestation_tasks=${validation.liveAttestationTaskCount}, blockers=${validation.blockers.length}`,
       );
       const governance = await scanGovernanceProposals(connection);
       info(

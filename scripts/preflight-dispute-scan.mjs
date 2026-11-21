@@ -304,6 +304,7 @@ export function decodeTaskBinding(dataLike) {
   if (taskType > 3) {
     throw new Error(`Task.task_type: invalid enum variant ${taskType}`);
   }
+  const deadline = data.readBigInt64LE(196);
   const escrow = new PublicKey(data.subarray(212, 244));
   const bump = data[310];
   const protocolFeeBps = data.readUInt16LE(311);
@@ -345,6 +346,7 @@ export function decodeTaskBinding(dataLike) {
       currentWorkers,
       status,
       taskType,
+      deadline,
       escrow,
       dependsOn: dependsOnOption.value,
       dependencyType,
@@ -400,6 +402,7 @@ export function decodeTaskBinding(dataLike) {
     currentWorkers,
     status,
     taskType,
+    deadline,
     escrow,
     dependsOn: dependsOnOption.value,
     dependencyType,

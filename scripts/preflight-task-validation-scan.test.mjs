@@ -10,8 +10,10 @@ import {
 } from "./preflight-dispute-scan.mjs";
 import {
   decodeTaskValidationConfig,
+  legacyAttestationTaskBlock,
   scanTaskValidationConfigs,
 } from "./preflight-task-validation-scan.mjs";
+import { assertRevision5CutoverResults } from "./mainnet-upgrade.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
@@ -312,3 +314,123 @@ test("a config whose task was compacted is a closed-task orphan, not a layout er
   );
   assert.ok(result.blockers.some((item) => item.kind === "invalid-validation-task-layout"));
 });
+
+// Review R2-5: revision 9 refuses a dispute on every single-worker manual task,
+// so a legacy ExternalAttestation task that can still be claimed, or whose work
+// is in flight or waits for the attestor, could lock its escrow. The cutover
+// blocks it; a terminal task, or an Open one past its deadline (the live
+// mainnet shape), does not.
+const NOW = 1_800_000_000n;
+function attestationTask({ status, workers = 0, maxWorkers = 1, deadline = 0n }) {
+  return { status, currentWorkers: workers, maxWorkers, deadline };
+}
+
+test("R2-5: which legacy ExternalAttestation tasks are claimable or pending", () => {
+  const cases = [
+    [attestationTask({ status: 0, deadline: 0n }), 0, "claimable"],
+    [attestationTask({ status: 0, deadline: NOW + 1n }), 0, "claimable"],
+    [attestationTask({ status: 0, deadline: NOW }), 0, null],
+    [attestationTask({ status: 0, deadline: NOW - 1n }), 0, null],
+    [attestationTask({ status: 0, workers: 1, deadline: 0n }), 0, null],
+    [attestationTask({ status: 0, deadline: NOW - 1n }), 1, "pending"],
+    [attestationTask({ status: 1, workers: 1, deadline: NOW - 1n }), 0, "pending"],
+    [attestationTask({ status: 2, workers: 1 }), 1, "pending"],
+    [attestationTask({ status: 3 }), 1, null],
+    [attestationTask({ status: 4 }), 1, null],
+    [attestationTask({ status: 5, workers: 1 }), 0, null],
+    [attestationTask({ status: 6, workers: 1 }), 0, null],
+    [attestationTask({ status: 5, workers: 1 }), 1, "pending"],
+  ];
+  for (const [task, pending, expected] of cases) {
+    assert.equal(
+      legacyAttestationTaskBlock(task, pending, NOW),
+      expected,
+      `status=${task.status} workers=${task.currentWorkers} deadline=${task.deadline} pending=${pending}`,
+    );
+  }
+});
+
+function attestationScenario({ status, workers = 0, deadline = 0n, pendingSubmissionCount = 0 }) {
+  const value = scenario({ mode: 3, status, pendingSubmissionCount });
+  value.taskData[184] = 1;
+  value.taskData[185] = workers;
+  value.taskData.writeBigInt64LE(deadline, 196);
+  return value;
+}
+
+test("R2-5: the scan blocks claimable and pending ExternalAttestation tasks and passes dead ones", async () => {
+  const cases = [
+    [{ status: 0, deadline: NOW + 3_600n }, "external-attestation-claimable"],
+    [{ status: 0, deadline: 0n }, "external-attestation-claimable"],
+    [{ status: 1, workers: 1, deadline: NOW + 3_600n }, "external-attestation-pending"],
+    [{ status: 2, workers: 1, pendingSubmissionCount: 1 }, "external-attestation-pending"],
+    [{ status: 0, deadline: NOW - 86_400n }, null],
+    [{ status: 3 }, null],
+  ];
+  for (const [fixture, kind] of cases) {
+    const value = attestationScenario(fixture);
+    const result = await scanTaskValidationConfigs(connectionFor(value), {
+      nowUnixTimestamp: NOW,
+    });
+    assert.equal(result.modeCounts.externalAttestation, 1);
+    if (kind) {
+      const found = result.blockers.find((item) => item.kind === kind);
+      assert.ok(found, `${JSON.stringify(fixture, (_, v) => (typeof v === "bigint" ? `${v}` : v))}: ${kind}`);
+      assert.equal(found.task.toBase58(), value.task.toBase58());
+      assert.equal(result.liveAttestationTaskCount, 1);
+      assert.throws(
+        () => assertRevision5CutoverResults(cutoverSnapshot(result), "Predeploy cutover snapshot"),
+        new RegExp(`task-validation cutover.*${kind}.*R2-5`),
+        "the scan result stops the cutover",
+      );
+    } else {
+      assert.deepEqual(result.blockers, []);
+      assert.equal(result.liveAttestationTaskCount, 0);
+    }
+  }
+});
+
+test("R2-5: the cluster clock is read only when an Open attestation task has a deadline", async () => {
+  const value = attestationScenario({ status: 0, deadline: NOW - 1n });
+  let clockReads = 0;
+  const connection = {
+    ...connectionFor(value),
+    getSlot: async () => {
+      clockReads++;
+      return 123;
+    },
+    getBlockTime: async (slot) => {
+      assert.equal(slot, 123);
+      return Number(NOW);
+    },
+  };
+  const result = await scanTaskValidationConfigs(connection);
+  assert.equal(clockReads, 1);
+  assert.deepEqual(result.blockers, []);
+
+  const pending = attestationScenario({ status: 2, workers: 1, pendingSubmissionCount: 1 });
+  const noClock = await scanTaskValidationConfigs(connectionFor(pending));
+  assert.ok(noClock.blockers.some((item) => item.kind === "external-attestation-pending"));
+});
+
+// The smallest cutover snapshot that passes every other gate, with this
+// validation scan result in it.
+function cutoverSnapshot(validation) {
+  return {
+    delegation: { accountCount: 0, blockers: [] },
+    skillRating: {
+      accountCount: 0, skillCount: 0, purchaseCount: 0, ratingCount: 0,
+      decodedSkillCount: 0, decodedPurchaseCount: 0, decodedRatingCount: 0, blockers: [],
+    },
+    reputationStakes: {
+      accountCount: 0, decodedAccountCount: 0, liveAgentCount: 0, retiredAgentCount: 0,
+      absentAgentCount: 0, invalidAgentCount: 0, principalWithoutAgentCount: 0,
+      underbackedAccountCount: 0, rentMinimumLamports: 0n, trackedStakedAmount: 0n,
+      actualLamports: 0n, requiredRentLamports: 0n, requiredBackingLamports: 0n,
+      backingDeficitLamports: 0n, backingSurplusLamports: 0n, principalWithoutAgentLamports: 0n,
+      blockers: [],
+    },
+    disputes: { statusCounts: { active: 0 }, blockers: [] },
+    validation,
+  };
+}

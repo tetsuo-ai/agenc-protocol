@@ -7,6 +7,14 @@
 // bump, and Task binding, then blocks every legacy ValidatorQuorum config. It is
 // intentionally run only after ProtocolConfig.protocol_paused has been confirmed:
 // the pause closes the old configure/claim entry paths during the scan/deploy gap.
+//
+// Revision 9 (review R2-5): `initiate_dispute` refuses every single-worker
+// manual task, in any mode, and auto-accept, expiry and cancel are closed while
+// a submission waits for an attestor. A legacy ExternalAttestation task that
+// can still be claimed, or whose work is in flight or waiting, could then lock
+// its escrow until the attestor acts. So the scan also blocks every non-terminal
+// ExternalAttestation task that is claimable or pending (ValidatorQuorum configs
+// are already blocked whatever their state).
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -119,6 +127,36 @@ function blocker(kind, config, task, detail) {
   return { kind, config, task, detail };
 }
 
+/// Review R2-5: why a legacy ExternalAttestation task blocks the cutover, or null.
+/// `pending`: work waits for the attestor (PendingValidation, a recorded pending
+/// submission) or is in flight (InProgress: a live claim can still deliver).
+/// `claimable`: an Open task with a free slot whose deadline has not passed (no
+/// deadline means always). Terminal tasks never block; Disputed and RejectFrozen
+/// tasks have their own exits and block only with a pending submission.
+export function legacyAttestationTaskBlock(task, pendingSubmissionCount, nowUnixTimestamp) {
+  if (task.status === 3 || task.status === 4) return null;
+  if (task.status === 1 || task.status === 2 || pendingSubmissionCount > 0) {
+    return "pending";
+  }
+  if (
+    task.status === 0 &&
+    task.currentWorkers < task.maxWorkers &&
+    (task.deadline === 0n || task.deadline > BigInt(nowUnixTimestamp))
+  ) {
+    return "claimable";
+  }
+  return null;
+}
+
+async function clusterUnixTimestamp(connection) {
+  const slot = await connection.getSlot("confirmed");
+  const blockTime = await connection.getBlockTime(slot);
+  if (!Number.isSafeInteger(blockTime)) {
+    throw new Error(`cannot obtain a safe confirmed block time for slot ${slot}`);
+  }
+  return BigInt(blockTime);
+}
+
 function quorumBlockerKind(task) {
   if (!task) return "validator-quorum-configured-unknown-task";
   if (task.status === 2) return "validator-quorum-pending-validation";
@@ -131,7 +169,7 @@ function quorumBlockerKind(task) {
   return "validator-quorum-terminal-config";
 }
 
-export async function scanTaskValidationConfigs(connection) {
+export async function scanTaskValidationConfigs(connection, { nowUnixTimestamp } = {}) {
   const genesis = await connection.getGenesisHash();
   if (genesis !== MAINNET_GENESIS) {
     throw new Error(
@@ -158,6 +196,13 @@ export async function scanTaskValidationConfigs(connection) {
     validatorQuorum: 0,
     externalAttestation: 0,
   };
+  // Read the cluster clock only if an Open attestation task needs it.
+  let now = nowUnixTimestamp === undefined ? undefined : BigInt(nowUnixTimestamp);
+  const currentNow = async () => {
+    if (now === undefined) now = await clusterUnixTimestamp(connection);
+    return now;
+  };
+  let liveAttestationTaskCount = 0;
 
   for (const { pubkey, account } of accounts) {
     if (!account.owner.equals(PROGRAM_ID)) {
@@ -313,6 +358,27 @@ export async function scanTaskValidationConfigs(connection) {
         }
       }
 
+      if (config.mode === MODE_EXTERNAL_ATTESTATION && task) {
+        const needsClock = task.status === 0 && task.deadline !== 0n;
+        const block = legacyAttestationTaskBlock(
+          task,
+          config.pendingSubmissionCount,
+          needsClock ? await currentNow() : 0n,
+        );
+        if (block) {
+          liveAttestationTaskCount++;
+          blockers.push(
+            blocker(
+              `external-attestation-${block}`,
+              pubkey,
+              config.task,
+              `status=${TASK_STATUS_NAMES[task.status]} workers=${task.currentWorkers}/${task.maxWorkers} ` +
+                `deadline=${task.deadline} pending_submissions=${config.pendingSubmissionCount}`,
+            ),
+          );
+        }
+      }
+
       if (config.mode === MODE_VALIDATOR_QUORUM) {
         const known = task ?? (closedTask ? { status: closedTask.status } : null);
         const status = known ? TASK_STATUS_NAMES[known.status] : "Unknown";
@@ -332,6 +398,7 @@ export async function scanTaskValidationConfigs(connection) {
   return {
     accountCount: accounts.length,
     modeCounts,
+    liveAttestationTaskCount,
     orphanCount: orphans.length,
     orphanLamports: orphans.reduce((sum, item) => sum + item.lamports, 0n),
     orphans,
@@ -352,6 +419,7 @@ async function main() {
       `(creator_review=${result.modeCounts.creatorReview}, ` +
       `validator_quorum=${result.modeCounts.validatorQuorum}, ` +
       `external_attestation=${result.modeCounts.externalAttestation}, ` +
+      `live_attestation_tasks=${result.liveAttestationTaskCount}, ` +
       `orphaned=${result.orphanCount}, orphan_lamports=${result.orphanLamports})`,
   );
   for (const item of result.orphans.slice(0, 10)) {
@@ -374,11 +442,11 @@ async function main() {
   }
   if (result.blockers.length > 0) {
     throw new Error(
-      `${result.blockers.length} task-validation cutover blocker(s) found; settle/remove legacy quorum state before deployment`,
+      `${result.blockers.length} task-validation cutover blocker(s) found; settle/remove legacy quorum state and settle or cancel every claimable or pending ExternalAttestation task before deployment`,
     );
   }
   console.log(
-    "PREFLIGHT OK: no ValidatorQuorum or active orphan config exists; rent-only historical orphans remain inventoried for typed reclamation.",
+    "PREFLIGHT OK: no ValidatorQuorum config, claimable or pending ExternalAttestation task, or active orphan config exists; rent-only historical orphans remain inventoried for typed reclamation.",
   );
 }
 
