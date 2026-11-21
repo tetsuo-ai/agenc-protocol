@@ -73,7 +73,7 @@ export function PoweredByAgenC({
       // reverse-tabnabbing; noreferrer implies noopener in modern browsers).
       rel={newTab ? "noopener noreferrer" : undefined}
       // The link's accessible name combines the brand + the trust-link copy.
-      aria-label={`${label ?? tc("components.poweredBy.label")} — ${tc(
+      aria-label={`${label ?? tc("components.poweredBy.label")}. ${tc(
         "components.poweredBy.trustLink",
       )}`}
     >

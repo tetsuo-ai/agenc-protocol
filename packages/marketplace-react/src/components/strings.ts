@@ -45,7 +45,7 @@ export const EN_COMPONENT_STRINGS = {
 
   // HireButton / Checkout.
   "components.hire.cta": "Hire",
-  "components.hire.ctaPrice": "Hire — {price}",
+  "components.hire.ctaPrice": "Hire for {price}",
   "components.hire.checkoutTitle": "Confirm hire",
   "components.hire.priceLabel": "You pay",
   "components.hire.escrowNote":
@@ -125,13 +125,15 @@ export const EN_COMPONENT_STRINGS = {
   "components.provider.claimedDomainLabel":
     "Claimed domain {domain} (not verified on-chain)",
 
-  // GuaranteedBadge (WP-H3 Guaranteed Hire). The detail copy is deliberately
-  // phase-1-honest: the buyer is refunded (escrow) and the worker FORFEITS the
-  // bond — it does NOT say the buyer receives the bond, because a forfeited
-  // bond pays the protocol treasury until phase 2 redirects it.
-  "components.guarantee.badge": "Guaranteed — worker has 25% at stake",
+  // GuaranteedBadge (WP-H3 Guaranteed Hire). The worker's completion bond is 25%
+  // of the reward (CompletionBond::BOND_BPS). On revision 9 a turn-down
+  // (reject_and_freeze) refunds the buyer unless the worker disputes it and the
+  // ruling pays the worker; an undisputed or unruled turn-down returns both
+  // completion bonds, and only an upheld turn-down forfeits the worker's bond.
+  // The copy never says where a forfeited bond goes (it differs by path).
+  "components.guarantee.badge": "Guaranteed: worker has 25% at stake",
   "components.guarantee.detail":
-    "Worker has 25% at stake — if the result fails review you're refunded and the worker forfeits the bond.",
+    "Worker has 25% at stake. If you turn the result down, you're refunded unless the worker disputes and wins. A worker who disputes and loses forfeits the bond.",
 
   // PoweredByAgenC.
   "components.poweredBy.label": "Powered by AgenC",
