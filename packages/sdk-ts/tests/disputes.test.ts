@@ -62,6 +62,8 @@ const MULTISIG_APPROVER_B = createNoopSigner(
   a("SysvarC1ock11111111111111111111111111111111"),
 );
 const PARENT_TASK = a("Config1111111111111111111111111111111111111");
+/** The ProtocolConfig owners of these fixtures (review R4-8). */
+const OWNERS = [MULTISIG_APPROVER_A.address, MULTISIG_APPROVER_B.address];
 const ACCEPTED_BID = a("ComputeBudget111111111111111111111111111111");
 const BIDDER_STATE = a("Ed25519SigVerify111111111111111111111111111");
 
@@ -163,6 +165,7 @@ describe("disputes facade (structural)", () => {
         bidderMarketState: BIDDER_STATE,
       },
       multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      multisigOwners: OWNERS,
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -244,6 +247,7 @@ describe("disputes facade (structural)", () => {
       dependencyParent: PARENT_TASK,
       bidSettlement,
       multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      multisigOwners: OWNERS,
     });
 
     rationaleHash.fill(99);
@@ -857,5 +861,64 @@ describe("settleDisputeClaim (revision 9 peer wallet)", () => {
       address: WORKER_WALLET,
       role: AccountRole.WRITABLE,
     });
+  });
+});
+
+describe("resolveDispute direct ruling approvals (revision 9, review R4-8)", () => {
+  const base = {
+    dispute: DISPUTE,
+    task: TASK,
+    approve: true,
+    rationaleHash: new Uint8Array(32).fill(5),
+    rationaleUri: "",
+    creator: CREATOR,
+    workerClaim: CLAIM,
+    worker: WORKER_AGENT,
+    workerWallet: WORKER_WALLET,
+    bondTreasury: TREASURY,
+  };
+
+  it("a non-owner proposer with two owners leaves only the two owners in remaining accounts", async () => {
+    // AUTHORITY proposes and pays; it is not an owner, so even when a caller
+    // lists it among the approvals it must not reach the suffix.
+    const plain = await facade.resolveDispute({
+      ...base,
+      authority: AUTHORITY,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      multisigOwners: OWNERS,
+    });
+    const withProposer = await facade.resolveDispute({
+      ...base,
+      authority: AUTHORITY,
+      multisigSigners: [AUTHORITY, MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      multisigOwners: OWNERS,
+    });
+    expect(order(withProposer)).toEqual(order(plain));
+    const suffix = withProposer.accounts.slice(-2);
+    expect(suffix.map((account) => account.address)).toEqual(OWNERS);
+    expect(
+      suffix.every((account) => account.role === AccountRole.READONLY_SIGNER),
+    ).toBe(true);
+    // The proposer is still the named authority, and only there.
+    expect(
+      withProposer.accounts.filter((account) => account.address === AUTHORITY_ADDR),
+    ).toHaveLength(1);
+  });
+
+  it("keeps an owner proposer's own approval, and refuses a direct ruling without the owners", async () => {
+    const ix = await facade.resolveDispute({
+      ...base,
+      authority: MULTISIG_APPROVER_A,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      multisigOwners: OWNERS,
+    });
+    expect(ix.accounts.slice(-2).map((account) => account.address)).toEqual(OWNERS);
+    await expect(
+      facade.resolveDispute({
+        ...base,
+        authority: AUTHORITY,
+        multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      } as never),
+    ).rejects.toThrow(/multisigOwners/);
   });
 });

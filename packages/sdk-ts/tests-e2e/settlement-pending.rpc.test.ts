@@ -177,6 +177,10 @@ describe.skipIf(!RPC_ENABLED)(
               workerWallet: defendant.signer.address,
               authority: h.admin,
               multisigSigners: [h.admin, h.moderator],
+              multisigOwners: h.config.multisigOwners.slice(
+                0,
+                h.config.multisigOwnersLen,
+              ),
               approve: scenario.approve,
               rationaleHash: id32(),
               rationaleUri: "agenc://ruling/agnc01-rpc",

@@ -318,6 +318,12 @@ getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tet
     ProtocolConfig owners: pass them in `multisigSigners`.
   - `settleDisputeClaim` names the peer's wallet (`workerAuthority`), which
     receives the peer's claim and submission rent.
+  - A direct `resolveDispute` ruling may be proposed by any wallet but the
+    dispute's initiator; two owners decide. It takes `multisigOwners` (the
+    ProtocolConfig owners), and only their approvals go in the remaining
+    accounts. A lone wallet's ruling fails with `MultisigNotEnoughSigners`.
+  - A creator cannot file a second dispute against a claim that lapsed
+    after an earlier filing on the same task (`ClaimExpired`).
   - A dependent task passes its parent to `expireClaim` (any task type) and
     `cancelTask`, so a real no-show forfeits its deposit.
 - The older 0.12.0 package targets the superseded 101-instruction revision-5
