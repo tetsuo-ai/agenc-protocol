@@ -1701,6 +1701,65 @@ mod tests {
         validate_task_dependency_for_assignment(&task, &[], &crate::ID).unwrap();
     }
 
+    // Revision 9 (C), review R1-6: a parent compacted by close_task is a 56-byte
+    // TaskMarker. A Completed marker satisfies every dependency type at
+    // assignment and settlement; a Cancelled marker is refused exactly as the full
+    // Cancelled Task was.
+    #[test]
+    fn compacted_parent_marker_settles_only_when_completed() {
+        let parent_key = Pubkey::new_unique();
+        for (status, expected) in [
+            (TaskStatus::Completed, None),
+            (
+                TaskStatus::Cancelled,
+                Some(CoordinationError::ParentTaskNotCompleted),
+            ),
+        ] {
+            let marker =
+                crate::state::TaskMarker::for_closed_task(Pubkey::new_unique(), status, 0, 1)
+                    .unwrap();
+            let mut data = vec![0u8; crate::state::TaskMarker::SIZE];
+            marker.write_to(&mut data).unwrap();
+            let parent = AccountInfo::new(
+                leak_pubkey(parent_key),
+                false,
+                false,
+                leak_lamports(1),
+                leak_data(data),
+                leak_pubkey(crate::ID),
+                false,
+                0,
+            );
+            for dependency_type in [
+                DependencyType::Data,
+                DependencyType::Ordering,
+                DependencyType::Proof,
+            ] {
+                let mut task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+                task.depends_on = Some(parent_key);
+                task.dependency_type = dependency_type;
+                let parents = std::slice::from_ref(&parent);
+                match expected {
+                    None => {
+                        validate_task_dependency(&task, parents, &crate::ID).unwrap();
+                        validate_task_dependency_for_assignment(&task, parents, &crate::ID)
+                            .unwrap();
+                    }
+                    Some(code) => {
+                        assert_anchor_error_code(
+                            validate_task_dependency(&task, parents, &crate::ID),
+                            code,
+                        );
+                        assert_anchor_error_code(
+                            validate_task_dependency_for_assignment(&task, parents, &crate::ID),
+                            code,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn leak_pubkey(key: Pubkey) -> &'static Pubkey {
         Box::leak(Box::new(key))
     }

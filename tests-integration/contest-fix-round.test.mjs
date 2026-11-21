@@ -39,6 +39,7 @@ import {
   BN,
   Keypair,
   SystemProgram,
+  readTaskMarker,
 } from "./harness.mjs";
 
 const CAP_COMPUTE = 1;
@@ -245,8 +246,7 @@ async function publishJobSpec(w, { task }) {
           taskModeration: taskMod,
           moderator: w.modAuth.publicKey,
           moderationAttestor: null,
-          systemProgram: SystemProgram.programId,
-        })
+          systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey})
         .instruction(),
       [w.modAuth],
     ),
@@ -708,17 +708,19 @@ test("FIX 1b: ghost lifecycle with a no-show claim -> reclaim_terminal_claim -> 
   ]);
   assert.ok(again.constructor.name.includes("Failed"), "re-reclaim fails");
 
-  // close_task now succeeds while retaining the durable Task parent. (The earlier
-  // bricked attempt was byte-identical; rotate the blockhash past litesvm dedup.)
+  // close_task now succeeds and compacts the Task into its TaskMarker, the
+  // durable parent (revision 9). (The earlier bricked attempt was byte-identical;
+  // rotate the blockhash past litesvm dedup.)
   w.svm.expireBlockhash();
   expectOk(
     send(w.svm, await closeTaskIx(w, m), [w.buyer]),
     "close_task after reclaim",
   );
-  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
-  assert.ok(
-    decode(w.svm, "Task", m.task).status.Completed !== undefined,
-    "terminal state remains decodable",
+  assert.ok(readTaskMarker(w.svm, m.task), "revision 9: the terminal Task compacted into its TaskMarker anchor");
+  assert.equal(
+    readTaskMarker(w.svm, m.task).status,
+    3,
+    "the marker keeps the Completed status",
   );
 });
 
@@ -762,7 +764,7 @@ test("FIX 1b: accept-path variant — winner accepted, no-show reclaimed, close_
     send(w.svm, await closeTaskIx(w, m), [w.buyer]),
     "close_task after accept-path reclaim",
   );
-  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
+  assert.ok(readTaskMarker(w.svm, m.task), "revision 9: the terminal Task compacted into its TaskMarker anchor");
 });
 
 // ===========================================================================
@@ -1137,7 +1139,7 @@ test("FIX 5: a retired identity tombstone still proves the worker rent recipient
     subRent,
     "straggler rent returned to the worker",
   );
-  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
+  assert.ok(readTaskMarker(w.svm, m.task), "revision 9: the terminal Task compacted into its TaskMarker anchor");
 });
 
 // ===========================================================================

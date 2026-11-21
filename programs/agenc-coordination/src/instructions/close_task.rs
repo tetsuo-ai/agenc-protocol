@@ -1,20 +1,37 @@
-//! Clean up a terminal task without destroying its durable liveness anchor.
+//! Clean up a terminal task and compact it into a 56-byte `TaskMarker`.
 //!
-//! A task can have children whose addresses are not enumerable from the `Task`
-//! account (historical submissions and per-hash/per-moderator attestations). If
-//! the parent PDA is destroyed while one of those children is omitted, every
-//! child exit that loads `Account<Task>` is permanently bricked. `close_task`
-//! therefore retains the full rent-exempt terminal `Task` as a tombstone/liveness
-//! anchor. It still closes every supplied child, frees hired-listing capacity,
-//! and refunds any Task lamports above the rent-exempt minimum.
+//! Revision 9 (C): `close_task` on a terminal `Task` closes every supplied child,
+//! frees hired-listing capacity, and then compacts the Task in place into a
+//! `TaskMarker` at the same address. The creator gets back every lamport above
+//! the marker's rent minimum. The marker keeps what the full tombstone protected:
+//! - It is a program-owned account at the task PDA, so `init` of a Task with the
+//!   same id keeps failing, and every `Account<Task>` loader rejects its
+//!   discriminator, so no new child can attach to it.
+//! - Children whose exits need a parent keep one. A task can have children whose
+//!   addresses are not enumerable from the `Task` (historical submissions and
+//!   per-hash/per-moderator attestations). Later `close_task` passes accept the
+//!   marker and sweep them, `reclaim_completion_bond` accepts it, and
+//!   `reclaim_orphan_task_child` treats it as a closed parent.
+//! - Exits that still need the full Task block compaction while they can run:
+//!   live claims, a pending worker slash, peer settlement, live bids, and a live
+//!   creator completion bond.
+//!
+//! The task account is loaded by hand (`load_task_or_marker`): a Task, checked
+//! at its canonical PDA with its stored bump, is closed and compacted; a
+//! TaskMarker is swept only; anything else fails with `InvalidTaskMarker`. Both
+//! forms must belong to the signer.
 //!
 //! Escrow handling: SOL terminal paths and `expire_dispute` close the escrow PDA,
-//! so the caller normally passes `escrow = None`. `resolve_dispute` deliberately
-//! retains a token task's `TaskEscrow` state while token-slash settlement is being
-//! distinguished from an already-settled token outcome. Once that account is
-//! drained and marked `is_closed = true`, the caller may pass it here to reclaim
-//! its rent. A pending reserve remains `is_closed = false` and cannot be reclaimed
-//! until the required slash finalizer has settled it.
+//! so the caller normally passes `escrow = None` for a SOL task. `resolve_dispute`
+//! deliberately retains a token task's `TaskEscrow` state while token-slash
+//! settlement is being distinguished from an already-settled token outcome. Once
+//! that account is drained and marked `is_closed = true`, it is closed here. A
+//! token-reward task must pass its canonical escrow address before it can be
+//! compacted (`TaskNotCompactable` otherwise), so a retained escrow can never be
+//! stranded: a live closed escrow is closed in the same call, and an empty
+//! address proves it is already gone. A pending reserve remains
+//! `is_closed = false` and cannot be reclaimed until the required slash finalizer
+//! has settled it.
 //!
 //! Hire/capacity handling: the `hire_record` PDA is ALWAYS a required account (the
 //! caller passes the derived `["hire", task]` address even for non-hired tasks,
@@ -23,12 +40,20 @@
 //! `open_jobs` capacity slot and closes the link. Making it required (not optional)
 //! is deliberate: a caller cannot skip the decrement to inflate a provider's
 //! capacity counter.
+//!
+//! Runtime order: this instruction makes no CPI. Every lamport moves directly,
+//! and the compaction (resize, marker write, surplus refund) runs last.
 
 use crate::errors::CoordinationError;
-use crate::events::TaskClosed;
+use crate::events::{TaskClosed, TaskCompacted};
+use crate::instructions::program_account_helpers::{
+    close_program_account, deserialize_program_account,
+};
+use crate::instructions::task_parent_helpers::{load_task_or_marker, TaskOrMarker};
 use crate::state::{
     AgentRegistration, HireRecord, ProtocolConfig, ServiceListing, Task, TaskAttestorConfig,
-    TaskEscrow, TaskJobSpec, TaskModeration, TaskStatus, TaskSubmission, TaskValidationConfig,
+    TaskEscrow, TaskJobSpec, TaskMarker, TaskModeration, TaskStatus, TaskSubmission,
+    TaskValidationConfig,
 };
 use anchor_lang::prelude::*;
 
@@ -49,6 +74,26 @@ pub(crate) fn validate_task_closable(
     // both terminal paths current_workers is driven to 0 before settlement.
     require!(current_workers == 0, CoordinationError::TaskNotClosable);
     require!(!worker_slash_pending, CoordinationError::ClaimSlashPending);
+    Ok(())
+}
+
+/// Revision 9 (C) compaction preconditions, checked after `validate_task_closable`.
+/// Peers that are still settling need the full Task, and a token-reward task must
+/// pass its canonical escrow address so a retained `TaskEscrow` closes in the same
+/// call instead of losing its parent.
+pub(crate) fn validate_task_compactable(
+    peer_settlement_pending: bool,
+    token_reward: bool,
+    escrow_passed: bool,
+) -> Result<()> {
+    require!(
+        !peer_settlement_pending,
+        CoordinationError::TaskNotCompactable
+    );
+    require!(
+        !token_reward || escrow_passed,
+        CoordinationError::TaskNotCompactable
+    );
     Ok(())
 }
 
@@ -74,13 +119,14 @@ fn is_drained_hire_record_tombstone(lamports: u64, data: &[u8]) -> bool {
 
 #[derive(Accounts)]
 pub struct CloseTask<'info> {
-    #[account(
-        mut,
-        seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
-        bump = task.bump,
-        constraint = task.creator == authority.key() @ CoordinationError::UnauthorizedTaskAction
-    )]
-    pub task: Account<'info, Task>,
+    /// The task PDA `["task", creator, task_id]`: a terminal Task (closed and
+    /// compacted by this call) or the TaskMarker an earlier close left there.
+    /// It is loaded by hand in the handler (`load_task_or_marker`): owner,
+    /// discriminator, the Task's canonical PDA with its stored bump, and
+    /// creator == authority are all checked before anything moves.
+    /// CHECK: validated in the handler, as described above.
+    #[account(mut)]
+    pub task: UncheckedAccount<'info>,
 
     /// Optional leftover job-spec pointer for this task. When provided it is closed
     /// alongside the task so its rent is reclaimed too. Bound to this task by seeds
@@ -99,20 +145,20 @@ pub struct CloseTask<'info> {
     )]
     pub task_job_spec: Option<Box<Account<'info, TaskJobSpec>>>,
 
-    /// Optional already-settled escrow PDA. `resolve_dispute` can leave a token
-    /// task's state escrow open after draining it and setting `is_closed = true`;
-    /// provide it here to reclaim its rent. A pending token reserve is still marked
-    /// open and is rejected until its slash finalizer runs. Bound to this task by
-    /// seeds + constraint.
-    // Boxed for the same SBF stack-frame reason as `task_job_spec` above — moves the
-    // deserialized escrow off the stack; constraints and close behavior unchanged.
+    /// Optional escrow PDA. `resolve_dispute` can leave a token task's state
+    /// escrow open after draining it and setting `is_closed = true`; provide it
+    /// here to reclaim its rent. A pending token reserve is still marked open and
+    /// is rejected until its slash finalizer runs. A token-reward task must pass
+    /// this address to be compacted; an empty address proves the escrow is gone.
+    /// A program-owned account must deserialize as this task's closed
+    /// `TaskEscrow`; anything else must be an empty system account.
+    /// CHECK: address fixed by seeds; content validated in the handler.
     #[account(
         mut,
         seeds = [b"escrow", task.key().as_ref()],
-        bump = escrow.bump,
-        constraint = escrow.task == task.key() @ CoordinationError::InvalidInput
+        bump
     )]
-    pub escrow: Option<Box<Account<'info, TaskEscrow>>>,
+    pub escrow: Option<UncheckedAccount<'info>>,
 
     /// Hire link PDA for this task. ALWAYS required — the caller passes the derived
     /// ["hire", task] address even for non-hired tasks (where it is an empty system
@@ -140,13 +186,14 @@ pub struct CloseTask<'info> {
     pub listing: Option<Box<Account<'info, ServiceListing>>>,
 
     /// Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
-    /// REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
-    /// (which reclaim_completion_bond needs) can never be destroyed out from under an
-    /// unsettled creator bond. The party is the creator, so this PDA is canonically
-    /// derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+    /// REFUSES to compact the Task while this is a live program-owned bond, so a
+    /// bond's parent can never be compacted out from under an unsettled creator
+    /// bond. The party is the creator, and the handler requires
+    /// `creator == authority`, so the seeds use the signer. For an already-settled
+    /// / un-bonded task it is an empty system PDA.
     /// CHECK: address fixed by seeds; liveness checked in the handler.
     #[account(
-        seeds = [b"completion_bond", task.key().as_ref(), task.creator.as_ref()],
+        seeds = [b"completion_bond", task.key().as_ref(), authority.key().as_ref()],
         bump
     )]
     pub creator_completion_bond: UncheckedAccount<'info>,
@@ -162,7 +209,8 @@ pub struct CloseTask<'info> {
     #[account(mut)]
     pub worker_completion_bond: Option<UncheckedAccount<'info>>,
 
-    /// Task creator; receives child rent and any Task balance above rent minimum.
+    /// Task creator; receives child rent and every Task lamport above the
+    /// marker's rent minimum.
     #[account(mut)]
     pub authority: Signer<'info>,
 
@@ -190,25 +238,52 @@ fn completion_bond_is_live(info: &AccountInfo) -> Result<bool> {
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
+    let authority = ctx.accounts.authority.key();
+    match load_task_or_marker(&ctx.accounts.task.to_account_info())? {
+        TaskOrMarker::Task(task) => {
+            require_keys_eq!(
+                task.creator,
+                authority,
+                CoordinationError::UnauthorizedTaskAction
+            );
+            close_and_compact_task(ctx, task)
+        }
+        TaskOrMarker::Marker(marker) => {
+            require_keys_eq!(
+                marker.creator,
+                authority,
+                CoordinationError::UnauthorizedTaskAction
+            );
+            sweep_marker_children(ctx)
+        }
+    }
+}
+
+/// Full Task path: today's checks and sweeps, then the compaction.
+fn close_and_compact_task<'info>(
+    ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>,
+    task: Box<Task>,
+) -> Result<()> {
     let clock = Clock::get()?;
-    let task_key = ctx.accounts.task.key();
-    let task = &ctx.accounts.task;
-    // The account constraint already validates the canonical task PDA using the
-    // stored bump. Bump 0 is valid and cannot be treated as corruption.
-    // Terminal status and zero live workers are the cleanup boundary. The Task
-    // itself remains alive because omitted auxiliary children cannot be enumerated
-    // or proven absent from this instruction.
+    let task_info = ctx.accounts.task.to_account_info();
+    let task_key = task_info.key();
+    // Terminal status and zero live workers are the cleanup boundary.
     validate_task_closable(
         task.status,
         task.current_workers,
         task.worker_slash_pending(),
     )?;
+    validate_task_compactable(
+        task.peer_settlement_pending(),
+        task.reward_mint.is_some(),
+        ctx.accounts.escrow.is_some(),
+    )?;
 
-    // Audit F12: never close the Task PDA while a completion bond is still live, because
-    // reclaim_completion_bond needs a live Task to refund it — closing first would strand
-    // the bond principal forever. Force the caller to settle (reclaim) first. The creator
-    // bond is canonically seeds-pinned; the worker bond is checked best-effort here and is
-    // additionally guaranteed settled by the required+pinned Completed-path settlement.
+    // Audit F12: never compact the Task while a completion bond is still live.
+    // Force the caller to settle (reclaim) first. The creator bond is canonically
+    // seeds-pinned; the worker bond is checked best-effort here and is additionally
+    // guaranteed settled by the required+pinned Completed-path settlement. A worker
+    // bond that is not derivable here can still be reclaimed against the marker.
     require!(
         !completion_bond_is_live(&ctx.accounts.creator_completion_bond.to_account_info())?,
         CoordinationError::TaskHasLiveCompletionBond
@@ -222,7 +297,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
 
     // Audit (2026-07 swarm): a BidExclusive task's book may still hold live bids —
     // each bid locks its bond + rent on a per-bid PDA, and EVERY withdrawal path
-    // (expire_bid / cancel_bid) loads the Task by seeds. Closing the Task PDA while
+    // (expire_bid / cancel_bid) loads the Task by seeds. Compacting the Task while
     // any bid is active permanently locks those bidders out of their bonds, with no
     // admin sweep. Require the canonical book (fail-closed when a BidExclusive task
     // omits it) and refuse while it reports active bids — bidders must withdraw
@@ -248,8 +323,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
             require!(book.active_bids == 0, CoordinationError::TaskNotClosable);
             (1, Some(book_info.clone()))
         } else {
-            // `close_task` is intentionally repeatable. After an earlier cleanup
-            // swept the canonical book, the same PDA is an empty system account.
+            // After an earlier cleanup swept the canonical book, the same PDA is
+            // an empty system account.
             require!(
                 book_info.owner == &anchor_lang::system_program::ID && book_info.data_is_empty(),
                 CoordinationError::InvalidAccountOwner
@@ -261,7 +336,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     };
 
     let job_spec_closed = ctx.accounts.task_job_spec.is_some();
-    let escrow_closed = ctx.accounts.escrow.is_some();
     // A live hire link is one owned by this program; an empty/absent PDA (non-hired
     // task) is system-owned. The caller cannot omit it (it is a required account).
     let hire_record_info = ctx.accounts.hire_record.to_account_info();
@@ -279,6 +353,20 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         false
     };
 
+    let authority_info = ctx.accounts.authority.to_account_info();
+
+    // Close the optional children in-handler. The task address survives as the
+    // marker, the durable parent needed by any child omitted from this pass.
+    if let Some(job_spec) = ctx.accounts.task_job_spec.as_ref() {
+        job_spec.close(authority_info.clone())?;
+    }
+    let escrow_closed = match ctx.accounts.escrow.as_ref() {
+        Some(escrow) => {
+            close_settled_escrow(&escrow.to_account_info(), &task_key, &authority_info)?
+        }
+        None => false,
+    };
+
     emit!(TaskClosed {
         task_id: task.task_id,
         creator: task.creator,
@@ -289,23 +377,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         timestamp: clock.unix_timestamp,
     });
 
-    let authority_info = ctx.accounts.authority.to_account_info();
-
-    // Close the optional children in-handler. The Task PDA deliberately survives
-    // as the durable parent needed by any child omitted from this cleanup pass.
-    if let Some(job_spec) = ctx.accounts.task_job_spec.as_ref() {
-        job_spec.close(authority_info.clone())?;
-    }
-    if let Some(escrow) = ctx.accounts.escrow.as_ref() {
-        // Only ever reclaim rent from an already-settled escrow; refuse to touch
-        // one that still holds undistributed funds (would strand/misdirect them).
-        require!(escrow.is_closed, CoordinationError::InvalidInput);
-        escrow.close(authority_info.clone())?;
-    }
     // Sweep the bid book too: the guard above proved active_bids == 0, and the
     // book is creator-funded (initialize_bid_book, payer = creator), so its rent
     // returns to the creator rather than stranding on the terminal task. Same
-    // blast radius as closing the Task itself, which the guard already gates.
+    // blast radius as compacting the Task itself, which the guard already gates.
     if let Some(book_info) = bid_book_info {
         close_child_to(&book_info, &authority_info)?;
     }
@@ -346,29 +421,154 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         data[..8].copy_from_slice(&CLOSED_ACCOUNT_TOMBSTONE);
     }
 
-    // Reclaim rent from explicitly supplied auxiliary child PDAs. Each child is
-    // bound to THIS task by stored state. Third-party-funded records are paid only
-    // to their stored funder; a creator can never harvest another party's rent.
-    //
-    // Batch 3 WS-CONTEST §1 (submission-rent return): a straggler `TaskSubmission`
-    // was funded by its WORKER, so its rent goes back to the submission's stored
-    // worker — the caller must follow each TaskSubmission child with that worker's
-    // `AgentRegistration` (resolves agent PDA -> authority wallet) and the writable
-    // authority wallet itself, both validated against stored pubkeys. FAIL-CLOSED:
-    // if the matching accounts are not supplied the instruction errors — the
-    // creator is NEVER paid a worker's submission rent (kills the rent-farming
-    // sink where junk tasks harvested ~0.00286 SOL from every submitter).
-    let mut idx = child_start;
-    while idx < ctx.remaining_accounts.len() {
-        let child = &ctx.remaining_accounts[idx];
+    sweep_task_children(
+        ctx.remaining_accounts,
+        child_start,
+        &task_key,
+        task.live_submissions(),
+        &authority_info,
+        ctx.accounts
+            .protocol_config
+            .as_ref()
+            .map(|config| config.treasury),
+    )?;
+
+    // Compaction, last: flags, resize to 56 bytes, write the marker, and return
+    // every lamport above the marker's rent minimum to the creator (every create
+    // path makes the creator pay the Task rent; old-rate and odd-rate tasks
+    // refund everything above the minimum too).
+    let mut flags = 0u8;
+    if hire_record_live {
+        flags |= TaskMarker::FLAG_ENDED_LIVE_HIRE;
+    }
+    if task.rating_fee_qualified() {
+        flags |= TaskMarker::FLAG_FEE_QUALIFIED;
+    }
+    let marker =
+        TaskMarker::for_closed_task(task.creator, task.status, flags, clock.unix_timestamp)?;
+    let (refunded_lamports, marker_lamports) =
+        compact_task_into_marker(&task_info, &authority_info, &marker)?;
+
+    emit!(TaskCompacted {
+        task: task_key,
+        creator: task.creator,
+        status: marker.status,
+        refunded_lamports,
+        marker_lamports,
+        timestamp: clock.unix_timestamp,
+    });
+
+    Ok(())
+}
+
+/// Marker path: the task was compacted by an earlier close. Only children are
+/// swept; the listing, hire-record and escrow branches are skipped because none
+/// of them can exist after compaction (each was closed, or proven absent, in the
+/// compacting call). A leftover job-spec pointer is still closed when passed.
+fn sweep_marker_children<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
+    let task_key = ctx.accounts.task.key();
+    let authority_info = ctx.accounts.authority.to_account_info();
+    if let Some(job_spec) = ctx.accounts.task_job_spec.as_ref() {
+        job_spec.close(authority_info.clone())?;
+    }
+    // After compaction no exit that needs the full Task can run, so the Task's
+    // live-submission counter no longer guards anything; a validation config's
+    // own pending count still blocks its sweep.
+    sweep_task_children(
+        ctx.remaining_accounts,
+        0,
+        &task_key,
+        0,
+        &authority_info,
+        ctx.accounts
+            .protocol_config
+            .as_ref()
+            .map(|config| config.treasury),
+    )
+}
+
+/// Close this task's escrow state when it is still open and settled. Returns
+/// whether this call closed it. A program-owned account must be this task's
+/// `TaskEscrow` with `is_closed`; an empty system account means it is gone.
+fn close_settled_escrow<'info>(
+    escrow_info: &AccountInfo<'info>,
+    task_key: &Pubkey,
+    authority_info: &AccountInfo<'info>,
+) -> Result<bool> {
+    if escrow_info.owner == &crate::ID {
+        let escrow: TaskEscrow = deserialize_program_account(escrow_info)?;
+        require!(escrow.task == *task_key, CoordinationError::InvalidInput);
+        // Only ever reclaim rent from an already-settled escrow; refuse to touch
+        // one that still holds undistributed funds (would strand/misdirect them).
+        require!(escrow.is_closed, CoordinationError::InvalidInput);
+        close_program_account(escrow_info, authority_info)?;
+        return Ok(true);
+    }
+    require!(
+        escrow_info.owner == &anchor_lang::system_program::ID && escrow_info.data_is_empty(),
+        CoordinationError::InvalidAccountOwner
+    );
+    Ok(false)
+}
+
+/// Compact a closed Task in place: shrink the data to `TaskMarker::SIZE`, write
+/// the marker, and move every lamport above the marker's rent minimum to the
+/// creator. Returns `(refunded, kept)`.
+fn compact_task_into_marker<'info>(
+    task_info: &AccountInfo<'info>,
+    creator_info: &AccountInfo<'info>,
+    marker: &TaskMarker,
+) -> Result<(u64, u64)> {
+    task_info.resize(TaskMarker::SIZE)?;
+    {
+        let mut data = task_info.try_borrow_mut_data()?;
+        marker.write_to(&mut data)?;
+    }
+    let kept = Rent::get()?.minimum_balance(TaskMarker::SIZE);
+    let refunded = task_info
+        .lamports()
+        .checked_sub(kept)
+        .ok_or(CoordinationError::TaskNotRentExempt)?;
+    if refunded > 0 {
+        **task_info.try_borrow_mut_lamports()? = kept;
+        **creator_info.try_borrow_mut_lamports()? = creator_info
+            .lamports()
+            .checked_add(refunded)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+    }
+    Ok((refunded, kept))
+}
+
+/// Reclaim rent from explicitly supplied auxiliary child PDAs. Each child is
+/// bound to THIS task by stored state. Third-party-funded records are paid only
+/// to their stored funder; a creator can never harvest another party's rent.
+///
+/// Batch 3 WS-CONTEST §1 (submission-rent return): a straggler `TaskSubmission`
+/// was funded by its WORKER, so its rent goes back to the submission's stored
+/// worker. The caller must follow each TaskSubmission child with that worker's
+/// `AgentRegistration` (resolves agent PDA -> authority wallet) and the writable
+/// authority wallet itself, both validated against stored pubkeys. FAIL-CLOSED:
+/// if the matching accounts are not supplied the instruction errors, so the
+/// creator is NEVER paid a worker's submission rent (kills the rent-farming
+/// sink where junk tasks harvested ~0.00286 SOL from every submitter).
+fn sweep_task_children<'info>(
+    remaining_accounts: &[AccountInfo<'info>],
+    start: usize,
+    task_key: &Pubkey,
+    task_live_submissions: u8,
+    authority_info: &AccountInfo<'info>,
+    treasury: Option<Pubkey>,
+) -> Result<()> {
+    let mut idx = start;
+    while idx < remaining_accounts.len() {
+        let child = &remaining_accounts[idx];
         idx = idx
             .checked_add(1)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
-        match classify_task_child(child, &task_key, task.live_submissions())? {
-            TaskChild::CreatorFunded => close_child_to(child, &authority_info)?,
+        match classify_task_child(child, task_key, task_live_submissions)? {
+            TaskChild::CreatorFunded => close_child_to(child, authority_info)?,
             TaskChild::NamedRecipient { recipient } => {
-                let recipient_info = ctx
-                    .remaining_accounts
+                let recipient_info = remaining_accounts
                     .get(idx)
                     .ok_or(CoordinationError::TaskChildRentRecipientRequired)?;
                 idx = idx
@@ -384,12 +584,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
                 worker_agent,
                 submitted_at,
             } => {
-                let agent_info = ctx
-                    .remaining_accounts
+                let agent_info = remaining_accounts
                     .get(idx)
                     .ok_or(CoordinationError::SubmissionRentAccountsRequired)?;
-                let worker_wallet_info = ctx
-                    .remaining_accounts
+                let worker_wallet_info = remaining_accounts
                     .get(
                         idx.checked_add(1)
                             .ok_or(CoordinationError::ArithmeticOverflow)?,
@@ -404,33 +602,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
                     submitted_at,
                     agent_info,
                     worker_wallet_info,
-                    ctx.accounts
-                        .protocol_config
-                        .as_ref()
-                        .map(|config| config.treasury),
+                    treasury,
                 )?;
             }
         }
     }
-
-    // Keep the complete Task account rent exempt so every omitted child retains a
-    // usable parent. Direct transfers or historical excess above the rent floor are
-    // still recoverable by the creator; only the minimum liveness deposit remains.
-    let task_info = ctx.accounts.task.to_account_info();
-    let rent_minimum = Rent::get()?.minimum_balance(task_info.data_len());
-    require!(
-        task_info.lamports() >= rent_minimum,
-        CoordinationError::TaskNotRentExempt
-    );
-    let surplus = task_info.lamports() - rent_minimum;
-    if surplus > 0 {
-        **task_info.try_borrow_mut_lamports()? = rent_minimum;
-        **authority_info.try_borrow_mut_lamports()? = authority_info
-            .lamports()
-            .checked_add(surplus)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-    }
-
     Ok(())
 }
 
@@ -439,8 +615,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
 enum TaskChild {
     /// Creator-funded records (`TaskValidationConfig` / `TaskAttestorConfig`).
     CreatorFunded,
-    /// A record funded by a stored wallet (currently `TaskModeration`). The next
-    /// remaining account must be this writable recipient.
+    /// A record funded by a stored wallet (currently `TaskModeration`, whose
+    /// payer role names the creator or the moderator). The next remaining account
+    /// must be this writable recipient.
     NamedRecipient { recipient: Pubkey },
     /// A worker-funded `TaskSubmission` straggler: rent returns to the submission's
     /// stored worker (Batch 3 WS-CONTEST §1). Carries the stored worker AGENT PDA
@@ -466,10 +643,12 @@ fn classify_task_child(
     );
     let data = child.try_borrow_data()?;
     let (bound_task, child_kind) = if let Ok(m) = TaskModeration::try_deserialize(&mut &data[..]) {
+        // Revision 9 (C): the rent goes back to whoever paid it (the creator when
+        // the payer role says so, else the moderator).
         (
             m.task,
             TaskChild::NamedRecipient {
-                recipient: m.moderator,
+                recipient: m.rent_recipient(),
             },
         )
     } else if let Ok(v) = TaskValidationConfig::try_deserialize(&mut &data[..]) {
@@ -623,6 +802,24 @@ mod tests {
     #[test]
     fn rejects_terminal_with_pending_worker_slash() {
         assert!(validate_task_closable(TaskStatus::Cancelled, 0, true).is_err());
+    }
+
+    // Revision 9 (C): peers still settling and a token task without its escrow
+    // address refuse compaction. Revert-sensitive: dropping either require! turns
+    // the matching assertion red.
+    #[test]
+    fn compaction_preconditions_refuse_peer_settlement_and_a_missing_token_escrow() {
+        assert!(validate_task_compactable(false, false, false).is_ok());
+        assert!(validate_task_compactable(false, false, true).is_ok());
+        assert!(validate_task_compactable(false, true, true).is_ok());
+        for (peer, token, escrow) in [
+            (true, false, false),
+            (true, true, true),
+            (false, true, false),
+        ] {
+            let err = validate_task_compactable(peer, token, escrow).unwrap_err();
+            assert_eq!(err, CoordinationError::TaskNotCompactable.into());
+        }
     }
 
     #[test]

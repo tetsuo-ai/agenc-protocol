@@ -13,19 +13,25 @@
 //! inside resolve_dispute (the SDK always passes the bond accounts there), so it is
 //! already closed and cannot be reclaimed here. settle_completion_bond is a no-op for
 //! an already-settled / non-existent bond, so a redundant call is harmless.
+//!
+//! Revision 9 (C): `close_task` compacts a terminal Task into a TaskMarker. A
+//! marker is always accepted as the bond's parent: it is written only over a
+//! Completed or Cancelled Task, and a worker bond that close_task could not derive
+//! must stay recoverable after compaction.
 
 use crate::errors::CoordinationError;
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
-use crate::state::{Task, TaskStatus};
+use crate::instructions::task_parent_helpers::{load_task_or_marker, TaskOrMarker};
+use crate::state::TaskStatus;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 pub struct ReclaimCompletionBond<'info> {
-    #[account(
-        seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
-        bump = task.bump
-    )]
-    pub task: Box<Account<'info, Task>>,
+    /// The task PDA: a Task (which must be Completed or Cancelled, checked at its
+    /// canonical PDA with its stored bump) or the TaskMarker that close_task left
+    /// there, loaded by hand in the handler (`load_task_or_marker`).
+    /// CHECK: validated in the handler, as described above.
+    pub task: UncheckedAccount<'info>,
 
     /// CHECK: the bond PDA, address-fixed by seeds; ownership/role/party are fully
     /// validated by settle_completion_bond in the handler.
@@ -51,11 +57,15 @@ pub fn handler(ctx: Context<ReclaimCompletionBond>, role: u8) -> Result<()> {
     // to its rightful party while the Task PDA is alive. settle_completion_bond refunds to
     // bond.party only, so it cannot misroute funds; a dispute LOSER's bond was already
     // forfeited+closed inside resolve_dispute, so it is a no-op here. Reclaim never forfeits.
-    require!(
-        ctx.accounts.task.status == TaskStatus::Completed
-            || ctx.accounts.task.status == TaskStatus::Cancelled,
-        CoordinationError::InvalidStatusTransition
-    );
+    //
+    // Revision 9 (C): a TaskMarker parent is always accepted (it exists only over a
+    // Completed or Cancelled task).
+    if let TaskOrMarker::Task(task) = load_task_or_marker(&ctx.accounts.task.to_account_info())? {
+        require!(
+            task.status == TaskStatus::Completed || task.status == TaskStatus::Cancelled,
+            CoordinationError::InvalidStatusTransition
+        );
+    }
 
     settle_completion_bond(
         &ctx.accounts.completion_bond.to_account_info(),

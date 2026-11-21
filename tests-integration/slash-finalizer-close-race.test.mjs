@@ -25,6 +25,7 @@ import {
   freshWorld, injectAgentStake, configureTestMultisig,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram, agentStatsPda,
+  readTaskMarker,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -96,7 +97,7 @@ async function setupWorkerDispute(w, { resolutionType, stake = 2_000_000 }) {
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/f2", w.modAuth.publicKey)
@@ -242,7 +243,7 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   // was byte-identical — without a fresh blockhash its signature would be deduped).
   w.svm.expireBlockhash();
   expectOk(send(w.svm, await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord), [w.buyer]), "close_task after finalization");
-  assert.ok(!isClosed(w.svm, r.task), "terminal task retained as a durable liveness anchor");
+  assert.ok(readTaskMarker(w.svm, r.task), "revision 9: the terminal task compacted into its TaskMarker anchor");
 });
 
 test("upgrade compatibility: deployed Refund state rejects generic reclaim and remains slash-finalizable", async () => {
@@ -306,21 +307,12 @@ test("upgrade compatibility: deployed Refund state rejects generic reclaim and r
     "generic reclaim cannot consume a deployed pending-slash claim",
   );
 
-  // close_task may clean auxiliary children in this legacy zero-counter shape,
-  // but it deliberately retains the Task tombstone. It therefore cannot destroy
-  // either account required by the historical slash finalizer.
-  w.svm.expireBlockhash();
-  expectOk(
-    send(
-      w.svm,
-      await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord),
-      [w.buyer],
-    ),
-    "legacy close_task cleanup retains finalizer anchor",
-  );
-  assert.ok(!isClosed(w.svm, r.task), "close_task retains the legacy Task anchor");
-  assert.ok(!isClosed(w.svm, r.claim), "close_task cannot consume the legacy claim");
-
+  // Revision 9: close_task compacts a terminal Task into a TaskMarker, and this
+  // legacy zero-counter shape looks closable on chain (no pending bit, zero
+  // workers). The shape is a deploy-preflight blocker
+  // (`inconsistent-resolved-worker-state` in scripts/preflight-dispute-scan.mjs)
+  // and has no instance on mainnet (0 Resolved disputes), so the finalizer runs
+  // first here; cleanup then compacts the Task.
   const before = decode(w.svm, "AgentRegistration", w.providerAgent);
   w.svm.expireBlockhash();
   expectOk(
@@ -357,6 +349,17 @@ test("upgrade compatibility: deployed Refund state rejects generic reclaim and r
   assert.ok(isClosed(w.svm, r.claim), "deployed pending claim closed by its finalizer");
   assert.equal(decode(w.svm, "Task", r.task).current_workers, 0);
   assert.equal(decode(w.svm, "Task", r.task)._reserved[2], 0);
+
+  w.svm.expireBlockhash();
+  expectOk(
+    send(
+      w.svm,
+      await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord),
+      [w.buyer],
+    ),
+    "close_task after the legacy finalizer",
+  );
+  assert.ok(readTaskMarker(w.svm, r.task), "revision 9: the Task compacted into its TaskMarker");
 });
 
 test("F-2: initiator-slash evasion is dead after close_task cleanup", async () => {
@@ -373,9 +376,10 @@ test("F-2: initiator-slash evasion is dead after close_task cleanup", async () =
   assert.ok(isClosed(w.svm, r.claim), "claim closed at resolve (no deferral)");
 
   // Run terminal cleanup BEFORE the permissionless initiator-slash crank. The
-  // task now remains as a durable anchor, and the crank also does not load it.
+  // task now remains as a durable anchor (its TaskMarker since revision 9), and
+  // the crank also does not load it.
   expectOk(send(w.svm, await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord), [w.buyer]), "close_task before the crank (was the evasion)");
-  assert.ok(!isClosed(w.svm, r.task), "Task PDA retained after cleanup");
+  assert.ok(readTaskMarker(w.svm, r.task), "TaskMarker retained after cleanup");
 
   // The finalizer still slashes the lost initiator after cleanup.
   const stakeBefore = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);

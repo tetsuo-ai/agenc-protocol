@@ -109,8 +109,7 @@ async function recordTaskModIx(w, { task, jobHash, recorder, attestorEntry = nul
     .accounts({
       moderationConfig: w.modCfg, task, taskModeration: taskMod,
       moderator: recorder.publicKey, moderationAttestor: attestorEntry,
-      systemProgram: SystemProgram.programId,
-    })
+      systemProgram: SystemProgram.programId, rentPayer: recorder.publicKey})
     .instruction();
   return { ix, taskMod };
 }
@@ -418,8 +417,7 @@ test("overwrite isolation: attestor B cannot clobber attestor A's verdict — ex
     .accounts({
       moderationConfig: w.modCfg, task, taskModeration: slotA,
       moderator: b.publicKey, moderationAttestor: entryB,
-      systemProgram: SystemProgram.programId,
-    })
+      systemProgram: SystemProgram.programId, rentPayer: b.publicKey})
     .instruction();
   expectFail(send(w.svm, forgedIx, [b]), "ConstraintSeeds", "cross-slot write rejected by seeds");
   void forged;

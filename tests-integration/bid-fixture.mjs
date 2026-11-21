@@ -129,8 +129,7 @@ export async function createPublishedTaskFixture(
         taskModeration,
         moderator: w.modAuth.publicKey,
         moderationAttestor: null,
-        systemProgram: SystemProgram.programId,
-      }),
+        systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey}),
     [w.modAuth],
     `${tag}:moderate`,
   );

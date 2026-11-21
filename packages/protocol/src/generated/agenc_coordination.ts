@@ -2771,8 +2771,10 @@ export type AgencCoordination = {
     {
       "name": "closeTask",
       "docs": [
-        "Clean supplied children of a terminal task while retaining the rent-exempt",
-        "Task as a durable liveness anchor for any children not supplied."
+        "Clean supplied children of a terminal task and compact the Task into a",
+        "56-byte TaskMarker at the same address, refunding every lamport above the",
+        "marker's rent minimum to the creator. A later call on the marker sweeps",
+        "children only; the marker stays as the parent of any child not supplied."
       ],
       "discriminator": [
         55,
@@ -2787,30 +2789,14 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "task",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task.creator",
-                "account": "task"
-              },
-              {
-                "kind": "account",
-                "path": "task.task_id",
-                "account": "task"
-              }
-            ]
-          }
+          "docs": [
+            "The task PDA `[\"task\", creator, task_id]`: a terminal Task (closed and",
+            "compacted by this call) or the TaskMarker an earlier close left there.",
+            "It is loaded by hand in the handler (`load_task_or_marker`): owner,",
+            "discriminator, the Task's canonical PDA with its stored bump, and",
+            "creator == authority are all checked before anything moves."
+          ],
+          "writable": true
         },
         {
           "name": "taskJobSpec",
@@ -2851,11 +2837,13 @@ export type AgencCoordination = {
         {
           "name": "escrow",
           "docs": [
-            "Optional already-settled escrow PDA. `resolve_dispute` can leave a token",
-            "task's state escrow open after draining it and setting `is_closed = true`;",
-            "provide it here to reclaim its rent. A pending token reserve is still marked",
-            "open and is rejected until its slash finalizer runs. Bound to this task by",
-            "seeds + constraint."
+            "Optional escrow PDA. `resolve_dispute` can leave a token task's state",
+            "escrow open after draining it and setting `is_closed = true`; provide it",
+            "here to reclaim its rent. A pending token reserve is still marked open and",
+            "is rejected until its slash finalizer runs. A token-reward task must pass",
+            "this address to be compacted; an empty address proves the escrow is gone.",
+            "A program-owned account must deserialize as this task's closed",
+            "`TaskEscrow`; anything else must be an empty system account."
           ],
           "writable": true,
           "optional": true,
@@ -2954,10 +2942,11 @@ export type AgencCoordination = {
           "name": "creatorCompletionBond",
           "docs": [
             "Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task",
-            "REFUSES to close the Task while this is a live program-owned bond, so the Task PDA",
-            "(which reclaim_completion_bond needs) can never be destroyed out from under an",
-            "unsettled creator bond. The party is the creator, so this PDA is canonically",
-            "derivable here. For an already-settled / un-bonded task it is an empty system PDA."
+            "REFUSES to compact the Task while this is a live program-owned bond, so a",
+            "bond's parent can never be compacted out from under an unsettled creator",
+            "bond. The party is the creator, and the handler requires",
+            "`creator == authority`, so the seeds use the signer. For an already-settled",
+            "/ un-bonded task it is an empty system PDA."
           ],
           "pda": {
             "seeds": [
@@ -2987,8 +2976,7 @@ export type AgencCoordination = {
               },
               {
                 "kind": "account",
-                "path": "task.creator",
-                "account": "task"
+                "path": "authority"
               }
             ]
           }
@@ -3011,7 +2999,8 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Task creator; receives child rent and any Task balance above rent minimum."
+            "Task creator; receives child rent and every Task lamport above the",
+            "marker's rent minimum."
           ],
           "writable": true,
           "signer": true
@@ -10936,8 +10925,9 @@ export type AgencCoordination = {
       "name": "reclaimCompletionBond",
       "docs": [
         "Permissionlessly refund a still-live completion bond to its poster once the",
-        "task is Completed — recovers a bond stranded by a terminal exit that omitted",
-        "the optional bond account (audit fix). `role`: 0 = creator, 1 = worker."
+        "task is Completed or Cancelled, or compacted into a TaskMarker. Recovers a",
+        "bond stranded by a terminal exit that omitted the optional bond account",
+        "(audit fix). `role`: 0 = creator, 1 = worker."
       ],
       "discriminator": [
         199,
@@ -10952,29 +10942,11 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "task",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task.creator",
-                "account": "task"
-              },
-              {
-                "kind": "account",
-                "path": "task.task_id",
-                "account": "task"
-              }
-            ]
-          }
+          "docs": [
+            "The task PDA: a Task (which must be Completed or Cancelled, checked at its",
+            "canonical PDA with its stored bump) or the TaskMarker that close_task left",
+            "there, loaded by hand in the handler (`load_task_or_marker`)."
+          ]
         },
         {
           "name": "completionBond",
@@ -11034,9 +11006,10 @@ export type AgencCoordination = {
     {
       "name": "reclaimOrphanTaskChild",
       "docs": [
-        "Return rent from a historical rent-only task child whose parent was",
-        "destroyed by an older close_task implementation. The destination is",
-        "derived from stored program state; the permissionless cranker cannot pick it."
+        "Return rent from a rent-only task child whose parent was destroyed by an",
+        "older close_task implementation or compacted into a TaskMarker. The",
+        "destination is derived from stored program state; the permissionless",
+        "cranker cannot pick it."
       ],
       "discriminator": [
         91,
@@ -11060,7 +11033,8 @@ export type AgencCoordination = {
           "name": "parentTask",
           "docs": [
             "children, `TaskSubmission` for validation votes) and be a provably",
-            "absent system-owned, zero-data account. The field name is ABI-stable."
+            "absent system-owned, zero-data account, or (task-level children only)",
+            "the TaskMarker of a compacted task. The field name is ABI-stable."
           ]
         },
         {
@@ -11797,7 +11771,9 @@ export type AgencCoordination = {
             "`init_if_needed` is self-re-review only. No attestor can overwrite another's",
             "verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted",
             "attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are",
-            "written ONLY under v2 seeds — legacy `[\"task_moderation\", …]` PDAs are frozen."
+            "written ONLY under v2 seeds — legacy `[\"task_moderation\", …]` PDAs are frozen.",
+            "Revision 9 (C): the rent is paid by `rent_payer` (the task creator or the",
+            "moderator), and the record remembers which so the rent goes back to them."
           ],
           "writable": true,
           "pda": {
@@ -11888,6 +11864,16 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rentPayer",
+          "docs": [
+            "Revision 9 (C), appended: pays the record's rent when it is first created.",
+            "Must be the task creator or the moderator (`InvalidModerationRentPayer`).",
+            "Full surface only; the canary keeps the moderator as the payer."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": [
@@ -19270,6 +19256,19 @@ export type AgencCoordination = {
         165,
         3,
         196
+      ]
+    },
+    {
+      "name": "taskMarker",
+      "discriminator": [
+        193,
+        11,
+        192,
+        200,
+        51,
+        208,
+        108,
+        255
       ]
     },
     {
@@ -32135,6 +32134,61 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "taskMarker",
+      "docs": [
+        "The compacted remains of a closed `Task`, written in place at the task's own",
+        "PDA `[\"task\", creator, task_id]` by `close_task`, and only over a verified",
+        "Task. Owner plus this discriminator therefore prove the address held a task.",
+        "A program-owned account stays at the address, so `init` of a Task with the",
+        "same id keeps failing and no task id can be reused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "creator",
+            "docs": [
+              "The task's creator (the only signer allowed to sweep later children)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "docs": [
+              "Terminal status of the task: 3 Completed or 4 Cancelled."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "flags",
+            "docs": [
+              "`TaskMarker::FLAG_*` bits."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "closedAt",
+            "docs": [
+              "When the task was compacted."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "taskMigrated",
       "docs": [
         "Emitted when a single Task account is reallocated to the Batch-2 layout."
@@ -32279,7 +32333,9 @@ export type AgencCoordination = {
           {
             "name": "reserved",
             "docs": [
-              "Reserved for future attestation metadata."
+              "Reserved for future attestation metadata. Revision 9 carves",
+              "`_reserved[0]` as the rent payer role (see `rent_payer_role`); the rest",
+              "stays zeroed."
             ],
             "type": {
               "array": [

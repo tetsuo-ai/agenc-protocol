@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 
-import { copyFile, mkdir, readFile, access, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { addTaskMarkerToArtifacts } from './anchor-idl-task-marker.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceIdl = path.join(root, 'target', 'idl', 'agenc_coordination.json');
 const sourceTypes = path.join(root, 'target', 'types', 'agenc_coordination.ts');
+const stateSource = path.join(root, 'programs', 'agenc-coordination', 'src', 'state.rs');
 const destIdl = path.join(root, 'artifacts', 'anchor', 'idl', 'agenc_coordination.json');
 const destTypes = path.join(root, 'artifacts', 'anchor', 'types', 'agenc_coordination.ts');
 const manifestPath = path.join(root, 'artifacts', 'anchor', 'manifest.json');
@@ -58,6 +60,18 @@ async function writeManifest(idlContent, typeContent) {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
+// The committed artifacts are the Anchor build output plus the checked
+// TaskMarker entries (see scripts/anchor-idl-task-marker.mjs): Anchor cannot list
+// an account that no instruction context takes as `Account<T>`.
+async function expectedArtifacts() {
+  const [idlText, typesText, state] = await Promise.all([
+    readUtf8(sourceIdl),
+    readUtf8(sourceTypes),
+    readUtf8(stateSource),
+  ]);
+  return addTaskMarkerToArtifacts({ idlText, typesText, stateSource: state });
+}
+
 async function refresh() {
   if (!(await exists(sourceIdl)) || !(await exists(sourceTypes))) {
     throw new Error(
@@ -68,11 +82,11 @@ async function refresh() {
   await mkdir(path.dirname(destIdl), { recursive: true });
   await mkdir(path.dirname(destTypes), { recursive: true });
 
-  await copyFile(sourceIdl, destIdl);
-  await copyFile(sourceTypes, destTypes);
+  const { idlText, typesText } = await expectedArtifacts();
+  await writeFile(destIdl, idlText, 'utf8');
+  await writeFile(destTypes, typesText, 'utf8');
 
-  const [idlContent, typeContent] = await Promise.all([readUtf8(destIdl), readUtf8(destTypes)]);
-  await writeManifest(idlContent, typeContent);
+  await writeManifest(idlText, typesText);
 
   process.stdout.write('Protocol artifacts refreshed.\n');
 }
@@ -99,15 +113,13 @@ async function check({ requireBuild }) {
     return;
   }
 
-  const [sourceIdlContent, sourceTypeContent, committedIdlContent, committedTypeContent] =
-    await Promise.all([
-      readUtf8(sourceIdl),
-      readUtf8(sourceTypes),
-      readUtf8(destIdl),
-      readUtf8(destTypes),
-    ]);
+  const [expected, committedIdlContent, committedTypeContent] = await Promise.all([
+    expectedArtifacts(),
+    readUtf8(destIdl),
+    readUtf8(destTypes),
+  ]);
 
-  if (sourceIdlContent !== committedIdlContent || sourceTypeContent !== committedTypeContent) {
+  if (expected.idlText !== committedIdlContent || expected.typesText !== committedTypeContent) {
     throw new Error('Committed protocol artifacts are stale. Run "npm run artifacts:refresh".');
   }
 

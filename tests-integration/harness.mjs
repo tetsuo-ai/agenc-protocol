@@ -181,6 +181,32 @@ export function readCreatorStats(svm, address) {
   };
 }
 
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker at
+// the same address. Decoded by its fixed layout (design Appendix A) so the
+// fed99ab comparison runs, whose IDL has no such account, can still read it.
+export const TASK_MARKER_DISCRIMINATOR = crypto
+  .createHash("sha256").update("account:TaskMarker").digest().subarray(0, 8);
+export function readTaskMarker(svm, address) {
+  const acct = svm.getAccount(address);
+  if (!acct || Number(acct.lamports) === 0 || acct.data.length === 0) return null;
+  const d = Buffer.from(acct.data);
+  if (d.length !== 56 || !d.subarray(0, 8).equals(TASK_MARKER_DISCRIMINATOR)) return null;
+  return {
+    creator: new PublicKey(d.subarray(8, 40)),
+    status: d[40],
+    flags: d[41],
+    closedAt: d.readBigInt64LE(42),
+    reserved: Buffer.from(d.subarray(50, 56)),
+    lamports: BigInt(acct.lamports),
+    owner: acct.owner,
+  };
+}
+// TaskMarker.status values and flag bits (program state.rs).
+export const MARKER_COMPLETED = 3;
+export const MARKER_CANCELLED = 4;
+export const MARKER_FLAG_ENDED_LIVE_HIRE = 1;
+export const MARKER_FLAG_FEE_QUALIFIED = 2;
+
 // The two remaining_accounts deregister_agent requires (audit, 2026-07 swarm):
 // [0] the canonical ["bidder_market", agent] PDA (read-only — deregistration is
 // refused while it reports live bids) and [1] the canonical

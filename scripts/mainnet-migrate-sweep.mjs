@@ -36,6 +36,7 @@ import {
   readProgramUpgradeAuthoritySnapshot,
 } from "./program-upgrade-authority-policy.mjs";
 import { simulateNonBroadcastableInstructions } from "./mainnet-release-boundary.mjs";
+import { decodeTaskMarker, isTaskMarkerData } from "./preflight-dispute-scan.mjs";
 import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,6 +59,7 @@ const SIZES = {
   TASK_LEGACY: 382,
   TASK_BATCH2: 432,
   TASK_CURRENT: 466,
+  TASK_MARKER: 56,
 };
 const RPC_URL = process.env.RPC_URL;
 const EXECUTE = process.argv.includes("--execute");
@@ -331,6 +333,16 @@ function validateTaskAccount(pubkey, account) {
   if (!account.owner.equals(PROGRAM_ID)) {
     die(`Task ${pubkey.toBase58()} has the wrong owner.`);
   }
+  // Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker
+  // at the same address. A compacted task is closed and needs no migration.
+  if (isTaskMarkerData(account.data)) {
+    try {
+      decodeTaskMarker(account.data);
+    } catch (error) {
+      die(`Task ${pubkey.toBase58()} holds an invalid TaskMarker: ${error instanceof Error ? error.message : error}`);
+    }
+    return { pubkey, dataLength: account.data.length, compacted: true };
+  }
   if (!account.data.subarray(0, 8).equals(TASK_DISCRIMINATOR)) {
     die(`Task ${pubkey.toBase58()} has a discriminator mismatch.`);
   }
@@ -350,7 +362,7 @@ function validateTaskAccount(pubkey, account) {
   if (!expected.equals(pubkey)) {
     die(`Task ${pubkey.toBase58()} is not its canonical [task, creator, task_id] PDA.`);
   }
-  return { pubkey, dataLength: account.data.length };
+  return { pubkey, dataLength: account.data.length, compacted: false };
 }
 
 async function enumerateAndValidateTasks() {
@@ -552,7 +564,8 @@ async function main() {
   );
   console.log(
     `Tasks: ${tasks.length} exact/canonical (${SIZES.TASK_LEGACY}B=${counts[SIZES.TASK_LEGACY] ?? 0}, ` +
-      `${SIZES.TASK_BATCH2}B=${counts[SIZES.TASK_BATCH2] ?? 0}, ${SIZES.TASK_CURRENT}B=${counts[SIZES.TASK_CURRENT] ?? 0})`,
+      `${SIZES.TASK_BATCH2}B=${counts[SIZES.TASK_BATCH2] ?? 0}, ${SIZES.TASK_CURRENT}B=${counts[SIZES.TASK_CURRENT] ?? 0}, ` +
+      `${SIZES.TASK_MARKER}B compacted=${counts[SIZES.TASK_MARKER] ?? 0})`,
   );
 
   if (SKIP_PROTOCOL && config.dataLength !== SIZES.CONFIG_CURRENT) {
@@ -590,7 +603,7 @@ async function main() {
   for (let index = 0; index < tasks.length; index++) {
     const task = tasks[index];
     const label = `migrate_task [${index + 1}/${tasks.length}] ${task.pubkey.toBase58()}`;
-    if (task.dataLength === SIZES.TASK_CURRENT) {
+    if (task.compacted || task.dataLength === SIZES.TASK_CURRENT) {
       alreadyCurrent++;
       continue;
     }
@@ -635,7 +648,7 @@ async function main() {
     const finalTasks = await enumerateAndValidateTasks();
     if (
       finalConfig.dataLength !== SIZES.CONFIG_CURRENT ||
-      finalTasks.some((task) => task.dataLength !== SIZES.TASK_CURRENT)
+      finalTasks.some((task) => !task.compacted && task.dataLength !== SIZES.TASK_CURRENT)
     ) {
       die("final post-sweep verification found a legacy-sized config or Task; do not stamp the surface.");
     }

@@ -41,6 +41,7 @@ import {
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram, PID, agentStatsPda,
   injectLegacyAutoHire,
+  readTaskMarker,
 } from "./harness.mjs";
 
 const STORE_BOND = 50_000_000; // STORE_REGISTRATION_BOND_LAMPORTS (0.05 SOL)
@@ -270,7 +271,7 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "b2ref:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/b2ref", w.modAuth.publicKey)
@@ -347,7 +348,7 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
 // batch-2 the child whitelist accepted only TaskModeration / TaskValidationConfig /
 // TaskSubmission, stranding ~0.00178 SOL on every reviewed task forever.
 // ---------------------------------------------------------------------------
-test("close_task: reclaims TaskAttestorConfig rent while retaining the task liveness anchor", async () => {
+test("close_task: reclaims TaskAttestorConfig rent and keeps the task's marker as the liveness anchor", async () => {
   const w = await freshWorld({ price: 1_500_000 });
 
   // Two plain (non-hired) REVIEWED tasks, each with a validation + attestor config
@@ -408,9 +409,9 @@ test("close_task: reclaims TaskAttestorConfig rent while retaining the task live
   expectOk(send(w.svm, await closeIx([a.validation, a.attestorCfg]), [w.buyer]),
     "b2close:close with attestor-config child");
 
-  assert.ok(!isClosed(w.svm, a.task), "terminal task retained as the durable child-liveness anchor");
-  assert.ok(decode(w.svm, "Task", a.task).status.Cancelled !== undefined,
-    "retained task remains terminal");
+  assert.ok(readTaskMarker(w.svm, a.task), "revision 9: the terminal task compacted into its TaskMarker, the durable child-liveness anchor");
+  assert.equal(readTaskMarker(w.svm, a.task).status, 4,
+    "the marker keeps the Cancelled status");
   // Tombstoned: lamports drained to the creator, discriminator poisoned.
   assert.equal(Number(w.svm.getBalance(a.attestorCfg)), 0, "attestor config rent drained");
   const tomb = w.svm.getAccount(a.attestorCfg);

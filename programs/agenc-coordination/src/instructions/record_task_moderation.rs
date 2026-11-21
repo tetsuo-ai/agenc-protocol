@@ -5,6 +5,8 @@ use anchor_lang::prelude::*;
 use crate::errors::CoordinationError;
 use crate::events::TaskModerationRecorded;
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::constants::MODERATION_RENT_PAYER_CREATOR;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::state::ModerationAttestor;
 use crate::state::{
     is_valid_task_moderation_status, ModerationConfig, Task, TaskModeration, HASH_SIZE,
@@ -42,10 +44,12 @@ pub struct RecordTaskModeration<'info> {
     /// verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
     /// attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
     /// written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+    /// Revision 9 (C): the rent is paid by `rent_payer` (the task creator or the
+    /// moderator), and the record remembers which so the rent goes back to them.
     #[cfg(not(feature = "mainnet-canary"))]
     #[account(
         init_if_needed,
-        payer = moderator,
+        payer = rent_payer,
         space = TaskModeration::SIZE,
         seeds = [b"task_moderation_v2", task.key().as_ref(), job_spec_hash.as_ref(), moderator.key().as_ref()],
         bump
@@ -86,6 +90,13 @@ pub struct RecordTaskModeration<'info> {
     pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
 
     pub system_program: Program<'info, System>,
+
+    /// Revision 9 (C), appended: pays the record's rent when it is first created.
+    /// Must be the task creator or the moderator (`InvalidModerationRentPayer`).
+    /// Full surface only; the canary keeps the moderator as the payer.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub rent_payer: Signer<'info>,
 }
 
 pub fn handler(
@@ -135,7 +146,19 @@ pub fn handler(
 
     let task_key = ctx.accounts.task.key();
     let task = &ctx.accounts.task;
+    // Revision 9 (C): the rent payer is the creator or the moderator. The payer
+    // role is written only when the record is first created (an existing record
+    // always stores its task), so a re-review never rewrites who paid.
+    #[cfg(not(feature = "mainnet-canary"))]
+    let rent_payer_role = {
+        let rent_payer = ctx.accounts.rent_payer.key();
+        rent_payer_role_for(rent_payer, task.creator, ctx.accounts.moderator.key())?
+    };
     let moderation = &mut ctx.accounts.task_moderation;
+    #[cfg(not(feature = "mainnet-canary"))]
+    if moderation.task == Pubkey::default() {
+        moderation.set_rent_payer_role(rent_payer_role);
+    }
     moderation.task = task_key;
     moderation.creator = task.creator;
     moderation.job_spec_hash = job_spec_hash;
@@ -164,6 +187,22 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+/// Revision 9 (C): who pays a new moderation record's rent. The task creator
+/// (role `MODERATION_RENT_PAYER_CREATOR`) or the moderator (role 0); anyone else
+/// is refused with `InvalidModerationRentPayer`.
+#[cfg(not(feature = "mainnet-canary"))]
+pub fn rent_payer_role_for(rent_payer: Pubkey, creator: Pubkey, moderator: Pubkey) -> Result<u8> {
+    if rent_payer == creator {
+        return Ok(MODERATION_RENT_PAYER_CREATOR);
+    }
+    require_keys_eq!(
+        rent_payer,
+        moderator,
+        CoordinationError::InvalidModerationRentPayer
+    );
+    Ok(0)
 }
 
 pub fn validate_record_task_moderation_inputs(
@@ -245,6 +284,24 @@ mod tests {
             err,
             CoordinationError::UnauthorizedModerationAttestor.into()
         );
+    }
+
+    // Revision 9 (C): the creator or the moderator pays; nobody else.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn rent_payer_is_the_creator_or_the_moderator() {
+        let creator = Pubkey::new_unique();
+        let moderator = Pubkey::new_unique();
+        assert_eq!(
+            rent_payer_role_for(creator, creator, moderator).unwrap(),
+            MODERATION_RENT_PAYER_CREATOR
+        );
+        assert_eq!(
+            rent_payer_role_for(moderator, creator, moderator).unwrap(),
+            0
+        );
+        let err = rent_payer_role_for(Pubkey::new_unique(), creator, moderator).unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidModerationRentPayer.into());
     }
 
     #[test]

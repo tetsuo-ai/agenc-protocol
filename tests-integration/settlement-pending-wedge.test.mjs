@@ -200,8 +200,7 @@ async function setup(
           taskModeration: taskMod,
           moderator: w.modAuth.publicKey,
           moderationAttestor: null,
-          systemProgram: SystemProgram.programId,
-        })
+          systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey})
         .instruction(),
       [w.modAuth],
     ),

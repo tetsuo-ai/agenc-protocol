@@ -1,7 +1,7 @@
 // Revert-sensitive coverage for repeatable close_task cleanup.
 //
-// A terminal Task remains as the durable parent while callers reclaim auxiliary
-// children in packet-sized batches. Later cleanup passes must accept already-
+// A terminal Task is compacted into a TaskMarker (revision 9), which remains the
+// durable parent while callers reclaim auxiliary children in packet-sized batches. Later cleanup passes must accept already-
 // swept fixed accounts, reclaim newly supplied children, and avoid decrementing
 // a hired listing's capacity more than once.
 
@@ -25,6 +25,7 @@ import {
   pda,
   send,
   taskModV2Pda,
+  readTaskMarker,
 } from "./harness.mjs";
 
 test("close_task reclaims omitted children on a later pass without double-decrementing listing capacity", async () => {
@@ -93,8 +94,7 @@ test("close_task reclaims omitted children on a later pass without double-decrem
           taskModeration,
           moderator: w.modAuth.publicKey,
           moderationAttestor: null,
-          systemProgram: SystemProgram.programId,
-        })
+          systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey})
         .instruction(),
       [w.modAuth],
     ),
@@ -186,7 +186,7 @@ test("close_task reclaims omitted children on a later pass without double-decrem
     .instruction();
   expectOk(send(w.svm, firstClose, [w.buyer]), "close_task batch one");
 
-  assert.ok(!isClosed(w.svm, task), "terminal Task remains live");
+  assert.ok(readTaskMarker(w.svm, task), "revision 9: the terminal Task compacted into its TaskMarker");
   assert.ok(isClosed(w.svm, taskJobSpec), "first pass reclaims the job spec");
   assert.ok(
     !isClosed(w.svm, taskModeration),
@@ -218,7 +218,7 @@ test("close_task reclaims omitted children on a later pass without double-decrem
   expectOk(send(w.svm, secondClose, [w.buyer]), "close_task batch two");
 
   assert.ok(isClosed(w.svm, taskModeration), "second pass reclaims the child");
-  assert.ok(!isClosed(w.svm, task), "repeat cleanup retains the Task anchor");
+  assert.ok(readTaskMarker(w.svm, task), "repeat cleanup keeps the TaskMarker anchor");
   assert.equal(
     decode(w.svm, "ServiceListing", w.listing).open_jobs,
     0,

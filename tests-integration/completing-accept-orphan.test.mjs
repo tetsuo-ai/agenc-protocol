@@ -38,6 +38,7 @@ import {
   BN,
   Keypair,
   SystemProgram,
+  readTaskMarker,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -210,8 +211,7 @@ async function publishJobSpec(w, task) {
           taskModeration: taskMod,
           moderator: w.modAuth.publicKey,
           moderationAttestor: null,
-          systemProgram: SystemProgram.programId,
-        })
+          systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey})
         .instruction(),
       [w.modAuth],
     ),
@@ -611,5 +611,5 @@ test("F-3b: a bounced claim stranded by a peer's completing accept is reclaimed 
     ),
     "close_task after reclaim",
   );
-  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
+  assert.ok(readTaskMarker(w.svm, m.task), "revision 9: the terminal Task compacted into its TaskMarker anchor");
 });
