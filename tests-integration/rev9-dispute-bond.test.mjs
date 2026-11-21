@@ -15,8 +15,8 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, hireIx, seatTestAuthorityResolver, mutateTask,
-  taskModV2Pda, listingModV2Pda, moderationBlockPda,
+  freshWorld, seatTestAuthorityResolver, mutateTask,
+  taskModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats, creatorStatsCreationCost,
   disputeBondPda, disputeRespondent, findEvents, coder,
   BN, Keypair, SystemProgram,
@@ -80,19 +80,31 @@ async function submit(w, t) {
     .instruction(), [w.provider]), "db:submit");
 }
 
-// Creator-filed target: an Auto-mode hire (Exclusive, one worker), published and
-// claimed, no delivery. Task disputes stay allowed on Auto-mode tasks.
-async function hiredClaimed(w) {
-  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
-  if (isClosed(w.svm, listingMod)) {
-    expectOk(send(w.svm, await makeProgram(w.modAuth).methods
-      .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-      .instruction(), [w.modAuth]), "db:listing-mod");
-  }
-  const { ix, task, escrow, hireRecord, taskJobSpecHash } = await hireIx(w, { taskId: id32(), listingModeration: listingMod });
-  expectOk(send(w.svm, ix, [w.buyer]), "db:hire");
-  const t = { task, escrow, hireRecord, validation: null, reward: BigInt(w.price), ...(await publish(w, task, taskJobSpecHash)) };
+// Creator-filed target: an Auto-mode task (Exclusive, one worker, no validation
+// config) made with create_task, published and claimed, no delivery. Task disputes
+// stay allowed on Auto-mode tasks. (Since PR 6 an agent-door hire is a CreatorReview
+// task, so a hire no longer serves here.)
+async function hiredClaimed(w, { reward = w.price } = {}) {
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const t = {
+    task,
+    escrow: pda([enc("escrow"), task.toBuffer()])[0],
+    hireRecord: pda([enc("hire"), task.toBuffer()])[0],
+    validation: null,
+    reward: BigInt(reward),
+  };
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
+    .accounts({ task, escrow: t.escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
+      authorityRateLimit: pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0],
+      authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+      rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "db:create Auto task");
+  Object.assign(t, await publish(w, task));
   await claim(w, t);
   return t;
 }

@@ -1157,42 +1157,46 @@ _None._
 Hire a provider from a standing service listing, minting a one-shot task
 that snapshots the listing's terms and funds escrow from the buyer.
 
-The explicit v2 discriminator (`sha256("global:hire_from_listing_v2")[0..8]`)
-is an atomic rollout boundary: the old
-program rejects new clients instead of silently ignoring the appended
-task-job-spec commitment, and the upgraded program rejects old clients.
+Revision 9 (v3): the buying agent reviews the work. The hire takes the
+buyer's `review_window_secs` and creates a CreatorReview config, so the
+provider is paid on accept or auto-accept, never by `complete_task`. The
+explicit v3 discriminator (`sha256("global:hire_from_listing_v3")[0..8]`)
+is the atomic rollout boundary: v2 clients fail loudly instead of
+minting an unreviewed hire.
 
-### Accounts (15)
+### Accounts (16)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `task` | yes |  |  | PDA ["task", account:creator, arg:task_id] |  |
 | 2 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
 | 3 | `hire_record` | yes |  |  | PDA ["hire", account:task] | Links this hire to its source listing so close_task can decrement capacity without a Task layout change, and snapshots the operator fee terms. |
-| 4 | `listing` | yes |  |  | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] | Standing listing being hired from. Mutable to record the hire (`total_hires`, `updated_at`). |
-| 5 | `provider_agent` |  |  |  | PDA ["agent", account:provider_agent.agent_id (AgentRegistration)] | Provider identity behind the standing listing. A listing is durable, but a suspended or permanently retired provider must not receive new hires. Existing hires settle independently through their Task/HireRecord. |
-| 6 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 7 | `moderation_config` |  |  |  | PDA ["moderation_config"] | Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured gate (account absent) makes the hire fail = marketplace halt (spec §6). When `enabled`, a valid `listing_moderation` is required (checked in the handler). |
-| 8 | `listing_moderation` |  |  | yes |  | Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the moderator sits inside the primary record's derivation), so this arrives unchecked and the handler re-implements every dropped constraint via `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy), `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings. |
-| 9 | `moderation_attestor` |  |  | yes |  | OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire gate when the record was authored by a non-global-authority attestor. The canonical-PDA + moderator binding is enforced in the handler via `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>` still guarantees the entry is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load — the WP-A1 fail-closed property, preserved). Only needed for the roster path; the global-authority path passes with `None`. |
-| 10 | `moderation_block` |  |  |  |  | P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`. The handler derives `["moderation_block", listing.spec_hash]` itself and rejects a mismatched address, so it can be neither omitted nor substituted; a multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation presented, and re-minting the same content under a fresh listing PDA is still blocked (content-hash-keyed).  (handler-derived canonical PDA; system-owned/empty = pass). |
-| 11 | `creator_agent` |  |  |  | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | Buyer's agent registration for identity/authorization (mirrors create_task). |
-| 12 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents. |
-| 13 | `authority` |  | yes |  |  | The authority that owns the buyer's agent. — has_one → creator_agent |
-| 14 | `creator` | yes | yes |  |  | The buyer who pays for and owns the hired task. Must match authority to prevent social-engineering attacks (#375). |
-| 15 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 4 | `task_validation_config` | yes |  |  | PDA ["task_validation", account:task] | Revision 9 (D): the hire's CreatorReview config, created here (as on the bare-wallet door) so an agent-door hire never settles on the auto-pay path; the buying agent's wallet reviews first. |
+| 5 | `listing` | yes |  |  | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] | Standing listing being hired from. Mutable to record the hire (`total_hires`, `updated_at`). |
+| 6 | `provider_agent` |  |  |  | PDA ["agent", account:provider_agent.agent_id (AgentRegistration)] | Provider identity behind the standing listing. A listing is durable, but a suspended or permanently retired provider must not receive new hires. Existing hires settle independently through their Task/HireRecord. |
+| 7 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 8 | `moderation_config` |  |  |  | PDA ["moderation_config"] | Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured gate (account absent) makes the hire fail = marketplace halt (spec §6). When `enabled`, a valid `listing_moderation` is required (checked in the handler). |
+| 9 | `listing_moderation` |  |  | yes |  | Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the moderator sits inside the primary record's derivation), so this arrives unchecked and the handler re-implements every dropped constraint via `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy), `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings. |
+| 10 | `moderation_attestor` |  |  | yes |  | OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire gate when the record was authored by a non-global-authority attestor. The canonical-PDA + moderator binding is enforced in the handler via `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>` still guarantees the entry is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load — the WP-A1 fail-closed property, preserved). Only needed for the roster path; the global-authority path passes with `None`. |
+| 11 | `moderation_block` |  |  |  |  | P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`. The handler derives `["moderation_block", listing.spec_hash]` itself and rejects a mismatched address, so it can be neither omitted nor substituted; a multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation presented, and re-minting the same content under a fresh listing PDA is still blocked (content-hash-keyed).  (handler-derived canonical PDA; system-owned/empty = pass). |
+| 12 | `creator_agent` |  |  |  | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | Buyer's agent registration for identity/authorization (mirrors create_task). |
+| 13 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents. |
+| 14 | `authority` |  | yes |  |  | The authority that owns the buyer's agent. — has_one → creator_agent |
+| 15 | `creator` | yes | yes |  |  | The buyer who pays for and owns the hired task. Must match authority to prevent social-engineering attacks (#375). |
+| 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (7)
+### Args (8)
 
 | # | Arg | Type |
 |---|---|---|
 | 1 | `task_id` | `[u8; 32]` |
 | 2 | `expected_price` | `u64` |
 | 3 | `expected_version` | `u64` |
-| 4 | `referrer` | `Option<pubkey>` |
-| 5 | `referrer_fee_bps` | `u16` |
-| 6 | `moderator` | `pubkey` |
-| 7 | `task_job_spec_hash` | `[u8; 32]` |
+| 4 | `review_window_secs` | `i64` |
+| 5 | `referrer` | `Option<pubkey>` |
+| 6 | `referrer_fee_bps` | `u16` |
+| 7 | `moderator` | `pubkey` |
+| 8 | `task_job_spec_hash` | `[u8; 32]` |
 
 ## hire_from_listing_humanless
 

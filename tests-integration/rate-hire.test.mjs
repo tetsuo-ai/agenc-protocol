@@ -127,9 +127,10 @@ async function hireToCompleted(w) {
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0, w.modAuth.publicKey, arr(jobHash))
+    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey, arr(jobHash))
     .accounts({
-      task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
+      task, escrow, hireRecord, taskValidationConfig: pda([enc("task_validation"), task.toBuffer()])[0],
+      listing: w.listing, providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
       moderationBlock: moderationBlockPda(w.specHash)[0],
@@ -162,12 +163,20 @@ async function hireToCompleted(w) {
     .instruction(), [w.provider]), "rate-hire:claim");
 
   // Return BEFORE completion when the caller wants to test the non-terminal guard.
+  // Revision 9 (D): an agent-door hire is a CreatorReview task, so it completes by
+  // submit then accept (accept records the fee qualification that rate_hire reads).
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   return { task, escrow, claim, hireRecord, jobSpec, taskMod, listing: w.listing,
     complete: async () => {
       expectOk(send(w.svm, await w.providerProg.methods
-        .completeTask(arr(id32()), null)
-        .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
-        .instruction(), [w.provider]), "rate-hire:complete");
+        .submitTaskResult(arr(id32()), arr(Buffer.concat([Buffer.alloc(63), Buffer.from([7])])))
+        .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+        .instruction(), [w.provider]), "rate-hire:submit");
+      expectOk(send(w.svm, await w.buyerProg.methods
+        .acceptTaskResult()
+        .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, referrer: null, hireRecord, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+        .instruction(), [w.buyer]), "rate-hire:accept");
     } };
 }
 

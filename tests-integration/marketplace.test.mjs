@@ -40,6 +40,7 @@ import {
   setMultisig, configureTestMultisig, seatTestAuthorityResolver,
   injectModerationConfig, freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda, agentStatsPda, creatorStatsCreationCost, mutateTask, creatorStatsPda, injectRevision8Freeze, disputeBondPda,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
 
@@ -402,7 +403,11 @@ test("FULL SETTLEMENT (Auto): create -> moderate -> publish -> claim -> complete
 /// fee) exists at complete_task time — exercising the §4 3-way split. Mirrors
 /// runAutoSettlement but mints the task via hire_from_listing instead of create_task.
 /// Requires a moderation-enabled world. Returns balance snapshots + reward.
-async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeComplete = false } = {}) {
+// Revision 9 (D): an agent-door hire is a CreatorReview task, so it settles by
+// submit then accept (fee and legs). `legacyAuto` injects the state of a hire made
+// before the upgrade (Auto mode), which still settles with complete_task and is the
+// only kind of hire a task dispute can reach.
+async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeComplete = false, legacyAuto = false } = {}) {
   const modProg = makeProgram(w.modAuth);
 
   // 0) record a CLEAN ListingModeration so the hire passes the moderation gate.
@@ -426,6 +431,8 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
     taskJobSpecHash: jobHash,
   } = await hireIx(w, { taskId, listingModeration: listingMod });
   expectOk(send(w.svm, hix, [w.buyer]), "hire-settle:hire");
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  if (legacyAuto) await injectLegacyAutoHire(w, task);
 
   // 2) task moderation -> publish job spec -> worker claims.
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
@@ -450,8 +457,9 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
       authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "hire-settle:claim");
 
-  // Stop here so callers can drive complete_task themselves (e.g. negative operator tests).
-  if (stopBeforeComplete) return { task, escrow, claim, hireRecord, taskMod, jobSpec, reward: w.price };
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
+  // Stop here so callers can drive the settlement themselves (e.g. negative operator tests).
+  if (stopBeforeComplete) return { task, escrow, claim, hireRecord, taskMod, jobSpec, validation, submission, reward: w.price };
 
   if (pauseBeforeComplete) await setProtocolPaused(w.svm, true);
 
@@ -459,14 +467,27 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
   const operatorBalBefore = w.operator ? Number(w.svm.getBalance(w.operator)) : 0;
 
-  // 3) worker completes — passes the HireRecord + operator payee so the 3-way
-  //    split fires. operator may be null when the listing has no operator fee.
-  expectOk(send(w.svm, await w.providerProg.methods
-    .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
-    .instruction(), [w.provider]), "hire-settle:complete");
+  if (legacyAuto) {
+    // 3) a legacy Auto hire: the worker completes, passing the HireRecord + operator
+    //    payee so the 3-way split fires. operator may be null without an operator fee.
+    expectOk(send(w.svm, await w.providerProg.methods
+      .completeTask(arr(id32()), null)
+      .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
+      .instruction(), [w.provider]), "hire-settle:complete");
+  } else {
+    // 3) the worker submits and the buying agent's wallet accepts: the accept path
+    //    pays the worker, the protocol fee and the operator leg.
+    expectOk(send(w.svm, await w.providerProg.methods
+      .submitTaskResult(arr(id32()), arr(Buffer.concat([Buffer.alloc(63), Buffer.from([7])])))
+      .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.provider]), "hire-settle:submit");
+    expectOk(send(w.svm, await w.buyerProg.methods
+      .acceptTaskResult()
+      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: w.operator, referrer: null, hireRecord, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+      .instruction(), [w.buyer]), "hire-settle:accept");
+  }
 
-  return { task, escrow, claim, hireRecord, taskMod, jobSpec, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
+  return { task, escrow, claim, hireRecord, taskMod, jobSpec, validation, submission, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
 }
 
 test("operator-fee protection: a hired task cannot be completed without paying the operator", async () => {
@@ -474,7 +495,7 @@ test("operator-fee protection: a hired task cannot be completed without paying t
   // worker cannot omit/forge the operator to pocket the operator's cut.
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
-  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
 
   const completeAccounts = (operator) => ({
     task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent,
@@ -715,7 +736,7 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
     .expireClaim()
     .accounts({ creatorStats: null,
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
-      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
       treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
@@ -781,7 +802,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
     .expireClaim()
     .accounts({ creatorStats: null,
       authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
-      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: null, bondCreator: null,
       treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
@@ -800,7 +821,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
     .expireClaim()
     .accounts({ creatorStats: null,
       authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
-      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: junkBond, bondCreator: w.buyer.publicKey,
       treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
@@ -818,7 +839,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
     .expireClaim()
     .accounts({ creatorStats: null,
       authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
-      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
       treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
@@ -851,7 +872,7 @@ test("completion bond (#71): an UN-BONDED no-show still expires cleanly (fix mus
     .expireClaim()
     .accounts({ creatorStats: null,
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
-      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBondPda, bondCreator: w.buyer.publicKey,
       treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
@@ -940,7 +961,7 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
 
 test("completion bond: a clean completion refunds BOTH bonds to their posters", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
-  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true }); // claimed, InProgress
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
@@ -1005,7 +1026,7 @@ test("completion bond (F12): complete_task FORCE-settles the worker bond even wh
   // (refunds) it. Revert-sensitive: restore the Optional+`if let Some` settlement and the
   // bond is left live (strandable), flipping the "closed" + "refunded" assertions red.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
-  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
     .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
@@ -1709,7 +1730,7 @@ test("close_task children: a program-owned non-child remaining account is reject
 
 test("dispute: creator-initiate -> expire settles the escrow while the protocol is paused (exit-safe)", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
-  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true }); // claimed task, InProgress
 
   // A bare no-show worker cannot self-dispute. The creator opens the dispute and
   // binds the defendant's live claim; expiry later receives the canonical empty
@@ -1967,7 +1988,7 @@ test("dispute: resolve via assigned resolver settles while the protocol is pause
   // resolves with the required P6.4 rationale, no arbiters, and no vote PDAs.
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const authorityResolver = await seatTestAuthorityResolver(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true }); // claimed task, InProgress
 
   // Creator opens a dispute against the claimed worker (there is no submission yet).
   const taskId = decode(w.svm, "Task", r.task).task_id;
@@ -1999,7 +2020,7 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
   const authorityResolver = await seatTestAuthorityResolver(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress, live hire w/ 10% operator fee
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true }); // claimed, InProgress, live hire w/ 10% operator fee
 
   // Creator opens a Complete dispute against the claimed worker.
   const taskId = decode(w.svm, "Task", r.task).task_id;
@@ -2058,7 +2079,7 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
   // treasury. Revert-sensitive: without the disposition both bonds stay open.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   const authorityResolver = await seatTestAuthorityResolver(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
@@ -2109,7 +2130,7 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   // the tx fails atomically (MissingCompletionBondAccount) and nothing settles.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   const authorityResolver = await seatTestAuthorityResolver(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
@@ -2151,7 +2172,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   // (worker loses). The slash decision comes from the ruling bit, not a tally.
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const authorityResolver = await seatTestAuthorityResolver(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true }); // claimed task, InProgress
   await injectAgentStake(w.svm, w.providerAgent, 2_000_000); // worker has a slashable stake
 
   // CREATOR opens a Refund dispute against the worker (resolution_type 0 = Refund).
@@ -2208,7 +2229,7 @@ async function resolveAsDispute(w, r, dispute, prog, signerPubkey, resolverAssig
 test("dispute roster: a threshold-seated ASSIGNED resolver resolves directly — no per-case votes, quorum, or voting-period wait", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const approvals = await configureTestMultisig(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
   const dispute = await openCompleteDispute(w, r);
 
   // An unassigned wallet cannot resolve (gating).
@@ -2241,7 +2262,7 @@ test("dispute roster: a threshold-seated ASSIGNED resolver resolves directly —
 test("dispute roster: revoke removes the resolver's authority", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const approvals = await configureTestMultisig(w);
-  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
   const dispute = await openCompleteDispute(w, r);
 
   const resolver = Keypair.generate();

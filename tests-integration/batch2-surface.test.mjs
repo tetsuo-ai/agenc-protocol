@@ -40,6 +40,7 @@ import {
   freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram, PID, agentStatsPda,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 
 const STORE_BOND = 50_000_000; // STORE_REGISTRATION_BOND_LAMPORTS (0.05 SOL)
@@ -256,6 +257,9 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
   const taskId = id32();
   const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod, referrer: referrerKp.publicKey, referrerFeeBps: REF_BPS });
   expectOk(send(w.svm, hix, [w.buyer]), "b2ref:referred hire");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
   const h = decode(w.svm, "HireRecord", hireRecord);
   assert.equal(h.referrer.toBase58(), referrerKp.publicKey.toBase58(), "referrer snapshotted on the HireRecord");
   assert.equal(h.referrer_fee_bps, REF_BPS, "referrer bps snapshotted");

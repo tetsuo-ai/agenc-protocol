@@ -16,6 +16,7 @@ import {
   PID, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed, BN, Keypair, PublicKey,
   freshWorld, hireIx, listingModV2Pda, taskModV2Pda, moderationBlockPda,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 
 const REWARD = 4_000_000;
@@ -90,6 +91,9 @@ test("control: a funded wallet referrer still settles and is paid (no regression
 
   const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { listingModeration: listingMod, referrer: ref.publicKey, referrerFeeBps: 500 });
   expectOk(send(w.svm, hix, [w.buyer]), "hire with a funded wallet referrer");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
 
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);

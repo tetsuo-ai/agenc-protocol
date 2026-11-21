@@ -7907,20 +7907,22 @@ export type AgencCoordination = {
         "Hire a provider from a standing service listing, minting a one-shot task",
         "that snapshots the listing's terms and funds escrow from the buyer.",
         "",
-        "The explicit v2 discriminator (`sha256(\"global:hire_from_listing_v2\")[0..8]`)",
-        "is an atomic rollout boundary: the old",
-        "program rejects new clients instead of silently ignoring the appended",
-        "task-job-spec commitment, and the upgraded program rejects old clients."
+        "Revision 9 (v3): the buying agent reviews the work. The hire takes the",
+        "buyer's `review_window_secs` and creates a CreatorReview config, so the",
+        "provider is paid on accept or auto-accept, never by `complete_task`. The",
+        "explicit v3 discriminator (`sha256(\"global:hire_from_listing_v3\")[0..8]`)",
+        "is the atomic rollout boundary: v2 clients fail loudly instead of",
+        "minting an unreviewed hire."
       ],
       "discriminator": [
-        241,
-        94,
-        127,
-        7,
-        104,
-        174,
-        240,
-        116
+        72,
+        38,
+        44,
+        237,
+        3,
+        93,
+        253,
+        108
       ],
       "accounts": [
         {
@@ -7987,6 +7989,43 @@ export type AgencCoordination = {
                   105,
                   114,
                   101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "Revision 9 (D): the hire's CreatorReview config, created here (as on the",
+            "bare-wallet door) so an agent-door hire never settles on the auto-pay",
+            "path; the buying agent's wallet reviews first."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
                 ]
               },
               {
@@ -8266,6 +8305,10 @@ export type AgencCoordination = {
         {
           "name": "expectedVersion",
           "type": "u64"
+        },
+        {
+          "name": "reviewWindowSecs",
+          "type": "i64"
         },
         {
           "name": "referrer",

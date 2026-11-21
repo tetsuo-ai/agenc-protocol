@@ -19,6 +19,7 @@ import {
   BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
   disputeRespondent,
   disputeBondPda, creatorStatsCreationCost,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -34,6 +35,9 @@ async function setupCreatorDispute(w) {
   const taskId = id32();
   const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
 
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
