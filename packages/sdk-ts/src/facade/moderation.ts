@@ -3,6 +3,7 @@
 // signatures, defaults, and (for multi-PDA flows) bundling. Never import from generated/
 // internals other than its public exports.
 import {
+  AccountRole,
   getBytesEncoder,
   getAddressEncoder,
   getProgramDerivedAddress,
@@ -496,12 +497,16 @@ export async function setDefaultTrustList(input: SetDefaultTrustListInput) {
  * on-chain; pass `none()` to leave it unchanged).
  *
  * Revision 9 (G): a plain heartbeat may come from the config authority, the
- * moderation authority, or any single ProtocolConfig owner. The facade always
- * passes the optional `protocolConfig` (auto-derived), which an owner needs.
- * A window change also needs the multisig threshold (2 of 3 on mainnet): pass
- * every approval in `multisigSigners` (the sender must still be an allowed
- * heartbeat sender, and appear there too if it is an owner whose approval
- * counts). Otherwise the program refuses with
+ * moderation authority, or any single ProtocolConfig owner. The revision 9
+ * wire always carries the optional `protocolConfig` slot (a two-account
+ * heartbeat fails with 3005): by default the facade passes the derived
+ * ProtocolConfig, which works for every sender and which an owner needs;
+ * `protocolConfig: null` sends the program-ID placeholder instead, for the
+ * config or moderation authority's plain heartbeat. A window change also
+ * needs the ProtocolConfig and the multisig threshold (2 of 3 on mainnet):
+ * pass every approval in `multisigSigners` (the sender must still be an
+ * allowed heartbeat sender, and appear there too if it is an owner whose
+ * approval counts). Otherwise the program refuses with
  * `UnauthorizedModerationHeartbeat`.
  *
  * Silence past the window relaxes the moderation ALLOW gates to
@@ -509,7 +514,15 @@ export async function setDefaultTrustList(input: SetDefaultTrustListInput) {
  * abandonment authority cannot freeze the marketplace; the multisig BLOCK
  * floor never relaxes.
  */
-export type ModerationHeartbeatInput = ModerationHeartbeatAsyncInput & {
+export type ModerationHeartbeatInput = Omit<
+  ModerationHeartbeatAsyncInput,
+  "protocolConfig"
+> & {
+  /**
+   * The optional ProtocolConfig slot. Defaults to the derived PDA; `null`
+   * sends the program-ID placeholder (plain heartbeat only).
+   */
+  protocolConfig?: Address | null;
   /** Approvals for a window change; omit for a plain heartbeat. */
   readonly multisigSigners?: readonly TransactionSigner[];
 };
@@ -520,12 +533,33 @@ export async function moderationHeartbeat(input: ModerationHeartbeatInput) {
     ["authority"],
     { multisigRequired: false },
   );
+  const { protocolConfig, ...rest } = generatedInput;
+  const newWindowSecs = snapshotOptionOrNullable(
+    rest.newWindowSecs,
+    "moderationHeartbeat: newWindowSecs",
+  );
   const instruction = await getModerationHeartbeatInstructionAsync({
-    ...generatedInput,
-    newWindowSecs: snapshotOptionOrNullable(
-      generatedInput.newWindowSecs,
-      "moderationHeartbeat: newWindowSecs",
-    ),
+    ...rest,
+    ...(protocolConfig ? { protocolConfig } : {}),
+    newWindowSecs,
   });
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  if (protocolConfig !== null) {
+    return appendMultisigSignerMetas(instruction, multisigSigners);
+  }
+  // The placeholder keeps the slot: the account list never shrinks to the
+  // two revision 8 accounts.
+  const changesWindow =
+    newWindowSecs !== null &&
+    (typeof newWindowSecs !== "object" || newWindowSecs.__option === "Some");
+  if (changesWindow || multisigSigners.length > 0) {
+    throw new TypeError(
+      "moderationHeartbeat: a window change needs the ProtocolConfig; do not pass protocolConfig: null with it",
+    );
+  }
+  const accounts = [...instruction.accounts];
+  accounts[2] = {
+    address: AGENC_COORDINATION_PROGRAM_ADDRESS,
+    role: AccountRole.READONLY,
+  };
+  return { ...instruction, accounts };
 }
