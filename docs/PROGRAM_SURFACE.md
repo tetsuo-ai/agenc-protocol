@@ -370,9 +370,12 @@ What the revision-9 candidate changes, in brief:
   can. Freezes made before revision 9 keep their revision 8 rules.
 - **Task disputes.** Every filing posts a bond (`DisputeBond`). A ruling against
   the filer, or the filer's own cancel, sends the principal to the other side;
-  otherwise it comes back. The bond's rent always goes back to the filer. Owners
-  who are the creator or the worker wallet do not count toward a ruling's
-  threshold.
+  otherwise it comes back. The bond's rent always goes back to the filer. A
+  ruling comes from a seated resolver, who must hold no stake in it, or from 2
+  of the 3 owners: any wallet may propose that direct ruling, and owners who
+  are the creator or the worker wallet do not count toward its threshold. The
+  initiator never rules. After a filing, the creator cannot file again against
+  a claim that has lapsed since (`ClaimExpired`).
   `initiate_dispute` refuses a dispute on a single-worker review task from
   either side (`DisputeRefusedOnReviewTask`): the buyer freezes and the worker
   disputes the freeze. The program reads only the Task there (Exclusive, one
@@ -396,7 +399,9 @@ What the revision-9 candidate changes, in brief:
 - **Agent buyers.** `hire_from_listing` v3 gives agent-door hires creator review.
 - **Kept cost.** `close_task` compacts a finished (Completed or Cancelled) task
   into a 56-byte `TaskMarker` at the same address and refunds the rest of its
-  rent to the creator; children of a compacted parent keep working.
+  rent to the creator; children of a compacted parent keep working. A settled
+  escrow left out of that call is closed to the creator by `close_task` on the
+  marker.
 - **One key.** Turning moderation on or off, choosing the moderator, suspending
   and unsuspending an agent, the moderation attestor roster and heartbeat window
   changes need 2 of the 3 owners. A task creator cannot moderate its own task,
@@ -412,6 +417,31 @@ Known limits, carried to revision 10 or left to clients:
   ends at the deadline (revision 8: one hour after it). A dependent task created
   without a deadline can be held indefinitely, in revision 8 too, because an
   InProgress task without a deadline cannot be cancelled. Listed for revision 10.
+- **A worker's filing also protects a lapsed peer.** Peer settlement after a
+  dispute always returns a peer's claim, deposit included, to the peer, even
+  when the peer's claim had lapsed before anyone filed. So a worker that files
+  (it needs a delivery under review) keeps the deposit of a peer whose claim
+  lapsed just before, for example another agent of the same operator. It costs
+  the filer the Dispute rent, and its bond if the ruling goes against it.
+  Listed for revision 10: pass the creator to peer settlement and apply the
+  no-show rule to peers.
+- **Resolver roster changes still need the protocol authority as proposer.**
+  `assign_dispute_resolver` and `revoke_dispute_resolver` need 2 of the 3
+  owners, and only `ProtocolConfig.authority` may propose them. Rulings no
+  longer depend on that key (any wallet may propose a direct ruling), and no
+  resolver is seated on mainnet. Listed for revision 10.
+- **Events name the proposer.** `TaskModerationConfigUpdated.authority`,
+  `AgentSuspended.authority`, `AgentUnsuspended.authority`,
+  `ModerationAttestorAssigned.assigned_by` and `ModerationAttestorRevoked.revoked_by`
+  now hold the wallet that sent the 2-of-3 transaction, which can be any wallet.
+  The approving owners appear in no event: indexers and the audit trail read
+  them from the transaction's signers.
+- **Appended optional accounts need the placeholder.** On the revision 9 wire a
+  plain `moderation_heartbeat` with the two revision 8 accounts fails
+  `AccountNotEnoughKeys` (3005): the appended optional `protocol_config` must be
+  passed, as the program ID placeholder when it is not used. The revision 9 SDK
+  does this; every heartbeat sender must move to it. The same holds for the
+  appended optional `creator_stats` of `expire_claim`.
 - **An overturned freeze still counts as a rejection.** `tasks_rejected` (worker)
   and `rejections` (creator) count every freeze, including one a ruling later
   overturned; `disputes_won` and `disputes_lost` show the outcome. Clients should
