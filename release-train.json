@@ -35,7 +35,7 @@
       "name": "@tetsuo-ai/marketplace-react",
       "directory": "packages/marketplace-react",
       "expectedVersion": "0.7.0",
-      "expectedIntegrity": "sha512-VTdgqz/4TQ8Xm6kXHA7eh5z/Rv3+geJDexOi6jGXz67a5c6/qNlu6ajQ9Nui4RJbJOzV3AUsYnvR61wEZw6ndQ==",
+      "expectedIntegrity": "sha512-evFM/EGLquX4NjIkpwaiPfQcIhkRTdy/NAiG5ztsgHF2QalPTW/c1e+26UK3RMP4RR4ROvbyLtyw3FpdJx7Opw==",
       "requires": ["sdk"]
     },
     {
