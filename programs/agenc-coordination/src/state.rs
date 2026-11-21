@@ -965,6 +965,18 @@ impl TaskSubmission {
         self._reserved[0] = 0;
         self._reserved[1] = 0;
     }
+
+    /// Revision 9 (A): how this submission was frozen, carved value-only from
+    /// `_reserved[2]` (nothing wrote it before revision 9, so every older
+    /// account reads 0). 0 = a revision 8 freeze or never frozen;
+    /// `FREEZE_KIND_DISPUTABLE` = a revision 9 freeze the worker may dispute.
+    pub fn freeze_kind(&self) -> u8 {
+        self._reserved[2]
+    }
+
+    pub fn set_freeze_kind(&mut self, kind: u8) {
+        self._reserved[2] = kind;
+    }
 }
 
 const _: () = assert!(TaskSubmission::SIZE == 273);
@@ -4776,6 +4788,31 @@ mod tests {
         assert_eq!(s.wallet, wallet, "identity must not be overwritten");
         assert_eq!(s.bump, 4);
         assert_eq!(s.rejections, 2);
+    }
+
+    // Revision 9 (A): `freeze_kind` is a value-only carve of `_reserved[2]`; it
+    // must not disturb the quorum counters in `[0]`/`[1]` or the tail `[3..5]`,
+    // and a legacy all-zero account reads as a revision 8 freeze.
+    #[test]
+    fn task_submission_freeze_kind_carve_is_value_only() {
+        let mut s = TaskSubmission::default();
+        assert_eq!(
+            s.freeze_kind(),
+            0,
+            "legacy zero bytes read as a revision 8 freeze"
+        );
+        s.set_approval_count(3);
+        s.set_rejection_count(4);
+        s.set_freeze_kind(crate::instructions::constants::FREEZE_KIND_DISPUTABLE);
+        assert_eq!(s.freeze_kind(), 1);
+        assert_eq!(s._reserved, [3, 4, 1, 0, 0]);
+        s.clear_validation_counts();
+        assert_eq!(
+            s.freeze_kind(),
+            1,
+            "clearing the quorum counters keeps the freeze kind"
+        );
+        assert_eq!(TaskSubmission::SIZE, 273);
     }
 
     #[test]

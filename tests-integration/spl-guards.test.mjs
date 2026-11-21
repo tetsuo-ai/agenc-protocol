@@ -27,7 +27,7 @@ import {
   enc, arr, pda, id32, coder,
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed, tokenAmount,
   freshWorld, taskModV2Pda, moderationBlockPda,
-  BN, Keypair, agentStatsPda,
+  BN, Keypair, agentStatsPda, injectLegacyValidation,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -65,10 +65,14 @@ async function setupTokenTask(w, { submit = false, manual = true } = {}) {
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: mint.publicKey, creatorTokenAccount: buyerAta, tokenEscrowAta: escrowAta, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID })
     .instruction(), [w.buyer]), "token create_task");
   if (manual) {
-    expectOk(send(w.svm, await w.buyerProg.methods
+    // Revision 9 refuses CreatorReview on a token reward for new configs (6429):
+    // the freeze settles in lamports only. A config made before revision 9 keeps
+    // its paths, so the token guards below run on an injected legacy config.
+    expectFail(send(w.svm, await w.buyerProg.methods
       .configureTaskValidation(1, new BN(3600), 0, null)
       .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [w.buyer]), "configure CreatorReview");
+      .instruction(), [w.buyer]), "CreatorReviewUnsupportedForTask", "rev9: no new CreatorReview on a token task");
+    await injectLegacyValidation(w, task, { mode: "CreatorReview", reviewWindowSecs: 3600 });
   }
 
   const modProg = makeProgram(w.modAuth);

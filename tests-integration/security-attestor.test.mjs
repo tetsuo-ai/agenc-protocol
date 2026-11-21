@@ -33,7 +33,7 @@ import {
   PublicKey,
   SystemProgram,
   taskModV2Pda,
-  moderationBlockPda,
+  moderationBlockPda, injectLegacyValidation,
 } from "./harness.mjs";
 
 const MODE_EXTERNAL_ATTESTATION = 3;
@@ -71,7 +71,10 @@ async function setupAttestedTask(w, { attestor, reward = 2_000_000 } = {}) {
   return { task, escrow, validation, attestorCfg, hireRecord, reward, configureRes,
     // continue the claim+submit flow once configure has been asserted OK
     async claimAndSubmit() {
-      expectOk(configureRes, "attested:configure");
+      // Revision 9 closes ExternalAttestation for new configs (6428). The retained
+      // legacy settlement path is exercised on a config made before revision 9.
+      expectFail(configureRes, "ValidationModeClosed", "rev9: new ExternalAttestation is closed");
+      await injectLegacyValidation(w, task, { mode: "ExternalAttestation", reviewWindowSecs: 0, attestor });
       const jobHash = id32();
       const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
       const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
@@ -164,7 +167,9 @@ test("ExternalAttestation self-attestation guard: creator-as-attestor is rejecte
   // so the bad attestor config never even persists.
   const w = await freshWorld({ moderationEnabled: true });
   const s = await setupAttestedTask(w, { attestor: w.buyer.publicKey }); // buyer == task.creator
-  expectFail(s.configureRes, "InvalidAttestor", "creator-as-attestor must be rejected at configure");
+  // Revision 9: configure refuses every new ExternalAttestation config, so a
+  // creator-as-attestor config can no longer be made at all.
+  expectFail(s.configureRes, "ValidationModeClosed", "creator-as-attestor must be rejected at configure");
 });
 
 test("ExternalAttestation positive: an INDEPENDENT third-party attestor can approve and the worker is paid", async () => {

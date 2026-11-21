@@ -26,7 +26,7 @@ import {
   moderationBlockPda,
   BN,
   Keypair,
-  SystemProgram, agentStatsPda, agentStatsCreationCost, creatorStatsCreationCost,
+  SystemProgram, agentStatsPda, agentStatsCreationCost, creatorStatsCreationCost, injectLegacyValidation,
 } from "./harness.mjs";
 import {
   createPublishedTaskFixture as createPublishedTask,
@@ -153,53 +153,16 @@ async function settleParent(w) {
   return parent.task;
 }
 
+// Revision 9 refuses CreatorReview on BidExclusive tasks and every new
+// ExternalAttestation config (6429 / 6428). Configs made before revision 9 keep
+// their settlement paths, which these tests exercise on injected legacy configs.
 async function configureCreatorReview(w, task, reviewWindow = 3_600) {
-  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
-  const [attestor] = pda([enc("task_attestor"), task.toBuffer()]);
-  expectOk(
-    send(
-      w.svm,
-      await w.buyerProg.methods
-        .configureTaskValidation(1, new BN(reviewWindow), 0, null)
-        .accounts({
-          task,
-          taskValidationConfig: validation,
-          taskAttestorConfig: attestor,
-          protocolConfig: w.protocolPda,
-          hireRecord: pda([enc("hire"), task.toBuffer()])[0],
-          creator: w.buyer.publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction(),
-      [w.buyer],
-    ),
-    "bid:configure-creator-review",
-  );
+  const { validation } = await injectLegacyValidation(w, task, { mode: "CreatorReview", reviewWindowSecs: reviewWindow });
   return validation;
 }
 
 async function configureExternalAttestation(w, task, attestor) {
-  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
-  const [attestorConfig] = pda([enc("task_attestor"), task.toBuffer()]);
-  expectOk(
-    send(
-      w.svm,
-      await w.buyerProg.methods
-        .configureTaskValidation(3, new BN(0), 0, attestor)
-        .accounts({
-          task,
-          taskValidationConfig: validation,
-          taskAttestorConfig: attestorConfig,
-          protocolConfig: w.protocolPda,
-          hireRecord: pda([enc("hire"), task.toBuffer()])[0],
-          creator: w.buyer.publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction(),
-      [w.buyer],
-    ),
-    "bid:configure-external-attestation",
-  );
+  const { validation, attestorConfig } = await injectLegacyValidation(w, task, { mode: "ExternalAttestation", reviewWindowSecs: 0, attestor });
   return { validation, attestorConfig };
 }
 

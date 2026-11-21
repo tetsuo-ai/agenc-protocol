@@ -16,7 +16,7 @@ import {
   freshWorld, seatTestAuthorityResolver, configureTestMultisig, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, injectRevision8Freeze, disputeBondPda,
 } from "./harness.mjs";
 
 const TX_FEE = 5_000n;
@@ -355,15 +355,19 @@ test("rev9 records: a multisig ruling on a freeze counts won and lost on both re
         protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: agentStatsPda(w.providerAgent),
         systemProgram: SystemProgram.programId, creatorStats: creatorStatsPda(w.buyer.publicKey) })
       .instruction(), [w.buyer]), "freeze");
+    // A revision 8 freeze (freeze_kind 0) may be ruled without a dispute, on both
+    // binaries; fed99ab ignores the v2 arguments and the record accounts.
+    await injectRevision8Freeze(w, submission, 3600);
 
     expectOk(send(w.svm, await makeProgram(w.admin).methods
-      .resolveRejectFrozen(approve)
+      .resolveRejectFrozen(approve, arr(Buffer.alloc(32, 5)), "agenc://ruling/rev9-records")
       .accounts({ task: t.task, claim, escrow: t.escrow, taskSubmission: submission, worker: w.providerAgent,
         protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey,
         workerAuthority: w.provider.publicKey, hireRecord: t.hireRecord, operator: null, referrer: null,
         authority: w.admin.publicKey, creatorCompletionBond: completionBond(t.task, w.buyer.publicKey),
         workerCompletionBond: completionBond(t.task, w.provider.publicKey), systemProgram: SystemProgram.programId,
-        workerStats: agentStatsPda(w.providerAgent), creatorStats: creatorStatsPda(w.buyer.publicKey) })
+        disputeBond: disputeBondPda(t.task), workerStats: agentStatsPda(w.providerAgent),
+        creatorStats: creatorStatsPda(w.buyer.publicKey) })
       .remainingAccounts(ms.remainingAccounts)
       .instruction(), ms.approvers), `multisig ruling approve=${approve}`);
 

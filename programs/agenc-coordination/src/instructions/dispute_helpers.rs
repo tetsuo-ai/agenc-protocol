@@ -41,6 +41,24 @@ impl MarketplaceTerms {
     };
 }
 
+/// Revision 9: the owners with a stake in a ruling, who never count toward the
+/// multisig threshold: the task creator, the worker wallet, and each live
+/// (non-zero fee, non-default payee) operator or referrer.
+pub(crate) fn ruling_conflicts(
+    creator: Pubkey,
+    worker_wallet: Pubkey,
+    terms: &MarketplaceTerms,
+) -> Vec<Pubkey> {
+    let mut conflicted = vec![creator, worker_wallet];
+    if terms.operator_fee_bps > 0 && terms.operator != Pubkey::default() {
+        conflicted.push(terms.operator);
+    }
+    if terms.referrer_fee_bps > 0 && terms.referrer != Pubkey::default() {
+        conflicted.push(terms.referrer);
+    }
+    conflicted
+}
+
 /// Resolve the marketplace terms (operator + referrer payees and fee bps) for a task
 /// settling via a dispute exit — Task-first with a HireRecord fallback, mirroring
 /// `accept_task_result`. A Batch-2 hire (and every referred `create_task`) stamps the
@@ -609,6 +627,42 @@ pub(crate) fn settle_dispute_submission_evidence<'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Revision 9 (lead check 3): the conflicted set is the parties plus the live
+    // fee payees only; a zero-fee or default leg is not an interest.
+    #[test]
+    fn ruling_conflicts_lists_parties_and_live_payees() {
+        let (creator, worker, operator, referrer) = (
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+        );
+        assert_eq!(
+            ruling_conflicts(creator, worker, &MarketplaceTerms::NONE),
+            vec![creator, worker]
+        );
+        let live = MarketplaceTerms {
+            operator,
+            operator_fee_bps: 100,
+            referrer,
+            referrer_fee_bps: 50,
+        };
+        assert_eq!(
+            ruling_conflicts(creator, worker, &live),
+            vec![creator, worker, operator, referrer]
+        );
+        let dead = MarketplaceTerms {
+            operator,
+            operator_fee_bps: 0,
+            referrer: Pubkey::default(),
+            referrer_fee_bps: 50,
+        };
+        assert_eq!(
+            ruling_conflicts(creator, worker, &dead),
+            vec![creator, worker]
+        );
+    }
 
     #[test]
     fn expected_peer_bundles_saturates_at_zero() {

@@ -2,14 +2,21 @@
 //!
 //! Unlike `reject_task_result` (reopen for re-work) and `request_changes` (free
 //! in-place revision), this is the escalation: the task moves to `RejectFrozen` and
-//! settles ONLY via `resolve_reject_frozen` (multisig review decision) or
-//! `expire_reject_frozen` (permissionless timeout that defaults to the worker). The
-//! worker's claim and any completion bonds are RETAINED untouched — the frozen exit
-//! pays the worker / disposes the bonds. No funds move here.
+//! settles ONLY via `resolve_reject_frozen` (multisig ruling) or
+//! `expire_reject_frozen` (permissionless timeout). The worker's claim and any
+//! completion bonds are RETAINED untouched; the frozen exit pays the worker or
+//! refunds the buyer and disposes the bonds. No funds move here.
+//!
+//! Revision 9 (A): this is the only way to refuse delivered work on a
+//! single-worker review task. The freeze opens a fixed dispute window
+//! (`REJECT_DISPUTE_WINDOW_SECS`, whatever the review window was) and is marked
+//! `FREEZE_KIND_DISPUTABLE`: inside the window the worker may dispute it with
+//! `dispute_rejection`; with no dispute the buyer is refunded after it.
 
 use crate::errors::CoordinationError;
 use crate::events::TaskRejectFrozen;
 use crate::instructions::agent_stats_helpers::Counter;
+use crate::instructions::constants::{FREEZE_KIND_DISPUTABLE, REJECT_DISPUTE_WINDOW_SECS};
 use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::record_account_helpers::{
     count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
@@ -158,10 +165,10 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
     );
 
     // Freeze for review. The claim + bonds are RETAINED (no close, no slot release,
-    // no payout) — resolve/expire_reject_frozen settle them. The review window starts
-    // now; expire_reject_frozen defaults to the worker after review_deadline_at.
-    let review_window = ctx.accounts.task_validation_config.review_window_secs;
-    let review_deadline_at = clock.unix_timestamp.saturating_add(review_window);
+    // no payout); resolve/expire_reject_frozen settle them. Revision 9: the
+    // deadline is the end of the fixed dispute window, not the buyer's review
+    // window (which can be one second), and the freeze is marked disputable.
+    let review_deadline_at = disputable_freeze_deadline(clock.unix_timestamp)?;
 
     let submission = &mut ctx.accounts.task_submission;
     submission.status = SubmissionStatus::Rejected;
@@ -169,6 +176,7 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
     submission.rejected_at = clock.unix_timestamp;
     submission.rejection_hash = rejection_hash;
     submission.review_deadline_at = review_deadline_at;
+    submission.set_freeze_kind(FREEZE_KIND_DISPUTABLE);
 
     // Moving the submission out of Submitted must decrement the per-task pending counter,
     // exactly like every sibling that leaves Submitted (accept/auto_accept/reject/
@@ -211,4 +219,28 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
     )?;
 
     Ok(())
+}
+
+/// Revision 9 (A): the end of the dispute window of a freeze made at `now`.
+pub(crate) fn disputable_freeze_deadline(now: i64) -> Result<i64> {
+    now.checked_add(REJECT_DISPUTE_WINDOW_SECS)
+        .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Design 11.1: the freeze deadline is now + 259,200 (72 hours), or 300 s
+    // under validation-timings, whatever the review window was.
+    #[test]
+    fn freeze_deadline_is_the_fixed_dispute_window() {
+        let now = 1_700_000_000;
+        #[cfg(not(feature = "validation-timings"))]
+        assert_eq!(disputable_freeze_deadline(now).unwrap(), now + 259_200);
+        #[cfg(feature = "validation-timings")]
+        assert_eq!(disputable_freeze_deadline(now).unwrap(), now + 300);
+        assert!(disputable_freeze_deadline(i64::MAX).is_err());
+        assert_eq!(FREEZE_KIND_DISPUTABLE, 1);
+    }
 }

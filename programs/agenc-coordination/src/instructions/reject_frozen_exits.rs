@@ -6,23 +6,44 @@
 //! A frozen task is ALWAYS a manual (CreatorReview) task. Humanless listing hires
 //! create that validation mode directly, so both worker-payout exits must honor the
 //! same immutable operator/referrer terms as normal accept and auto-accept paths.
+//!
+//! Revision 9 (A, B). `TaskSubmission.freeze_kind` selects the rules:
+//! - 0, a revision 8 freeze: today's rules. The multisig may rule without a
+//!   dispute; after `review_deadline_at` the timeout pays the worker.
+//! - `FREEZE_KIND_DISPUTABLE`, a revision 9 freeze: `review_deadline_at` is the
+//!   end of the dispute window. With no dispute, the buyer is refunded after it.
+//!   With a dispute (a live `DisputeBond` at `["dispute_bond", task]`), the
+//!   multisig rules until `ruling_deadline`: for the worker it is paid as on
+//!   accept and gets its bond back; for the buyer it is refunded and receives the
+//!   worker's bond. Not ruled in time: as if no dispute had been filed (the buyer
+//!   is refunded, the bond goes back to the worker).
+//!
+//! Every ruling needs the threshold of owners WITHOUT a stake in it: the creator,
+//! the worker wallet and live operator or referrer payees do not count.
 
 use crate::errors::CoordinationError;
-use crate::events::{RejectFrozenExpired, RejectFrozenResolved};
+use crate::events::{
+    rejection_dispute_outcome, RejectFrozenExpired, RejectFrozenResolved, RejectionDisputeSettled,
+};
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::{
     build_marketplace_fee_legs, calculate_fee_with_reputation, execute_completion_rewards,
 };
+use crate::instructions::constants::FREEZE_KIND_DISPUTABLE;
 use crate::instructions::creator_stats_helpers::rejection_ruling_record_outcome;
+use crate::instructions::dispute_bond_helpers::{
+    is_empty_bond_address, load_live_dispute_bond, settle_dispute_bond, BondEnding,
+};
+use crate::instructions::dispute_helpers::{resolve_task_marketplace_terms, ruling_conflicts};
 use crate::instructions::record_account_helpers::{
     count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
 };
 use crate::instructions::task_validation_helpers::release_claim_slot;
 use crate::state::{
-    AgentRegistration, CompletionBond, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
-    TaskEscrow, TaskStatus, TaskSubmission,
+    AgentRegistration, CompletionBond, DisputeBond, ProtocolConfig, SubmissionStatus, Task,
+    TaskClaim, TaskEscrow, TaskStatus, TaskSubmission,
 };
-use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
+use crate::utils::multisig::{require_unconflicted_multisig_threshold, unique_account_infos};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
@@ -136,6 +157,12 @@ pub struct ResolveRejectFrozen<'info> {
 
     pub system_program: Program<'info, System>,
 
+    /// CHECK: revision 9 dispute bond `["dispute_bond", task]`, seeds-pinned here. A
+    /// system-owned account with no data means "not disputed" (whatever lamports
+    /// it holds); a live bond is validated and settled by `settle_dispute_bond`.
+    #[account(mut, seeds = [b"dispute_bond", task.key().as_ref()], bump)]
+    pub dispute_bond: UncheckedAccount<'info>,
+
     /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
     /// here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by
     /// `authority`.
@@ -152,16 +179,47 @@ pub struct ResolveRejectFrozen<'info> {
 
 /// Multisig review decision on a frozen task. `approve_completion`:
 /// - true  -> the rejection is overturned: pay the worker, refund the worker bond,
-///   forfeit the creator bond to treasury.
+///   forfeit the creator bond to treasury; a revision 9 dispute bond goes back to
+///   the worker.
 /// - false -> the rejection is upheld: refund the creator, forfeit the worker bond to
-///   treasury, refund the creator bond.
-pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bool) -> Result<()> {
+///   treasury, refund the creator bond; a revision 9 dispute bond's principal goes
+///   to the creator (its rent back to the worker).
+///
+/// Revision 9 (v2 wire): a reasoned ruling (`rationale_hash`, `rationale_uri`), the
+/// conflicted-owner threshold, and the freeze rules in the module note.
+pub fn resolve_handler(
+    ctx: Context<ResolveRejectFrozen>,
+    approve_completion: bool,
+    rationale_hash: [u8; 32],
+    rationale_uri: String,
+) -> Result<()> {
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::MultisigNotEnoughSigners
     );
+    validate_frozen_rationale(&rationale_hash, &rationale_uri)?;
+    // Revision 9: owners with a stake in the ruling (the creator, the worker wallet,
+    // live operator or referrer payees) do not count toward the threshold.
+    let task_key = ctx.accounts.task.key();
+    let terms = resolve_task_marketplace_terms(
+        ctx.accounts.task.operator,
+        ctx.accounts.task.operator_fee_bps,
+        ctx.accounts.task.referrer,
+        ctx.accounts.task.referrer_fee_bps,
+        &ctx.accounts.hire_record.to_account_info(),
+        &task_key,
+    )?;
+    let conflicted = ruling_conflicts(
+        ctx.accounts.task.creator,
+        ctx.accounts.worker_authority.key(),
+        &terms,
+    );
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
-    require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
+    require_unconflicted_multisig_threshold(
+        &ctx.accounts.protocol_config,
+        &unique_signers,
+        &conflicted,
+    )?;
     // Exit path: a frozen task must settle even while paused (money never locks).
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
@@ -186,8 +244,24 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
         ctx.accounts.task.status == TaskStatus::RejectFrozen,
         CoordinationError::TaskNotRejectFrozen
     );
+    // Revision 8 freeze: today's rules. Revision 9 freeze: a ruling needs a filed
+    // dispute and must land inside its ruling window.
+    let bond_info = ctx.accounts.dispute_bond.to_account_info();
+    let rules = freeze_rules(ctx.accounts.task_submission.freeze_kind())?;
+    let disputed = !is_empty_bond_address(&bond_info);
+    let ruling_deadline = if disputed {
+        load_live_dispute_bond(
+            &bond_info,
+            &task_key,
+            &task_key,
+            DisputeBond::KIND_REJECTION,
+        )?
+        .ruling_deadline
+    } else {
+        0
+    };
+    validate_frozen_ruling(rules, disputed, clock.unix_timestamp, ruling_deadline)?;
 
-    let task_key = ctx.accounts.task.key();
     let creator_info = ctx.accounts.creator.to_account_info();
     let worker_auth_info = ctx.accounts.worker_authority.to_account_info();
     // Forfeits go to the protocol treasury (already validated == protocol_config.treasury).
@@ -309,6 +383,38 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
             timestamp: clock.unix_timestamp,
         });
     }
+
+    // Revision 9 (B): the dispute bond follows the ruling: back to the worker when
+    // the completion is approved; its principal to the creator when the rejection
+    // is upheld (the rent always back to the worker). No bond (a revision 8 freeze)
+    // moves nothing.
+    let bond = settle_dispute_bond(
+        &bond_info,
+        &task_key,
+        &task_key,
+        DisputeBond::KIND_REJECTION,
+        &worker_auth_info,
+        &creator_info,
+        if approve_completion {
+            BondEnding::FilerUpheld
+        } else {
+            BondEnding::FilerRejected
+        },
+        clock.unix_timestamp,
+    )?;
+    emit!(RejectionDisputeSettled {
+        task: task_key,
+        outcome: if approve_completion {
+            rejection_dispute_outcome::PAID_BY_RULING
+        } else {
+            rejection_dispute_outcome::REFUNDED_BY_RULING
+        },
+        bond_amount: bond.amount,
+        bond_recipient: bond.principal_recipient,
+        resolved_by: ctx.accounts.authority.key(),
+        rationale_hash,
+        timestamp: clock.unix_timestamp,
+    });
 
     // Revision 9 (E): a ruling on a freeze is recorded on both sides: approving
     // the completion is a worker win and a creator loss, upholding the rejection
@@ -448,6 +554,12 @@ pub struct ExpireRejectFrozen<'info> {
 
     pub system_program: Program<'info, System>,
 
+    /// CHECK: revision 9 dispute bond `["dispute_bond", task]`, seeds-pinned here. A
+    /// system-owned account with no data means "not disputed" (whatever lamports
+    /// it holds); a live bond is validated and settled by `settle_dispute_bond`.
+    #[account(mut, seeds = [b"dispute_bond", task.key().as_ref()], bump)]
+    pub dispute_bond: UncheckedAccount<'info>,
+
     /// CHECK: revision 9 worker record `["agent_stats", worker.key()]`, seeds-pinned
     /// here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by
     /// `authority`.
@@ -462,9 +574,15 @@ pub struct ExpireRejectFrozen<'info> {
     pub creator_stats: UncheckedAccount<'info>,
 }
 
-/// Permissionless timeout: once the review window lapses with no multisig decision,
-/// a frozen task defaults to the WORKER (the creator failed to adjudicate). Pays the
-/// worker and refunds BOTH bonds (no fault established).
+/// Permissionless timeout (no completion bond is forfeited: no fault was found).
+/// - Revision 8 freeze: after `review_deadline_at` it defaults to the WORKER (the
+///   creator failed to adjudicate): pays the worker and refunds both bonds.
+/// - Revision 9 freeze, not disputed: after the dispute window the BUYER is
+///   refunded (price and escrow rent) and both completion bonds are refunded; the
+///   worker gets its claim and submission rent back and is not paid.
+/// - Revision 9 freeze, disputed but not ruled by `ruling_deadline`: the outcome of
+///   `unruled_rejection_dispute_outcome` (the buyer is refunded), and the dispute
+///   bond goes back to the worker, principal and rent.
 pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
     require!(
         ctx.accounts.authority.is_signer,
@@ -475,6 +593,7 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
     let clock = Clock::get()?;
     // Revision 9: create any missing record first. The create is a CPI, and a CPI
     // made after this handler moves lamports directly fails (UnbalancedInstruction).
+    // No counter moves on an expiry: the freeze counted the rejection.
     ensure_agent_stats(
         &ctx.accounts.worker_stats.to_account_info(),
         &ctx.accounts.authority.to_account_info(),
@@ -494,66 +613,101 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         ctx.accounts.task.status == TaskStatus::RejectFrozen,
         CoordinationError::TaskNotRejectFrozen
     );
-    require!(
-        clock.unix_timestamp > ctx.accounts.task_submission.review_deadline_at,
-        CoordinationError::RejectFrozenTimeoutNotElapsed
-    );
 
     let task_key = ctx.accounts.task.key();
     let worker_auth_info = ctx.accounts.worker_authority.to_account_info();
     let creator_info = ctx.accounts.creator.to_account_info();
-
-    let protocol_fee_bps = calculate_fee_with_reputation(
-        ctx.accounts.task.protocol_fee_bps,
-        ctx.accounts.worker.reputation,
-    );
-    let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
-        ctx.accounts.task.as_ref(),
-        task_key,
-        &ctx.accounts.hire_record.to_account_info(),
-        ctx.accounts
-            .operator
-            .as_ref()
-            .map(|account| account.as_ref()),
-        ctx.accounts
-            .referrer
-            .as_ref()
-            .map(|account| account.as_ref()),
-    )?;
-    ctx.accounts.claim.proof_hash = ctx.accounts.task_submission.proof_hash;
-    ctx.accounts.claim.result_data = ctx.accounts.task_submission.result_data;
-    ctx.accounts.claim.is_completed = true;
-    ctx.accounts.claim.is_validated = true;
-    ctx.accounts.claim.completed_at = clock.unix_timestamp;
-
-    execute_completion_rewards(
-        &mut ctx.accounts.task,
-        &mut ctx.accounts.claim,
-        &mut ctx.accounts.escrow,
-        &mut ctx.accounts.worker,
-        &mut ctx.accounts.protocol_config,
-        &worker_auth_info,
-        &ctx.accounts.treasury.to_account_info(),
-        &creator_info,
-        protocol_fee_bps,
-        None,
-        Some(ctx.accounts.task_submission.result_data),
-        &clock,
-        None,
-        operator_leg,
-        referrer_leg,
+    let bond_info = ctx.accounts.dispute_bond.to_account_info();
+    let rules = freeze_rules(ctx.accounts.task_submission.freeze_kind())?;
+    let disputed = !is_empty_bond_address(&bond_info);
+    let ruling_deadline = if disputed {
+        load_live_dispute_bond(
+            &bond_info,
+            &task_key,
+            &task_key,
+            DisputeBond::KIND_REJECTION,
+        )?
+        .ruling_deadline
+    } else {
+        0
+    };
+    let outcome = frozen_expiry_outcome(
+        rules,
+        disputed,
+        clock.unix_timestamp,
+        ctx.accounts.task_submission.review_deadline_at,
+        ruling_deadline,
     )?;
 
-    ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
-    ctx.accounts.task_submission.accepted_at = clock.unix_timestamp;
-    // Report the ACTUAL lamports paid to the worker (reward minus protocol fee), not
-    // the gross escrow — execute_completion_rewards records it on the claim.
-    let worker_payout = ctx.accounts.claim.reward_paid;
+    let worker_payout = match outcome {
+        FrozenExpiryOutcome::PayWorker => {
+            let protocol_fee_bps = calculate_fee_with_reputation(
+                ctx.accounts.task.protocol_fee_bps,
+                ctx.accounts.worker.reputation,
+            );
+            let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+                ctx.accounts.task.as_ref(),
+                task_key,
+                &ctx.accounts.hire_record.to_account_info(),
+                ctx.accounts
+                    .operator
+                    .as_ref()
+                    .map(|account| account.as_ref()),
+                ctx.accounts
+                    .referrer
+                    .as_ref()
+                    .map(|account| account.as_ref()),
+            )?;
+            ctx.accounts.claim.proof_hash = ctx.accounts.task_submission.proof_hash;
+            ctx.accounts.claim.result_data = ctx.accounts.task_submission.result_data;
+            ctx.accounts.claim.is_completed = true;
+            ctx.accounts.claim.is_validated = true;
+            ctx.accounts.claim.completed_at = clock.unix_timestamp;
 
-    // No fault on a timeout: refund BOTH bonds to their posters. Required +
-    // seeds-pinned accounts (audit F5/F12), so this ALWAYS runs and a live bond can
-    // never survive into the terminal task; settle no-ops on an un-bonded task's
-    // empty PDA.
+            execute_completion_rewards(
+                &mut ctx.accounts.task,
+                &mut ctx.accounts.claim,
+                &mut ctx.accounts.escrow,
+                &mut ctx.accounts.worker,
+                &mut ctx.accounts.protocol_config,
+                &worker_auth_info,
+                &ctx.accounts.treasury.to_account_info(),
+                &creator_info,
+                protocol_fee_bps,
+                None,
+                Some(ctx.accounts.task_submission.result_data),
+                &clock,
+                None,
+                operator_leg,
+                referrer_leg,
+            )?;
+
+            ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
+            ctx.accounts.task_submission.accepted_at = clock.unix_timestamp;
+            // Report the ACTUAL lamports paid to the worker (reward minus protocol fee),
+            // not the gross escrow; execute_completion_rewards records it on the claim.
+            ctx.accounts.claim.reward_paid
+        }
+        FrozenExpiryOutcome::RefundBuyer => {
+            // The uphold money path without its forfeits: cancel, release the claim
+            // slot (as resolve_reject_frozen's uphold branch does) and close the
+            // escrow to the creator (price and rent). The worker is paid nothing.
+            ctx.accounts.task.status = TaskStatus::Cancelled;
+            release_claim_slot(
+                &mut ctx.accounts.task,
+                &mut ctx.accounts.worker,
+                clock.unix_timestamp,
+            )?;
+            ctx.accounts.escrow.is_closed = true;
+            ctx.accounts.escrow.close(creator_info.clone())?;
+            0
+        }
+    };
+
+    // No fault on a timeout: refund BOTH completion bonds to their posters.
+    // Required + seeds-pinned accounts (audit F5/F12), so this ALWAYS runs and a
+    // live bond can never survive into the terminal task; settle no-ops on an
+    // un-bonded task's empty PDA.
     settle_completion_bond(
         &ctx.accounts.worker_completion_bond.to_account_info(),
         &worker_auth_info,
@@ -569,6 +723,19 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         BondDisposition::Refund,
     )?;
 
+    // Revision 9 (B): a dispute left unruled returns the bond to the worker,
+    // principal and rent. No bond moves nothing.
+    let bond = settle_dispute_bond(
+        &bond_info,
+        &task_key,
+        &task_key,
+        DisputeBond::KIND_REJECTION,
+        &worker_auth_info,
+        &creator_info,
+        BondEnding::Unruled,
+        clock.unix_timestamp,
+    )?;
+
     ctx.accounts.claim.close(worker_auth_info.clone())?;
     ctx.accounts.task_submission.close(worker_auth_info)?;
 
@@ -577,6 +744,266 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         worker_payout,
         timestamp: clock.unix_timestamp,
     });
+    if rules == FreezeRules::Revision9 {
+        emit!(RejectionDisputeSettled {
+            task: task_key,
+            outcome: if disputed {
+                rejection_dispute_outcome::REFUNDED_UNRULED
+            } else {
+                rejection_dispute_outcome::REFUNDED_UNDISPUTED
+            },
+            bond_amount: bond.amount,
+            bond_recipient: bond.principal_recipient,
+            resolved_by: Pubkey::default(),
+            rationale_hash: [0u8; 32],
+            timestamp: clock.unix_timestamp,
+        });
+    }
 
     Ok(())
+}
+
+// ============================ revision 9 freeze rules (pure) ============================
+
+/// Longest `rationale_uri` a frozen-task ruling takes: 128 bytes keeps the v2
+/// transaction under the 1,232-byte limit with all of its accounts.
+pub const MAX_FROZEN_RATIONALE_URI_LEN: usize = 128;
+
+/// A ruling must carry a non-zero rationale hash (as `resolve_dispute` requires)
+/// and a bounded pointer (empty allowed).
+pub(crate) fn validate_frozen_rationale(
+    rationale_hash: &[u8; 32],
+    rationale_uri: &str,
+) -> Result<()> {
+    require!(
+        rationale_hash.iter().any(|byte| *byte != 0),
+        CoordinationError::InvalidRationaleHash
+    );
+    require!(
+        rationale_uri.len() <= MAX_FROZEN_RATIONALE_URI_LEN,
+        CoordinationError::RationaleUriTooLong
+    );
+    Ok(())
+}
+
+/// Which rules a freeze follows, from `TaskSubmission.freeze_kind`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FreezeRules {
+    /// A freeze made before revision 9 (the byte reads 0).
+    Revision8,
+    /// A disputable revision 9 freeze.
+    Revision9,
+}
+
+pub(crate) fn freeze_rules(freeze_kind: u8) -> Result<FreezeRules> {
+    match freeze_kind {
+        0 => Ok(FreezeRules::Revision8),
+        FREEZE_KIND_DISPUTABLE => Ok(FreezeRules::Revision9),
+        _ => err!(CoordinationError::CorruptedData),
+    }
+}
+
+/// The worker may dispute a revision 9 freeze while `now <= dispute_deadline`
+/// (`TaskSubmission.review_deadline_at`). The undisputed refund needs the
+/// complement, so on one cluster clock the two can never both succeed.
+pub(crate) fn rejection_dispute_window_open(now: i64, dispute_deadline: i64) -> bool {
+    now <= dispute_deadline
+}
+
+/// The multisig may rule on a disputed revision 9 freeze while
+/// `now <= ruling_deadline`. The unruled refund needs the complement.
+pub(crate) fn rejection_ruling_window_open(now: i64, ruling_deadline: i64) -> bool {
+    now <= ruling_deadline
+}
+
+/// What a multisig ruling on a frozen task needs: nothing more for a revision 8
+/// freeze (which can never carry a bond); a filed dispute and an open ruling
+/// window for a revision 9 freeze.
+pub(crate) fn validate_frozen_ruling(
+    rules: FreezeRules,
+    disputed: bool,
+    now: i64,
+    ruling_deadline: i64,
+) -> Result<()> {
+    match rules {
+        FreezeRules::Revision8 => {
+            require!(!disputed, CoordinationError::InvalidDisputeBond);
+        }
+        FreezeRules::Revision9 => {
+            require!(disputed, CoordinationError::RejectionDisputeRequired);
+            require!(
+                rejection_ruling_window_open(now, ruling_deadline),
+                CoordinationError::RulingWindowClosed
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The money outcome of `expire_reject_frozen`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FrozenExpiryOutcome {
+    /// Pay the worker as on accept (fee and legs).
+    PayWorker,
+    /// Refund the buyer the price and escrow rent.
+    RefundBuyer,
+}
+
+/// Owner decision (design question 3, 2026-11-20): a disputed revision 9 freeze
+/// that is not ruled in time ends as if no dispute had been filed: the buyer is
+/// refunded, and `expire_reject_frozen` returns the worker's bond. This is the one
+/// place that decides it.
+pub(crate) fn unruled_rejection_dispute_outcome() -> FrozenExpiryOutcome {
+    FrozenExpiryOutcome::RefundBuyer
+}
+
+/// When `expire_reject_frozen` may run and what it does.
+pub(crate) fn frozen_expiry_outcome(
+    rules: FreezeRules,
+    disputed: bool,
+    now: i64,
+    review_deadline_at: i64,
+    ruling_deadline: i64,
+) -> Result<FrozenExpiryOutcome> {
+    match rules {
+        FreezeRules::Revision8 => {
+            require!(!disputed, CoordinationError::InvalidDisputeBond);
+            require!(
+                now > review_deadline_at,
+                CoordinationError::RejectFrozenTimeoutNotElapsed
+            );
+            Ok(FrozenExpiryOutcome::PayWorker)
+        }
+        FreezeRules::Revision9 if disputed => {
+            require!(
+                !rejection_ruling_window_open(now, ruling_deadline),
+                CoordinationError::RejectionWindowStillOpen
+            );
+            Ok(unruled_rejection_dispute_outcome())
+        }
+        FreezeRules::Revision9 => {
+            require!(
+                !rejection_dispute_window_open(now, review_deadline_at),
+                CoordinationError::RejectionWindowStillOpen
+            );
+            Ok(FrozenExpiryOutcome::RefundBuyer)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn code<T: core::fmt::Debug>(result: Result<T>) -> u32 {
+        match result {
+            Err(anchor_lang::error::Error::AnchorError(e)) => e.error_code_number,
+            other => panic!("expected an AnchorError, got {other:?}"),
+        }
+    }
+
+    // Design 11.1 / lead check 4: window predicates at deadline - 1, deadline and
+    // deadline + 1. Filing and ruling are inclusive at the deadline; both refunds
+    // need the next second, so a filing (or ruling) and a refund never both pass.
+    #[test]
+    fn rejection_windows_are_disjoint_at_the_edges() {
+        let d = 1_700_259_200;
+        assert!(rejection_dispute_window_open(d - 1, d));
+        assert!(rejection_dispute_window_open(d, d));
+        assert!(!rejection_dispute_window_open(d + 1, d));
+        assert!(rejection_ruling_window_open(d - 1, d));
+        assert!(rejection_ruling_window_open(d, d));
+        assert!(!rejection_ruling_window_open(d + 1, d));
+
+        let r9 = FreezeRules::Revision9;
+        // Undisputed refund: closed at d - 1 and d, open at d + 1.
+        for now in [d - 1, d] {
+            assert_eq!(
+                code(frozen_expiry_outcome(r9, false, now, d, 0)),
+                u32::from(CoordinationError::RejectionWindowStillOpen)
+            );
+        }
+        assert_eq!(
+            frozen_expiry_outcome(r9, false, d + 1, d, 0).unwrap(),
+            FrozenExpiryOutcome::RefundBuyer
+        );
+        // Unruled refund: keyed to the ruling deadline, not the dispute deadline.
+        let ruling = d + 259_200;
+        for now in [ruling - 1, ruling] {
+            assert_eq!(
+                code(frozen_expiry_outcome(r9, true, now, d, ruling)),
+                u32::from(CoordinationError::RejectionWindowStillOpen)
+            );
+        }
+        assert_eq!(
+            frozen_expiry_outcome(r9, true, ruling + 1, d, ruling).unwrap(),
+            FrozenExpiryOutcome::RefundBuyer
+        );
+        // Ruling: allowed through the deadline, refused one second after.
+        assert!(validate_frozen_ruling(r9, true, ruling - 1, ruling).is_ok());
+        assert!(validate_frozen_ruling(r9, true, ruling, ruling).is_ok());
+        assert_eq!(
+            code(validate_frozen_ruling(r9, true, ruling + 1, ruling)),
+            u32::from(CoordinationError::RulingWindowClosed)
+        );
+    }
+
+    // Lead check 5: revision 8 versus revision 9 selection in both exits.
+    #[test]
+    fn revision_8_freezes_keep_revision_8_rules() {
+        assert_eq!(freeze_rules(0).unwrap(), FreezeRules::Revision8);
+        assert_eq!(freeze_rules(1).unwrap(), FreezeRules::Revision9);
+        assert_eq!(
+            code(freeze_rules(2)),
+            u32::from(CoordinationError::CorruptedData)
+        );
+        let r8 = FreezeRules::Revision8;
+        let d = 1_700_000_100;
+        // Revision 8 timeout pays the worker after the review deadline.
+        assert_eq!(
+            code(frozen_expiry_outcome(r8, false, d, d, 0)),
+            u32::from(CoordinationError::RejectFrozenTimeoutNotElapsed)
+        );
+        assert_eq!(
+            frozen_expiry_outcome(r8, false, d + 1, d, 0).unwrap(),
+            FrozenExpiryOutcome::PayWorker
+        );
+        // Revision 8: the multisig may rule with no dispute, at any time.
+        assert!(validate_frozen_ruling(r8, false, d + 999_999, 0).is_ok());
+        // A revision 8 freeze can never carry a bond; one would fail closed.
+        assert_eq!(
+            code(validate_frozen_ruling(r8, true, d, 0)),
+            u32::from(CoordinationError::InvalidDisputeBond)
+        );
+        // Revision 9: no ruling without a dispute.
+        assert_eq!(
+            code(validate_frozen_ruling(FreezeRules::Revision9, false, d, 0)),
+            u32::from(CoordinationError::RejectionDisputeRequired)
+        );
+    }
+
+    // Owner decision (design question 3): an unruled dispute refunds the buyer.
+    #[test]
+    fn an_unruled_dispute_refunds_the_buyer() {
+        assert_eq!(
+            unruled_rejection_dispute_outcome(),
+            FrozenExpiryOutcome::RefundBuyer
+        );
+    }
+
+    #[test]
+    fn frozen_rationale_is_required_and_bounded() {
+        assert_eq!(
+            code(validate_frozen_rationale(&[0u8; 32], "")),
+            u32::from(CoordinationError::InvalidRationaleHash)
+        );
+        assert!(validate_frozen_rationale(&[1u8; 32], "").is_ok());
+        let max = "a".repeat(MAX_FROZEN_RATIONALE_URI_LEN);
+        assert!(validate_frozen_rationale(&[1u8; 32], &max).is_ok());
+        let over = "a".repeat(MAX_FROZEN_RATIONALE_URI_LEN + 1);
+        assert_eq!(
+            code(validate_frozen_rationale(&[1u8; 32], &over)),
+            u32::from(CoordinationError::RationaleUriTooLong)
+        );
+    }
 }

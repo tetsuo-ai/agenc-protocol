@@ -35,6 +35,8 @@ pub mod creator_stats_helpers;
 pub mod dispute_bond_helpers;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod dispute_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod dispute_rejection;
 pub mod lamport_transfer;
 pub mod launch_controls;
 pub(crate) mod program_account_helpers;
@@ -282,6 +284,9 @@ pub use create_task_humanless::*;
 pub use delegate_reputation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use deregister_agent::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use dispute_rejection::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use distribute_ghost_share::*;

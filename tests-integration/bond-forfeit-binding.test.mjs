@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import {
   freshWorld, makeProgram, send, expectOk, expectFail, decode, isClosed,
   pda, enc, arr, id32, BN, SystemProgram,
-  taskModV2Pda, moderationBlockPda,
+  taskModV2Pda, moderationBlockPda, mutateTask,
 } from "./harness.mjs";
 import { Keypair } from "@solana/web3.js";
 import { Buffer } from "node:buffer";
@@ -54,6 +54,10 @@ async function rejectedWorkerWithBond(w) {
     .createTask(arr(taskId), new BN(1), arr(desc), new BN(4_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "create task");
+  // Revision 9 refuses a plain reject on a single-worker review task (it must
+  // freeze), so a reopen-after-reject only happens on a legacy Exclusive task
+  // made before the max_workers == 1 rule. The F-1 guard is exercised there.
+  await mutateTask(w, task, (t) => { t.max_workers = 2; });
   expectOk(send(w.svm, await w.buyerProg.methods
     .configureTaskValidation(1, new BN(3600), 0, null)
     .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })

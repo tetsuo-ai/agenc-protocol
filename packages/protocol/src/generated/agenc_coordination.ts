@@ -5834,6 +5834,250 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "disputeRejection",
+      "docs": [
+        "Revision 9: the worker disputes a revision 9 freeze inside its dispute",
+        "window by posting a bond (10% of the price, at least 0.01 SOL). The",
+        "multisig then has the ruling window to rule. Exit path (works while paused)."
+      ],
+      "discriminator": [
+        219,
+        216,
+        21,
+        241,
+        9,
+        27,
+        136,
+        53
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "docs": [
+            "The frozen claim's worker; only its own wallet can dispute."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeBond",
+          "docs": [
+            "The bond. Its existence means \"disputed\"."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "The buyer's record. It exists: the freeze created it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The worker wallet: pays the bond and its rent, and gets the rent back."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "worker"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "evidenceHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "evidenceUri",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "distributeGhostShare",
       "docs": [
         "Permissionless contest ghost-split crank (Batch 3 WS-CONTEST §3): from",
@@ -7057,8 +7301,11 @@ export type AgencCoordination = {
     {
       "name": "expireRejectFrozen",
       "docs": [
-        "Permissionless timeout exit for a frozen task (Batch 3 §8): after the review",
-        "window lapses, default to the worker (pay + refund both bonds). Exit path."
+        "Permissionless timeout exit for a frozen task (Batch 3 §8). A revision 8",
+        "freeze defaults to the worker after its review window (pay + refund both",
+        "bonds). A revision 9 freeze refunds the buyer after the dispute window, or,",
+        "if disputed and not ruled, after the ruling window (the bond goes back to",
+        "the worker). Exit path."
       ],
       "discriminator": [
         132,
@@ -7361,6 +7608,39 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "disputeBond",
+          "docs": [
+            "system-owned account with no data means \"not disputed\" (whatever lamports",
+            "it holds); a live bond is validated and settled by `settle_dispute_bond`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
         },
         {
           "name": "workerStats",
@@ -13364,17 +13644,23 @@ export type AgencCoordination = {
       "docs": [
         "Multisig review decision on a frozen task (Batch 3 §8): pay the worker",
         "(approve_completion=true) or refund the creator (false), disposing both bonds.",
-        "Exit path — settles even while paused (money never locks)."
+        "Exit path — settles even while paused (money never locks).",
+        "",
+        "Revision 9 (v2): a reasoned ruling (rationale hash and a URI of at most 128",
+        "bytes); owners with a stake in the task do not count toward the threshold;",
+        "a revision 9 freeze can be ruled only when disputed and inside its ruling",
+        "window, and the dispute bond follows the ruling. The explicit discriminator",
+        "`sha256(\"global:resolve_reject_frozen_v2\")[0..8]` makes old clients fail loudly."
       ],
       "discriminator": [
-        247,
-        17,
-        223,
-        213,
-        12,
-        193,
-        235,
-        127
+        64,
+        51,
+        69,
+        144,
+        38,
+        227,
+        148,
+        59
       ],
       "accounts": [
         {
@@ -13665,6 +13951,39 @@ export type AgencCoordination = {
           "address": "11111111111111111111111111111111"
         },
         {
+          "name": "disputeBond",
+          "docs": [
+            "system-owned account with no data means \"not disputed\" (whatever lamports",
+            "it holds); a live bond is validated and settled by `settle_dispute_bond`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
           "name": "workerStats",
           "docs": [
             "here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by",
@@ -13736,6 +14055,19 @@ export type AgencCoordination = {
         {
           "name": "approveCompletion",
           "type": "bool"
+        },
+        {
+          "name": "rationaleHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "rationaleUri",
+          "type": "string"
         }
       ]
     },
@@ -17960,6 +18292,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "creatorStats",
+      "discriminator": [
+        239,
+        158,
+        112,
+        237,
+        227,
+        82,
+        97,
+        129
+      ]
+    },
+    {
       "name": "defaultTrustList",
       "discriminator": [
         142,
@@ -17983,6 +18328,19 @@ export type AgencCoordination = {
         36,
         241,
         74
+      ]
+    },
+    {
+      "name": "disputeBond",
+      "discriminator": [
+        52,
+        102,
+        115,
+        175,
+        111,
+        220,
+        8,
+        79
       ]
     },
     {
@@ -23886,6 +24244,88 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "creatorStats",
+      "docs": [
+        "Wallet-keyed track record for task creators (bare wallets and agent buyers",
+        "alike, since a Task stores only the creator's wallet). Seeds",
+        "`[\"creator_stats\", wallet]`. Telemetry, never a settlement precondition."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "docs": [
+              "The creator wallet these counters belong to (also the seed)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rejections",
+            "docs": [
+              "Deliveries this creator refused (reject or freeze)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rejectionsContested",
+            "docs": [
+              "Refusals the worker disputed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "disputesWon",
+            "docs": [
+              "Disputes ruled in this creator's favor."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "disputesLost",
+            "docs": [
+              "Disputes ruled against this creator."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cancels",
+            "docs": [
+              "Tasks this creator cancelled."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "depositsReceived",
+            "docs": [
+              "Forfeited claim deposits this creator received."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lastUpdated",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "creatorTrackRecordUpdated",
       "docs": [
         "A counter on a wallet-keyed `CreatorStats` record was incremented."
@@ -24361,6 +24801,92 @@ export type AgencCoordination = {
               "final peer settles. Only meaningful while `status == SettlementPending`."
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeBond",
+      "docs": [
+        "A dispute bond: the filer's stake on a dispute, held as lamports above this",
+        "account's rent. Seeds `[\"dispute_bond\", subject]`, where `subject` is the",
+        "task for a dispute of a rejection (kind 0) or the `Dispute` account for a",
+        "task dispute (kind 1). The two seed spaces cannot collide because a task",
+        "and a dispute never share an address. Its existence means \"disputed\"; it is",
+        "closed (tombstoned) when settled."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "subject",
+            "docs": [
+              "The task (kind 0) or the Dispute account (kind 1). Also the seed."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "task",
+            "docs": [
+              "The task the dispute is about."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "filer",
+            "docs": [
+              "Filer wallet. Always gets the rent back."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "respondent",
+            "docs": [
+              "Respondent wallet. Gets the principal when the filer loses."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Principal held above rent."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "kind",
+            "docs": [
+              "`DisputeBond::KIND_*`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "filedAt",
+            "type": "i64"
+          },
+          {
+            "name": "rulingDeadline",
+            "docs": [
+              "End of the ruling window (kind 0). Zero for a task dispute, whose window",
+              "lives on the Dispute account."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved (room for a judge fee). MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                24
+              ]
+            }
           }
         ]
       }

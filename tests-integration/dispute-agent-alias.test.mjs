@@ -24,7 +24,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake,
   taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram,
+  BN, Keypair, SystemProgram, injectLegacyValidation,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -58,11 +58,16 @@ async function setupSubmittedTask(w, { mode, attestor = null }) {
     .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "create task");
-  const reviewWindow = mode === MODE_CREATOR_REVIEW ? 3600 : 0;
+  // Revision 9 closes ExternalAttestation for new configs (6428): an attested
+  // task is a config made before revision 9, injected after a CreatorReview
+  // configure (the retained legacy settlement path).
   expectOk(send(w.svm, await w.buyerProg.methods
-    .configureTaskValidation(mode, new BN(reviewWindow), 0, attestor)
+    .configureTaskValidation(MODE_CREATOR_REVIEW, new BN(3600), 0, null)
     .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestorCfg, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "configure validation");
+  if (mode === MODE_EXTERNAL_ATTESTATION) {
+    await injectLegacyValidation(w, task, { mode: "ExternalAttestation", reviewWindowSecs: 0, attestor });
+  }
 
   const modProg = makeProgram(w.modAuth);
   const jobHash = id32();

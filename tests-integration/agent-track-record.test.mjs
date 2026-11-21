@@ -77,7 +77,7 @@ function readStats(svm, statsPda) {
 // Helper: a non-hired CreatorReview task driven to a pending submission (ready
 // for reject_task_result). Mirrors marketplace.test.mjs's setupSubmittedManual.
 // ---------------------------------------------------------------------------
-async function setupSubmittedManual(w) {
+async function setupSubmittedManual(w, { taskType = 0 } = {}) {
   const modProg = makeProgram(w.modAuth);
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
@@ -90,7 +90,7 @@ async function setupSubmittedManual(w) {
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
 
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "trk:create_task");
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -133,7 +133,9 @@ async function setupSubmittedManual(w) {
 // ---------------------------------------------------------------------------
 test("track-record: reject_task_result bumps the worker's tasks_rejected (AgentStats lazily created)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const m = await setupSubmittedManual(w);
+  // Collaborative review task: revision 9 keeps plain reject there (a
+  // single-worker review task must freeze, see rev9-turn-down.test.mjs).
+  const m = await setupSubmittedManual(w, { taskType: 1 });
 
   const workerStats = agentStatsPda(w.providerAgent);
   // Revision 9: the worker's record is created at its first claim, counters at zero.
