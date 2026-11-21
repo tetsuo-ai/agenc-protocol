@@ -133,9 +133,8 @@ selected signer.
 
 ## Referrers
 
-Referral settlement is live on the full protocol surface (104-instruction
-revision 8 on mainnet, and the 106-instruction revision 9 this workspace
-targets). When `referrer: { wallet, feeBps }` is configured:
+Referral settlement is live on the full protocol surface (the 106-instruction
+revision 9 on mainnet since 2026-11-21). When `referrer: { wallet, feeBps }` is configured:
 
 - the provider validates and stores it (bad base58 throws; out-of-range basis
   points are rejected);

@@ -2,8 +2,8 @@
 
 ## 0.6.0
 
-For the revision 9 program (`surface_revision = 9`). Protocol 0.5.2 stays the
-revision-8 IDL. The two wires do not mix: revision 9 appends accounts to 18
+For the revision 9 program (`surface_revision = 9`), deployed to mainnet on 2026-11-21 from release commit `154d286`.
+Protocol 0.5.2 stays the revision-8 IDL. The two wires do not mix: revision 9 appends accounts to 18
 existing instructions and changes the data of two of them.
 
 ### Release coordination

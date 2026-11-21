@@ -270,11 +270,11 @@ pin a moderated job spec → claim → submit → accept/close/rate) is in
 [`examples/embeddable-marketplace.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/embeddable-marketplace.ts), and the
 getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
 
-### Workspace status (revision 9, not released yet)
+### Revision 9 (deployed to mainnet on 2026-11-21)
 
 - Version `0.14.0` targets the revision 9 program and its **106-instruction**
-  IDL. It is published after mainnet is stamped 9. Until then `0.13.0` on npm
-  is the revision 8 release (104 instructions, deployed 2026-10-28).
+  IDL (release commit `154d286`). The older `0.13.0` is the revision 8 client
+  (104 instructions); its changed writes fail against revision 9.
 - `SURFACE_REVISION_CURRENT` is 9 (`SURFACE_REVISION_ACCOUNTABLE_REVIEW`).
   `capabilitiesForRevision(8)` still reads as the full surface, with
   `accountableReview: false`. Several revision 9 wires changed, so do not send
