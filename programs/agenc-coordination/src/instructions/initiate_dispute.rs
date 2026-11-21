@@ -1,15 +1,26 @@
 //! Initiate a dispute for conflict resolution
+//!
+//! Revision 9 (B): every dispute costs the filer a bond of `max(10% of the
+//! disputed amount, 0.01 SOL)` (the task reward, or the defendant's share on a
+//! Collaborative task), held in a `DisputeBond` at `["dispute_bond", dispute]`.
+//! The ruling, the expiry or a cancel settles it. Single-worker review tasks
+//! refuse task disputes from both sides: the buyer freezes instead, and the
+//! worker disputes the freeze with `dispute_rejection`.
 
 use crate::errors::CoordinationError;
-use crate::events::DisputeInitiated;
+use crate::events::{DisputeBondPosted, DisputeInitiated};
+use crate::instructions::dispute_bond_helpers::dispute_bond_for_task;
 use crate::instructions::launch_controls::require_task_type_enabled;
-use crate::instructions::task_validation_helpers::is_contest_configured_task;
+use crate::instructions::task_validation_helpers::{
+    is_contest_configured_task, is_single_worker_manual_task,
+};
 use crate::state::{
-    AgentRegistration, AgentStatus, AuthorityRateLimit, Dispute, DisputeStatus, ProtocolConfig,
-    ResolutionType, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
+    AgentRegistration, AgentStatus, AuthorityRateLimit, Dispute, DisputeBond, DisputeStatus,
+    ProtocolConfig, ResolutionType, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
+use anchor_lang::system_program::{transfer, Transfer};
 
 use super::rate_limit_helpers::{check_authority_rate_limits, RateLimitAction};
 
@@ -89,6 +100,18 @@ pub struct InitiateDispute<'info> {
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// Revision 9 (B): the filer's bond. Created here, paid by `authority` (rent),
+    /// which also posts the bond above the rent. Anchor's `init` allocates over an
+    /// address that only holds lamports, so pre-funding cannot block a dispute.
+    #[account(
+        init,
+        payer = authority,
+        space = DisputeBond::SIZE,
+        seeds = [b"dispute_bond", dispute.key().as_ref()],
+        bump
+    )]
+    pub dispute_bond: Box<Account<'info, DisputeBond>>,
 }
 
 pub fn handler<'info>(
@@ -147,6 +170,15 @@ pub fn handler<'info>(
     require!(
         !is_contest_configured_task(task),
         CoordinationError::ContestFlowUnsupported
+    );
+    // Revision 9 (B): no task dispute on a single-worker review task, from either
+    // side (design questions 4 and 5). The buyer freezes delivered work instead
+    // and the worker disputes the freeze. The Task alone proves the part checked
+    // here (Exclusive, one worker, manual validation); this account list does not
+    // carry the validation config.
+    require!(
+        !is_single_worker_manual_task(task),
+        CoordinationError::DisputeRefusedOnReviewTask
     );
 
     // Verify task is in a disputable state
@@ -339,6 +371,52 @@ pub fn handler<'info>(
         // Worker path: the initiating agent is the subject of the dispute
         agent.key()
     };
+
+    // Revision 9 (B): the filer's bond. The respondent is the other side: the
+    // creator when a worker files, the defendant worker's wallet when the creator
+    // files. The principal sits on the bond account above its rent.
+    let respondent = if is_creator {
+        ctx.accounts
+            .worker_agent
+            .as_ref()
+            .ok_or(CoordinationError::WorkerAgentRequired)?
+            .authority
+    } else {
+        task.creator
+    };
+    let bond_amount = dispute_bond_for_task(task)?;
+    transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.authority.to_account_info(),
+                to: ctx.accounts.dispute_bond.to_account_info(),
+            },
+        ),
+        bond_amount,
+    )?;
+    let dispute_key = dispute.key();
+    let filer = ctx.accounts.authority.key();
+    let bond = ctx.accounts.dispute_bond.as_mut();
+    bond.subject = dispute_key;
+    bond.task = task.key();
+    bond.filer = filer;
+    bond.respondent = respondent;
+    bond.amount = bond_amount;
+    bond.kind = DisputeBond::KIND_TASK_DISPUTE;
+    bond.filed_at = clock.unix_timestamp;
+    bond.ruling_deadline = dispute.last_ruling_second();
+    bond.bump = ctx.bumps.dispute_bond;
+    bond._reserved = [0u8; 24];
+    emit!(DisputeBondPosted {
+        subject: dispute_key,
+        task: task.key(),
+        kind: DisputeBond::KIND_TASK_DISPUTE,
+        filer,
+        respondent,
+        amount: bond_amount,
+        timestamp: clock.unix_timestamp,
+    });
 
     // Mark task as disputed
     task.status = TaskStatus::Disputed;

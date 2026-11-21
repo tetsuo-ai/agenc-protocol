@@ -20,6 +20,7 @@ import {
   injectAgentStake, freshWorld, setProtocolPaused,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
+  disputeRespondent, disputeBondPda,
 } from "./harness.mjs";
 
 // Capability bits (state.rs::capability). COMPUTE = 1<<0, VALIDATOR = 1<<8.
@@ -579,7 +580,10 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   // Open + publish a manual task and have the worker claim and submit. A worker
   // dispute must bind both the live claim and its canonical live submission;
   // a no-show claim cannot self-dispute to evade bond forfeiture.
-  const m = await setupManualTask(w, { mode: 1 });
+  // Revision 9 refuses task disputes on single-worker review tasks (6425): the buyer
+  // freezes and the worker disputes the freeze. Disputes here run on a one-worker
+  // Collaborative task, which keeps the same claim, counters and exits.
+  const m = await setupManualTask(w, { mode: 1, taskType: 1 });
   const modProg = makeProgram(w.modAuth);
   const jobHash = id32();
   const [taskMod] = taskModV2Pda(m.task, jobHash, w.modAuth.publicKey);
@@ -633,14 +637,21 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   // cancel_dispute remaining accounts: [0] dispute.defendant, [1] the writable
   // TaskValidationConfig (required when the restore lands on PendingValidation —
   // AGNC-03 review-clock debt accumulates there).
+  // Revision 9: the cancel also costs the filing worker its bond: the principal
+  // goes to the respondent creator, the rent back to the worker.
+  const bondAddress = disputeBondPda(dispute);
+  const bondPrincipal = BigInt(decode(w.svm, "DisputeBond", bondAddress).amount.toString());
+  const creatorBeforeCancel = BigInt(w.svm.getBalance(w.buyer.publicKey));
   expectOk(send(w.svm, await w.providerProg.methods
     .cancelDispute()
-    .accounts({ protocolConfig: w.protocolPda, dispute, task: m.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", m.task).creator) })
+    .accounts({ respondent: disputeRespondent(w.svm, dispute), protocolConfig: w.protocolPda, dispute, task: m.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", m.task).creator) })
     .remainingAccounts([
       { pubkey: w.providerAgent, isSigner: false, isWritable: true },
       { pubkey: m.validation, isSigner: false, isWritable: true },
     ])
     .instruction(), [w.provider]), "slash:cancel");
+  assert.equal(BigInt(w.svm.getBalance(w.buyer.publicKey)) - creatorBeforeCancel, bondPrincipal, "cancel: the respondent creator receives the bond principal");
+  assert.ok(isClosed(w.svm, bondAddress), "cancel: the bond is settled");
 
   return { dispute, task: m.task, initiatorAgent: w.providerAgent };
 }

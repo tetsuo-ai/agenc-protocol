@@ -48,7 +48,7 @@ import {
   freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
-  creatorStatsPda, readCreatorStats,
+  creatorStatsPda, readCreatorStats, disputeBondPda, findEvents,
 } from "./harness.mjs";
 
 // Derive the AgentStats PDA for an agent ["agent_stats", agent].
@@ -272,7 +272,7 @@ async function resolveWithStats(w, r, approve) {
   const defendantStats = agentStatsPda(w.providerAgent);
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
-  expectOk(send(w.svm, await makeProgram(w.admin).methods
+  const res = expectOk(send(w.svm, await makeProgram(w.admin).methods
     // P6.4: a reasoned ruling (rationale_hash + rationale_uri) is required on resolve.
     .resolveDispute(approve, arr(Buffer.alloc(32, 5)), "agenc://ruling/sha256/track-record")
     .accounts({
@@ -290,7 +290,14 @@ async function resolveWithStats(w, r, approve) {
       agentStats: defendantStats, creatorStats: creatorStatsPda(w.buyer.publicKey),
     })
     .instruction(), [w.admin]), "resolve_dispute with agent_stats");
-  return defendantStats;
+  return res;
+}
+
+// Revision 9 (B): the one DisputeBondSettled event of a ruling.
+function bondSettlement(res) {
+  const events = findEvents(res, "DisputeBondSettled");
+  assert.equal(events.length, 1, "the ruling settles the dispute bond once");
+  return events[0];
 }
 
 // resolution_type Refund (0) + approve -> worker LOSES -> disputes_lost += 1.
@@ -302,9 +309,14 @@ test("track-record: resolve_dispute (worker loses) bumps the defendant's dispute
   // Revision 9: the defendant's record already exists from its claim.
   assert.equal(readStats(w.svm, defendantStats).disputes_lost, 0n, "no dispute counted before the ruling");
 
-  await resolveWithStats(w, r, true);
+  const res = await resolveWithStats(w, r, true);
 
   assert.ok(decode(w.svm, "Dispute", r.dispute).status.Resolved !== undefined, "dispute Resolved");
+  // The creator's approved filing returns its bond (principal and rent).
+  const bond = bondSettlement(res);
+  assert.equal(bond.recipient.toBase58(), w.buyer.publicKey.toBase58(), "bond principal back to the filing creator");
+  assert.equal(bond.amount.toString(), "10000000", "the bond floor");
+  assert.ok(isClosed(w.svm, disputeBondPda(r.dispute)), "bond closed");
   const after = readStats(w.svm, defendantStats);
   assert.equal(after.exists, true, "AgentStats present after dispute resolution");
   assert.equal(after.agent.toBase58(), w.providerAgent.toBase58(), "AgentStats keyed to the defendant");
@@ -322,7 +334,11 @@ test("track-record: resolve_dispute (creator's dispute rejected) bumps the defen
   const r = await hireClaimDispute(w, { resolutionType: 0 }); // Refund, rejected below
 
   const defendantStats = agentStatsPda(w.providerAgent);
-  await resolveWithStats(w, r, false);
+  const res = await resolveWithStats(w, r, false);
+  // The creator's rejected filing sends its bond principal to the worker.
+  const bond = bondSettlement(res);
+  assert.equal(bond.recipient.toBase58(), w.provider.publicKey.toBase58(), "bond principal to the respondent worker");
+  assert.ok(isClosed(w.svm, disputeBondPda(r.dispute)), "bond closed");
 
   const after = readStats(w.svm, defendantStats);
   assert.equal(after.exists, true, "AgentStats present after dispute resolution");

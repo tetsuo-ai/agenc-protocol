@@ -18,6 +18,7 @@ use crate::instructions::bid_settlement_helpers::{
     accepted_bid_no_show_bond_disposition, settle_accepted_bid, AcceptedBidBookDisposition,
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+use crate::instructions::dispute_bond_helpers::{settle_dispute_bond, BondEnding};
 use crate::instructions::dispute_helpers::{
     expected_peer_bundles, settle_dispute_submission_evidence, validate_dispute_worker_accounts,
 };
@@ -32,8 +33,8 @@ use crate::instructions::token_helpers::{
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, CompletionBond, DependencyType, Dispute, DisputeStatus, ProtocolConfig,
-    Task, TaskClaim, TaskEscrow, TaskStatus, TaskType, TaskValidationConfig,
+    AgentRegistration, CompletionBond, DependencyType, Dispute, DisputeBond, DisputeStatus,
+    ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType, TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -188,6 +189,12 @@ pub struct ExpireDispute<'info> {
         bump = task_validation_config.bump
     )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
+
+    /// CHECK: revision 9 dispute bond `["dispute_bond", dispute]`, seeds-pinned here.
+    /// An unruled dispute returns the whole bond to the filer. A system-owned
+    /// account with no data is a dispute filed before the upgrade (no bond).
+    #[account(mut, seeds = [b"dispute_bond", dispute.key().as_ref()], bump)]
+    pub dispute_bond: UncheckedAccount<'info>,
 
     /// CHECK: revision 9 worker record `["agent_stats", dispute.defendant]`, seeds-pinned
     /// here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
@@ -589,6 +596,27 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
             } else {
                 BondDisposition::Refund
             },
+        )?;
+    }
+
+    // Revision 9 (B): no ruling before the window closed, so the filer gets its
+    // whole bond back (principal and rent). No bond moves nothing.
+    {
+        let creator_info = ctx.accounts.creator.to_account_info();
+        let (filer_info, respondent_info) = if dispute.initiated_by_creator {
+            (&creator_info, &worker_wallet_info)
+        } else {
+            (&worker_wallet_info, &creator_info)
+        };
+        settle_dispute_bond(
+            &ctx.accounts.dispute_bond.to_account_info(),
+            &dispute.key(),
+            &task_key,
+            DisputeBond::KIND_TASK_DISPUTE,
+            filer_info,
+            respondent_info,
+            BondEnding::Unruled,
+            clock.unix_timestamp,
         )?;
     }
 

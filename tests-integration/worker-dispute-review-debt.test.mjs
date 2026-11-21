@@ -14,6 +14,7 @@ import {
   freshWorld,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
+  disputeRespondent,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -125,7 +126,7 @@ function autoAcceptIx(w, r, signer) {
 function cancelDisputeIx(w, r, dispute) {
   return w.providerProg.methods
     .cancelDispute()
-    .accounts({ protocolConfig: w.protocolPda, dispute, task: r.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", r.task).creator) })
+    .accounts({ respondent: disputeRespondent(w.svm, dispute), protocolConfig: w.protocolPda, dispute, task: r.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", r.task).creator) })
     .remainingAccounts([
       { pubkey: w.providerAgent, isSigner: false, isWritable: true },
       { pubkey: r.validation, isSigner: false, isWritable: true },

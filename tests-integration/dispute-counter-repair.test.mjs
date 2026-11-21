@@ -28,6 +28,7 @@ import {
   freshWorld, injectAgentStake, configureTestMultisig,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
+  disputeRespondent,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -39,7 +40,9 @@ const INCIDENT_SIGNATURE = crypto.randomBytes(64);
 const statusName = (status) => Object.keys(status)[0];
 
 // Task pinned to CreatorReview, moderated and published, then claimed and
-// submitted by the provider worker (same shape as the mainnet disputes).
+// submitted by the provider worker (the mainnet disputes' shape, except that
+// revision 9 refuses task disputes on single-worker review tasks, 6425: the
+// task is a one-worker Collaborative task, with the same counters and exits).
 async function setupSubmittedTask(w) {
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
@@ -52,7 +55,7 @@ async function setupSubmittedTask(w) {
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 1, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "create task");
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -418,7 +421,7 @@ test("a cancelled stranded outcome keeps its loss policy after the repair", asyn
   // The initiator cancels the incident dispute instead of letting it expire.
   expectOk(send(w.svm, await w.providerProg.methods
     .cancelDispute()
-    .accounts({ protocolConfig: w.protocolPda, dispute: h.incident.dispute, task: h.incident.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", h.incident.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", h.incident.task).creator) })
+    .accounts({ respondent: disputeRespondent(w.svm, h.incident.dispute), protocolConfig: w.protocolPda, dispute: h.incident.dispute, task: h.incident.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", h.incident.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", h.incident.task).creator) })
     .remainingAccounts([
       { pubkey: w.providerAgent, isSigner: false, isWritable: true },
       { pubkey: h.incident.validation, isSigner: false, isWritable: true },

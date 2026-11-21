@@ -1671,7 +1671,9 @@ export type AgencCoordination = {
       "docs": [
         "Cancel an active dispute. Only the initiator can cancel, and only while",
         "the dispute is still active. The retired voter-count byte must be",
-        "historical zero or the current `0xff` initiator-outcome provenance marker."
+        "historical zero or the current `0xff` initiator-outcome provenance marker.",
+        "Revision 9: the bond principal goes to the respondent, its rent back to",
+        "the filer."
       ],
       "discriminator": [
         23,
@@ -1764,6 +1766,48 @@ export type AgencCoordination = {
           ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "disputeBond",
+          "docs": [
+            "A system-owned account with no data is a dispute filed before the upgrade (no",
+            "bond, nothing moves); a live bond is validated and settled by",
+            "`settle_dispute_bond`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "respondent",
+          "docs": [
+            "defendant worker's wallet when the creator filed). `settle_dispute_bond`",
+            "requires it to equal the stored respondent; it receives the principal."
+          ],
+          "writable": true
         },
         {
           "name": "workerStats",
@@ -6925,7 +6969,8 @@ export type AgencCoordination = {
     {
       "name": "expireDispute",
       "docs": [
-        "Expire a dispute after the maximum duration has passed."
+        "Expire a dispute after the maximum duration has passed.",
+        "Revision 9: an unruled dispute returns the whole bond to the filer."
       ],
       "discriminator": [
         241,
@@ -7216,6 +7261,39 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeBond",
+          "docs": [
+            "An unruled dispute returns the whole bond to the filer. A system-owned",
+            "account with no data is a dispute filed before the upgrade (no bond)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute"
               }
             ]
           }
@@ -9011,7 +9089,11 @@ export type AgencCoordination = {
         "* `dispute_id` - Unique identifier for the dispute",
         "* `task_id` - Related task ID",
         "* `evidence_hash` - Hash of evidence supporting the dispute",
-        "* `resolution_type` - 0=refund, 1=complete, 2=split"
+        "* `resolution_type` - 0=refund, 1=complete, 2=split",
+        "",
+        "Revision 9: the filer posts a bond of max(10% of the disputed amount,",
+        "0.01 SOL) into `[\"dispute_bond\", dispute]`; single-worker review tasks",
+        "refuse task disputes (the buyer freezes, the worker disputes the freeze)."
       ],
       "discriminator": [
         128,
@@ -9221,6 +9303,40 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "disputeBond",
+          "docs": [
+            "Revision 9 (B): the filer's bond. Created here, paid by `authority` (rent),",
+            "which also posts the bond above the rent. Anchor's `init` allocates over an",
+            "address that only holds lamports, so pre-funding cannot block a dispute."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -13199,7 +13315,11 @@ export type AgencCoordination = {
         "P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a",
         "32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.",
         "Both are persisted on the dispute alongside the deciding resolver, and the hash",
-        "+ resolver are emitted in `DisputeResolved`."
+        "+ resolver are emitted in `DisputeResolved`.",
+        "",
+        "Revision 9: the bond goes back to the filer on an approval (a Split",
+        "included) and its principal to the respondent on a rejection; owners with a",
+        "stake in the ruling do not count toward the direct M-of-N threshold."
       ],
       "discriminator": [
         231,
@@ -13578,6 +13698,40 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeBond",
+          "docs": [
+            "A system-owned account with no data is a dispute filed before the upgrade (no",
+            "bond, nothing moves); a live bond is validated and settled with the ruling by",
+            "`settle_dispute_bond`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute"
               }
             ]
           }

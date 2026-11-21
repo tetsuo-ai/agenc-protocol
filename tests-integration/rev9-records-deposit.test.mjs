@@ -17,6 +17,7 @@ import {
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats,
   BN, Keypair, SystemProgram, injectRevision8Freeze, disputeBondPda,
+  disputeRespondent,
 } from "./harness.mjs";
 
 const TX_FEE = 5_000n;
@@ -324,7 +325,7 @@ test("rev9 records: cancelling one's own dispute charges the filer's disputes_lo
 
   expectOk(send(w.svm, await w.buyerProg.methods
     .cancelDispute()
-    .accounts({ protocolConfig: w.protocolPda, dispute, task, authority: w.buyer.publicKey,
+    .accounts({ respondent: disputeRespondent(w.svm, dispute), protocolConfig: w.protocolPda, dispute, task, authority: w.buyer.publicKey,
       workerStats: agentStatsPda(w.providerAgent), creatorStats: creatorStatsPda(w.buyer.publicKey),
       systemProgram: SystemProgram.programId })
     .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])

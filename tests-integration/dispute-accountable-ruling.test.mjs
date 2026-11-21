@@ -381,3 +381,57 @@ test("accountable ruling: threshold-approved protocol authority resolves directl
   assert.equal(d.rationale_uri, "", "empty rationale_uri persisted");
   assert.equal(d.resolved_by.toBase58(), w.admin.publicKey.toBase58(), "resolved_by == the protocol authority");
 });
+
+// ---------------------------------------------------------------------------
+// Revision 9 (B): on the direct protocol-authority branch, an owner with a stake
+// in the ruling (the creator, the worker wallet, a live operator payee) does not
+// count toward the threshold. fed99ab counted every listed owner.
+// ---------------------------------------------------------------------------
+test("accountable ruling: owners who are the creator, the worker wallet or a live payee do not count toward the direct threshold", async () => {
+  const operator = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operator.publicKey, operatorFeeBps: 1000 });
+  const owner5 = Keypair.generate();
+  for (const k of [operator, owner5]) w.svm.airdrop(k.publicKey, BigInt(10e9));
+  await setMultisig(
+    w.svm,
+    [w.buyer.publicKey, w.provider.publicKey, operator.publicKey, w.admin.publicKey, owner5.publicKey],
+    2,
+  );
+  const r = await hireClaimDispute(w, { resolutionType: 1 }); // Complete: pays the worker and the operator leg
+  assert.equal(decode(w.svm, "Task", r.task).operator.toBase58(), operator.publicKey.toBase58(), "operator terms stamped by the hire");
+
+  const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+  const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
+  const buildDirectResolution = async (approvers) => makeProgram(w.admin).methods
+    .resolveDispute(true, arr(crypto.randomBytes(32)), "agenc://ruling/rev9-conflicts")
+    .accounts({
+      dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
+      authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey,
+      workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
+      agentStats: agentStatsPda(w.providerAgent),
+      hireRecord: r.hireRecord, disputeOperator: operator.publicKey, disputeReferrer: null, systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
+      treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
+      taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
+      taskValidationConfig: null })
+    .remainingAccounts(approvers.map(signerMeta))
+    .instruction();
+
+  for (const [party, label] of [[w.buyer, "creator"], [w.provider, "worker wallet"], [operator, "operator payee"]]) {
+    w.svm.expireBlockhash();
+    expectFail(
+      send(w.svm, await buildDirectResolution([party, w.admin]), [w.admin, party]),
+      "MultisigNotEnoughSigners",
+      `rev9: the ${label} does not count toward the threshold`,
+    );
+  }
+  assert.ok(decode(w.svm, "Dispute", r.dispute).status.Active !== undefined, "still Active");
+  const operatorBefore = BigInt(w.svm.getBalance(operator.publicKey));
+  expectOk(
+    send(w.svm, await buildDirectResolution([w.admin, owner5]), [w.admin, owner5]),
+    "rev9: two unconflicted owners resolve directly",
+  );
+  assert.ok(decode(w.svm, "Dispute", r.dispute).status.Resolved !== undefined, "dispute Resolved");
+  assert.ok(BigInt(w.svm.getBalance(operator.publicKey)) > operatorBefore, "the operator leg is paid on the approved Complete");
+});

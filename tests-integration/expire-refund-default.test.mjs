@@ -17,7 +17,7 @@ import {
   makeProgram, send, expectOk, decode, isClosed,
   freshWorld, hireIx,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
-  BN, Keypair, SystemProgram, agentStatsPda,
+  BN, Keypair, SystemProgram, agentStatsPda, disputeBondPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -119,16 +119,26 @@ test("expire_dispute: unresolved principal returns to the creator while a proven
   const workerBondBalance = Number(w.svm.getBalance(r.workerBond));
   const workerBondPrincipal = Number(decode(w.svm, "CompletionBond", r.workerBond).amount);
   const workerBondRent = workerBondBalance - workerBondPrincipal;
+  const escrowBalance = Number(w.svm.getBalance(r.escrow));
+  // Revision 9: the creator filed, so it posted a dispute bond (0.01 SOL floor
+  // on this price) that the unruled expiry returns whole, principal and rent.
+  const disputeBond = disputeBondPda(r.dispute);
+  const disputeBondBalance = Number(w.svm.getBalance(disputeBond));
+  assert.equal(Number(decode(w.svm, "DisputeBond", disputeBond).amount), 10_000_000, "creator posted the bond floor");
 
   expectOk(send(w.svm, await expireIx(w, r, cleaner), [cleaner]), "expire_dispute after the resolver window");
 
-  // The creator receives every reward lamport plus the objectively forfeited
-  // completion-bond principal (and may also receive escrow-account rent).
+  // The creator receives the whole escrow (every reward lamport and its rent),
+  // the objectively forfeited completion-bond principal, and its own dispute
+  // bond back. The task principal is unchanged by the bond.
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
-  assert.ok(
-    buyerDelta >= REWARD + workerBondPrincipal,
-    `creator received full escrow + no-show bond (got ${buyerDelta} >= ${REWARD + workerBondPrincipal})`,
+  assert.equal(
+    buyerDelta,
+    escrowBalance + workerBondPrincipal + disputeBondBalance,
+    `creator received escrow + no-show bond + its dispute bond (got ${buyerDelta})`,
   );
+  assert.ok(escrowBalance > REWARD, "the escrow held the full reward plus its rent");
+  assert.ok(isClosed(w.svm, disputeBond), "dispute bond settled and closed");
 
   // The no-show gets no task principal and no bond principal: only the rent from
   // the two worker-funded accounts that expiry closes.

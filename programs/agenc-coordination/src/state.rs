@@ -1732,6 +1732,17 @@ impl Dispute {
                     .saturating_add(Self::VOTING_DEADLINE_GRACE)
     }
 
+    /// Revision 9 (B): the last second a ruling can land (`resolution_window_open`
+    /// holds at it and fails one second later). Stored as the dispute bond's
+    /// `ruling_deadline`, with the same meaning as for a dispute of a freeze.
+    pub fn last_ruling_second(&self) -> i64 {
+        self.expires_at.min(
+            self.voting_deadline
+                .saturating_add(Self::VOTING_DEADLINE_GRACE)
+                .saturating_sub(1),
+        )
+    }
+
     /// Return whether this dispute owns one unit of its initiator's pending
     /// outcome counter. Zero is the only accepted historical representation;
     /// all other values are retired voter-era/corrupt state and fail closed.
@@ -4793,6 +4804,28 @@ mod tests {
     // Revision 9 (A): `freeze_kind` is a value-only carve of `_reserved[2]`; it
     // must not disturb the quorum counters in `[0]`/`[1]` or the tail `[3..5]`,
     // and a legacy all-zero account reads as a revision 8 freeze.
+    // Revision 9 (B): the bond's ruling deadline is the last second of the
+    // dispute's own ruling window, from either bound.
+    #[test]
+    fn dispute_last_ruling_second_matches_the_resolution_window() {
+        for (voting_deadline, expires_at) in [
+            (1_000, 5_000),
+            (1_000, 1_050),
+            (1_000, 1_119),
+            (1_000, 1_120),
+        ] {
+            let d = Dispute {
+                voting_deadline,
+                expires_at,
+                ..Dispute::default()
+            };
+            let last = d.last_ruling_second();
+            assert!(d.resolution_window_open(last));
+            assert!(!d.resolution_window_open(last + 1));
+            assert!(d.expiry_window_open(last + 1));
+        }
+    }
+
     #[test]
     fn task_submission_freeze_kind_carve_is_value_only() {
         let mut s = TaskSubmission::default();

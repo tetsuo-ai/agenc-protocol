@@ -327,8 +327,10 @@ _None._
 Cancel an active dispute. Only the initiator can cancel, and only while
 the dispute is still active. The retired voter-count byte must be
 historical zero or the current `0xff` initiator-outcome provenance marker.
+Revision 9: the bond principal goes to the respondent, its rent back to
+the filer.
 
-### Accounts (7)
+### Accounts (9)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -336,9 +338,11 @@ historical zero or the current `0xff` initiator-outcome provenance marker.
 | 2 | `dispute` | yes |  |  | PDA ["dispute", account:dispute.dispute_id (Dispute)] |  |
 | 3 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 4 | `authority` | yes | yes |  |  | Only the initiator's authority can cancel. Writable (revision 9): it pays for a missing record. |
-| 5 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by `authority`. |
-| 6 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:task.creator (Task)] | seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by `ensure_creator_stats`, paid by `authority`. |
-| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required by the record creation (revision 9). |
+| 5 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:dispute] | A system-owned account with no data is a dispute filed before the upgrade (no bond, nothing moves); a live bond is validated and settled by `settle_dispute_bond`. |
+| 6 | `respondent` | yes |  |  |  | defendant worker's wallet when the creator filed). `settle_dispute_bond` requires it to equal the stored respondent; it receives the principal. |
+| 7 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 8 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:task.creator (Task)] | seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 9 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required by the record creation (revision 9). |
 
 ### Args (0)
 
@@ -1057,8 +1061,9 @@ _None._
 ## expire_dispute
 
 Expire a dispute after the maximum duration has passed.
+Revision 9: an unruled dispute returns the whole bond to the filer.
 
-### Accounts (24)
+### Accounts (25)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1083,9 +1088,10 @@ Expire a dispute after the maximum duration has passed.
 | 19 | `worker_completion_bond` | yes |  |  |  |  |
 | 20 | `task_submission` | yes |  | yes |  | REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the canonical TaskSubmission PDA for the defendant claim. A live record is swept before claim close; the exact system-owned empty PDA proves absence. `Option` preserves the deployed account list, but `None` fails closed. |
 | 21 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | OPTIONAL: canonical TaskValidationConfig, required when the swept manual submission is still Submitted and therefore carries counter debt. |
-| 22 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
-| 23 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by `ensure_creator_stats`, paid by `authority`. |
-| 24 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required by the record creation (revision 9). |
+| 22 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:dispute] | An unruled dispute returns the whole bond to the filer. A system-owned account with no data is a dispute filed before the upgrade (no bond). |
+| 23 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:dispute.defendant (Dispute)] | here. REQUIRED: a proven no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 24 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: no counter moves on an unruled expiry. Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 25 | `system_program` |  |  |  | address `11111111111111111111111111111111` | Required by the record creation (revision 9). |
 
 ### Args (0)
 
@@ -1340,7 +1346,11 @@ configured M-of-N. `vote_dispute` is retired.
 * `evidence_hash` - Hash of evidence supporting the dispute
 * `resolution_type` - 0=refund, 1=complete, 2=split
 
-### Accounts (11)
+Revision 9: the filer posts a bond of max(10% of the disputed amount,
+0.01 SOL) into `["dispute_bond", dispute]`; single-worker review tasks
+refuse task disputes (the buyer freezes, the worker disputes the freeze).
+
+### Accounts (12)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1355,6 +1365,7 @@ configured M-of-N. `vote_dispute` is retired.
 | 9 | `task_submission` |  |  | yes |  | Submitted delivery record; required for worker-initiated disputes. A submission never substitutes for the live claim required by both exits. |
 | 10 | `authority` | yes | yes |  |  | has_one → agent |
 | 11 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 12 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:dispute] | Revision 9 (B): the filer's bond. Created here, paid by `authority` (rent), which also posts the bond above the rent. Anchor's `init` allocates over an address that only holds lamports, so pre-funding cannot block a dispute. |
 
 ### Args (5)
 
@@ -2008,7 +2019,11 @@ P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a
 Both are persisted on the dispute alongside the deciding resolver, and the hash
 + resolver are emitted in `DisputeResolved`.
 
-### Accounts (27)
+Revision 9: the bond goes back to the filer on an approval (a Split
+included) and its principal to the respondent on a rejection; owners with a
+stake in the ruling do not count toward the direct M-of-N threshold.
+
+### Accounts (28)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2038,7 +2053,8 @@ Both are persisted on the dispute alongside the deciding resolver, and the hash
 | 24 | `bond_treasury` | yes |  |  |  |  |
 | 25 | `task_submission` | yes |  | yes |  | REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the canonical TaskSubmission PDA for the defendant claim. A live record is swept before claim close; the exact system-owned empty PDA proves absence. `Option` preserves the deployed account list, but `None` fails closed. |
 | 26 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | OPTIONAL: canonical TaskValidationConfig, required when the swept manual submission is still Submitted and therefore carries counter debt. |
-| 27 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` / `disputes_lost`, the mirror of the worker's. Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 27 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:dispute] | A system-owned account with no data is a dispute filed before the upgrade (no bond, nothing moves); a live bond is validated and settled with the ruling by `settle_dispute_bond`. |
+| 28 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` / `disputes_lost`, the mirror of the worker's. Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
 ### Args (3)
 

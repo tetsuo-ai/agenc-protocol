@@ -43,7 +43,7 @@ function expectAliasRejected(res, codeName, accountName, label) {
 
 // Task pinned to `mode` (CreatorReview or ExternalAttestation), moderated and
 // published, then claimed and submitted by the provider worker.
-async function setupSubmittedTask(w, { mode, attestor = null }) {
+async function setupSubmittedTask(w, { mode, attestor = null, taskType = 0 }) {
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
@@ -55,7 +55,7 @@ async function setupSubmittedTask(w, { mode, attestor = null }) {
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "create task");
   // Revision 9 closes ExternalAttestation for new configs (6428): an attested
@@ -149,7 +149,10 @@ test("initiate_dispute rejects a worker_agent that aliases the initiating agent"
 
 test("control: a worker-initiated dispute without worker_agent records one unit of each counter", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const r = await setupSubmittedTask(w, { mode: MODE_CREATOR_REVIEW });
+  // Revision 9 refuses task disputes on single-worker review tasks (6425): the buyer
+  // freezes and the worker disputes the freeze. Disputes here run on a one-worker
+  // Collaborative task, which keeps the same claim, counters and exits.
+  const r = await setupSubmittedTask(w, { mode: MODE_CREATOR_REVIEW, taskType: 1 });
   await injectAgentStake(w.svm, w.providerAgent, 2_000_000);
   const before = decode(w.svm, "AgentRegistration", w.providerAgent);
 

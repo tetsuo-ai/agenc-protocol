@@ -13,9 +13,11 @@ use crate::instructions::completion_helpers::{
 };
 use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::creator_stats_helpers::task_dispute_record_outcome;
+use crate::instructions::dispute_bond_helpers::{settle_dispute_bond, BondEnding};
 use crate::instructions::dispute_helpers::{
     expected_peer_bundles, pay_dispute_marketplace_legs, resolve_task_marketplace_terms,
-    settle_dispute_submission_evidence, validate_dispute_worker_accounts, MarketplaceTerms,
+    ruling_conflicts, settle_dispute_submission_evidence, validate_dispute_worker_accounts,
+    MarketplaceTerms,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::program_account_helpers::{remaining_account_at, remaining_account_range};
@@ -28,11 +30,13 @@ use crate::instructions::token_helpers::{
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, CompletionBond, DependencyType, Dispute, DisputeResolver, DisputeStatus,
-    ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
-    TaskValidationConfig,
+    AgentRegistration, CompletionBond, DependencyType, Dispute, DisputeBond, DisputeResolver,
+    DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus,
+    TaskType, TaskValidationConfig,
 };
-use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
+use crate::utils::multisig::{
+    require_multisig_threshold, require_unconflicted_multisig_threshold, unique_account_infos,
+};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -335,6 +339,13 @@ pub struct ResolveDispute<'info> {
     )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 
+    /// CHECK: revision 9 dispute bond `["dispute_bond", dispute]`, seeds-pinned here.
+    /// A system-owned account with no data is a dispute filed before the upgrade (no
+    /// bond, nothing moves); a live bond is validated and settled with the ruling by
+    /// `settle_dispute_bond`.
+    #[account(mut, seeds = [b"dispute_bond", dispute.key().as_ref()], bump)]
+    pub dispute_bond: UncheckedAccount<'info>,
+
     /// CHECK: revision 9 creator record `["creator_stats", task.creator]` (`creator` is constrained
     /// to the task creator),
     /// seeds-pinned here. REQUIRED: the ruling moves its `disputes_won` /
@@ -503,6 +514,17 @@ pub fn handler<'info>(
         !resolver_has_conflict(&signer, &task.creator, &worker_wallet_key, &dispute_terms,),
         CoordinationError::ResolverConflictOfInterest
     );
+    // Revision 9 (B): on the direct protocol-authority branch, owners with a stake
+    // in the ruling (the creator, the worker wallet, live operator or referrer
+    // payees) do not count toward the multisig threshold. Duplicates count once.
+    if uses_direct_protocol_authority {
+        let unique_signers = unique_account_infos(ctx.remaining_accounts);
+        require_unconflicted_multisig_threshold(
+            config,
+            &unique_signers,
+            &ruling_conflicts(task.creator, worker_wallet_key, &dispute_terms),
+        )?;
+    }
 
     let (dispute_remaining_accounts, accepted_bid_accounts) =
         if task.task_type == TaskType::BidExclusive {
@@ -1369,6 +1391,39 @@ pub fn handler<'info>(
                 BondDisposition::Refund,
             )?;
         }
+    }
+
+    // Revision 9 (B): the dispute bond follows the ruling. An approval (a Split
+    // included) returns it to the filer; a rejection sends its principal to the
+    // respondent; the rent always goes back to the filer. The empty address of a
+    // dispute filed before the upgrade moves nothing.
+    {
+        let creator_info = ctx.accounts.creator.to_account_info();
+        let worker_info = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
+            .to_account_info();
+        let (filer_info, respondent_info) = if dispute.initiated_by_creator {
+            (&creator_info, &worker_info)
+        } else {
+            (&worker_info, &creator_info)
+        };
+        settle_dispute_bond(
+            &ctx.accounts.dispute_bond.to_account_info(),
+            &dispute.key(),
+            &task_key,
+            DisputeBond::KIND_TASK_DISPUTE,
+            filer_info,
+            respondent_info,
+            if approved {
+                BondEnding::FilerUpheld
+            } else {
+                BondEnding::FilerRejected
+            },
+            clock.unix_timestamp,
+        )?;
     }
 
     // P6.4 resolver accountability: if an ASSIGNED resolver decided this dispute (the

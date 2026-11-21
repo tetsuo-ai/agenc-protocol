@@ -17,6 +17,8 @@ import {
   freshWorld, hireIx, injectAgentStake, deregisterRemaining,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram, agentStatsPda, creatorStatsPda,
+  disputeRespondent,
+  disputeBondPda, creatorStatsCreationCost,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -126,14 +128,26 @@ test("initiator outcome counter blocks stale cancel+deregister until the loss is
 
   // Cancellation is a losing outcome, but does not release the counter. This
   // closes the exact cancel+deregister race without a finite cooldown.
+  // Revision 9: the cancel also costs the filing creator its dispute bond: the
+  // principal goes to the respondent worker, the rent back to the creator.
   w.svm.expireBlockhash();
+  const bondAddress = disputeBondPda(r.dispute);
+  const bondBalance = BigInt(w.svm.getBalance(bondAddress));
+  const bondPrincipal = BigInt(decode(w.svm, "DisputeBond", bondAddress).amount.toString());
+  const creatorBeforeCancel = BigInt(w.svm.getBalance(w.buyer.publicKey));
+  const workerBeforeCancel = BigInt(w.svm.getBalance(w.provider.publicKey));
+  const creatorRecordCost = creatorStatsCreationCost(w.svm, w.buyer.publicKey);
   expectOk(send(w.svm, await w.buyerProg.methods
     .cancelDispute()
-    .accounts({
+    .accounts({ respondent: disputeRespondent(w.svm, r.dispute),
       protocolConfig: w.protocolPda, dispute: r.dispute,
       task: r.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", r.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", r.task).creator)})
     .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])
     .instruction(), [w.buyer]), "cancel active dispute");
+  assert.equal(bondPrincipal, 10_000_000n, "the creator posted the bond floor");
+  assert.equal(BigInt(w.svm.getBalance(w.provider.publicKey)) - workerBeforeCancel, bondPrincipal, "cancel: the respondent worker receives the bond principal");
+  assert.equal(BigInt(w.svm.getBalance(w.buyer.publicKey)) - creatorBeforeCancel, bondBalance - bondPrincipal - 5_000n - creatorRecordCost, "cancel: the filer gets only the bond rent back (less its fee and its first record)");
+  assert.ok(isClosed(w.svm, bondAddress), "cancel: the bond is settled");
   assert.equal(
     decode(w.svm, "AgentRegistration", w.buyerAgent).active_dispute_votes,
     1,
@@ -186,7 +200,7 @@ test("legacy zero-marker cancellation cannot revive an expired penalty or consum
 
   expectOk(send(w.svm, await w.buyerProg.methods
     .cancelDispute()
-    .accounts({
+    .accounts({ respondent: disputeRespondent(w.svm, r.dispute),
       protocolConfig: w.protocolPda, dispute: r.dispute,
       task: r.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", r.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", r.task).creator)})
     .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])
