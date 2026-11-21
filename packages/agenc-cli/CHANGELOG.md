@@ -13,9 +13,15 @@ For the revision 9 program (`surface_revision = 9`).
 - `promote` selects the revision 9 set on a finalized surface revision 9:
   protocol 0.6.x, SDK 0.14.x, worker 0.4.x, React, tools and MCP 0.7.x and
   moderation 0.3.x. It is never unioned with revision 8.
-- The revision 9 deployment identity (ProgramData slot, executable hash and
-  source commit) is added only after the verified cutover. Until it is in the
-  reviewed release table, `promote` fails closed on a revision 9 deployment.
+- `agenc promote` accepts the reviewed revision 9 deployment identity:
+  ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, deployment slot
+  472177819, upgrade authority `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`,
+  normalized executable hash
+  `baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608` and
+  source commit `154d286659592c799bd111bf416fdba7ccc704b4`. These values were
+  read from finalized mainnet after the upgrade. No published store-core
+  release targets revision 9 yet, so an installed store-core fails closed
+  there.
 
 ## 0.4.0
 

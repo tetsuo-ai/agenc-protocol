@@ -192,11 +192,11 @@ release table, rebuild/repack the CLI, and independently re-audit that artifact
 before publishing it. Candidate or predicted deployment values are never
 accepted as release evidence. CLI 0.5.0 carries the reviewed revision-8 identity
 (ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, slot 462468899,
-normalized executable hash `ffb8f3cb…`, commit `f39b383`). No reviewed
-store-core release targets revision 8 yet, so an installed store-core fails
-closed there. The revision-9 package matrix is in place, but its deployment
-identity is added only after the verified cutover, so `promote` fails closed
-on a revision-9 deployment until then. Projects that `agenc init` generates pin
+normalized executable hash `ffb8f3cb…`, commit `f39b383`) and the reviewed
+revision-9 identity (the same ProgramData, slot 472177819, normalized
+executable hash `baf5be55…`, commit `154d286`). No reviewed store-core release
+targets revision 8 or 9 yet, so an installed store-core fails closed there.
+Projects that `agenc init` generates pin
 `@tetsuo-ai/marketplace-sdk@^0.14.0` and `@tetsuo-ai/agenc-worker@^0.4.0`, and
 `promote` checks generated code against those lines.
 

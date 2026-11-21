@@ -6,8 +6,7 @@
 // revision-9 set this CLI ships with (§1.1.3) and the historical revision-4
 // and revision-5 sets. Update both the document and this constant on a lockstep publish.
 // REVIEWED_MAINNET_RELEASES holds the deployment identities observed on
-// finalized mainnet after each upgrade; the revision-9 identity is added only
-// after its verified cutover. Compatibility is selected by the finalized
+// finalized mainnet after each upgrade (revisions 4, 8 and 9). Compatibility is selected by the finalized
 // on-chain surface revision; the sets must never be unioned because each
 // cutover changed the write wire: revision-5 writers fail against revision 4
 // and the reverse, revision 8 retires the legacy feed vote and requires new
@@ -78,6 +77,22 @@ export const REVIEWED_MAINNET_RELEASES = [
     executableHash:
       "ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38",
     sourceCommit: "f39b383e416ec5bc511b0ffb781481a658d137d8",
+  },
+  // Revision 9, upgraded 2026-11-21 by Squads proposal 15 (execute tx
+  // NaSwiMaL3Uab3SyMfCg6K9taDr9YiuKbP7qh5Uo7jy33nSRTVLrxEkNocaZrfMVyhkhWRKGVssqzZLD8xgEcBjv)
+  // and stamped by stamp_release_surface (tx
+  // 3vndWhKJ3LsXYXh8kaSoDSTPKrXGp4jdNi2QuH9ydbzSoMCiM7KVzJ5GJF5w9KAchRfRMHq1m4Z73oPybZKozfMb).
+  // Read from finalized mainnet after the upgrade. The 2,183,448-byte release
+  // binary is followed only by zero padding; sourceCommit is the main commit
+  // that the verification record (Squads proposal 16) names.
+  {
+    surfaceRevision: 9,
+    programDataAddress: "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+    programDataSlot: 472_177_819,
+    upgradeAuthority: "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+    executableHash:
+      "baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608",
+    sourceCommit: "154d286659592c799bd111bf416fdba7ccc704b4",
   },
 ] as const;
 
