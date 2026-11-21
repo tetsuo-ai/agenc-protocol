@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Rent } from "litesvm";
 import {
-  REPO, PID, enc, arr, pda, id32,
+  REPO, PID, enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, seatTestAuthorityResolver, configureTestMultisig, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
@@ -966,4 +966,130 @@ test("rev9 deposit: reclaim_terminal_claim of an old-rate stranded claim returns
     .instruction(), [caller]), "reclaim the old-rate stranded claim");
   assert.equal(bal(w, second.kp.publicKey) - before.worker, OLD_RATE_CLAIM, "worker: the whole old-rate claim");
   assert.equal(bal(w, w.buyer.publicKey) - before.creator, 0n, "creator: nothing");
+});
+
+// ---------------------------------------------------------------------------
+// Review R1-6 part 2. A claim deposit forfeits on the same dependency evidence
+// as a worker completion bond: a dependent task's no-show is the worker's fault
+// only while its parent proves Completed. Unreachable on live state (a revision
+// 9 claim needs a Completed parent, and close_task keeps a Completed marker), so
+// the dependency and the parent are injected after the claim: a Completed marker
+// (the worker's fault, as before), a Cancelled marker, or a closed (empty)
+// parent address.
+// ---------------------------------------------------------------------------
+const MARKER_DISCRIMINATOR = Buffer.from("c10bc0c833d06cff", "hex");
+
+async function injectDependency(w, t, parentState) {
+  const parent = Keypair.generate().publicKey;
+  if (parentState !== "closed") {
+    const data = Buffer.alloc(56);
+    MARKER_DISCRIMINATOR.copy(data, 0);
+    w.buyer.publicKey.toBuffer().copy(data, 8);
+    data[40] = parentState === "completed" ? 3 : 4;
+    data.writeBigInt64LE(BigInt(w.svm.getClock().unixTimestamp), 42);
+    w.svm.setAccount(parent, { lamports: Number(rent(w, 56)), data, owner: PID, executable: false, rentEpoch: 0 });
+  }
+  const acct = w.svm.getAccount(t.task);
+  const task = decode(w.svm, "Task", t.task);
+  task.dependency_type = { Ordering: {} };
+  task.depends_on = parent;
+  const data = Buffer.from(acct.data);
+  (await coder.accounts.encode("Task", task)).copy(data, 0);
+  w.svm.setAccount(t.task, { ...acct, data });
+  assert.equal(decode(w.svm, "Task", t.task).depends_on.toBase58(), parent.toBase58(), "dependency injected");
+  return parent;
+}
+
+const parentMeta = (parent) => ({ pubkey: parent, isSigner: false, isWritable: false });
+
+test("rev9 deposit: a no-show expire_claim forfeits the deposit only while the parent proves Completed (review R1-6 part 2; 8cc4ced: forfeited whatever the parent)", async () => {
+  for (const taskType of [0, 1]) {
+    for (const parentState of ["completed", "cancelled", "closed"]) {
+      const label = `${taskType === 0 ? "Exclusive" : "Collaborative"}, ${parentState} parent`;
+      const w = await freshWorld({ moderationEnabled: true });
+      const t = await publishedTask(w, { taskType, maxWorkers: 1, reward: 200_000_000, review: false, deadlineSecs: 600 });
+      t.review = false;
+      const { ix, claim } = await claimIx(w, t);
+      expectOk(send(w.svm, ix, [w.provider]), `${label}: claim`);
+      const parent = await injectDependency(w, t, parentState);
+      warpTo(w, Number(decode(w.svm, "TaskClaim", claim).expires_at.toString()) + 61);
+      const deposit = surplusOf(w, claim);
+      const claimLamports = bal(w, claim);
+      assert.equal(deposit, 20_000_000n, `${label}: the deposit`);
+      const caller = crank(w);
+      const before = { creator: bal(w, w.buyer.publicKey), worker: bal(w, w.provider.publicKey) };
+      const expire = await expireClaimIx(w, t, claim, caller);
+      expire.keys.push(parentMeta(parent));
+      const res = expectOk(send(w.svm, expire, [caller]), `${label}: expire_claim`);
+      const d = { creator: bal(w, w.buyer.publicKey) - before.creator, worker: bal(w, w.provider.publicKey) - before.worker };
+      const settled = findEvents(res, "ClaimDepositSettled");
+      assert.equal(settled.length, 1, `${label}: one deposit settled`);
+      if (parentState === "completed") {
+        assert.equal(d.creator, deposit, `${label}: the creator gets the deposit`);
+        assert.equal(d.worker, claimLamports - deposit, `${label}: the worker gets the rent`);
+        assert.equal(settled[0].forfeited, true, `${label}: forfeited`);
+      } else {
+        assert.equal(d.creator, 0n, `${label}: the creator gets nothing`);
+        assert.equal(d.worker, claimLamports, `${label}: the worker gets rent and deposit`);
+        assert.equal(settled[0].forfeited, false, `${label}: refunded`);
+      }
+    }
+  }
+});
+
+test("rev9 deposit: a dependent no-show cannot hide its parent to keep the deposit (review R1-6 part 2; 8cc4ced: a Collaborative no-show expires without the parent and forfeits)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await publishedTask(w, { taskType: 1, maxWorkers: 1, reward: 200_000_000, review: false, deadlineSecs: 600 });
+  t.review = false;
+  const { ix, claim } = await claimIx(w, t);
+  expectOk(send(w.svm, ix, [w.provider]), "claim");
+  const parent = await injectDependency(w, t, "completed");
+  warpTo(w, Number(decode(w.svm, "TaskClaim", claim).expires_at.toString()) + 1);
+  // Inside the 60-second worker-only window the worker itself expires its claim.
+  expectFail(send(w.svm, await expireClaimIx(w, t, claim, w.provider), [w.provider]), "ParentTaskAccountRequired",
+    "the parent evidence is required while a deposit is at stake");
+  w.svm.expireBlockhash();
+  const expire = await expireClaimIx(w, t, claim, w.provider);
+  expire.keys.push(parentMeta(parent));
+  const res = expectOk(send(w.svm, expire, [w.provider]), "with the Completed parent");
+  assert.equal(findEvents(res, "ClaimDepositSettled")[0].forfeited, true, "forfeited to the creator");
+});
+
+test("rev9 deposit: the cancel_task drain forfeits the deposit only while the parent proves Completed (review R1-6 part 2; 8cc4ced: forfeited whatever the parent)", async () => {
+  for (const parentState of ["completed", "cancelled", "closed", "omitted"]) {
+    const w = await freshWorld({ moderationEnabled: true });
+    // Cancelled 7,201 s after the claim, past its release grace (review R1-5).
+    const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 7_200 });
+    const { ix, claim } = await claimIx(w, t);
+    expectOk(send(w.svm, ix, [w.provider]), `${parentState}: claim`);
+    const parent = await injectDependency(w, t, parentState === "omitted" ? "completed" : parentState);
+    warpTo(w, Number(decode(w.svm, "Task", t.task).deadline.toString()) + 1);
+    const deposit = surplusOf(w, claim);
+    const claimLamports = bal(w, claim);
+    const escrowBefore = bal(w, t.escrow);
+    const recordCost = creatorStatsCost(w);
+    const before = { creator: bal(w, w.buyer.publicKey), worker: bal(w, w.provider.publicKey) };
+    const cancel = await cancelIx(w, t);
+    // The parent evidence is optional on cancel and comes first; a creator that
+    // omits it proves no worker fault.
+    if (parentState !== "omitted") cancel.keys.push(parentMeta(parent));
+    cancel.keys.push(
+      { pubkey: claim, isSigner: false, isWritable: true },
+      { pubkey: w.providerAgent, isSigner: false, isWritable: true },
+      { pubkey: w.provider.publicKey, isSigner: false, isWritable: true },
+    );
+    const res = expectOk(send(w.svm, cancel, [w.buyer]), `${parentState}: cancel drain`);
+    const d = { creator: bal(w, w.buyer.publicKey) - before.creator, worker: bal(w, w.provider.publicKey) - before.worker };
+    const settled = findEvents(res, "ClaimDepositSettled");
+    assert.equal(settled.length, 1, `${parentState}: one deposit settled`);
+    if (parentState === "completed") {
+      assert.equal(d.creator, escrowBefore + deposit - TX_FEE - recordCost, `${parentState}: the creator gets the deposit`);
+      assert.equal(d.worker, claimLamports - deposit, `${parentState}: the worker gets the rent`);
+      assert.equal(settled[0].forfeited, true, `${parentState}: forfeited`);
+    } else {
+      assert.equal(d.creator, escrowBefore - TX_FEE - recordCost, `${parentState}: the creator gets the escrow only`);
+      assert.equal(d.worker, claimLamports, `${parentState}: the worker gets rent and deposit`);
+      assert.equal(settled[0].forfeited, false, `${parentState}: refunded`);
+    }
+  }
 });
