@@ -4,8 +4,11 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { MAINNET_GENESIS, PROGRAM_ID } from "./preflight-dispute-scan.mjs";
 import {
+  countListingSelfModeration,
   decodeHireRecordProvider,
+  decodeListingModeration,
   decodeServiceListingProvider,
+  inventoryListingSelfModeration,
   scanHireProviderBindings,
 } from "./preflight-hire-provider-scan.mjs";
 
@@ -319,4 +322,101 @@ test("a hired task that was compacted reads as a closed, terminal task (item 34)
   records.set(value.task.address.toBase58(), account(malformed));
   const result = await scanHireProviderBindings(connectionFor(value, { records }));
   assert.ok(result.blockers.some((item) => item.kind === "invalid-hired-task-layout"));
+});
+
+// Item 39, report only: ListingModeration records whose moderator is the
+// listing's own provider wallet (`ServiceListing.authority`). Revision 9 refuses
+// new ones at record_listing_moderation; the count decides whether revision 10
+// adds the hire-gate check. It never blocks.
+function listingModerationFixture({ listing, moderator, status = 0 }) {
+  const data = Buffer.alloc(234);
+  disc("ListingModeration").copy(data);
+  listing.toBuffer().copy(data, 8);
+  new PublicKey(Buffer.alloc(32, 93)).toBuffer().copy(data, 40);
+  data.fill(7, 72, 104);
+  data[104] = status;
+  moderator.toBuffer().copy(data, 194);
+  data[226] = 255;
+  return data;
+}
+
+function listingWithWallet(wallet, seed) {
+  const listing = listingFixture();
+  const data = Buffer.from(listing.data);
+  wallet.toBuffer().copy(data, 40);
+  return { address: new PublicKey(Buffer.alloc(32, seed)), data };
+}
+
+test("item 39: decodes ListingModeration and the listing's provider wallet", () => {
+  const wallet = new PublicKey(Buffer.alloc(32, 120));
+  const listing = listingWithWallet(wallet, 121);
+  assert.equal(decodeServiceListingProvider(listing.data).authority.toBase58(), wallet.toBase58());
+  const record = decodeListingModeration(
+    listingModerationFixture({ listing: listing.address, moderator: wallet, status: 2 }),
+  );
+  assert.equal(record.listing.toBase58(), listing.address.toBase58());
+  assert.equal(record.moderator.toBase58(), wallet.toBase58());
+  assert.equal(record.status, 2);
+  assert.throws(
+    () => decodeListingModeration(Buffer.alloc(233)),
+    /ListingModeration: unexpected size 233; expected 234/,
+  );
+});
+
+test("item 39: counts self-moderated listing records, report only", async () => {
+  const providerWallet = new PublicKey(Buffer.alloc(32, 130));
+  const otherModerator = new PublicKey(Buffer.alloc(32, 131));
+  const selfListing = listingWithWallet(providerWallet, 132);
+  const otherListing = listingWithWallet(providerWallet, 133);
+  const goneListing = new PublicKey(Buffer.alloc(32, 134));
+  const records = [
+    { address: new PublicKey(Buffer.alloc(32, 140)), data: listingModerationFixture({ listing: selfListing.address, moderator: providerWallet }) },
+    { address: new PublicKey(Buffer.alloc(32, 141)), data: listingModerationFixture({ listing: otherListing.address, moderator: otherModerator }) },
+    { address: new PublicKey(Buffer.alloc(32, 142)), data: listingModerationFixture({ listing: goneListing, moderator: providerWallet }) },
+    { address: new PublicKey(Buffer.alloc(32, 143)), data: Buffer.alloc(234) },
+  ];
+  const listingAccounts = new Map([
+    [selfListing.address.toBase58(), account(selfListing.data)],
+    [otherListing.address.toBase58(), account(otherListing.data)],
+  ]);
+  const counted = countListingSelfModeration(records, listingAccounts);
+  assert.deepEqual(
+    {
+      recordCount: counted.recordCount,
+      decodedCount: counted.decodedCount,
+      unreadableCount: counted.unreadableCount,
+      listingMissingCount: counted.listingMissingCount,
+      selfModeratedCount: counted.selfModeratedCount,
+    },
+    { recordCount: 4, decodedCount: 3, unreadableCount: 1, listingMissingCount: 1, selfModeratedCount: 1 },
+  );
+  assert.equal(counted.selfModerated[0].moderation.toBase58(), records[0].address.toBase58());
+  assert.equal(counted.selfModerated[0].providerWallet.toBase58(), providerWallet.toBase58());
+  assert.equal("blockers" in counted, false, "a report, never a gate");
+
+  const discriminator = disc("ListingModeration").toString("base64");
+  const inventory = await inventoryListingSelfModeration({
+    getGenesisHash: async () => MAINNET_GENESIS,
+    getProgramAccounts: async (_program, options) => {
+      assert.equal(options.filters[0].memcmp.bytes, discriminator);
+      return records.map(({ address, data }) => ({ pubkey: address, account: account(data) }));
+    },
+    getMultipleAccountsInfo: async (addresses) =>
+      addresses.map((address) => listingAccounts.get(address.toBase58()) ?? null),
+  });
+  assert.equal(inventory.selfModeratedCount, 1);
+  assert.equal(inventory.listingMissingCount, 1);
+
+  let enumerated = false;
+  await assert.rejects(
+    inventoryListingSelfModeration({
+      getGenesisHash: async () => "devnet",
+      getProgramAccounts: async () => {
+        enumerated = true;
+        return [];
+      },
+    }),
+    /wrong cluster genesis/,
+  );
+  assert.equal(enumerated, false);
 });

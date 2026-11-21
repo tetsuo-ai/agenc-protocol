@@ -1718,3 +1718,21 @@ test("predeploy approves the artifact before scanning, fresh rescan reclassifies
     /const options = \{ repairAllowance, bondEntryPauseGated \}/,
   );
 });
+
+test("item 39: the listing self-moderation count is reported by the cutover scan, never a gate", () => {
+  const source = readFileSync(new URL("./mainnet-upgrade.mjs", import.meta.url), "utf8");
+  const verify = source.slice(
+    source.indexOf("export async function verifyRevision5CutoverState("),
+    source.indexOf("// ------------------------------------------------------------------ preflight"),
+  );
+  assert.match(verify, /const listingModeration = await inventoryListingSelfModeration\(connection\);/);
+  assert.match(verify, /listing_self_moderated=\$\{listingModeration\.selfModeratedCount\} \(report only\)/);
+  const assertion = source.slice(
+    source.indexOf("export function assertRevision5CutoverResults("),
+    source.indexOf("export async function verifyRevision5CutoverState("),
+  );
+  assert.doesNotMatch(assertion, /listingModeration|selfModerated/);
+  const snapshot = safeSnapshot();
+  snapshot.listingModeration = { recordCount: 82, selfModeratedCount: 82 };
+  assert.doesNotThrow(() => assertRevision5CutoverResults(snapshot, "predeploy"));
+});
