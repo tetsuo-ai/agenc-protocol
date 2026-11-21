@@ -1719,3 +1719,18 @@ test("item 39: the listing self-moderation count is reported by the cutover scan
   snapshot.listingModeration = { recordCount: 82, selfModeratedCount: 82 };
   assert.doesNotThrow(() => assertRevision5CutoverResults(snapshot, "predeploy"));
 });
+
+test("item 29: the upgrade publishes the committed IDL by default and refuses one without TaskMarker", async () => {
+  const { DEFAULT_REVIEWED_IDL_PATH } = await import("./mainnet-upgrade.mjs");
+  assert.equal(DEFAULT_REVIEWED_IDL_PATH, "artifacts/anchor/idl/agenc_coordination.json");
+  const source = readFileSync(new URL("./mainnet-upgrade.mjs", import.meta.url), "utf8");
+  assert.match(source, /args\.idl \|\| process\.env\.IDL_PATH \|\| DEFAULT_REVIEWED_IDL_PATH/);
+  assert.doesNotMatch(source, /process\.env\.IDL_PATH \|\| "target\/idl/);
+  const preflight = source.slice(source.indexOf("const idl = JSON.parse(idlBytes.toString(\"utf8\"));"));
+  const check = preflight.indexOf("assertIdlListsTaskMarker(idl);");
+  assert.ok(check > 0, "the preflight checks the TaskMarker entry");
+  assert.ok(
+    check < preflight.indexOf("pf.reviewedIdl = idl;"),
+    "before the IDL is accepted for publication",
+  );
+});

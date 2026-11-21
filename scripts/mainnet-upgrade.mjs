@@ -74,8 +74,9 @@
 //   mainnet verifier deployment are independently reviewed.
 //   --so <path>                  SO_PATH              the full-surface .so to deploy
 //                                  default: programs/agenc-coordination/target/deploy/agenc_coordination.so
-//   --idl <path>                 IDL_PATH             reviewed full-surface IDL
-//                                  default: target/idl/agenc_coordination.json
+//   --idl <path>                 IDL_PATH             reviewed full-surface IDL; it must list
+//                                                     TaskMarker (revision 9), as the committed one does
+//                                  default: artifacts/anchor/idl/agenc_coordination.json
 //   --expected-so-sha256 <hex>   EXPECTED_SO_SHA256   independently reviewed .so digest (REQUIRED)
 //   --expected-idl-sha256 <hex>  EXPECTED_IDL_SHA256  independently reviewed IDL digest (REQUIRED)
 //
@@ -167,6 +168,7 @@ import {
   planAnchorIdlStorage,
   prepareOnChainIdl,
 } from "./anchor-idl-publication.mjs";
+import { assertIdlListsTaskMarker } from "./anchor-idl-task-marker.mjs";
 import {
   PROGRAMDATA_METADATA_BYTES,
   assertImmediatePostUpgradeSnapshot,
@@ -224,6 +226,9 @@ const MAX_BID_LIFETIME_SECS = 604_800n;
 const MAX_BPS = 10_000;
 const MIN_MODERATION_LIVENESS_WINDOW_SECS = 86_400;
 const MAX_MODERATION_LIVENESS_WINDOW_SECS = 34_560_000;
+// Lead item 29: the reviewed IDL to publish is the committed artifact (it lists
+// TaskMarker); Anchor's raw target/idl output does not.
+export const DEFAULT_REVIEWED_IDL_PATH = "artifacts/anchor/idl/agenc_coordination.json";
 // Mirrors ProtocolConfig::SURFACE_REVISION_CURRENT. These counts are release
 // invariants, not documentation: preflight independently derives each surface
 // from the cfg-gated Rust #[program] modules and refuses any drift.
@@ -3485,7 +3490,7 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
   );
   // IDL ix-count sanity (full surface, not canary).
   const idlPath = expandHome(
-    args.idl || process.env.IDL_PATH || "target/idl/agenc_coordination.json",
+    args.idl || process.env.IDL_PATH || DEFAULT_REVIEWED_IDL_PATH,
   );
   const idlAbs = path.isAbsolute(idlPath) ? idlPath : path.join(ROOT, idlPath);
   if (!existsSync(idlAbs))
@@ -3509,6 +3514,13 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
   }
   if (!Array.isArray(idl.instructions))
     die("(a) IDL instructions is not an array. Refusing.");
+  // Lead item 29: clients decode a compacted task only from an IDL that lists
+  // TaskMarker; Anchor's raw target/idl output does not.
+  try {
+    assertIdlListsTaskMarker(idl);
+  } catch (error) {
+    die(`(a) ${error instanceof Error ? error.message : String(error)}. Refusing.`);
+  }
   const ixCount = idl.instructions.length;
   const programSourcePath = path.join(
     ROOT,
@@ -3560,7 +3572,7 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
     );
   }
   pf.checks.push(
-    `(a) .so + IDL match explicit approved hashes; private-zk is OFF and production Rust/IDL surfaces match at exactly ${ixCount} instructions`,
+    `(a) .so + IDL match explicit approved hashes; private-zk is OFF and production Rust/IDL surfaces match at exactly ${ixCount} instructions; the IDL lists TaskMarker`,
   );
   pf.soAbs = soAbs;
   pf.idlAbs = idlAbs;
