@@ -19,6 +19,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
+  readTaskMarker,
 } from "./harness.mjs";
 
 const CAP_COMPUTE = 1;
@@ -96,7 +97,7 @@ async function publishJobSpec(w, { task }) {
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "contest:mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/contest", w.modAuth.publicKey)
@@ -499,7 +500,7 @@ test("close_task: straggler submission rent returns to the worker, and is FAIL-C
     subRent,
     "REVERT-SENSITIVE (§1): straggler submission rent went to the WORKER, not the creator",
   );
-  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
+  assert.ok(readTaskMarker(w.svm, m.task), "revision 9: the terminal Task compacted into its TaskMarker anchor");
 });
 
 test("close_task routes equal-time and later AgentRegistration clones to the canonical treasury", async () => {
@@ -567,7 +568,7 @@ test("close_task routes equal-time and later AgentRegistration clones to the can
       subRent,
       "canonical treasury receives exact straggler rent",
     );
-    assert.ok(!isClosed(w.svm, m.task), "durable Task remains after cleanup");
+    assert.ok(readTaskMarker(w.svm, m.task), "revision 9: the TaskMarker anchor remains after cleanup");
   }
 });
 

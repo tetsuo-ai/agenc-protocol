@@ -56,7 +56,7 @@ async function hireDriveComplete(w, { referrer = null, referrerFeeBps = 0 } = {}
 
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "task-mod");
 
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -245,7 +245,7 @@ test("REFERRER PROTECTION: a referred task cannot be completed without paying th
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x", w.modAuth.publicKey)

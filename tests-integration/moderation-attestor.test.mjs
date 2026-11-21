@@ -99,8 +99,7 @@ async function recordTaskModeration(w, { task, recorder, jobHash, attestorEntry 
         taskModeration: taskMod,
         moderator: recorder.publicKey,
         moderationAttestor: attestorEntry,
-        systemProgram: SystemProgram.programId,
-      })
+        systemProgram: SystemProgram.programId, rentPayer: recorder.publicKey})
       .instruction(),
   };
 }

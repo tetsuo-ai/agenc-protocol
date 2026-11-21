@@ -85,8 +85,7 @@ async function recordTaskMod(w, { task, jobHash, recorder, attestorEntry = null 
         .accounts({
           moderationConfig: w.modCfg, task, taskModeration: taskMod,
           moderator: recorder.publicKey, moderationAttestor: attestorEntry,
-          systemProgram: SystemProgram.programId,
-        })
+          systemProgram: SystemProgram.programId, rentPayer: recorder.publicKey})
         .instruction(),
       [recorder],
     ),
@@ -259,8 +258,7 @@ test("publish gate: an unregistered stranger can never seed a publishable modera
         .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
         .accounts({
           moderationConfig: w.modCfg, task, taskModeration: taskMod,
-          moderator: stranger.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId,
-        })
+          moderator: stranger.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: stranger.publicKey})
         .instruction(),
       [stranger],
     ),

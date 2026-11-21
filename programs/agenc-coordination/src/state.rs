@@ -4,7 +4,7 @@ use crate::instructions::constants::{
     DEFAULT_DISPUTE_INITIATION_COOLDOWN, DEFAULT_MAX_DISPUTES_PER_24H, DEFAULT_MAX_TASKS_PER_24H,
     DEFAULT_TASK_CREATION_COOLDOWN, MAX_REPUTATION, MIN_GOVERNANCE_DISTINCT_VOTERS,
     MIN_GOVERNANCE_VOTER_REPUTATION, MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS,
-    MIN_RATING_PROTOCOL_FEE_LAMPORTS, TASK_MARKER_SIZE,
+    MIN_RATING_PROTOCOL_FEE_LAMPORTS, MODERATION_RENT_PAYER_CREATOR, TASK_MARKER_SIZE,
 };
 use anchor_lang::prelude::*;
 
@@ -1203,12 +1203,38 @@ pub struct TaskModeration {
     pub moderator: Pubkey,
     /// PDA bump.
     pub bump: u8,
-    /// Reserved for future attestation metadata.
+    /// Reserved for future attestation metadata. Revision 9 carves
+    /// `_reserved[0]` as the rent payer role (see `rent_payer_role`); the rest
+    /// stays zeroed.
     pub _reserved: [u8; 7],
 }
 
 impl TaskModeration {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    /// Revision 9 (C) value-only carve: who paid this record's rent.
+    /// `MODERATION_RENT_PAYER_CREATOR` (1) means the task creator paid it; 0
+    /// means the moderator did. Every record written before revision 9 reads 0,
+    /// which matches its history (the moderator was the on-chain payer).
+    pub fn rent_payer_role(&self) -> u8 {
+        self._reserved[0]
+    }
+
+    /// Record who paid the rent. Written only when the record is first
+    /// created, so a re-review never rewrites who paid.
+    pub fn set_rent_payer_role(&mut self, role: u8) {
+        self._reserved[0] = role;
+    }
+
+    /// The wallet that gets this record's rent back when it closes: the stored
+    /// creator when the creator paid, else the stored moderator.
+    pub fn rent_recipient(&self) -> Pubkey {
+        if self.rent_payer_role() == MODERATION_RENT_PAYER_CREATOR {
+            self.creator
+        } else {
+            self.moderator
+        }
+    }
 }
 
 /// Task account
@@ -4774,6 +4800,28 @@ mod tests {
         let mut bad = cancelled;
         bad.status = 2;
         assert!(!bad.validate_reserved_fields());
+    }
+
+    /// Revision 9 (C): a moderation record's rent follows who paid it.
+    #[test]
+    fn task_moderation_rent_follows_the_payer_role() {
+        let creator = Pubkey::new_unique();
+        let moderator = Pubkey::new_unique();
+        let mut record = TaskModeration {
+            creator,
+            moderator,
+            ..TaskModeration::default()
+        };
+        // Records written before revision 9 read 0: the moderator paid.
+        assert_eq!(record.rent_payer_role(), 0);
+        assert_eq!(record.rent_recipient(), moderator);
+        record.set_rent_payer_role(MODERATION_RENT_PAYER_CREATOR);
+        assert_eq!(record._reserved[0], 1);
+        assert_eq!(record.rent_recipient(), creator);
+        // Any other value is not the creator role and keeps the moderator.
+        record.set_rent_payer_role(2);
+        assert_eq!(record.rent_recipient(), moderator);
+        assert_eq!(&record._reserved[1..], &[0u8; 6]);
     }
 
     #[test]

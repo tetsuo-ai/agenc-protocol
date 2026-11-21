@@ -473,21 +473,23 @@ _None._
 
 ## close_task
 
-Clean supplied children of a terminal task while retaining the rent-exempt
-Task as a durable liveness anchor for any children not supplied.
+Clean supplied children of a terminal task and compact the Task into a
+56-byte TaskMarker at the same address, refunding every lamport above the
+marker's rent minimum to the creator. A later call on the marker sweeps
+children only; the marker stays as the parent of any child not supplied.
 
 ### Accounts (9)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 1 | `task` | yes |  |  |  | The task PDA `["task", creator, task_id]`: a terminal Task (closed and compacted by this call) or the TaskMarker an earlier close left there. It is loaded by hand in the handler (`load_task_or_marker`): owner, discriminator, the Task's canonical PDA with its stored bump, and creator == authority are all checked before anything moves. |
 | 2 | `task_job_spec` | yes |  | yes | PDA ["task_job_spec", account:task] | Optional leftover job-spec pointer for this task. When provided it is closed alongside the task so its rent is reclaimed too. Bound to this task by seeds + constraint so a caller cannot close another task's pointer. |
-| 3 | `escrow` | yes |  | yes | PDA ["escrow", account:task] | Optional already-settled escrow PDA. `resolve_dispute` can leave a token task's state escrow open after draining it and setting `is_closed = true`; provide it here to reclaim its rent. A pending token reserve is still marked open and is rejected until its slash finalizer runs. Bound to this task by seeds + constraint. |
+| 3 | `escrow` | yes |  | yes | PDA ["escrow", account:task] | Optional escrow PDA. `resolve_dispute` can leave a token task's state escrow open after draining it and setting `is_closed = true`; provide it here to reclaim its rent. A pending token reserve is still marked open and is rejected until its slash finalizer runs. A token-reward task must pass this address to be compacted; an empty address proves the escrow is gone. A program-owned account must deserialize as this task's closed `TaskEscrow`; anything else must be an empty system account. |
 | 4 | `hire_record` | yes |  |  | PDA ["hire", account:task] | Hire link PDA for this task. ALWAYS required — the caller passes the derived ["hire", task] address even for non-hired tasks (where it is an empty system account). close_task decides from the on-chain owner whether a live hire must be settled, so a caller cannot dodge the capacity decrement by omitting it. the handler, and a live record is deserialized + validated there. |
 | 5 | `listing` | yes |  | yes | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] | Source listing, required when a live hire link is present, so its `open_jobs` capacity counter can be decremented. Verified against `hire_record.listing`. |
-| 6 | `creator_completion_bond` |  |  |  | PDA ["completion_bond", account:task, account:task.creator (Task)] | Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task REFUSES to close the Task while this is a live program-owned bond, so the Task PDA (which reclaim_completion_bond needs) can never be destroyed out from under an unsettled creator bond. The party is the creator, so this PDA is canonically derivable here. For an already-settled / un-bonded task it is an empty system PDA. |
+| 6 | `creator_completion_bond` |  |  |  | PDA ["completion_bond", account:task, account:authority] | Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task REFUSES to compact the Task while this is a live program-owned bond, so a bond's parent can never be compacted out from under an unsettled creator bond. The party is the creator, and the handler requires `creator == authority`, so the seeds use the signer. For an already-settled / un-bonded task it is an empty system PDA. |
 | 7 | `worker_completion_bond` | yes |  | yes |  | Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot canonically pin this (the worker authority is not recorded on the Task after the claim closes), so it is checked only when supplied: if a live program-owned bond is passed, close is REFUSED. The hard guarantee for the worker bond comes from the Completed settlement paths (accept/auto_accept/complete), which are now required + pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond (now also valid on Cancelled) is the worker's permissionless recovery on the cancel path. CHECK: liveness checked in the handler when present. |
-| 8 | `authority` | yes | yes |  |  | Task creator; receives child rent and any Task balance above rent minimum. |
+| 8 | `authority` | yes | yes |  |  | Task creator; receives child rent and every Task lamport above the marker's rent minimum. |
 | 9 | `protocol_config` |  |  | yes | PDA ["protocol"] | Protocol config (fix round, FIX 5) — supplies the canonical treasury pubkey for the deregistered-worker straggler path below. Optional so existing close paths (no stragglers, or stragglers with live agents) keep working without it; REQUIRED (fail-closed) whenever a straggler submission's worker agent is provably closed. |
 
 ### Args (0)
@@ -1642,14 +1644,15 @@ One rating per agent per skill, enforced by PDA uniqueness.
 ## reclaim_completion_bond
 
 Permissionlessly refund a still-live completion bond to its poster once the
-task is Completed — recovers a bond stranded by a terminal exit that omitted
-the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
+task is Completed or Cancelled, or compacted into a TaskMarker. Recovers a
+bond stranded by a terminal exit that omitted the optional bond account
+(audit fix). `role`: 0 = creator, 1 = worker.
 
 ### Accounts (4)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 1 | `task` |  |  |  |  | The task PDA: a Task (which must be Completed or Cancelled, checked at its canonical PDA with its stored bump) or the TaskMarker that close_task left there, loaded by hand in the handler (`load_task_or_marker`). |
 | 2 | `completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:party] | validated by settle_completion_bond in the handler. |
 | 3 | `party` | yes |  |  |  |  |
 | 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
@@ -1662,16 +1665,17 @@ the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
 
 ## reclaim_orphan_task_child
 
-Return rent from a historical rent-only task child whose parent was
-destroyed by an older close_task implementation. The destination is
-derived from stored program state; the permissionless cranker cannot pick it.
+Return rent from a rent-only task child whose parent was destroyed by an
+older close_task implementation or compacted into a TaskMarker. The
+destination is derived from stored program state; the permissionless
+cranker cannot pick it.
 
 ### Accounts (5)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `child` | yes |  |  |  | validated in the handler before any lamports move. |
-| 2 | `parent_task` |  |  |  |  | children, `TaskSubmission` for validation votes) and be a provably absent system-owned, zero-data account. The field name is ABI-stable. |
+| 2 | `parent_task` |  |  |  |  | children, `TaskSubmission` for validation votes) and be a provably absent system-owned, zero-data account, or (task-level children only) the TaskMarker of a compacted task. The field name is ABI-stable. |
 | 3 | `worker_agent` |  |  |  |  | worker AgentRegistration and is fully deserialized/canonically verified. |
 | 4 | `rent_recipient` | yes |  |  |  | writable. The cranker can never choose the rent destination. |
 | 5 | `authority` |  | yes |  |  | Permissionless cranker. Its signature provides transaction accountability but grants no authority over the rent destination. |
@@ -1768,16 +1772,17 @@ so `hire_from_listing` can gate at hire time. Moderation-authority only.
 
 Record a moderation decision for a task/job-spec hash.
 
-### Accounts (6)
+### Accounts (7)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `moderation_config` |  |  |  | PDA ["moderation_config"] |  |
 | 2 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `moderator` | yes | yes |  |  | The recording signer. Authorization is checked in the handler (NOT as an account constraint here) so the registered-attestor OR global-authority branch can be evaluated. In the canary build there is no attestor account, so the handler falls back to the global-authority-only check — the canary surface stays frozen. Declared BEFORE `task_moderation` in the full build so the v2 seed can reference it (an IDL account-order change for this batch's regenerated clients). |
-| 4 | `task_moderation` | yes |  |  | PDA ["task_moderation_v2", account:task, arg:job_spec_hash, account:moderator] | P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so `init_if_needed` is self-re-review only. No attestor can overwrite another's verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen. |
+| 4 | `task_moderation` | yes |  |  | PDA ["task_moderation_v2", account:task, arg:job_spec_hash, account:moderator] | P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so `init_if_needed` is self-re-review only. No attestor can overwrite another's verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen. Revision 9 (C): the rent is paid by `rent_payer` (the task creator or the moderator), and the record remembers which so the rent goes back to them. |
 | 5 | `moderation_attestor` |  |  | yes | PDA ["moderation_attestor", account:moderator] | OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and `moderator == moderation_attestor.attestor`), authorizes a non-global-authority attestor to record. Bound to `["moderation_attestor", moderator]` — Anchor enforces the canonical PDA, so a forged or mismatched entry fails account resolution; a REVOKED attestor's PDA is closed and fails to load (cannot attest). Full-surface only — gated so the frozen canary account list for `record_task_moderation` is unchanged. |
 | 6 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 7 | `rent_payer` | yes | yes |  |  | Revision 9 (C), appended: pays the record's rent when it is first created. Must be the task creator or the moderator (`InvalidModerationRentPayer`). Full surface only; the canary keeps the moderator as the payer. |
 
 ### Args (7)
 

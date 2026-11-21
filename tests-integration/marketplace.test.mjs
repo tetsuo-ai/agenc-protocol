@@ -41,6 +41,7 @@ import {
   injectModerationConfig, freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda, agentStatsPda, creatorStatsCreationCost, mutateTask, creatorStatsPda, injectRevision8Freeze, disputeBondPda,
   injectLegacyAutoHire,
+  readTaskMarker,
 } from "./harness.mjs";
 import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
 
@@ -88,7 +89,7 @@ test("hire_from_listing: mints task + escrow + hire record, increments capacity"
   assert.equal(l.total_hires.toString(), "1", "total_hires incremented");
 });
 
-test("hire -> cancel -> close: frees capacity, closes hire record, retains task anchor", async () => {
+test("hire -> cancel -> close: frees capacity, closes hire record, compacts the task into its marker anchor", async () => {
   const w = await freshWorld({ price: 1_500_000 });
   const { ix, task, escrow, hireRecord } = await hireIx(w, {});
   expectOk(send(w.svm, ix, [w.buyer]), "hire");
@@ -119,7 +120,7 @@ test("hire -> cancel -> close: frees capacity, closes hire record, retains task 
     .instruction();
   expectOk(send(w.svm, closeIx, [w.buyer]), "close");
 
-  assert.ok(!isClosed(w.svm, task), "terminal task retained as the durable child-liveness anchor");
+  assert.ok(readTaskMarker(w.svm, task), "revision 9: the terminal task compacted into its TaskMarker, the durable child-liveness anchor");
   assert.ok(isClosed(w.svm, hireRecord), "hire record closed");
   assert.equal(decode(w.svm, "ServiceListing", w.listing).open_jobs, 0, "open_jobs decremented back to 0");
 });
@@ -312,7 +313,7 @@ test("moderation edges (set_task_job_spec): a non-publishable task moderation ca
   // record a BLOCKED task moderation, then try to publish the job spec.
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
     .recordTaskModeration(arr(jobHash), 2 /* BLOCKED */, 90, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "record BLOCKED task moderation");
   expectFail(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/blocked", w.modAuth.publicKey)
@@ -350,7 +351,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   // 2) moderator records CLEAN for (task, jobHash)
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "settle:moderate");
 
   // 3) creator publishes the job spec (moderation-gated)
@@ -441,7 +442,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
 
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "hire-settle:task-mod");
 
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -905,7 +906,7 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
     const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
     expectOk(send(w.svm, await modProg.methods
       .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
       .instruction(), [w.modAuth]), `${name}:task-mod`);
     expectOk(send(w.svm, await w.buyerProg.methods
       .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/noshow", w.modAuth.publicKey)
@@ -1050,7 +1051,7 @@ test("completion bond (F12): complete_task FORCE-settles the worker bond even wh
   expectOk(send(w.svm, await w.buyerProg.methods.closeTask()
     .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction(), [w.buyer]), "close_task after bonds settled");
-  assert.ok(!isClosed(w.svm, r.task), "terminal task retained as the durable child-liveness anchor");
+  assert.ok(readTaskMarker(w.svm, r.task), "revision 9: the terminal task compacted into its TaskMarker, the durable child-liveness anchor");
 });
 
 test("completion bond (F12/F5): cancel settles the creator bond (required+pinned); close_task then succeeds", async () => {
@@ -1086,7 +1087,7 @@ test("completion bond (F12/F5): cancel settles the creator bond (required+pinned
   expectOk(send(w.svm, await w.buyerProg.methods.closeTask()
     .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction(), [w.buyer]), "close_task after the bond settled at cancel");
-  assert.ok(!isClosed(w.svm, task), "terminal task retained as the durable child-liveness anchor");
+  assert.ok(readTaskMarker(w.svm, task), "revision 9: the terminal task compacted into its TaskMarker, the durable child-liveness anchor");
 });
 
 test("completion bond: cancel refunds the creator bond on an Open task", async () => {
@@ -1295,7 +1296,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "manual:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/manual", w.modAuth.publicKey)
@@ -1408,7 +1409,7 @@ async function setupSubmittedManual(w, opts = {}) {
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods.recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId }).instruction(), [w.modAuth]), "rc:mod");
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey }).instruction(), [w.modAuth]), "rc:mod");
   expectOk(send(w.svm, await w.buyerProg.methods.setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rc", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "rc:publish");
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
@@ -1918,7 +1919,7 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "token:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/token", w.modAuth.publicKey)
@@ -2373,7 +2374,7 @@ test("close_task children: reclaims rent from a task_moderation child via remain
     .instruction();
   expectOk(send(w.svm, closeIx, [w.buyer]), "close_task with moderation child");
 
-  assert.ok(!isClosed(w.svm, r.task), "terminal task retained as the durable child-liveness anchor");
+  assert.ok(readTaskMarker(w.svm, r.task), "revision 9: the terminal task compacted into its TaskMarker, the durable child-liveness anchor");
   assert.ok(isClosed(w.svm, r.jobSpec), "task_job_spec rent reclaimed");
   assert.ok(isClosed(w.svm, r.taskMod), "task_moderation rent reclaimed");
   assert.equal(decode(w.svm, "ServiceListing", w.listing).open_jobs, 0, "listing capacity freed");

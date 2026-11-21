@@ -57,6 +57,15 @@ const AGENT_DISCRIMINATOR = createHash("sha256")
   .digest()
   .subarray(0, 8);
 
+// Revision 9 (C): `close_task` compacts a closed Task into a 56-byte TaskMarker
+// at the task's own address (program `state.rs`, design Appendix A).
+export const TASK_MARKER_SIZE = 56;
+export const TASK_MARKER_DISCRIMINATOR = createHash("sha256")
+  .update("account:TaskMarker")
+  .digest()
+  .subarray(0, 8);
+const TASK_MARKER_KNOWN_FLAGS = 0b11;
+
 const DISPUTE_PREFIX_SIZE = 263;
 const DISPUTE_PRE_CHUNK_SIZE = 587;
 const DISPUTE_CURRENT_SIZE = 590;
@@ -219,6 +228,46 @@ export function decodeDispute(dataLike) {
     initiatorSlashApplied: initiatorSlashAppliedByte === 1,
     bump: data[230],
     defendant: new PublicKey(data.subarray(231, 263)),
+  };
+}
+
+/// True for an account image shaped like a revision 9 TaskMarker (size and
+/// discriminator). Use `decodeTaskMarker` to validate its content.
+export function isTaskMarkerData(dataLike) {
+  const data = Buffer.from(dataLike);
+  return (
+    data.length === TASK_MARKER_SIZE &&
+    data.subarray(0, 8).equals(TASK_MARKER_DISCRIMINATOR)
+  );
+}
+
+/// Decode a revision 9 TaskMarker: the closed task's creator, terminal status
+/// (3 Completed, 4 Cancelled), flags and compaction time. Fails closed on any
+/// other size, discriminator, status, flag bit or nonzero reserved byte. A
+/// marker carries no task id; the program writes it only over a verified Task
+/// PDA, so a program-owned marker at an address proves that task was closed.
+export function decodeTaskMarker(dataLike) {
+  const data = Buffer.from(dataLike);
+  if (data.length !== TASK_MARKER_SIZE) {
+    throw new Error(`TaskMarker: unsupported account size ${data.length}`);
+  }
+  assertDiscriminator(data, TASK_MARKER_DISCRIMINATOR, "TaskMarker");
+  const status = data[40];
+  if (status !== 3 && status !== 4) {
+    throw new Error(`TaskMarker.status: invalid terminal status ${status}`);
+  }
+  const flags = data[41];
+  if ((flags & ~TASK_MARKER_KNOWN_FLAGS) !== 0) {
+    throw new Error(`TaskMarker.flags: unknown bits ${flags}`);
+  }
+  if (!data.subarray(50, 56).equals(Buffer.alloc(6))) {
+    throw new Error("TaskMarker: reserved bytes are nonzero");
+  }
+  return {
+    creator: new PublicKey(data.subarray(8, 40)),
+    status,
+    flags,
+    closedAt: data.readBigInt64LE(42),
   };
 }
 
@@ -544,6 +593,26 @@ async function inspectTaskAndClaim(
     blockers.push(
       blocker("invalid-task-owner", pubkey, dispute.task.toBase58()),
     );
+  } else if (isTaskMarkerData(taskAccount.data)) {
+    // Revision 9 (C): the task was closed and compacted. Compaction needs zero
+    // live workers and no pending worker slash, so the marker reads as such.
+    try {
+      decodeTaskMarker(taskAccount.data);
+      task = { compacted: true, currentWorkers: 0, workerSlashPending: false };
+      if (requireLiveClaim) {
+        blockers.push(
+          blocker("compacted-task-on-active-dispute", pubkey, dispute.task.toBase58()),
+        );
+      }
+    } catch (error) {
+      blockers.push(
+        blocker(
+          "invalid-task-layout",
+          pubkey,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
   } else {
     try {
       task = decodeTaskBinding(taskAccount.data);

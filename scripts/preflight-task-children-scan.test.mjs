@@ -615,7 +615,8 @@ test("fails closed on child owner and canonical-PDA ambiguity", async () => {
 
   const moderator = new PublicKey(Buffer.alloc(32, 65));
   const badReserved = moderationFixture(task, creator, moderator);
-  badReserved.data[227] = 1;
+  // Byte 227 is the revision 9 rent payer role; the rest stays reserved.
+  badReserved.data[228] = 1;
   result = await scanTaskChildren(connectionWith([badReserved]));
   assert.ok(
     result.blockers.some(
@@ -639,4 +640,70 @@ test("refuses non-mainnet before enumerating child families", async () => {
     /wrong cluster genesis/,
   );
   assert.equal(enumerated, false);
+});
+
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker,
+// and a TaskModeration record names who paid its rent in `_reserved[0]`.
+function markerAccount(creator, status = 3) {
+  const data = Buffer.alloc(56);
+  disc("TaskMarker").copy(data);
+  creator.toBuffer().copy(data, 8);
+  data[40] = status;
+  data.writeBigInt64LE(1_700_000_000n, 42);
+  return { owner: PROGRAM_ID, data, lamports: 934_720, executable: false };
+}
+
+test("attributes a creator-paid TaskModeration record's rent to the creator", async () => {
+  const task = new PublicKey(Buffer.alloc(32, 91));
+  const creator = new PublicKey(Buffer.alloc(32, 92));
+  const moderator = new PublicKey(Buffer.alloc(32, 93));
+  const moderation = moderationFixture(task, creator, moderator);
+  moderation.data[227] = 1;
+  const result = await scanTaskChildren(connectionWith([moderation]));
+
+  const orphan = result.families.TaskModeration.orphans[0];
+  assert.equal(orphan.payer.toBase58(), creator.toBase58());
+  assert.match(orphan.payerField, /^creator/u);
+  assert.deepEqual(result.blockers, []);
+
+  moderation.data[227] = 2;
+  const invalid = await scanTaskChildren(connectionWith([moderation]));
+  assert.ok(
+    invalid.blockers.some(
+      (item) => item.kind === "invalid-child-layout" && /rent payer role/u.test(item.detail),
+    ),
+  );
+});
+
+test("children of a compacted task are orphans of a gone parent; its bonds stay recoverable", async () => {
+  const task = taskFixture(61);
+  const creator = new PublicKey(task.data.subarray(40, 72));
+  const moderator = new PublicKey(Buffer.alloc(32, 94));
+  const moderation = moderationFixture(task.address, creator, moderator);
+  moderation.data[227] = 1;
+  const validation = validationFixture(task.address, creator);
+  const bond = bondFixture(task.address, new PublicKey(Buffer.alloc(32, 95)), 7_000n);
+  const extra = new Map([[task.address.toBase58(), markerAccount(creator)]]);
+  const result = await scanTaskChildren(connectionWith([moderation, validation, bond], extra));
+
+  assert.equal(result.families.TaskModeration.rentOnlyOrphanCount, 1);
+  assert.equal(
+    result.families.TaskModeration.orphans[0].payer.toBase58(),
+    creator.toBase58(),
+  );
+  assert.equal(result.families.TaskValidationConfig.rentOnlyOrphanCount, 1);
+  assert.equal(result.families.CompletionBond.orphanCount, 0);
+  assert.equal(result.liveCompletionBondPrincipal, 7_000n);
+  assert.deepEqual(result.blockers, []);
+
+  // A child whose stored creator differs from the marker's is a binding error,
+  // and a malformed marker is not a parent.
+  const stranger = validationFixture(task.address, new PublicKey(Buffer.alloc(32, 96)));
+  const mismatch = await scanTaskChildren(connectionWith([stranger], extra));
+  assert.ok(mismatch.blockers.some((item) => item.kind === "invalid-child-creator-binding"));
+  const broken = markerAccount(creator, 2);
+  const malformed = await scanTaskChildren(
+    connectionWith([validation], new Map([[task.address.toBase58(), broken]])),
+  );
+  assert.ok(malformed.blockers.some((item) => item.kind === "invalid-child-task-binding"));
 });

@@ -39,3 +39,22 @@ test("migration child binds every execute mutation to the paused reviewed releas
     /simulateTransaction\(transaction,\s*\{[\s\S]*sigVerify:\s*true/,
   );
 });
+
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker at
+// the same address. The sweep must validate one and skip it, never migrate it or
+// fail the final all-current check on it.
+test("migration sweep validates a compacted TaskMarker and never migrates it", async () => {
+  const source = await readFile(CHILD, "utf8");
+  const validate = source.slice(
+    source.indexOf("function validateTaskAccount("),
+    source.indexOf("async function enumerateAndValidateTasks()"),
+  );
+  assert.match(validate, /isTaskMarkerData\(account\.data\)[\s\S]*decodeTaskMarker\(account\.data\)[\s\S]*compacted: true/);
+  assert.ok(
+    validate.indexOf("isTaskMarkerData(account.data)") < validate.indexOf("TASK_DISCRIMINATOR"),
+    "a marker is recognized before the Task discriminator check",
+  );
+  const mainBody = source.slice(source.indexOf("async function main()"));
+  assert.match(mainBody, /if \(task\.compacted \|\| task\.dataLength === SIZES\.TASK_CURRENT\) \{\s*alreadyCurrent\+\+;\s*continue;/);
+  assert.match(mainBody, /finalTasks\.some\(\(task\) => !task\.compacted && task\.dataLength !== SIZES\.TASK_CURRENT\)/);
+});

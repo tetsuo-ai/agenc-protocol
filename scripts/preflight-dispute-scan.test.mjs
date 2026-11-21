@@ -11,7 +11,9 @@ import {
   decodeClaimBinding,
   decodeDispute,
   decodeTaskBinding,
+  decodeTaskMarker,
   isResolvedUnappliedWorkerLoss,
+  isTaskMarkerData,
   scanDisputes,
 } from "./preflight-dispute-scan.mjs";
 
@@ -840,4 +842,86 @@ test("missing or undecodable enumerated agents do not create a speculative defic
       ),
     );
   }
+});
+
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker.
+function markerFixture({ creator = new PublicKey(Buffer.alloc(32, 10)), status = 3, flags = 0 } = {}) {
+  const data = Buffer.alloc(56);
+  discriminator("TaskMarker").copy(data, 0);
+  creator.toBuffer().copy(data, 8);
+  data[40] = status;
+  data[41] = flags;
+  data.writeBigInt64LE(1_700_000_000n, 42);
+  return data;
+}
+
+function withCompactedTask(value, marker = markerFixture()) {
+  const original = value.getMultipleAccountsInfo;
+  value.getMultipleAccountsInfo = async (addresses) => {
+    const [, claim] = await original(addresses);
+    return [{ owner: PROGRAM_ID, data: marker, lamports: 1 }, claim];
+  };
+  return value;
+}
+
+test("decodes a revision 9 TaskMarker and fails closed on malformed ones", () => {
+  const creator = new PublicKey(Buffer.alloc(32, 31));
+  const marker = decodeTaskMarker(markerFixture({ creator, status: 4, flags: 0b11 }));
+  assert.equal(marker.creator.toBase58(), creator.toBase58());
+  assert.equal(marker.status, 4);
+  assert.equal(marker.flags, 3);
+  assert.equal(marker.closedAt, 1_700_000_000n);
+  assert.equal(isTaskMarkerData(markerFixture()), true);
+  assert.equal(isTaskMarkerData(markerFixture().subarray(0, 55)), false);
+
+  assert.throws(() => decodeTaskMarker(markerFixture({ status: 2 })), /terminal status/u);
+  assert.throws(() => decodeTaskMarker(markerFixture({ flags: 0b100 })), /unknown bits/u);
+  const reserved = markerFixture();
+  reserved[55] = 1;
+  assert.throws(() => decodeTaskMarker(reserved), /reserved/u);
+  assert.throws(() => decodeTaskMarker(Buffer.concat([markerFixture(), Buffer.alloc(1)])), /size/u);
+  const wrongDiscriminator = markerFixture();
+  discriminator("Task").copy(wrongDiscriminator, 0);
+  assert.throws(() => decodeTaskMarker(wrongDiscriminator), /discriminator/u);
+});
+
+test("a resolved dispute whose task was compacted reads as a closed task", async () => {
+  const value = withCompactedTask(
+    scenario({ pending: false, missingClaim: true, currentWorkers: 0 }),
+  );
+  const result = await scanDisputes(connectionFor(value), {
+    nowUnixTimestamp: 100n,
+  });
+  assert.deepEqual(result.blockers, []);
+});
+
+test("a compacted task with a live defendant claim is inconsistent", async () => {
+  const value = withCompactedTask(scenario({ pending: true }));
+  const result = await scanDisputes(connectionFor(value), {
+    nowUnixTimestamp: 100n,
+  });
+  assert.ok(
+    result.blockers.some((item) => item.kind === "inconsistent-resolved-worker-state"),
+  );
+});
+
+test("an Active dispute on a compacted task blocks, and a malformed marker is invalid", async () => {
+  const active = withCompactedTask(scenario({ pending: false, status: 0 }));
+  const activeResult = await scanDisputes(connectionFor(active), {
+    nowUnixTimestamp: 100n,
+  });
+  assert.ok(
+    activeResult.blockers.some((item) => item.kind === "compacted-task-on-active-dispute"),
+  );
+
+  const malformed = withCompactedTask(
+    scenario({ pending: false, missingClaim: true, currentWorkers: 0 }),
+    markerFixture({ status: 1 }),
+  );
+  const malformedResult = await scanDisputes(connectionFor(malformed), {
+    nowUnixTimestamp: 100n,
+  });
+  assert.ok(
+    malformedResult.blockers.some((item) => item.kind === "invalid-task-layout"),
+  );
 });

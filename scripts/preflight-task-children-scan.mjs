@@ -8,6 +8,9 @@
 // TaskValidationVote binds to TaskSubmission. Missing-parent children with unsettled
 // principal or active state are blockers. Known rent-only orphans are reported with
 // aggregate lamports and stored payer/reclaim identities for a typed reclaim sweep.
+// Revision 9 compacts a closed Task into a 56-byte TaskMarker; its children count
+// as orphans of a gone parent (completion bonds stay recoverable), and a
+// TaskModeration record's rent goes to the payer its role byte names.
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -18,6 +21,8 @@ import {
   PROGRAM_ID,
   decodeAgentBinding,
   decodeTaskBinding,
+  decodeTaskMarker,
+  isTaskMarkerData,
   redactRpcText,
 } from "./preflight-dispute-scan.mjs";
 import { decodeTaskValidationConfig } from "./preflight-task-validation-scan.mjs";
@@ -279,17 +284,23 @@ const FAMILIES = [
       if (data[104] > 5 || data[105] > 100) {
         throw new Error("TaskModeration: invalid status/risk score");
       }
-      requireZeroBytes(data, 227, 234, "TaskModeration");
+      // Revision 9 (C): `_reserved[0]` (byte 227) records who paid the rent:
+      // 1 the task creator, 0 the moderator (every older record). close_task and
+      // reclaim_orphan_task_child route the refund back to that payer.
+      const rentPayerRole = data[227];
+      if (rentPayerRole > 1) {
+        throw new Error(`TaskModeration: invalid rent payer role ${rentPayerRole}`);
+      }
+      requireZeroBytes(data, 228, 234, "TaskModeration");
+      const creatorPaid = rentPayerRole === 1;
       return {
         task,
         creator,
         bump: data[226],
         seedParts: [],
         moderationPdaParts: [task.toBuffer(), hash, moderator.toBuffer()],
-        // record_task_moderation uses the stored moderator as the rent payer and
-        // close_task routes the refund back to this exact named recipient.
-        payer: moderator,
-        payerField: "moderator",
+        payer: creatorPaid ? creator : moderator,
+        payerField: creatorPaid ? "creator (rent payer role 1)" : "moderator",
         active: false,
         principal: 0n,
         state: `status=${data[104]}`,
@@ -549,6 +560,21 @@ export async function scanTaskChildren(connection) {
         taskStates.set(address.toBase58(), { kind: "invalid", detail: "owner" });
         continue;
       }
+      if (isTaskMarkerData(account.data)) {
+        // Revision 9 (C): a task compacted by close_task. Its children are
+        // orphans that reclaim_orphan_task_child (or a close_task pass on the
+        // marker) returns to their stored payers.
+        try {
+          const marker = decodeTaskMarker(account.data);
+          taskStates.set(address.toBase58(), { kind: "compacted", marker });
+        } catch (error) {
+          taskStates.set(address.toBase58(), {
+            kind: "invalid",
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
+        continue;
+      }
       try {
         const task = decodeTaskBinding(account.data);
         const [expected, expectedBump] = PublicKey.findProgramAddressSync(
@@ -627,6 +653,24 @@ export async function scanTaskChildren(connection) {
         detail: state?.detail ?? "task lookup missing",
       });
       continue;
+    }
+    if (state.kind === "compacted") {
+      // The marker keeps the creator, so the binding stays checkable.
+      if (
+        item.record.creator &&
+        !item.record.creator.equals(state.marker.creator)
+      ) {
+        blockers.push({
+          kind: "invalid-child-creator-binding",
+          family: item.family.name,
+          address: item.address,
+          task: item.record.task,
+        });
+        continue;
+      }
+      // reclaim_completion_bond accepts a marker parent, so a bond on a
+      // compacted task is still recoverable by its poster, not orphaned.
+      if (item.family.name === "CompletionBond") continue;
     }
     if (state.kind === "live") {
       if (

@@ -25,7 +25,9 @@ use anchor_lang::system_program;
 /// has been closed: a system-owned, zero-data account at that exact address is
 /// an authenticated proof that no live Completed parent exists. Requiring the
 /// address prevents a caller from omitting a live Completed parent to turn a
-/// forfeiture into a refund on an exit path.
+/// forfeiture into a refund on an exit path. Revision 9 (C): a parent compacted
+/// by `close_task` is a TaskMarker; a Completed marker proves a Completed parent
+/// and a Cancelled marker proves it is not one, as the full Task did.
 pub(crate) fn dependency_parent_completed(
     task: &Task,
     remaining_accounts: &[AccountInfo<'_>],
@@ -292,6 +294,92 @@ mod tests {
         data: &'a mut [u8],
     ) -> AccountInfo<'a> {
         AccountInfo::new(key, false, false, lamports, data, owner, false, 0)
+    }
+
+    fn serialized_marker(creator: Pubkey, status: TaskStatus) -> Vec<u8> {
+        let marker = crate::state::TaskMarker::for_closed_task(creator, status, 0, 1).unwrap();
+        let mut data = vec![0u8; crate::state::TaskMarker::SIZE];
+        marker.write_to(&mut data).unwrap();
+        data
+    }
+
+    // Revision 9 (C), review R1-6: a parent compacted by close_task must keep
+    // proving what the full terminal Task proved. Without this, every exit of a
+    // child of a compacted parent (expire_claim, expire_dispute, cancel) would
+    // fail on the 56-byte account.
+    #[test]
+    fn compacted_parent_marker_proves_its_stored_terminal_status() {
+        for dependency_type in [
+            DependencyType::Data,
+            DependencyType::Ordering,
+            DependencyType::Proof,
+        ] {
+            let (parent, parent_key) = canonical_parent(TaskStatus::Completed);
+            let child = dependent_task(parent_key, dependency_type);
+
+            let mut lamports = 1;
+            let mut data = serialized_marker(parent.creator, TaskStatus::Completed);
+            let info = account_info(&parent_key, &crate::ID, &mut lamports, data.as_mut_slice());
+            assert!(
+                dependency_parent_completed(&child, std::slice::from_ref(&info), &crate::ID)
+                    .unwrap()
+            );
+
+            let mut lamports = 1;
+            let mut data = serialized_marker(parent.creator, TaskStatus::Cancelled);
+            let info = account_info(&parent_key, &crate::ID, &mut lamports, data.as_mut_slice());
+            assert!(
+                !dependency_parent_completed(&child, std::slice::from_ref(&info), &crate::ID)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_compacted_parent_marker_fails_closed() {
+        let (parent, parent_key) = canonical_parent(TaskStatus::Completed);
+        let child = dependent_task(parent_key, DependencyType::Proof);
+        let good = serialized_marker(parent.creator, TaskStatus::Completed);
+
+        // A non-terminal status, unknown flags or a nonzero reserved byte.
+        for (index, value) in [(40usize, 2u8), (41, 0b100), (55, 1)] {
+            let mut data = good.clone();
+            data[index] = value;
+            let mut lamports = 1;
+            let info = account_info(&parent_key, &crate::ID, &mut lamports, data.as_mut_slice());
+            assert!(
+                dependency_parent_completed(&child, std::slice::from_ref(&info), &crate::ID)
+                    .is_err(),
+                "unexpectedly accepted a marker with byte {index} = {value}",
+            );
+        }
+        // A marker owned by another program is not evidence.
+        let mut data = good.clone();
+        let mut lamports = 1;
+        let other_owner = Pubkey::new_unique();
+        let info = account_info(
+            &parent_key,
+            &other_owner,
+            &mut lamports,
+            data.as_mut_slice(),
+        );
+        assert!(
+            dependency_parent_completed(&child, std::slice::from_ref(&info), &crate::ID).is_err()
+        );
+        // The marker discriminator at any other length is not a marker.
+        for len in [
+            crate::state::TaskMarker::SIZE - 1,
+            crate::state::TaskMarker::SIZE + 1,
+        ] {
+            let mut data = vec![0u8; len];
+            data[..8].copy_from_slice(&good[..8]);
+            let mut lamports = 1;
+            let info = account_info(&parent_key, &crate::ID, &mut lamports, data.as_mut_slice());
+            assert!(
+                dependency_parent_completed(&child, std::slice::from_ref(&info), &crate::ID)
+                    .is_err()
+            );
+        }
     }
 
     // Revert-sensitive: Data and Ordering were the exploitable cases. All three

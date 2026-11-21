@@ -17,6 +17,7 @@ import {
   injectBidMarketplace, freshWorld,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
+  readTaskMarker,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -40,7 +41,7 @@ async function setupBidTask(w, { bidExpiresIn = 1800, minBond = 100_000 } = {}) 
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "bid:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bidguard", w.modAuth.publicKey)
@@ -131,8 +132,8 @@ test("close_task refuses to brick live bids on a BidExclusive task", async () =>
   const bookRent = Number(w.svm.getBalance(r.bidBook));
   const creatorBefore = Number(w.svm.getBalance(w.buyer.publicKey));
   expectOk(send(w.svm, await closeTaskIx(w, r, true), [w.buyer]), "close_task after all bids withdrawn");
-  assert.ok(!isClosed(w.svm, r.task), "durable terminal Task anchor remains");
-  assert.ok(decode(w.svm, "Task", r.task).status.Cancelled !== undefined, "terminal state remains decodable");
+  assert.ok(readTaskMarker(w.svm, r.task), "revision 9: the terminal Task compacted into its TaskMarker anchor");
+  assert.equal(readTaskMarker(w.svm, r.task).status, 4, "the marker keeps the Cancelled status");
 
   // Audit C8: the book is swept in the same transaction — its creator-funded
   // rent returns to the creator instead of stranding on the terminal task.

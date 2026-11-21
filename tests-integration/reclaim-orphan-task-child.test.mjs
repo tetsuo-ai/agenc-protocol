@@ -26,6 +26,7 @@ import {
   Keypair,
   LiteSVM,
   SystemProgram,
+  TASK_MARKER_DISCRIMINATOR,
 } from "./harness.mjs";
 
 const CHILD_LAMPORTS = 2_000_000;
@@ -151,9 +152,12 @@ async function attestorFixture(svm) {
   };
 }
 
-async function moderationFixture(svm, { legacy = false } = {}) {
+// `creatorPaid`: a revision 9 record whose rent the task creator paid
+// (`_reserved[0] = 1`); its rent goes back to the stored creator.
+async function moderationFixture(svm, { legacy = false, creatorPaid = false } = {}) {
   const task = Keypair.generate().publicKey;
   const recipient = fundedRecipient(svm);
+  const moderator = creatorPaid ? Keypair.generate().publicKey : recipient.publicKey;
   const jobSpecHash = id32();
   const seeds = legacy
     ? [enc("task_moderation"), task.toBuffer(), Buffer.from(jobSpecHash)]
@@ -161,12 +165,14 @@ async function moderationFixture(svm, { legacy = false } = {}) {
         enc("task_moderation_v2"),
         task.toBuffer(),
         Buffer.from(jobSpecHash),
-        recipient.publicKey.toBuffer(),
+        moderator.toBuffer(),
       ];
   const [child, bump] = pda(seeds);
+  const reserved = Array(7).fill(0);
+  if (creatorPaid) reserved[0] = 1;
   await injectAccount(svm, child, "TaskModeration", {
     task,
-    creator: Keypair.generate().publicKey,
+    creator: creatorPaid ? recipient.publicKey : Keypair.generate().publicKey,
     job_spec_hash: arr(jobSpecHash),
     status: 0,
     risk_score: 0,
@@ -175,9 +181,9 @@ async function moderationFixture(svm, { legacy = false } = {}) {
     scanner_hash: arr(id32()),
     recorded_at: new BN(1),
     expires_at: new BN(0),
-    moderator: recipient.publicKey,
+    moderator,
     bump,
-    _reserved: Array(7).fill(0),
+    _reserved: reserved,
   });
   return {
     child,
@@ -344,12 +350,44 @@ test("reclaim_orphan_task_child reclaims every rent-only child kind to its store
     [await attestorFixture(world.svm), "TaskAttestorConfig -> creator"],
     [await moderationFixture(world.svm), "TaskModeration v2 -> moderator"],
     [await moderationFixture(world.svm, { legacy: true }), "TaskModeration legacy -> moderator"],
+    [await moderationFixture(world.svm, { creatorPaid: true }), "TaskModeration v2, creator-paid -> creator (revision 9)"],
     [await submissionFixture(world.svm), "terminal TaskSubmission -> worker authority"],
     [await validationVoteFixture(world.svm), "TaskValidationVote -> reviewer"],
   ];
   for (const [fixture, label] of fixtures) {
     await expectReclaimed(world, fixture, label);
   }
+});
+
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker.
+// A marker parent counts as gone for task-level children (never for a vote,
+// whose parent is a TaskSubmission).
+function injectTaskMarker(svm, address, { status = 3, reserved = 0 } = {}) {
+  const data = Buffer.alloc(56);
+  TASK_MARKER_DISCRIMINATOR.copy(data, 0);
+  Keypair.generate().publicKey.toBuffer().copy(data, 8);
+  data[40] = status;
+  data[55] = reserved;
+  svm.setAccount(address, { lamports: 934_720, data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
+test("reclaim_orphan_task_child accepts a compacted task's marker as a gone parent (revision 9)", async () => {
+  const world = freshRecoveryWorld();
+  for (const fixture of [
+    await jobSpecFixture(world.svm),
+    await moderationFixture(world.svm, { creatorPaid: true }),
+  ]) {
+    injectTaskMarker(world.svm, fixture.task);
+    await expectReclaimed(world, fixture, "child of a compacted task");
+  }
+  // A malformed marker is not proof that the task closed.
+  const fixture = await validationFixture(world.svm);
+  injectTaskMarker(world.svm, fixture.task, { reserved: 1 });
+  expectFail(
+    send(world.svm, await reclaimIx(world, fixture), [world.cranker]),
+    "OrphanTaskParentStillLive",
+    "malformed marker parent",
+  );
 });
 
 test("reclaim_orphan_task_child refuses a live parent", async () => {

@@ -7,6 +7,10 @@
 //! principal, proves the stored parent (`Task` or `TaskSubmission`) is absent,
 //! verifies the child's canonical PDA, and returns rent to the party that
 //! originally funded the account.
+//!
+//! Revision 9 (C): a task parent compacted by `close_task` into a TaskMarker also
+//! counts as gone. A marker is written only over a terminal Task, after which no
+//! lifecycle handler of a child can load the parent any more.
 
 use anchor_lang::prelude::*;
 
@@ -15,7 +19,7 @@ use crate::events::OrphanTaskChildReclaimed;
 use crate::instructions::program_account_helpers::deserialize_program_account;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, TaskAttestorConfig, TaskJobSpec,
-    TaskModeration, TaskSubmission, TaskValidationConfig, TaskValidationVote,
+    TaskMarker, TaskModeration, TaskSubmission, TaskValidationConfig, TaskValidationVote,
 };
 
 pub mod orphan_task_child_kind {
@@ -38,7 +42,8 @@ pub struct ReclaimOrphanTaskChild<'info> {
 
     /// CHECK: must equal the child's stored parent (`Task` for task-level
     /// children, `TaskSubmission` for validation votes) and be a provably
-    /// absent system-owned, zero-data account. The field name is ABI-stable.
+    /// absent system-owned, zero-data account, or (task-level children only)
+    /// the TaskMarker of a compacted task. The field name is ABI-stable.
     pub parent_task: UncheckedAccount<'info>,
 
     /// CHECK: used only for terminal TaskSubmission children; must be the stored
@@ -90,7 +95,7 @@ pub fn handler<'info>(
         CoordinationError::InvalidInput
     );
     require!(
-        parent_info.owner == &anchor_lang::system_program::ID && parent_info.data_is_empty(),
+        parent_is_gone(&parent_info, target.kind)?,
         CoordinationError::OrphanTaskParentStillLive
     );
 
@@ -188,6 +193,27 @@ pub fn handler<'info>(
     Ok(())
 }
 
+/// A parent is gone when its address is a system-owned, zero-data account, or,
+/// for a task-level child, when it holds the TaskMarker of a compacted task.
+/// Owner plus the marker discriminator prove the address held a task that was
+/// closed: `close_task` writes markers only over a verified terminal Task. A
+/// validation vote's parent is a `TaskSubmission`, which is never compacted.
+fn parent_is_gone(parent_info: &AccountInfo, child_kind: u8) -> Result<bool> {
+    if parent_info.owner == &anchor_lang::system_program::ID && parent_info.data_is_empty() {
+        return Ok(true);
+    }
+    if child_kind == orphan_task_child_kind::VALIDATION_VOTE || parent_info.owner != &crate::ID {
+        return Ok(false);
+    }
+    let data = parent_info.try_borrow_data()?;
+    if data.len() != TaskMarker::SIZE {
+        return Ok(false);
+    }
+    Ok(TaskMarker::try_deserialize(&mut &data[..])
+        .map(|marker| marker.validate_reserved_fields())
+        .unwrap_or(false))
+}
+
 fn require_canonical_child(actual: &Pubkey, seeds: &[&[u8]], stored_bump: u8) -> Result<()> {
     let (expected, bump) = Pubkey::find_program_address(seeds, &crate::ID);
     require!(
@@ -269,9 +295,11 @@ fn classify_and_validate_child(
                 || (*child_info.key == legacy && moderation.bump == legacy_bump),
             CoordinationError::InvalidInput
         );
+        // Revision 9 (C): rent goes back to whoever paid it (the creator when the
+        // record's payer role says so, else the moderator).
         return Ok(ReclaimTarget {
             task: moderation.task,
-            destination: RentDestination::Stored(moderation.moderator),
+            destination: RentDestination::Stored(moderation.rent_recipient()),
             kind: orphan_task_child_kind::MODERATION,
         });
     }
@@ -496,5 +524,72 @@ mod tests {
             0,
         );
         assert!(classify_and_validate_child(&wrong_bump_info, &worker_info).is_err());
+    }
+
+    // Revision 9 (C): a compacted task's marker is a gone parent for task-level
+    // children only; a live Task, a malformed marker and any vote parent are not.
+    #[test]
+    fn compacted_task_marker_is_a_gone_parent_for_task_children_only() {
+        let key = Pubkey::new_unique();
+        let marker = TaskMarker::for_closed_task(
+            Pubkey::new_unique(),
+            crate::state::TaskStatus::Completed,
+            0,
+            1,
+        )
+        .unwrap();
+        let mut good = vec![0u8; TaskMarker::SIZE];
+        marker.write_to(&mut good).unwrap();
+
+        let check = |data: &mut [u8], owner: &Pubkey, kind: u8| {
+            let mut lamports = 1;
+            let info = AccountInfo::new(&key, false, false, &mut lamports, data, owner, false, 0);
+            parent_is_gone(&info, kind).unwrap()
+        };
+
+        for kind in [
+            orphan_task_child_kind::JOB_SPEC,
+            orphan_task_child_kind::VALIDATION_CONFIG,
+            orphan_task_child_kind::ATTESTOR_CONFIG,
+            orphan_task_child_kind::MODERATION,
+            orphan_task_child_kind::TERMINAL_SUBMISSION,
+        ] {
+            assert!(check(good.clone().as_mut_slice(), &crate::ID, kind));
+        }
+        assert!(!check(
+            good.clone().as_mut_slice(),
+            &crate::ID,
+            orphan_task_child_kind::VALIDATION_VOTE
+        ));
+        // Another owner, a tampered reserved byte, or a full Task image.
+        let other = Pubkey::new_unique();
+        assert!(!check(
+            good.clone().as_mut_slice(),
+            &other,
+            orphan_task_child_kind::MODERATION
+        ));
+        let mut tampered = good.clone();
+        tampered[55] = 1;
+        assert!(!check(
+            tampered.as_mut_slice(),
+            &crate::ID,
+            orphan_task_child_kind::MODERATION
+        ));
+        let mut task_image = vec![0u8; crate::state::Task::SIZE];
+        crate::state::Task::default()
+            .try_serialize(&mut &mut task_image[..])
+            .unwrap();
+        assert!(!check(
+            task_image.as_mut_slice(),
+            &crate::ID,
+            orphan_task_child_kind::MODERATION
+        ));
+        // A system-owned empty address is gone for every kind, as before.
+        let system = anchor_lang::system_program::ID;
+        assert!(check(
+            &mut [],
+            &system,
+            orphan_task_child_kind::VALIDATION_VOTE
+        ));
     }
 }

@@ -1398,16 +1398,19 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Clean supplied children of a terminal task while retaining the rent-exempt
-    /// Task as a durable liveness anchor for any children not supplied.
+    /// Clean supplied children of a terminal task and compact the Task into a
+    /// 56-byte TaskMarker at the same address, refunding every lamport above the
+    /// marker's rent minimum to the creator. A later call on the marker sweeps
+    /// children only; the marker stays as the parent of any child not supplied.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn close_task<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
         instructions::close_task::handler(ctx)
     }
 
-    /// Return rent from a historical rent-only task child whose parent was
-    /// destroyed by an older close_task implementation. The destination is
-    /// derived from stored program state; the permissionless cranker cannot pick it.
+    /// Return rent from a rent-only task child whose parent was destroyed by an
+    /// older close_task implementation or compacted into a TaskMarker. The
+    /// destination is derived from stored program state; the permissionless
+    /// cranker cannot pick it.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn reclaim_orphan_task_child<'info>(
         ctx: Context<'_, '_, '_, 'info, ReclaimOrphanTaskChild<'info>>,
@@ -1423,8 +1426,9 @@ pub mod agenc_coordination {
     }
 
     /// Permissionlessly refund a still-live completion bond to its poster once the
-    /// task is Completed — recovers a bond stranded by a terminal exit that omitted
-    /// the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
+    /// task is Completed or Cancelled, or compacted into a TaskMarker. Recovers a
+    /// bond stranded by a terminal exit that omitted the optional bond account
+    /// (audit fix). `role`: 0 = creator, 1 = worker.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn reclaim_completion_bond(ctx: Context<ReclaimCompletionBond>, role: u8) -> Result<()> {
         instructions::reclaim_completion_bond::handler(ctx, role)

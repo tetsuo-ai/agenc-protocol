@@ -23,7 +23,7 @@ for (const byte of [4, 5]) {
       const recordTask = await makeProgram(w.modAuth).methods
         .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(id32()), arr(id32()), new BN(0))
         .accounts({ moderationConfig: w.modCfg, task: existing.task, taskModeration: taskMod,
-          moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+          moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
         .instruction();
       expectOk(send(w.svm, recordTask, [w.modAuth]), "attest while config is valid");
       const beforeConfig = w.svm.getAccount(w.modCfg);

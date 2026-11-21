@@ -135,7 +135,12 @@ import path from "path";
 import { scanDelegations } from "./preflight-delegation-scan.mjs";
 import { scanReputationStakes } from "./preflight-reputation-stake-scan.mjs";
 import { scanSkillRatingCutover } from "./preflight-skill-rating-cutover-scan.mjs";
-import { decodeTaskBinding, scanDisputes } from "./preflight-dispute-scan.mjs";
+import {
+  decodeTaskBinding,
+  decodeTaskMarker,
+  isTaskMarkerData,
+  scanDisputes,
+} from "./preflight-dispute-scan.mjs";
 import { scanTaskValidationConfigs } from "./preflight-task-validation-scan.mjs";
 import { scanGovernanceProposals } from "./preflight-governance-scan.mjs";
 import { scanTaskChildren } from "./preflight-task-children-scan.mjs";
@@ -3813,7 +3818,8 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
   info(`\n(e) live Task count  : ${total}  (sweep EXPECTED_TASKS = ${total})`);
   info(
     `      sizes: 382B(legacy)=${sizes.old}  432B(batch-2)=${sizes.batch2}  ` +
-      `466B(migrated)=${sizes.new}  invalid/other=${sizes.other}`,
+      `466B(migrated)=${sizes.new}  56B(compacted marker)=${sizes.markers}  ` +
+      `invalid/other=${sizes.other}`,
   );
   info(
     `      dispute worker cap=${DISPUTE_SAFE_MAX_WORKERS}  ` +
@@ -4104,10 +4110,14 @@ async function currentProgramDataLamports(connection, expectedSnapshot) {
 }
 
 // Read just the data length of each task via dataSlice (cheap). Bucket by 382/466/other.
-async function sampleTaskSizes(connection, tasks) {
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker at
+// the same address. A task compacted between enumeration and this read is a
+// closed task that needs no migration: count it, never as invalid.
+export async function sampleTaskSizes(connection, tasks) {
   let oldN = 0,
     batch2N = 0,
     newN = 0,
+    markers = 0,
     other = 0;
   const incompatibleExclusive = [];
   const aboveDisputeSafeMaxWorkers = [];
@@ -4127,6 +4137,15 @@ async function sampleTaskSizes(connection, tasks) {
       const ai = infos[j];
       if (!ai) {
         other++;
+        continue;
+      }
+      if (ai.owner.equals(PROGRAM_ID) && isTaskMarkerData(ai.data)) {
+        try {
+          decodeTaskMarker(ai.data);
+          markers++;
+        } catch {
+          other++;
+        }
         continue;
       }
       if (
@@ -4186,11 +4205,12 @@ async function sampleTaskSizes(connection, tasks) {
     old: oldN,
     batch2: batch2N,
     new: newN,
+    markers,
     other,
     incompatibleExclusive,
     aboveDisputeSafeMaxWorkers,
     disputeUnsafeActiveWorkers,
-    inspected: oldN + batch2N + newN + other,
+    inspected: oldN + batch2N + newN + markers + other,
   };
 }
 

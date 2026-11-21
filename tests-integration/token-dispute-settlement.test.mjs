@@ -132,8 +132,7 @@ async function setupTokenDispute(w, resolutionType) {
     .accounts({
       moderationConfig: w.modCfg, task, taskModeration,
       moderator: w.modAuth.publicKey, moderationAttestor: null,
-      systemProgram: SystemProgram.programId,
-    })
+      systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey})
     .instruction(), [w.modAuth]), "token-dispute: moderate task");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/token-dispute", w.modAuth.publicKey)

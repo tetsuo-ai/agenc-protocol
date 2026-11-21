@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   DISPUTE_SAFE_MAX_WORKERS,
   inspectTaskMigrationCompatibility,
+  sampleTaskSizes,
 } from "./mainnet-upgrade.mjs";
+import { PROGRAM_ID } from "./preflight-dispute-scan.mjs";
 import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../tests-integration/package.json", import.meta.url),
@@ -146,4 +148,45 @@ test("fails closed on unsupported size, discriminator, and enums", () => {
     })),
     /dependency Option\/type mismatch/,
   );
+});
+
+// Revision 9 (C): close_task compacts a closed Task into a 56-byte TaskMarker at
+// the same address. The inventory counts one as a closed task, never as invalid.
+test("the Task inventory counts compacted markers apart from invalid accounts", async () => {
+  const creator = new PublicKey(Buffer.alloc(32, 41));
+  const taskId = Buffer.alloc(32, 42);
+  const [taskAddress] = PublicKey.findProgramAddressSync(
+    [Buffer.from("task"), creator.toBuffer(), taskId],
+    PROGRAM_ID,
+  );
+  const live = taskFixture({ size: 466, status: 3 });
+  taskId.copy(live, 8);
+  creator.toBuffer().copy(live, 40);
+  const marker = Buffer.alloc(56);
+  createHash("sha256").update("account:TaskMarker").digest().subarray(0, 8).copy(marker);
+  creator.toBuffer().copy(marker, 8);
+  marker[40] = 4;
+  const malformed = Buffer.from(marker);
+  malformed[40] = 1;
+  const addresses = [
+    taskAddress,
+    new PublicKey(Buffer.alloc(32, 43)),
+    new PublicKey(Buffer.alloc(32, 44)),
+  ];
+  const images = [live, marker, malformed];
+  const connection = {
+    getMultipleAccountsInfo: async (keys) =>
+      keys.map((key) => {
+        const index = addresses.findIndex((address) => address.equals(key));
+        return { owner: PROGRAM_ID, data: images[index], lamports: 1 };
+      }),
+  };
+  const sizes = await sampleTaskSizes(
+    connection,
+    addresses.map((address) => ({ pubkey: address.toBase58() })),
+  );
+  assert.equal(sizes.new, 1);
+  assert.equal(sizes.markers, 1);
+  assert.equal(sizes.other, 1);
+  assert.equal(sizes.inspected, 3);
 });

@@ -104,7 +104,7 @@ async function setupSubmittedManual(w, { taskType = 0 } = {}) {
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "trk:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/trk", w.modAuth.publicKey)
@@ -241,7 +241,7 @@ async function hireClaimDispute(w, { resolutionType }) {
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId, rentPayer: w.modAuth.publicKey })
     .instruction(), [w.modAuth]), "disp-trk:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/disp", w.modAuth.publicKey)
