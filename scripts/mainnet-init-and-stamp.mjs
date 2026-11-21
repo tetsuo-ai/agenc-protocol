@@ -60,6 +60,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { assertPrivateTaskReleaseDisabled } from "./private-task-release-policy.mjs";
 import { parseBinaryEnvFlag } from "./env-flags.mjs";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
 import {
   assertApprovedExecutableSnapshot,
@@ -136,26 +137,16 @@ function die(msg) {
   console.error(`ERROR: ${redactRpc(msg)}`);
   process.exit(1);
 }
+// The error names the path only, never the file's content (review S-19).
 function loadKeypair(p) {
   const filePath = p.replace(/^~(?=$|\/)/, process.env.HOME);
-  let parsed;
+  let secretKey;
   try {
-    parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    secretKey = readPlainKeypairFile(filePath, p);
   } catch (error) {
-    die(
-      `cannot read keypair ${filePath}: ${error instanceof Error ? error.message : error}`,
-    );
+    die(error.message);
   }
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 64 ||
-    parsed.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
-  ) {
-    die(
-      `keypair ${filePath} must be a plain 64-byte JSON array; encrypted vault/object inputs are refused.`,
-    );
-  }
-  return Keypair.fromSecretKey(Uint8Array.from(parsed));
+  return Keypair.fromSecretKey(secretKey);
 }
 function envOrDie(name) {
   const v = process.env[name];

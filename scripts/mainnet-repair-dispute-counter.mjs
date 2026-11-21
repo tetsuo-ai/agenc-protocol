@@ -41,6 +41,7 @@ import {
   reviewFreshAdminTransaction,
   assertReviewedAdminTransaction,
 } from "./admin-signing-policy.mjs";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(
@@ -131,22 +132,8 @@ function loadKeypair(filePath) {
   const absolute = path.resolve(
     filePath.replace(/^~(?=$|\/)/, process.env.HOME),
   );
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(absolute, "utf8"));
-  } catch (error) {
-    throw new Error(`cannot read keypair ${absolute}: ${error.message}`);
-  }
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 64 ||
-    parsed.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
-  ) {
-    throw new Error(
-      `keypair ${absolute} must be a plain 64-byte JSON array; encrypted vault/object inputs are refused.`,
-    );
-  }
-  return Keypair.fromSecretKey(Uint8Array.from(parsed));
+  // The error names the path only, never the file's content (review S-19).
+  return Keypair.fromSecretKey(readPlainKeypairFile(absolute, filePath));
 }
 
 export function assertRepairExecutableBinding({

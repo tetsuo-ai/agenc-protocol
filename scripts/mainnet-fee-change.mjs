@@ -88,6 +88,7 @@ import { fileURLToPath, pathToFileURL } from "url";
 import path from "path";
 import { createHash } from "crypto";
 import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 import {
   assertImmediatePreUpgradeSnapshot,
   loadReviewedUpgradeAuthorityPolicy,
@@ -207,8 +208,15 @@ function redactRpc(value) {
   return String(value).replace(/(?:https?|wss?):\/\/[^\s"']+/giu, "<redacted-rpc>");
 }
 function die(msg) { console.error(`ERROR: ${redactRpc(msg)}`); process.exit(1); }
+// The error names the path only, never the file's content (review S-19).
 function loadKeypair(p) {
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(p.replace(/^~/, process.env.HOME), "utf8"))));
+  let secretKey;
+  try {
+    secretKey = readPlainKeypairFile(p.replace(/^~/, process.env.HOME), p);
+  } catch (error) {
+    die(error.message);
+  }
+  return Keypair.fromSecretKey(secretKey);
 }
 function envInt(name, fallback) {
   const raw = process.env[name];

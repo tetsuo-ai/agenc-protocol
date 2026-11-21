@@ -38,6 +38,7 @@ import {
 import { simulateNonBroadcastableInstructions } from "./mainnet-release-boundary.mjs";
 import { decodeTaskMarker, isTaskMarkerData } from "./preflight-dispute-scan.mjs";
 import { reviewFreshAdminTransaction, assertReviewedAdminTransaction } from "./admin-signing-policy.mjs";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
@@ -87,22 +88,16 @@ function expandHome(filePath) {
   return filePath.replace(/^~(?=$|\/)/, process.env.HOME);
 }
 
+// The error names the path only, never the file's content (review S-19).
 function loadKeypair(filePath) {
   const absolute = expandHome(filePath);
-  let parsed;
+  let secretKey;
   try {
-    parsed = JSON.parse(readFileSync(absolute, "utf8"));
+    secretKey = readPlainKeypairFile(absolute, filePath);
   } catch (error) {
-    die(`cannot read keypair ${absolute}: ${error instanceof Error ? error.message : error}`);
+    die(error.message);
   }
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 64 ||
-    parsed.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
-  ) {
-    die(`keypair ${absolute} must be a plain 64-byte JSON array; encrypted vault/object inputs are refused.`);
-  }
-  return Keypair.fromSecretKey(Uint8Array.from(parsed));
+  return Keypair.fromSecretKey(secretKey);
 }
 
 function parseExpectedTasks() {
