@@ -24,7 +24,7 @@ import {
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, setMultisig, setProtocolPaused, configureTestMultisig, approvalSigners,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
-  agentStatsPda, creatorStatsPda, readCreatorStats, disputeBondPda, injectRevision8Freeze,
+  agentStatsPda, creatorStatsPda, readCreatorStats, disputeBondPda, injectRevision8Freeze, findEvents,
   Program, AnchorProvider, Wallet, Connection, BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 
@@ -775,4 +775,35 @@ test("rev9 turn-down: resolve_reject_frozen refuses a submission that is not the
     "TaskSubmissionRequired", "a ruling over another worker's Submitted submission");
   assert.equal(bal(w, other.kp.publicKey), otherBefore, "the other worker is paid nothing");
   assert.equal(status(w, t.task), "RejectFrozen", "still frozen");
+});
+
+// ---------------------------------------------------------------------------
+// Review R1-10 (a). RejectionDisputeSettled reports how a dispute of a revision 9
+// freeze ended (design Appendix D). A ruling on a revision 8 freeze has no such
+// dispute, so it emits only RejectFrozenResolved, as the expiry already did.
+// ---------------------------------------------------------------------------
+test("rev9 turn-down: only a ruling on a revision 9 freeze emits RejectionDisputeSettled (review R1-10 a; 38b222e: also for a revision 8 freeze)", async () => {
+  for (const approve of [true, false]) {
+    {
+      const w = await freshWorld({ moderationEnabled: true });
+      const { owner2 } = await multisig(w);
+      const t = await frozenTask(w);
+      await injectRevision8Freeze(w, t.submission, 3600);
+      const res = expectOk(send(w.svm, await resolveIx(w, t, approve, [w.admin, owner2]), [w.admin, owner2]),
+        `revision 8 freeze ruled, approve=${approve}`);
+      assert.equal(findEvents(res, "RejectFrozenResolved").length, 1, "RejectFrozenResolved");
+      assert.equal(findEvents(res, "RejectionDisputeSettled").length, 0, `revision 8, approve=${approve}: no RejectionDisputeSettled`);
+    }
+    {
+      const w = await freshWorld({ moderationEnabled: true });
+      const { owner2 } = await multisig(w);
+      const t = await frozenTask(w);
+      expectOk(send(w.svm, await disputeIx(w, t), [w.provider]), "dispute");
+      const res = expectOk(send(w.svm, await resolveIx(w, t, approve, [w.admin, owner2]), [w.admin, owner2]),
+        `revision 9 freeze ruled, approve=${approve}`);
+      const settled = findEvents(res, "RejectionDisputeSettled");
+      assert.equal(settled.length, 1, `revision 9, approve=${approve}: RejectionDisputeSettled`);
+      assert.equal(settled[0].bond_amount.toString(), BOND_FLOOR.toString(), "the bond it settled");
+    }
+  }
 });
