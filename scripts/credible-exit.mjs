@@ -22,8 +22,10 @@
 //   (d) artifacts on self- .. the job-spec/result "artifacts" are committed as a
 //       chosen storage         hash of a LOCAL file on disk (file:// URI), not
 //                            uploaded to marketplace.agenc.tech.
-// Settlement (escrow -> claim -> complete -> worker paid + protocol fee) is
-// entirely on-chain via the public @tetsuo-ai/marketplace-sdk.
+// Settlement (escrow -> claim -> submit -> buyer accepts -> worker paid +
+// protocol fee) is entirely on-chain via the public @tetsuo-ai/marketplace-sdk.
+// Revision 9 makes an agent hire a creator-review task, so the buyer accepts
+// the delivery instead of the provider completing it alone.
 //
 // This is the LOCALNET execution. The devnet run is deploy-gated/[HUMAN]; the
 // localnet stack runs the REAL full-surface program at the REAL program id, so
@@ -365,10 +367,13 @@ async function main() {
   if (existingRoster.value) {
     log(`   roster entry already exists at ${attestorRosterPda} (converging)`);
   } else {
+    // Revision 9 (G): the roster needs 2 of the 3 ProtocolConfig owners. The
+    // local owners are the authority, the moderator and the seeder.
     const assignSig = await authorityClient.send([
       await sdk.facade.assignModerationAttestor({
         authority: authoritySigner,
         attestor: ownAttestor.address,
+        multisigSigners: [authoritySigner, moderatorSigner],
       }),
     ]);
     proof.signatures.assignModerationAttestor = assignSig.signature;
@@ -582,6 +587,8 @@ async function main() {
     taskId,
     expectedPrice: price,
     expectedVersion: 1n,
+    // Revision 9: the buyer has one hour to review the delivery.
+    reviewWindowSecs: 3_600n,
     listingSpecHash,
     taskJobSpecHash: jobSpecHash,
     // P1.2 §4.4: the hirer names WHICH attestor's verdict it consumes. We name
@@ -669,11 +676,12 @@ async function main() {
   log("");
 
   // ============================================================= STEP 7
-  // Provider claims and settles. complete_task pays the worker + the protocol
-  // fee to the on-chain treasury. We measure the real balance deltas as proof
-  // the worker actually got paid.
+  // Provider claims and delivers; the buyer accepts, which pays the worker
+  // and the protocol fee to the on-chain treasury. We measure the real
+  // balance deltas as proof the worker actually got paid. The claim deposit
+  // the provider posts at claim comes back with the delivery.
   log(
-    "STEP 7  provider claims + completes — worker paid on-chain (escrow settled)",
+    "STEP 7  provider claims + delivers, buyer accepts: worker paid on-chain (escrow settled)",
   );
   const providerBalBefore = BigInt(
     (await rpc.getBalance(provider.address).send()).value,
@@ -694,23 +702,36 @@ async function main() {
 
   const [hireRecord] = await sdk.findHireRecordPda({ task });
   const resultHash = await descriptionHash("worcse"); // the self-hosted result commitment
-  const completeResult = await providerClient.send([
-    await sdk.facade.completeTask({
+  const submitResult = await providerClient.send([
+    await sdk.facade.submitTaskResult({
       task,
-      creator: buyer.address,
       worker: providerAgent,
-      treasury,
       authority: provider,
-      hireRecord,
       proofHash: resultHash,
       resultData: null,
+    }),
+  ]);
+  await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.PendingValidation, {
+    timeoutMs: 90_000,
+  });
+  proof.signatures.submitTaskResult = submitResult.signature;
+  log(`   provider delivered  sig ${submitResult.signature}`);
+
+  const acceptResult = await buyerClient.send([
+    await sdk.facade.acceptTaskResult({
+      task,
+      worker: providerAgent,
+      creator: buyer,
+      treasury,
+      workerAuthority: provider.address,
+      hireRecord,
     }),
   ]);
   await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.Completed, {
     timeoutMs: 90_000,
   });
-  proof.signatures.completeTask = completeResult.signature;
-  log(`   provider completed  sig ${completeResult.signature}`);
+  proof.signatures.acceptTaskResult = acceptResult.signature;
+  log(`   buyer accepted      sig ${acceptResult.signature}`);
 
   // -------------------------------------------------- on-chain final state
   const finalTask = await sdk.fetchMaybeTask(rpc, task);
@@ -775,7 +796,7 @@ async function main() {
     `             roster attestor (${ownAttestor.address}); NO HTTP attestor service`,
   );
   log(`  artifacts: local file:// (${workDir})`);
-  log(`  settlement: on-chain escrow -> claim -> complete`);
+  log(`  settlement: on-chain escrow -> claim -> submit -> buyer accept`);
   log("");
   log("credible-exit: PROVEN.");
 

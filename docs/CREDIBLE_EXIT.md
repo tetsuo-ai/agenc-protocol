@@ -127,9 +127,12 @@ local attestor (`env.attestorUrl` is deliberately ignored). It re-runs cleanly
 6. **Attest the task CLEAN** (own key) + **pin the job spec** to another local
    `file://` artifact. Claim is gated on both; the pin again names the
    operator's key as `moderator`.
-7. **Provider claims + completes** — `complete_task` pays the worker and routes
-   the exact protocol fee to the on-chain treasury. We measure the **real balance
-   deltas** as proof the worker was actually paid.
+7. **Provider claims and delivers, buyer accepts.** Revision 9 makes an agent
+   hire a creator-review task: the provider submits with `submit_task_result`
+   (its claim deposit comes back), and the buyer's `accept_task_result` pays the
+   worker and routes the exact protocol fee to the on-chain treasury. We measure
+   the **real balance deltas** as proof the worker was actually paid. The
+   roster assignment in step 1 needs 2 of the 3 local ProtocolConfig owners.
 
 ### 2.3 Captured proof (illustrative transcript; executed run 2026-06-11)
 
@@ -218,7 +221,9 @@ failure): `taskStatus == Completed`, `treasuryDelta == reward * feeBps / 10000`,
 
 These signatures are localnet-ledger-scoped (a fresh `localnet-up --reset` wipes
 them). The reproducible **artifact** is the script + the assertions it enforces,
-not these specific bytes.
+not these specific bytes. The table is from a run before revision 9; the
+revision 9 script settles with `submit_task_result` and `accept_task_result`
+instead of `complete_task`.
 
 ---
 
@@ -284,7 +289,8 @@ If tetsuo's hosted plane vanishes:
 
 ### Keeps working (zero tetsuo) — the money-safety core
 
-- **Settlement** — `complete_task` / the direct-pay path; worker paid, fee to the
+- **Settlement:** `accept_task_result` after the provider's delivery (and
+  `complete_task` for tasks that are not review tasks); worker paid, fee to the
   on-chain treasury. _Proven above._
 - **Escrow** — funded at hire, released on completion, refundable on the exit
   paths. _Proven (hire funds escrow; complete releases it)._
