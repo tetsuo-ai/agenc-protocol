@@ -15700,7 +15700,7 @@ export type AgencCoordination = {
         {
           "name": "worker",
           "docs": [
-            "the shared bundle validation; receives the closed claim's rent."
+            "the shared bundle validation; its active task count drops by one."
           ],
           "writable": true
         },
@@ -15748,6 +15748,16 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "signer": true
+        },
+        {
+          "name": "workerAuthority",
+          "docs": [
+            "Revision 9 (review R1-4): the peer's wallet, the `authority` stored in",
+            "its AgentRegistration. The closed claim's whole balance (rent and any",
+            "deposit) and the peer's submission rent go to it, as on every other",
+            "claim close."
+          ],
+          "writable": true
         }
       ],
       "args": []

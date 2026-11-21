@@ -211,6 +211,7 @@ struct ValidatedPeerBundle {
 fn validate_worker_claim_bundle<'info>(
     claim_info: &AccountInfo<'info>,
     worker_info: &AccountInfo<'info>,
+    worker_wallet_info: &AccountInfo<'info>,
     submission_info: &AccountInfo<'info>,
     task_key: &Pubkey,
     program_id: &Pubkey,
@@ -219,6 +220,10 @@ fn validate_worker_claim_bundle<'info>(
     validate_account_owner(worker_info)?;
     require!(claim_info.is_writable, CoordinationError::InvalidInput);
     require!(worker_info.is_writable, CoordinationError::InvalidInput);
+    require!(
+        worker_wallet_info.is_writable,
+        CoordinationError::InvalidInput
+    );
 
     // Validate claim PDA derivation to prevent crafted program-owned accounts
     let (expected_claim_pda, expected_claim_bump) = Pubkey::find_program_address(
@@ -250,6 +255,11 @@ fn validate_worker_claim_bundle<'info>(
         require!(
             worker_info.key() == expected_worker_pda && worker_reg.bump == expected_worker_bump,
             CoordinationError::InvalidInput
+        );
+        // Review R1-4: the claim closes to the peer's own wallet.
+        require!(
+            worker_wallet_info.key() == worker_reg.authority,
+            CoordinationError::UnauthorizedAgent
         );
     }
 
@@ -295,10 +305,12 @@ fn validate_worker_claim_bundle<'info>(
 
 /// Mutate one bundle only after the whole peer vector has passed read-only
 /// validation and aggregate counter-conservation checks.
+#[allow(clippy::too_many_arguments)]
 fn settle_validated_worker_claim_bundle<'info>(
     task: &mut Task,
     claim_info: &AccountInfo<'info>,
     worker_info: &AccountInfo<'info>,
+    worker_wallet_info: &AccountInfo<'info>,
     submission_info: &AccountInfo<'info>,
     task_key: &Pubkey,
     validated: ValidatedPeerBundle,
@@ -312,7 +324,7 @@ fn settle_validated_worker_claim_bundle<'info>(
             task_key,
             &claim_info.key(),
             &worker_info.key(),
-            worker_info,
+            worker_wallet_info,
             submission_info,
             validation_config,
         )?;
@@ -328,12 +340,13 @@ fn settle_validated_worker_claim_bundle<'info>(
         .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize)?;
     drop(worker_data);
 
-    // Close the processed claim account. Rent is credited to the worker PDA so
-    // funds remain recoverable via normal agent lifecycle and no stale claims
-    // block cleanup flows after dispute resolution/expiration.
+    // Close the processed claim account to the peer's wallet: its whole balance,
+    // rent and any deposit (review R1-4: a peer is not at fault for the dispute,
+    // and lamports left on the AgentRegistration come out only when the
+    // identity is retired). No stale claim then blocks cleanup after the ruling.
     let claim_lamports = claim_info.lamports();
     **claim_info.try_borrow_mut_lamports()? = 0;
-    **worker_info.try_borrow_mut_lamports()? = worker_info
+    **worker_wallet_info.try_borrow_mut_lamports()? = worker_wallet_info
         .lamports()
         .checked_add(claim_lamports)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -361,6 +374,7 @@ pub(crate) fn settle_single_dispute_peer<'info>(
     task_key: &Pubkey,
     claim_info: &AccountInfo<'info>,
     worker_info: &AccountInfo<'info>,
+    worker_wallet_info: &AccountInfo<'info>,
     submission_info: &AccountInfo<'info>,
     defendant: Pubkey,
     validation_config: Option<&mut Account<'info, TaskValidationConfig>>,
@@ -373,6 +387,7 @@ pub(crate) fn settle_single_dispute_peer<'info>(
     let validated = validate_worker_claim_bundle(
         claim_info,
         worker_info,
+        worker_wallet_info,
         submission_info,
         task_key,
         program_id,
@@ -405,6 +420,7 @@ pub(crate) fn settle_single_dispute_peer<'info>(
         task,
         claim_info,
         worker_info,
+        worker_wallet_info,
         submission_info,
         task_key,
         validated,
@@ -476,9 +492,9 @@ pub(crate) fn validate_dispute_worker_accounts(
 ///   transition); the task-level counter is schema-gated via
 ///   `note_submission_left_review`, and the validation-config counter is decremented
 ///   for manual tasks (the config account is then REQUIRED);
-/// - the account is closed to a worker-controlled rent destination (the primary
-///   worker authority, or the canonical peer AgentRegistration PDA) and tombstoned
-///   against re-init.
+/// - the account is closed to the worker's wallet (the defendant's or, since
+///   review R1-4, a peer's; both are bound to the registration's `authority`) and
+///   tombstoned against re-init.
 ///
 /// - every live status is closed on the now-terminalizing exit. Non-`Submitted`
 ///   statuses carry no review-counter debt, but their worker-funded rent must not
@@ -543,10 +559,9 @@ fn sweep_dispute_submission<'info>(
         }
     }
 
-    // Return worker-funded submission rent to the caller-authenticated worker
-    // destination and tombstone against re-init. Primary cleanup supplies the
-    // authority wallet; peer cleanup supplies the canonical worker Agent PDA, in
-    // line with the existing peer-claim rent path.
+    // Return worker-funded submission rent to the worker's wallet, bound to the
+    // registration's `authority` by the caller (primary and peer cleanup alike),
+    // and tombstone against re-init.
     let lamports = submission_info.lamports();
     **submission_info.try_borrow_mut_lamports()? = 0;
     **rent_recipient.try_borrow_mut_lamports()? = rent_recipient
@@ -806,8 +821,10 @@ mod tests {
         let peer1_agent_id = [1u8; 32];
         let (peer1_worker_key, peer1_worker_bump) =
             Pubkey::find_program_address(&[b"agent", peer1_agent_id.as_ref()], &crate::ID);
+        let peer1_wallet_key = Pubkey::new_unique();
         let peer1_worker = AgentRegistration {
             agent_id: peer1_agent_id,
+            authority: peer1_wallet_key,
             active_tasks: 1,
             bump: peer1_worker_bump,
             ..AgentRegistration::default()
@@ -820,6 +837,15 @@ mod tests {
             true,
             &mut peer1_worker_lamports,
             peer1_worker_data.as_mut_slice(),
+        );
+        let mut peer1_wallet_lamports = 1_000;
+        let mut peer1_wallet_data = Vec::new();
+        let peer1_wallet_info = test_account_info(
+            &peer1_wallet_key,
+            &anchor_lang::system_program::ID,
+            true,
+            &mut peer1_wallet_lamports,
+            peer1_wallet_data.as_mut_slice(),
         );
         let (peer1_claim_key, peer1_claim_bump) = Pubkey::find_program_address(
             &[b"claim", task_key.as_ref(), peer1_worker_key.as_ref()],
@@ -867,8 +893,10 @@ mod tests {
         let peer2_agent_id = [2u8; 32];
         let (peer2_worker_key, peer2_worker_bump) =
             Pubkey::find_program_address(&[b"agent", peer2_agent_id.as_ref()], &crate::ID);
+        let peer2_wallet_key = Pubkey::new_unique();
         let peer2_worker = AgentRegistration {
             agent_id: peer2_agent_id,
+            authority: peer2_wallet_key,
             active_tasks: 1,
             bump: peer2_worker_bump,
             ..AgentRegistration::default()
@@ -881,6 +909,15 @@ mod tests {
             true,
             &mut peer2_worker_lamports,
             peer2_worker_data.as_mut_slice(),
+        );
+        let mut peer2_wallet_lamports = 2_000;
+        let mut peer2_wallet_data = Vec::new();
+        let peer2_wallet_info = test_account_info(
+            &peer2_wallet_key,
+            &anchor_lang::system_program::ID,
+            true,
+            &mut peer2_wallet_lamports,
+            peer2_wallet_data.as_mut_slice(),
         );
         let (peer2_claim_key, peer2_claim_bump) = Pubkey::find_program_address(
             &[b"claim", task_key.as_ref(), peer2_worker_key.as_ref()],
@@ -922,6 +959,7 @@ mod tests {
             &task_key,
             &peer1_claim_info,
             &peer1_submission_info,
+            &peer1_wallet_info,
             &peer1_worker_info,
             primary_worker,
             Some(&mut config_account),
@@ -940,12 +978,32 @@ mod tests {
             &task_key,
             &peer1_claim_info,
             &peer1_worker_info,
+            &peer1_wallet_info,
             &peer1_submission_info,
             peer1_worker_key,
             Some(&mut config_account),
             &crate::ID,
         )
         .is_err());
+
+        // Review R1-4: the claim closes to the peer's own wallet; another wallet
+        // (here peer 2's) fails before any lamports or counters move.
+        assert!(settle_single_dispute_peer(
+            &mut task,
+            &task_key,
+            &peer1_claim_info,
+            &peer1_worker_info,
+            &peer2_wallet_info,
+            &peer1_submission_info,
+            primary_worker,
+            Some(&mut config_account),
+            &crate::ID,
+        )
+        .is_err());
+        assert_eq!(task.live_submissions(), 1);
+        assert_eq!(config_account.pending_submission_count(), 1);
+        assert_eq!(peer1_claim_info.lamports(), 50);
+        assert_eq!(peer2_wallet_info.lamports(), 2_000);
 
         // Stale task and validation counters each fail before rent movement or
         // tombstoning, preserving conservation on corrupted legacy state.
@@ -955,6 +1013,7 @@ mod tests {
             &task_key,
             &peer1_claim_info,
             &peer1_worker_info,
+            &peer1_wallet_info,
             &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
@@ -968,6 +1027,7 @@ mod tests {
             &task_key,
             &peer1_claim_info,
             &peer1_worker_info,
+            &peer1_wallet_info,
             &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
@@ -985,6 +1045,7 @@ mod tests {
             &task_key,
             &peer1_claim_info,
             &peer1_worker_info,
+            &peer1_wallet_info,
             &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
@@ -996,6 +1057,7 @@ mod tests {
             &task_key,
             &peer2_claim_info,
             &peer2_worker_info,
+            &peer2_wallet_info,
             &peer2_submission_info,
             primary_worker,
             Some(&mut config_account),
@@ -1010,6 +1072,7 @@ mod tests {
             &task_key,
             &peer1_claim_info,
             &peer1_worker_info,
+            &peer1_wallet_info,
             &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
@@ -1021,9 +1084,13 @@ mod tests {
         assert_eq!(config_account.pending_submission_count(), 0);
         assert_eq!(peer1_claim_info.lamports(), 0);
         assert_eq!(peer1_submission_info.lamports(), 0);
-        assert_eq!(peer1_worker_info.lamports(), 180);
+        // Review R1-4: the claim and submission lamports go to each peer's
+        // wallet; the AgentRegistrations keep exactly what they had.
+        assert_eq!(peer1_worker_info.lamports(), 100);
+        assert_eq!(peer1_wallet_info.lamports(), 1_080);
         assert_eq!(peer2_claim_info.lamports(), 0);
-        assert_eq!(peer2_worker_info.lamports(), 260);
+        assert_eq!(peer2_worker_info.lamports(), 200);
+        assert_eq!(peer2_wallet_info.lamports(), 2_060);
         assert_eq!(
             &peer1_claim_info.try_borrow_data().unwrap()[..8],
             &[255u8; 8]

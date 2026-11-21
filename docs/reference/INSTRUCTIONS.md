@@ -2329,7 +2329,7 @@ Permissionlessly settle one deferred collaborative peer claim after a
 dispute ruling (chunked settlement). The dispute reaches its recorded
 terminal status when the last peer settles.
 
-### Accounts (8)
+### Accounts (9)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2337,10 +2337,11 @@ terminal status when the last peer settles.
 | 2 | `dispute` | yes |  |  | PDA ["dispute", account:dispute.dispute_id (Dispute)] |  |
 | 3 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 4 | `claim` | yes |  |  |  | and binding to `worker` are all enforced by the shared bundle validation in the handler (identical to the retired monolithic path). |
-| 5 | `worker` | yes |  |  |  | the shared bundle validation; receives the closed claim's rent. |
+| 5 | `worker` | yes |  |  |  | the shared bundle validation; its active task count drops by one. |
 | 6 | `task_submission` | yes |  |  |  | swept with counter conservation; the exact empty system-owned PDA proves absence. Non-skippable evidence, as on the retired path. |
 | 7 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] |  |
 | 8 | `authority` |  | yes |  |  |  |
+| 9 | `worker_authority` | yes |  |  |  | Revision 9 (review R1-4): the peer's wallet, the `authority` stored in its AgentRegistration. The closed claim's whole balance (rent and any deposit) and the peer's submission rent go to it, as on every other claim close. |
 
 ### Args (0)
 
