@@ -8,7 +8,7 @@
       "name": "@tetsuo-ai/protocol",
       "directory": "packages/protocol",
       "expectedVersion": "0.6.0",
-      "expectedIntegrity": "sha512-cEWgAu6QFJH7icjGXxB8f/VcuPGiEBUGtMz+Zs+9l73WzwoyKLyPcYiIAJD8FJoAGxJceE+rsppafnbNqd8JdA==",
+      "expectedIntegrity": "sha512-pRdmimq0sjPe7CHKiVx7bfS9AHOP8VoZvMkNq3RjqQv3Z//n/+7ZS3HJYmdtrp/HyBvQa1ooCrh9EBvltUc+PA==",
       "requires": []
     },
     {
@@ -17,7 +17,7 @@
       "name": "@tetsuo-ai/marketplace-sdk",
       "directory": "packages/sdk-ts",
       "expectedVersion": "0.14.0",
-      "expectedIntegrity": "sha512-nT0xea9E37jvCfT1j3CLaVVFVj9Hc9Xr9kIN2qBkMTej2DJd5oril8whUP78QzJeLXOkSyV7pqdOsriN5xXZ7g==",
+      "expectedIntegrity": "sha512-j9UnUIFu8MDwhIrP3tzlhHs0LFr2NdfeZWDJD/H+PWXKlNL+tFhcDoJA2n7//RtmCkw6T06f2rr3xRcZ+j8fPw==",
       "requires": ["protocol"]
     },
     {
@@ -35,7 +35,7 @@
       "name": "@tetsuo-ai/marketplace-react",
       "directory": "packages/marketplace-react",
       "expectedVersion": "0.7.0",
-      "expectedIntegrity": "sha512-rXAdqzVTxpKPvRXo3tyvG8IQ9wQl0sWG4I/iNpbWtyhiLds4EC8Tp0Eo0P2fFmv0xtnXk2Lto4wthUnp90Ct8Q==",
+      "expectedIntegrity": "sha512-VTdgqz/4TQ8Xm6kXHA7eh5z/Rv3+geJDexOi6jGXz67a5c6/qNlu6ajQ9Nui4RJbJOzV3AUsYnvR61wEZw6ndQ==",
       "requires": ["sdk"]
     },
     {
@@ -44,7 +44,7 @@
       "name": "@tetsuo-ai/marketplace-tools",
       "directory": "packages/marketplace-tools",
       "expectedVersion": "0.7.0",
-      "expectedIntegrity": "sha512-54MQEQtSstsH5i9gWetT/7/DpmwIpq2yZGnLOOy2FOFCpVu3ky4YgO7P4IeIG6CcCM47eHmuiAIT0pXqn+TtEQ==",
+      "expectedIntegrity": "sha512-qhYWn43Cp3F+BEEVz+xM2Y5k6GGkudrNTHrTGBoJN//mTK1WPLb6DnDTcBYnzDSxCK18hJVegqvrpOlXxZ5vyQ==",
       "requires": ["sdk"]
     },
     {
@@ -53,7 +53,7 @@
       "name": "@tetsuo-ai/agenc-worker",
       "directory": "packages/agenc-worker",
       "expectedVersion": "0.4.0",
-      "expectedIntegrity": "sha512-V5dd8uJ0KbKu5CczsTMzwOtxvb1vJBjPiOS8BNrr1VjQKjmpp6BB2fqKvLzjKhEkZxByCpQpc1hU6cgf91qd5g==",
+      "expectedIntegrity": "sha512-/hDh6KyYKj7OaES91DgJcZiF1BP6YlQrJMC4iIEL4aiMRVA862apI5nARVSSaRYcZ30fCKhUeMP3dYumNH0viA==",
       "requires": ["sdk"]
     },
     {
@@ -62,7 +62,7 @@
       "name": "@tetsuo-ai/marketplace-mcp",
       "directory": "packages/marketplace-mcp",
       "expectedVersion": "0.7.0",
-      "expectedIntegrity": "sha512-+o7G7zr7kbOQe/iQ6vVV/5qjqiEIOL66Ckrr1+dXMjOeqDiElxhtRDzZVYwh/UGLeQE2dhumM3b5xYdUJOK8sQ==",
+      "expectedIntegrity": "sha512-0eN6kGTcPbtoIgfgenpmM85HAR+z3QJyeQcX8EXKo2kh36VIbBLXWHcjWHV8OVlU27+BY7ib01OLc/3IEuqssA==",
       "requires": ["sdk", "tools"]
     },
     {
@@ -71,7 +71,7 @@
       "name": "@tetsuo-ai/agenc-cli",
       "directory": "packages/agenc-cli",
       "expectedVersion": "0.5.0",
-      "expectedIntegrity": "sha512-2dqv0WbrPXiHxdweMrdGQErPGgcTDGMgytmteDOIoX24h0yYHOaR7RMeyFbGTB33Al69qktQU4HiUfPPMQADOg==",
+      "expectedIntegrity": "sha512-hSCQu5LWG4WeKqSjsNuRjfblADlJUO0g1XcXWWUXbDB+GjWtWGpcLFvYh0okRbl1Cis6iFhghFruRhpYb3a+Xg==",
       "requires": ["sdk", "worker"]
     },
     {
@@ -80,7 +80,7 @@
       "name": "agenc-cli",
       "directory": "packages/agenc-cli-alias",
       "expectedVersion": "0.5.0",
-      "expectedIntegrity": "sha512-AQdaDe27rOQv+HtbV6hUyvTiBvJPXWi9M3QN/Hzx3CSmMl5mGRKcibtEHMM3KLUwsAA459yIL/NME7lg91rIgg==",
+      "expectedIntegrity": "sha512-oXvXYPX0ZI1+LoHllKx+GZ+FLL2dZt695UnBAsEGbbuy08pkU22y0l79+gHbe1M2cu4rxlfapmfLPwnfaUr5gg==",
       "requires": ["cli"]
     }
   ]
