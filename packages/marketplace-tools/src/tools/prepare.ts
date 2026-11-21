@@ -768,7 +768,10 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
     "Build an UNSIGNED claim_task_with_job_spec instruction (a worker agent claims an " +
     "eligible task against its pre-existing pinned job-spec pointer). Returns the unsigned instruction — NOT " +
     "signed, NOT sent. The caller signs with the worker's authority wallet behind their " +
-    "own policy gate and broadcasts it.",
+    "own policy gate and broadcasts it. Revision 9: a non-contest claim moves a claim " +
+    "deposit from the worker wallet (10% of the worker's share, at least 0.005 SOL). It " +
+    "comes back on the first delivery and goes to the buyer if the claim ends without one " +
+    "after its expiry. The first claim also creates the worker's record, paid by the worker.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -950,7 +953,10 @@ const prepareReject = defineTool<PrepareRejectArgs, UnsignedInstructionView>({
   name: "prepare_reject_task_result",
   kind: "prepare",
   description:
-    "Build an UNSIGNED reject_task_result instruction for CreatorReview rejection.",
+    "Build an UNSIGNED reject_task_result instruction for CreatorReview rejection. " +
+    "Revision 9 refuses it on a single-worker review task (Exclusive, one worker, " +
+    "CreatorReview; error 6418): turn that work down with prepare_reject_and_freeze. " +
+    "Collaborative and contest tasks keep this path.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -986,6 +992,198 @@ const prepareReject = defineTool<PrepareRejectArgs, UnsignedInstructionView>({
         "rejectionHash",
         "prepare_reject_task_result",
       ),
+    });
+    return projectInstruction(ix as unknown as BuiltInstructionLike);
+  },
+});
+
+interface PrepareRejectAndFreezeArgs {
+  task: string;
+  worker: string;
+  creator: string;
+  rejectionHash: string;
+}
+
+const prepareRejectAndFreeze = defineTool<
+  PrepareRejectAndFreezeArgs,
+  UnsignedInstructionView
+>({
+  name: "prepare_reject_and_freeze",
+  kind: "prepare",
+  description:
+    "Build an UNSIGNED reject_and_freeze instruction: the buyer turns a delivery down on " +
+    "a single-worker review task. The price stays held. Revision 9: the worker has 72 " +
+    "hours to dispute the turn-down with a bond; with no dispute the buyer is refunded " +
+    "when that time ends (prepare_expire_reject_frozen). The creator's record is created " +
+    "at its first freeze or cancel, paid by the creator.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "worker", "creator", "rejectionHash"],
+    properties: {
+      task: solanaAddress("Task PDA in creator review."),
+      worker: solanaAddress("The claim's worker agent PDA (derives the claim and its record)."),
+      creator: solanaAddress("Task creator wallet that signs."),
+      rejectionHash: hex32Schema("Non-zero 32-byte turn-down reason hash.", true),
+    },
+  },
+  async handler(args) {
+    const ix = await facade.rejectAndFreeze({
+      task: args.task as Address,
+      worker: args.worker as Address,
+      creator: createNoopSigner(args.creator as Address),
+      rejectionHash: hex32(args.rejectionHash, "rejectionHash", "prepare_reject_and_freeze"),
+    });
+    return projectInstruction(ix as unknown as BuiltInstructionLike);
+  },
+});
+
+interface PrepareDisputeRejectionArgs {
+  task: string;
+  worker: string;
+  workerAuthority: string;
+  creator: string;
+  evidenceHash: string;
+  evidenceUri?: string;
+}
+
+const prepareDisputeRejection = defineTool<
+  PrepareDisputeRejectionArgs,
+  UnsignedInstructionView
+>({
+  name: "prepare_dispute_rejection",
+  kind: "prepare",
+  description:
+    "Build an UNSIGNED dispute_rejection instruction: the worker disputes a buyer's " +
+    "revision 9 turn-down within its 72-hour window, posting a bond of 10% of the price " +
+    "(at least 0.01 SOL) plus the bond account's rent, which always comes back. The " +
+    "multisig rules within 72 hours: for the worker it is paid and the bond comes back; " +
+    "for the buyer the buyer gets the bond; with no ruling the buyer is refunded and the " +
+    "bond comes back. The bond is at risk, so only send it on a deliberate decision.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "worker", "workerAuthority", "creator", "evidenceHash"],
+    properties: {
+      task: solanaAddress("The turned-down Task PDA (RejectFrozen)."),
+      worker: solanaAddress("The worker agent PDA that delivered."),
+      workerAuthority: solanaAddress("The worker agent's wallet; signs and posts the bond."),
+      creator: solanaAddress("The task's creator wallet (task.creator)."),
+      evidenceHash: hex32Schema("Non-zero 32-byte evidence hash.", true),
+      evidenceUri: contentUri("Optional evidence URI, at most 256 bytes. Omit for none.", 256),
+    },
+  },
+  async handler(args) {
+    const ix = await facade.disputeRejection({
+      task: args.task as Address,
+      worker: args.worker as Address,
+      creator: args.creator as Address,
+      authority: createNoopSigner(args.workerAuthority as Address),
+      evidenceHash: hex32(args.evidenceHash, "evidenceHash", "prepare_dispute_rejection"),
+      evidenceUri: args.evidenceUri ?? "",
+    });
+    return projectInstruction(ix as unknown as BuiltInstructionLike);
+  },
+});
+
+interface PrepareExpireRejectFrozenArgs {
+  task: string;
+  worker: string;
+  workerAuthority: string;
+  treasury: string;
+  creator: string;
+  authority: string;
+  operator?: string;
+  referrer?: string;
+}
+
+const prepareExpireRejectFrozen = defineTool<
+  PrepareExpireRejectFrozenArgs,
+  UnsignedInstructionView
+>({
+  name: "prepare_expire_reject_frozen",
+  kind: "prepare",
+  description:
+    "Build an UNSIGNED expire_reject_frozen instruction once a turn-down's time is over. " +
+    "Anyone may send it. A revision 9 turn-down (undisputed, or disputed and not ruled) " +
+    "refunds the buyer and returns the worker's claim and submission rent, and its bond " +
+    "when it disputed. A freeze made before revision 9 pays the worker. Records missing " +
+    "on chain are created, paid by the signer.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "worker", "workerAuthority", "treasury", "creator", "authority"],
+    properties: {
+      task: solanaAddress("The turned-down Task PDA (RejectFrozen)."),
+      worker: solanaAddress("The worker agent PDA."),
+      workerAuthority: solanaAddress("The worker agent's wallet."),
+      treasury: solanaAddress("Protocol treasury account."),
+      creator: solanaAddress("Task creator wallet."),
+      authority: solanaAddress("Permissionless caller wallet that signs."),
+      operator: solanaAddress("Optional operator payee (paid only on a revision 8 payout)."),
+      referrer: solanaAddress("Optional referrer payee (paid only on a revision 8 payout)."),
+    },
+  },
+  async handler(args) {
+    const ix = await facade.expireRejectFrozen({
+      task: args.task as Address,
+      claim: (
+        await facade.findClaimPda({ task: args.task as Address, bidder: args.worker as Address })
+      )[0],
+      worker: args.worker as Address,
+      workerAuthority: args.workerAuthority as Address,
+      treasury: args.treasury as Address,
+      creator: args.creator as Address,
+      authority: createNoopSigner(args.authority as Address),
+      ...(args.operator ? { operator: args.operator as Address } : {}),
+      ...(args.referrer ? { referrer: args.referrer as Address } : {}),
+    });
+    return projectInstruction(ix as unknown as BuiltInstructionLike);
+  },
+});
+
+interface PrepareReleaseClaimArgs {
+  task: string;
+  worker: string;
+  workerAuthority: string;
+  creator: string;
+  autoTask?: boolean;
+}
+
+const prepareReleaseClaim = defineTool<
+  PrepareReleaseClaimArgs,
+  UnsignedInstructionView
+>({
+  name: "prepare_release_claim",
+  kind: "prepare",
+  description:
+    "Build an UNSIGNED release_claim instruction (revision 9): a worker gives up an " +
+    "undelivered claim before it expires. Within 1 hour of claiming the claim deposit " +
+    "comes back; later it goes to the buyer. The slot is freed and the claim rent comes " +
+    "back either way. Refused for delivered work under review, contests and bid tasks.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "worker", "workerAuthority", "creator"],
+    properties: {
+      task: solanaAddress("The claimed Task PDA."),
+      worker: solanaAddress("The worker agent PDA."),
+      workerAuthority: solanaAddress("The worker agent's wallet; signs."),
+      creator: solanaAddress("The task's creator wallet (task.creator)."),
+      autoTask: {
+        type: "boolean",
+        description:
+          "True for an Auto task with no validation config. Omit for review tasks (every hire).",
+      },
+    },
+  },
+  async handler(args) {
+    const ix = await facade.releaseClaim({
+      task: args.task as Address,
+      worker: args.worker as Address,
+      creator: args.creator as Address,
+      authority: createNoopSigner(args.workerAuthority as Address),
+      ...(args.autoTask === true ? { taskValidationConfig: null } : {}),
     });
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },
@@ -1053,7 +1251,10 @@ const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
   name: "prepare_cancel_task",
   kind: "prepare",
   description:
-    "Build an UNSIGNED cancel_task instruction to refund an open/unclaimed task.",
+    "Build an UNSIGNED cancel_task instruction to refund an open/unclaimed task. " +
+    "Revision 9: the creator's first cancel or freeze creates its record (CreatorStats), " +
+    "paid by the creator before the refund and never returned, so the creator wallet " +
+    "needs that rent plus the fee.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -1320,8 +1521,12 @@ export const prepareTools: ReadonlyArray<MarketplaceTool> = [
   prepareSubmit,
   prepareAccept,
   prepareReject,
+  prepareRejectAndFreeze,
+  prepareDisputeRejection,
+  prepareExpireRejectFrozen,
   prepareAutoAccept,
   prepareCancel,
+  prepareReleaseClaim,
   prepareClose,
   prepareRateHire,
   prepareCreateServiceListing,
