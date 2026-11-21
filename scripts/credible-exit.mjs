@@ -581,6 +581,8 @@ async function main() {
   const taskId = randomId32();
   const hireResult = await buyerClient.hireFromListing({
     listing,
+    // Revision 9 (hire v3) names the provider agent the listing is bound to.
+    providerAgent,
     creatorAgent: buyerAgent,
     authority: buyer,
     creator: buyer,
@@ -689,11 +691,33 @@ async function main() {
   const treasuryBalBefore = BigInt(
     (await rpc.getBalance(treasury).send()).value,
   );
+  // Revision 9 (E): the worker's record is created at its first claim, paid
+  // by the worker, so the proof adds that rent back with the tx fees.
+  const [workerStats] = await sdk.findWorkerStatsPda({ worker: providerAgent });
+  const workerStatsExisted =
+    (await rpc.getAccountInfo(workerStats, { encoding: "base64" }).send())
+      .value !== null;
+  const txFee = async (signature) => {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const tx = await rpc
+        .getTransaction(signature, {
+          commitment: "confirmed",
+          encoding: "json",
+          maxSupportedTransactionVersion: 0,
+        })
+        .send();
+      if (tx?.meta) return BigInt(tx.meta.fee);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    fail(`no confirmed transaction ${signature}`);
+  };
 
-  await providerClient.claimTaskWithJobSpec({
+  const claimResult = await providerClient.claimTaskWithJobSpec({
     task,
     worker: providerAgent,
     authority: provider,
+    // The pinned spec's hash, for the assignment-time moderation BLOCK check.
+    jobSpecHash,
   });
   await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.InProgress, {
     timeoutMs: 90_000,
@@ -747,6 +771,17 @@ async function main() {
   const providerDelta = providerBalAfter - providerBalBefore;
   const treasuryDelta = treasuryBalAfter - treasuryBalBefore;
   const expectedFee = (reward * BigInt(protocol.data.protocolFeeBps)) / 10_000n;
+  const providerTxFees =
+    (await txFee(claimResult.signature)) + (await txFee(submitResult.signature));
+  const workerStatsRent = workerStatsExisted
+    ? 0n
+    : BigInt(
+        await rpc
+          .getMinimumBalanceForRentExemption(BigInt(sdk.getAgentStatsSize()))
+          .send(),
+      );
+  // The claim and submission rents and the deposit all come back by accept.
+  const workerPayout = providerDelta + providerTxFees + workerStatsRent;
 
   proof.finalState = {
     taskStatus: status, // 3 == Completed
@@ -757,7 +792,10 @@ async function main() {
     protocolFeeBps: protocol.data.protocolFeeBps,
     expectedProtocolFee: expectedFee.toString(),
     treasuryFeeMatches: treasuryDelta === expectedFee,
-    workerPaid: providerDelta > 0n,
+    providerTxFees: providerTxFees.toString(),
+    workerStatsRent: workerStatsRent.toString(),
+    workerPayout: workerPayout.toString(),
+    workerPaid: workerPayout === reward - expectedFee,
   };
 
   if (status !== sdk.TaskStatus.Completed)
@@ -767,8 +805,10 @@ async function main() {
       `treasury delta ${treasuryDelta} != expected protocol fee ${expectedFee}`,
     );
   }
-  if (providerDelta <= 0n)
-    fail(`provider was not paid (delta ${providerDelta})`);
+  if (workerPayout !== reward - expectedFee)
+    fail(
+      `provider payout ${workerPayout} != reward ${reward} minus the protocol fee ${expectedFee}`,
+    );
 
   log("");
   log("-".repeat(72));
@@ -779,7 +819,10 @@ async function main() {
     `  treasury delta       = ${treasuryDelta} lamports (= ${protocol.data.protocolFeeBps} bps fee, matches)`,
   );
   log(
-    `  provider net delta   = ${providerDelta} lamports (payout minus its own tx fees)`,
+    `  provider payout      = ${workerPayout} lamports (reward minus the protocol fee)`,
+  );
+  log(
+    `  provider net delta   = ${providerDelta} lamports (payout minus ${providerTxFees} tx fees and ${workerStatsRent} first-claim record rent)`,
   );
   log(`  worker paid          = YES`);
   log("-".repeat(72));
