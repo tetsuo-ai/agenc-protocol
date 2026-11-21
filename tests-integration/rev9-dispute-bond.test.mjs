@@ -15,7 +15,7 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, seatTestAuthorityResolver, mutateTask,
+  freshWorld, seatTestAuthorityResolver, mutateTask, setMultisig,
   taskModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats, creatorStatsCreationCost,
   disputeBondPda, disputeRespondent, findEvents, coder, sendMany,
@@ -771,4 +771,115 @@ test("rev9 dispute bond: the same chain on an Exclusive task takes no completion
   expectOk(send(w.svm, fileIx, [w.buyer]), "db:creator files against the worker");
   warpTo(w, deadline + 3_601);
   await secondFilingOutcome(w, t, dispute, { agent: w.providerAgent, claim: t.claim, wallet: w.provider.publicKey }, "Exclusive with a bond");
+});
+
+// ---------------------------------------------------------------------------
+// Review R4-1 (and R4-3 for rulings): a task-dispute ruling on the direct branch
+// takes any proposer, and the ProtocolConfig owners decide through the two
+// thresholds, as in resolve_reject_frozen. Before, only ProtocolConfig.authority
+// could propose: a creator that named that key as a 1 bps referrer made its
+// dispute unrulable (ResolverConflictOfInterest), and with that owner offline
+// the other two could not rule (UnauthorizedResolver). The initiator still may
+// not propose.
+// ---------------------------------------------------------------------------
+async function referredAutoClaimed(w, { referrer = null, referrerFeeBps = 0 } = {}) {
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const t = {
+    task,
+    escrow: pda([enc("escrow"), task.toBuffer()])[0],
+    hireRecord: pda([enc("hire"), task.toBuffer()])[0],
+    validation: null,
+  };
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(100_000_000), 1, new BN(now + 3600), 0, null, 0, null, referrer, referrerFeeBps)
+    .accounts({ task, escrow: t.escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
+      authorityRateLimit: pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0],
+      authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+      rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "db:create an Auto task");
+  Object.assign(t, await publish(w, task));
+  await claim(w, t);
+  return t;
+}
+
+function directRulingIx(w, t, dispute, proposer, approvers, approve = false) {
+  return makeProgram(proposer).methods
+    .resolveDispute(approve, arr(Buffer.alloc(32, 9)), "agenc://ruling/rev9-direct")
+    .accounts({ dispute, task: t.task, escrow: t.escrow, protocolConfig: w.protocolPda,
+      authority: proposer.publicKey, resolverAssignment: null, creator: w.buyer.publicKey,
+      workerClaim: t.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
+      agentStats: agentStatsPda(w.providerAgent), hireRecord: t.hireRecord, disputeOperator: null, disputeReferrer: null,
+      systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
+      treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: completionBond(t.task, w.buyer.publicKey), workerCompletionBond: completionBond(t.task, w.provider.publicKey),
+      bondTreasury: w.admin.publicKey, taskSubmission: t.submission, taskValidationConfig: t.validation,
+      disputeBond: disputeBondPda(dispute), creatorStats: creatorStatsPda(w.buyer.publicKey) })
+    .remainingAccounts(approvers.map((k) => ({ pubkey: k.publicKey, isSigner: true, isWritable: false })))
+    .instruction();
+}
+
+function uniqueSigners(...keys) {
+  const seen = new Set();
+  return keys.filter((k) => !seen.has(k.publicKey.toBase58()) && seen.add(k.publicKey.toBase58()));
+}
+
+async function ownersWorld() {
+  const w = await freshWorld({ moderationEnabled: true });
+  const owner2 = Keypair.generate();
+  const owner3 = Keypair.generate();
+  for (const owner of [owner2, owner3]) w.svm.airdrop(owner.publicKey, 10_000_000_000n);
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey, owner3.publicKey], 2);
+  return { w, owner2, owner3 };
+}
+
+test("rev9 dispute bond: a creator that names the protocol authority as a 1 bps referrer cannot make its dispute unrulable (review R4-1; 560a578: ResolverConflictOfInterest)", async () => {
+  const { w, owner2 } = await ownersWorld();
+  const t = await referredAutoClaimed(w, { referrer: w.admin.publicKey, referrerFeeBps: 1 });
+  assert.equal(decode(w.svm, "Task", t.task).referrer.toBase58(), w.admin.publicKey.toBase58(), "the protocol authority is the referrer");
+  const { ix: fileIx, dispute } = await creatorFilesIx(w, t, 0);
+  expectOk(send(w.svm, fileIx, [w.buyer]), "db:the creator files Refund");
+  const principal = BigInt(decode(w.svm, "DisputeBond", disputeBondPda(dispute)).amount.toString());
+  assert.equal(principal, BOND_FLOOR);
+  const claimBalance = bal(w, t.claim);
+  const before = bal(w, w.provider.publicKey);
+  expectOk(send(w.svm, await directRulingIx(w, t, dispute, w.admin, [w.admin, owner2]), uniqueSigners(w.admin, owner2)),
+    "db:the admin and owner2 reject the creator's filing");
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "Resolved");
+  assert.ok(isClosed(w.svm, disputeBondPda(dispute)), "the bond settled");
+  assert.equal(bal(w, w.provider.publicKey) - before, claimBalance + principal,
+    "the provider gets its claim (rent and deposit) and the creator's bond principal");
+});
+
+test("rev9 dispute bond: two owners rule a task dispute without the protocol authority (review R4-3; 560a578: UnauthorizedResolver)", async () => {
+  const { w, owner2, owner3 } = await ownersWorld();
+  const t = await referredAutoClaimed(w);
+  const { ix: fileIx, dispute } = await creatorFilesIx(w, t, 0);
+  expectOk(send(w.svm, fileIx, [w.buyer]), "db:the creator files Refund");
+  expectOk(send(w.svm, await directRulingIx(w, t, dispute, owner2, [owner2, owner3]), uniqueSigners(owner2, owner3)),
+    "db:owner2 proposes, owner2 and owner3 approve");
+  const d = decode(w.svm, "Dispute", dispute);
+  assert.ok(d.status.Resolved !== undefined, "Resolved");
+  assert.equal(d.resolved_by.toBase58(), owner2.publicKey.toBase58(), "the proposer is recorded");
+});
+
+test("rev9 dispute bond: a non-owner proposes a direct ruling with two owners, never with one, and the initiator never (review R4-1; 560a578: UnauthorizedResolver)", async () => {
+  const { w, owner2, owner3 } = await ownersWorld();
+  const t = await referredAutoClaimed(w);
+  const { ix: fileIx, dispute } = await creatorFilesIx(w, t, 0);
+  expectOk(send(w.svm, fileIx, [w.buyer]), "db:the creator files Refund");
+  const stranger = crankerFor(w);
+  expectFail(send(w.svm, await directRulingIx(w, t, dispute, stranger, [owner2]), uniqueSigners(stranger, owner2)),
+    "MultisigNotEnoughSigners", "one owner is not the threshold");
+  w.svm.expireBlockhash();
+  expectFail(send(w.svm, await directRulingIx(w, t, dispute, w.buyer, [owner2, owner3]), uniqueSigners(w.buyer, owner2, owner3)),
+    "InitiatorCannotResolve", "the initiator may not propose");
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Active !== undefined, "still Active");
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await directRulingIx(w, t, dispute, stranger, [owner2, owner3]), uniqueSigners(stranger, owner2, owner3)),
+    "db:a non-owner proposes, two owners approve");
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "Resolved");
 });

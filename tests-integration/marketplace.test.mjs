@@ -2233,11 +2233,12 @@ test("dispute roster: a threshold-seated ASSIGNED resolver resolves directly —
   const r = await runHireSettlement(w, { stopBeforeComplete: true, legacyAuto: true });
   const dispute = await openCompleteDispute(w, r);
 
-  // An unassigned wallet cannot resolve (gating).
+  // An unassigned wallet cannot resolve alone (gating). Review R4-1: it may only
+  // propose a direct ruling, which needs the owners' M-of-N approval.
   const stranger = Keypair.generate();
   w.svm.airdrop(stranger.publicKey, BigInt(10e9));
   expectFail(send(w.svm, await resolveAsDispute(w, r, dispute, makeProgram(stranger), stranger.publicKey, null, true), [stranger]),
-    "UnauthorizedResolver", "roster:unassigned wallet rejected");
+    "MultisigNotEnoughSigners", "roster:unassigned wallet rejected");
 
   // The protocol authority assigns a specific resolver.
   const resolver = Keypair.generate();
@@ -2290,9 +2291,10 @@ test("dispute roster: revoke removes the resolver's authority", async () => {
     .instruction(), approvals.approvers), "roster:revoke");
   assert.ok(isClosed(w.svm, assignment), "assignment PDA closed on revoke");
 
-  // With the assignment gone, the (formerly assigned) resolver is just a stranger again.
+  // With the assignment gone, the (formerly assigned) resolver is just a stranger
+  // again: alone it has no M-of-N approval (review R4-1).
   expectFail(send(w.svm, await resolveAsDispute(w, r, dispute, makeProgram(resolver), resolver.publicKey, null, true), [resolver]),
-    "UnauthorizedResolver", "roster:revoked resolver rejected");
+    "MultisigNotEnoughSigners", "roster:revoked resolver rejected");
 });
 
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {

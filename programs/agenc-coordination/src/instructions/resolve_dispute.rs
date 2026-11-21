@@ -367,12 +367,15 @@ pub fn handler<'info>(
     // band, but remains length-bounded when supplied.
     validate_rationale(&rationale_hash, &rationale_uri)?;
 
-    // Authorization: the protocol authority with configured M-of-N approval OR an
-    // assigned dispute resolver may resolve. This replaced the open staked-arbiter
-    // vote + quorum model: a threshold-seated assigned resolver decides directly
-    // without a per-case vote (see assign_dispute_resolver).
+    // Authorization: a threshold-seated assigned resolver decides alone, without a
+    // per-case vote (see assign_dispute_resolver); otherwise the ProtocolConfig
+    // owners decide on the direct branch. This replaced the open staked-arbiter
+    // vote + quorum model. Review R4-1: as in `resolve_reject_frozen`, any wallet
+    // may propose a direct ruling and the two thresholds below decide. Only
+    // `ProtocolConfig.authority` could propose before, so a creator that named
+    // that key as a 1 bps referrer made its disputes unrulable, and the other two
+    // owners could not rule without it.
     let signer = ctx.accounts.authority.key();
-    let is_protocol_authority = signer == ctx.accounts.protocol_config.authority;
     let is_assigned_resolver = ctx
         .accounts
         .resolver_assignment
@@ -380,18 +383,18 @@ pub fn handler<'info>(
         .map(|r| r.resolver == signer)
         .unwrap_or(false);
     require!(
-        ctx.accounts.authority.is_signer && (is_protocol_authority || is_assigned_resolver),
+        ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedResolver
     );
 
     // An assigned resolver is already seated by a threshold-approved roster
-    // mutation. The exceptional direct protocol-authority branch must itself
-    // collect M-of-N approval. Approval accounts share the deployed instruction's
-    // existing remaining-account wire, so remove configured owner signers before
-    // the economic/dependency account parser consumes the remainder.
-    let uses_direct_protocol_authority = is_protocol_authority && !is_assigned_resolver;
+    // mutation. The direct branch must itself collect M-of-N approval. Approval
+    // accounts share the deployed instruction's existing remaining-account wire,
+    // so remove configured owner signers before the economic/dependency account
+    // parser consumes the remainder.
+    let uses_direct_branch = !is_assigned_resolver;
     let mut economic_remaining_accounts = Vec::new();
-    let resolution_remaining_accounts = if uses_direct_protocol_authority {
+    let resolution_remaining_accounts = if uses_direct_branch {
         let unique_signers = unique_account_infos(ctx.remaining_accounts);
         require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
         let owners_len = ctx.accounts.protocol_config.multisig_owners_len as usize;
@@ -407,7 +410,7 @@ pub fn handler<'info>(
         ctx.remaining_accounts
     };
     // Self-dealing guard: the dispute initiator must never resolve their own dispute,
-    // even if they are also on the resolver roster (or are the protocol authority).
+    // even if they are also on the resolver roster, and never propose a direct ruling.
     // The InitiatorCannotResolve error was declared but never wired (audit) — without
     // this a roster member could initiate a dispute on their own task and rule in
     // their own favor, then drive the permissionless slash finalizers against the
@@ -496,28 +499,30 @@ pub fn handler<'info>(
         dispute_terms.referrer_fee_bps,
     )?;
 
-    // Audit H-2 follow-up: a resolver who is a PARTY to the dispute or a
-    // snapshotted settlement beneficiary must never rule on it, even when seated
-    // on the resolver roster.
+    // Audit H-2 follow-up: a seated resolver who is a PARTY to the dispute or a
+    // snapshotted settlement beneficiary must never rule on it: it rules alone.
     // The initiator guard above only covers whichever party filed; without this, a
     // roster-seated DEFENDANT could rule `approve:false` to dodge a slash and drive the
     // permissionless finalizers against the honest initiator, and a roster-seated CREATOR
     // could refund their own escrow and slash the worker. `worker_wallet` is validated to
     // equal `worker.authority` (the defendant) by `validate_worker_accounts` above.
+    // Review R4-1: on the direct branch the proposer only pays; the owners decide.
     let worker_wallet_key = ctx
         .accounts
         .worker_wallet
         .as_ref()
         .ok_or(CoordinationError::IncompleteWorkerAccounts)?
         .key();
-    require!(
-        !resolver_has_conflict(&signer, &task.creator, &worker_wallet_key, &dispute_terms,),
-        CoordinationError::ResolverConflictOfInterest
-    );
-    // Revision 9 (B): on the direct protocol-authority branch, owners with a stake
-    // in the ruling (the creator and the worker wallet) do not count toward the
-    // multisig threshold; review R2-1: fee payees do. Duplicates count once.
-    if uses_direct_protocol_authority {
+    if is_assigned_resolver {
+        require!(
+            !resolver_has_conflict(&signer, &task.creator, &worker_wallet_key, &dispute_terms,),
+            CoordinationError::ResolverConflictOfInterest
+        );
+    }
+    // Revision 9 (B): on the direct branch, owners with a stake in the ruling (the
+    // creator and the worker wallet) do not count toward the multisig threshold;
+    // review R2-1: fee payees do. Duplicates count once.
+    if uses_direct_branch {
         let unique_signers = unique_account_infos(ctx.remaining_accounts);
         require_unconflicted_multisig_threshold(
             config,
@@ -582,8 +587,8 @@ pub fn handler<'info>(
     );
 
     // The decision is the authorized resolver's `approve` argument — NOT a per-case
-    // arbiter vote tally. Direct protocol-authority authorization has already passed
-    // its M-of-N check above; `approved` upholds the initiator's requested
+    // arbiter vote tally. A direct ruling has already passed its M-of-N checks
+    // above; `approved` upholds the initiator's requested
     // `resolution_type`, while `!approved` refunds the creator.
     let approved = approve;
     let outcome = if approved {
