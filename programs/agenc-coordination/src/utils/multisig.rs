@@ -58,10 +58,10 @@ pub fn require_multisig_threshold(
 /// that an owner listed in `conflicted` never counts toward the threshold, even
 /// when it signs. Duplicate signers count once (the signer set is a set).
 ///
-/// Callers list every party with a stake in the ruling: the task creator, the
-/// worker wallet, and each live operator or referrer payee. If fewer than the
-/// threshold of unconflicted owners can sign, the ruling cannot be made and the
-/// unruled default applies.
+/// Callers list the parties with a stake in the ruling: the task creator and
+/// the worker wallet (review R2-1: not the fee payees, which a party could
+/// choose). If fewer than the threshold of unconflicted owners can sign, the
+/// ruling cannot be made and the unruled default applies.
 pub fn require_unconflicted_multisig_threshold(
     config: &ProtocolConfig,
     remaining_accounts: &[AccountInfo],

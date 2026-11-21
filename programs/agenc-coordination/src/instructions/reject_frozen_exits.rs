@@ -34,7 +34,7 @@ use crate::instructions::creator_stats_helpers::rejection_ruling_record_outcome;
 use crate::instructions::dispute_bond_helpers::{
     is_empty_bond_address, load_live_dispute_bond, settle_dispute_bond, BondEnding,
 };
-use crate::instructions::dispute_helpers::{resolve_task_marketplace_terms, ruling_conflicts};
+use crate::instructions::dispute_helpers::ruling_conflicts;
 use crate::instructions::record_account_helpers::{
     count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
 };
@@ -198,21 +198,12 @@ pub fn resolve_handler(
         CoordinationError::MultisigNotEnoughSigners
     );
     validate_frozen_rationale(&rationale_hash, &rationale_uri)?;
-    // Revision 9: owners with a stake in the ruling (the creator, the worker wallet,
-    // live operator or referrer payees) do not count toward the threshold.
+    // Revision 9: owners with a stake in the ruling (the creator and the worker
+    // wallet) do not count toward the threshold. Review R2-1: fee payees do.
     let task_key = ctx.accounts.task.key();
-    let terms = resolve_task_marketplace_terms(
-        ctx.accounts.task.operator,
-        ctx.accounts.task.operator_fee_bps,
-        ctx.accounts.task.referrer,
-        ctx.accounts.task.referrer_fee_bps,
-        &ctx.accounts.hire_record.to_account_info(),
-        &task_key,
-    )?;
     let conflicted = ruling_conflicts(
         ctx.accounts.task.creator,
         ctx.accounts.worker_authority.key(),
-        &terms,
     );
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
     require_unconflicted_multisig_threshold(
