@@ -235,6 +235,8 @@ pub fn resolve_handler(
         ctx.accounts.task.status == TaskStatus::RejectFrozen,
         CoordinationError::TaskNotRejectFrozen
     );
+    // Review R1-7: the rules come from the frozen submission only.
+    require_frozen_submission(ctx.accounts.task_submission.status)?;
     // Revision 8 freeze: today's rules. Revision 9 freeze: a ruling needs a filed
     // dispute and must land inside its ruling window.
     let bond_info = ctx.accounts.dispute_bond.to_account_info();
@@ -604,6 +606,8 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         ctx.accounts.task.status == TaskStatus::RejectFrozen,
         CoordinationError::TaskNotRejectFrozen
     );
+    // Review R1-7: the rules come from the frozen submission only.
+    require_frozen_submission(ctx.accounts.task_submission.status)?;
 
     let task_key = ctx.accounts.task.key();
     let worker_auth_info = ctx.accounts.worker_authority.to_account_info();
@@ -784,6 +788,18 @@ pub(crate) enum FreezeRules {
     Revision8,
     /// A disputable revision 9 freeze.
     Revision9,
+}
+
+/// Review R1-7: both exits take the freeze's rules (`freeze_kind`) and its
+/// payout from the submission they are given, so they accept only the frozen
+/// one, which `reject_and_freeze` left Rejected. Another live claim's submission
+/// on the same task (Submitted, say) is refused.
+pub(crate) fn require_frozen_submission(status: SubmissionStatus) -> Result<()> {
+    require!(
+        status == SubmissionStatus::Rejected,
+        CoordinationError::TaskSubmissionRequired
+    );
+    Ok(())
 }
 
 pub(crate) fn freeze_rules(freeze_kind: u8) -> Result<FreezeRules> {
@@ -996,5 +1012,21 @@ mod tests {
             code(validate_frozen_rationale(&[1u8; 32], &over)),
             u32::from(CoordinationError::RationaleUriTooLong)
         );
+    }
+
+    // Review R1-7: only the frozen (Rejected) submission selects the rules.
+    #[test]
+    fn only_the_frozen_submission_is_accepted() {
+        assert!(require_frozen_submission(SubmissionStatus::Rejected).is_ok());
+        for status in [
+            SubmissionStatus::Idle,
+            SubmissionStatus::Submitted,
+            SubmissionStatus::Accepted,
+        ] {
+            assert_eq!(
+                code(require_frozen_submission(status)),
+                u32::from(CoordinationError::TaskSubmissionRequired)
+            );
+        }
     }
 }

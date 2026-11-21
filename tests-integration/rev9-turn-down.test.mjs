@@ -20,7 +20,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  REPO, enc, arr, pda, id32, coder,
+  REPO, PID, enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, setMultisig, setProtocolPaused, configureTestMultisig, approvalSigners,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
@@ -688,4 +688,91 @@ test("rev9 turn-down: a worker suspended inside the window cannot dispute until 
   expectOk(send(w.svm, await disputeIx(w, t), [w.provider]), "the unsuspended worker disputes inside the window");
   assert.ok(now(w) < t.disputeDeadline, "still inside the dispute window");
   assert.equal(decode(w.svm, "DisputeBond", disputeBondPda(t.task)).filer.toBase58(), w.provider.publicKey.toBase58());
+});
+
+// ---------------------------------------------------------------------------
+// Review R1-7. The exits read the freeze's rules from the submission they are
+// given, so they accept only the frozen one (status Rejected). Unreachable on
+// live state (a new Exclusive task has one worker, and the older multi-worker
+// ones are past their deadline), so a second worker's live claim and a
+// Submitted, revision 8 shaped submission are injected on a frozen task.
+// ---------------------------------------------------------------------------
+async function injectOtherSubmission(w, t) {
+  const kp = Keypair.generate();
+  w.svm.airdrop(kp.publicKey, 10_000_000_000n);
+  const agentId = id32();
+  const [agent] = pda([enc("agent"), agentId]);
+  expectOk(send(w.svm, await makeProgram(kp).methods
+    .registerAgent(arr(agentId), new BN(1), "http://other-worker.test", null, new BN(0))
+    .accounts({ agent, protocolConfig: w.protocolPda, authority: kp.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [kp]), "register a second worker");
+  const [claim, claimBump] = pda([enc("claim"), t.task.toBuffer(), agent.toBuffer()]);
+  const c = decode(w.svm, "TaskClaim", t.claim);
+  c.worker = agent;
+  c.bump = claimBump;
+  const claimData = await coder.accounts.encode("TaskClaim", c);
+  w.svm.setAccount(claim, { lamports: Number(rent(w, claimData.length)), data: claimData, owner: PID, executable: false, rentEpoch: 0 });
+  const [submission, submissionBump] = pda([enc("task_submission"), claim.toBuffer()]);
+  const sub = decode(w.svm, "TaskSubmission", t.submission);
+  sub.claim = claim;
+  sub.worker = agent;
+  sub.status = { Submitted: {} };
+  sub.bump = submissionBump;
+  sub._reserved[2] = 0; // a revision 8 shape: the expiry would pay its worker
+  sub.review_deadline_at = new BN(now(w) - 1);
+  const subData = await coder.accounts.encode("TaskSubmission", sub);
+  w.svm.setAccount(submission, { lamports: Number(rent(w, subData.length)), data: subData, owner: PID, executable: false, rentEpoch: 0 });
+  // Counters as a real second claim leaves them: one more worker on the task,
+  // one active task on the second agent.
+  for (const [address, name, edit] of [
+    [t.task, "Task", (v) => { v.current_workers += 1; }],
+    [agent, "AgentRegistration", (v) => { v.active_tasks += 1; }],
+  ]) {
+    const acct = w.svm.getAccount(address);
+    const value = decode(w.svm, name, address);
+    edit(value);
+    const data = Buffer.from(acct.data);
+    (await coder.accounts.encode(name, value)).copy(data, 0);
+    w.svm.setAccount(address, { ...acct, data });
+  }
+  return { kp, agent, claim, submission };
+}
+
+function otherExitAccounts(w, t, o, authority) {
+  return { ...exitAccounts(w, t, authority), claim: o.claim, taskSubmission: o.submission, worker: o.agent,
+    workerAuthority: o.kp.publicKey, workerCompletionBond: completionBond(t.task, o.kp.publicKey),
+    workerStats: agentStatsPda(o.agent) };
+}
+
+test("rev9 turn-down: expire_reject_frozen refuses a submission that is not the frozen one (review R1-7; e03a1f1: pays the other worker under revision 8 rules)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await frozenTask(w);
+  const other = await injectOtherSubmission(w, t);
+  const cranker = crankerFor(w);
+  const otherBefore = bal(w, other.kp.publicKey);
+  expectFail(send(w.svm, await makeProgram(cranker).methods.expireRejectFrozen()
+    .accounts(otherExitAccounts(w, t, other, cranker.publicKey)).instruction(), [cranker]),
+    "TaskSubmissionRequired", "another worker's Submitted submission");
+  assert.equal(bal(w, other.kp.publicKey), otherBefore, "the other worker is paid nothing");
+  assert.equal(status(w, t.task), "RejectFrozen", "still frozen");
+  // The frozen submission still settles: no dispute, the buyer is refunded after the window.
+  warpTo(w, t.disputeDeadline + 1);
+  expectOk(send(w.svm, await expireIx(w, t, cranker), [cranker]), "the frozen submission's refund");
+  assert.equal(status(w, t.task), "Cancelled", "refunded");
+});
+
+test("rev9 turn-down: resolve_reject_frozen refuses a submission that is not the frozen one (review R1-7; e03a1f1: rules for the other worker without a dispute)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await frozenTask(w);
+  const other = await injectOtherSubmission(w, t);
+  const { owner2 } = await multisig(w);
+  const otherBefore = bal(w, other.kp.publicKey);
+  expectFail(send(w.svm, await rev9(w.admin).methods
+    .resolveRejectFrozen(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/rev9")
+    .accounts(otherExitAccounts(w, t, other, w.admin.publicKey))
+    .remainingAccounts([w.admin, owner2].map((k) => ({ pubkey: k.publicKey, isSigner: true, isWritable: false })))
+    .instruction(), [w.admin, owner2]),
+    "TaskSubmissionRequired", "a ruling over another worker's Submitted submission");
+  assert.equal(bal(w, other.kp.publicKey), otherBefore, "the other worker is paid nothing");
+  assert.equal(status(w, t.task), "RejectFrozen", "still frozen");
 });
