@@ -37,6 +37,7 @@ import {
   type ApprovalTarget,
 } from "../src/approval.js";
 import { SYSTEM_PROGRAM_ADDRESS, transferInstruction, type Chain } from "../src/chain.js";
+import { revisionRefusal } from "../src/revision.js";
 
 const fill = (byte: number): Address => getAddressDecoder().decode(new Uint8Array(32).fill(byte));
 const TASK = fill(3);
@@ -224,6 +225,21 @@ describe("an approval this wallet will sign", () => {
     // A job's approval that also asks for a transfer: not signed either.
     const old = { transaction: await build([pay(DEPOSIT), await taskApproval()]), moderator: approver.address };
     await expect(signApproval(chain, payer, old, TARGET)).rejects.toMatchObject({ code: "NETWORK" });
+  });
+
+  it("is not signed while the marketplace program is on another revision", async () => {
+    const chain = {
+      getMinimumBalanceForRentExemption: async () => DEPOSIT,
+      assertSigningRevision: async () => {
+        throw revisionRefusal(8)!;
+      },
+    } as unknown as Chain;
+    const payment = { transaction: await honest(), moderator: approver.address };
+    await expect(signApproval(chain, payer, payment, TARGET)).rejects.toMatchObject({
+      code: "NOT_AVAILABLE",
+      retryable: true,
+      message: expect.stringMatching(/still on revision 8.*only for revision 9\. Nothing was signed\./),
+    });
   });
 
   it("costs its deposit and the fee of two signatures", async () => {
