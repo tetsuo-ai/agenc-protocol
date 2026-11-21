@@ -1423,19 +1423,48 @@ pub mod agenc_coordination {
         instructions::reject_and_freeze::handler(ctx, rejection_hash)
     }
 
+    /// Revision 9: the worker disputes a revision 9 freeze inside its dispute
+    /// window by posting a bond (10% of the price, at least 0.01 SOL). The
+    /// multisig then has the ruling window to rule. Exit path (works while paused).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn dispute_rejection(
+        ctx: Context<DisputeRejection>,
+        evidence_hash: [u8; 32],
+        evidence_uri: String,
+    ) -> Result<()> {
+        instructions::dispute_rejection::handler(ctx, evidence_hash, evidence_uri)
+    }
+
     /// Multisig review decision on a frozen task (Batch 3 §8): pay the worker
     /// (approve_completion=true) or refund the creator (false), disposing both bonds.
     /// Exit path — settles even while paused (money never locks).
+    ///
+    /// Revision 9 (v2): a reasoned ruling (rationale hash and a URI of at most 128
+    /// bytes); owners with a stake in the task do not count toward the threshold;
+    /// a revision 9 freeze can be ruled only when disputed and inside its ruling
+    /// window, and the dispute bond follows the ruling. The explicit discriminator
+    /// `sha256("global:resolve_reject_frozen_v2")[0..8]` makes old clients fail loudly.
     #[cfg(not(feature = "mainnet-canary"))]
+    #[instruction(discriminator = [64, 51, 69, 144, 38, 227, 148, 59])]
     pub fn resolve_reject_frozen(
         ctx: Context<ResolveRejectFrozen>,
         approve_completion: bool,
+        rationale_hash: [u8; 32],
+        rationale_uri: String,
     ) -> Result<()> {
-        instructions::reject_frozen_exits::resolve_handler(ctx, approve_completion)
+        instructions::reject_frozen_exits::resolve_handler(
+            ctx,
+            approve_completion,
+            rationale_hash,
+            rationale_uri,
+        )
     }
 
-    /// Permissionless timeout exit for a frozen task (Batch 3 §8): after the review
-    /// window lapses, default to the worker (pay + refund both bonds). Exit path.
+    /// Permissionless timeout exit for a frozen task (Batch 3 §8). A revision 8
+    /// freeze defaults to the worker after its review window (pay + refund both
+    /// bonds). A revision 9 freeze refunds the buyer after the dispute window, or,
+    /// if disputed and not ruled, after the ruling window (the bond goes back to
+    /// the worker). Exit path.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn expire_reject_frozen(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         instructions::reject_frozen_exits::expire_handler(ctx)

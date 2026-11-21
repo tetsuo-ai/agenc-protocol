@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**104 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**105 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -41,6 +41,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`delegate_reputation`](#delegate_reputation)
 - [`demote_ineligible_best`](#demote_ineligible_best)
 - [`deregister_agent`](#deregister_agent)
+- [`dispute_rejection`](#dispute_rejection)
 - [`distribute_ghost_share`](#distribute_ghost_share)
 - [`execute_proposal`](#execute_proposal)
 - [`expire_bid`](#expire_bid)
@@ -924,6 +925,33 @@ Agent must have no active tasks.
 
 _None._
 
+## dispute_rejection
+
+Revision 9: the worker disputes a revision 9 freeze inside its dispute
+window by posting a bond (10% of the price, at least 0.01 SOL). The
+multisig then has the ruling window to rule. Exit path (works while paused).
+
+### Accounts (9)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `claim` |  |  |  | PDA ["claim", account:task, account:claim.worker (TaskClaim)] |  |
+| 3 | `task_submission` |  |  |  | PDA ["task_submission", account:claim] |  |
+| 4 | `worker` |  |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] | The frozen claim's worker; only its own wallet can dispute. |
+| 5 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:task] | The bond. Its existence means "disputed". |
+| 6 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:task.creator (Task)] | The buyer's record. It exists: the freeze created it. |
+| 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 8 | `authority` | yes | yes |  |  | The worker wallet: pays the bond and its rent, and gets the rent back. — has_one → worker |
+| 9 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (2)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `evidence_hash` | `[u8; 32]` |
+| 2 | `evidence_uri` | `string` |
+
 ## distribute_ghost_share
 
 Permissionless contest ghost-split crank (Batch 3 WS-CONTEST §3): from
@@ -1065,10 +1093,13 @@ _None._
 
 ## expire_reject_frozen
 
-Permissionless timeout exit for a frozen task (Batch 3 §8): after the review
-window lapses, default to the worker (pay + refund both bonds). Exit path.
+Permissionless timeout exit for a frozen task (Batch 3 §8). A revision 8
+freeze defaults to the worker after its review window (pay + refund both
+bonds). A revision 9 freeze refunds the buyer after the dispute window, or,
+if disputed and not ruled, after the ruling window (the bond goes back to
+the worker). Exit path.
 
-### Accounts (18)
+### Accounts (19)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1088,8 +1119,9 @@ window lapses, default to the worker (pay + refund both bonds). Exit path.
 | 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | refunded on this no-fault timeout exit. Making it omittable would let a caller strand a live bond into the terminal task, where reclaim_completion_bond can never reach it once the Task PDA is closed. Pass the derived PDA even for an un-bonded task (empty system account); settle_completion_bond no-ops on it. |
 | 15 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | worker authority (audit F5/F12); refunded on this no-fault exit. |
 | 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
-| 17 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by `authority`. |
-| 18 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 17 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:task] | system-owned account with no data means "not disputed" (whatever lamports it holds); a live bond is validated and settled by `settle_dispute_bond`. |
+| 18 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 19 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: no counter moves (the freeze counted the rejection). Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
 ### Args (0)
 
@@ -2022,7 +2054,13 @@ Multisig review decision on a frozen task (Batch 3 §8): pay the worker
 (approve_completion=true) or refund the creator (false), disposing both bonds.
 Exit path — settles even while paused (money never locks).
 
-### Accounts (18)
+Revision 9 (v2): a reasoned ruling (rationale hash and a URI of at most 128
+bytes); owners with a stake in the task do not count toward the threshold;
+a revision 9 freeze can be ruled only when disputed and inside its ruling
+window, and the dispute bond follows the ruling. The explicit discriminator
+`sha256("global:resolve_reject_frozen_v2")[0..8]` makes old clients fail loudly.
+
+### Accounts (19)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2042,14 +2080,17 @@ Exit path — settles even while paused (money never locks).
 | 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury). |
 | 15 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] |  |
 | 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
-| 17 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
-| 18 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by `ensure_creator_stats`, paid by `authority`. |
+| 17 | `dispute_bond` | yes |  |  | PDA ["dispute_bond", account:task] | system-owned account with no data means "not disputed" (whatever lamports it holds); a live bond is validated and settled by `settle_dispute_bond`. |
+| 18 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 19 | `creator_stats` | yes |  |  | PDA ["creator_stats", account:creator] | to the task creator), seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by `ensure_creator_stats`, paid by `authority`. |
 
-### Args (1)
+### Args (3)
 
 | # | Arg | Type |
 |---|---|---|
 | 1 | `approve_completion` | `bool` |
+| 2 | `rationale_hash` | `[u8; 32]` |
+| 3 | `rationale_uri` | `string` |
 
 ## revoke_agent_verification
 

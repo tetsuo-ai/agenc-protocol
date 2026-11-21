@@ -19,6 +19,8 @@ use crate::instructions::program_account_helpers::remaining_account_at;
 use crate::instructions::record_account_helpers::{
     count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::task_validation_helpers::is_single_worker_review_task;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, release_claim_slot,
@@ -174,6 +176,16 @@ pub fn handler<'info>(
         &ctx.accounts.task_validation_config,
         ValidationMode::CreatorReview,
     )?;
+    // Revision 9 (A): on a single-worker review task the buyer refuses delivered
+    // work only with `reject_and_freeze`, which the worker can dispute. A plain
+    // reject reopened the task for a free refund through `cancel_task`.
+    // Contests and Collaborative tasks keep this path. Full surface only: the
+    // canary build has no freeze and keeps today's behavior.
+    #[cfg(not(feature = "mainnet-canary"))]
+    require!(
+        !is_single_worker_review_task(&ctx.accounts.task, ctx.accounts.task_validation_config.mode),
+        CoordinationError::SingleWorkerRejectMustFreeze
+    );
     require!(
         ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
         CoordinationError::SubmissionNotPending

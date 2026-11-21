@@ -39,7 +39,7 @@ import {
   injectProtocolConfig, setProtocolPaused, injectAgentStake,
   setMultisig, configureTestMultisig, seatTestAuthorityResolver,
   injectModerationConfig, freshWorld, hireIx,
-  taskModV2Pda, listingModV2Pda, moderationBlockPda, agentStatsPda, creatorStatsCreationCost,
+  taskModV2Pda, listingModV2Pda, moderationBlockPda, agentStatsPda, creatorStatsCreationCost, mutateTask, creatorStatsPda, injectRevision8Freeze, disputeBondPda,
 } from "./harness.mjs";
 import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
 
@@ -728,8 +728,10 @@ test("completion bond (#70): rejection atomically refunds the worker bond before
   // Once rejection closes the worker claim, no later task instruction can
   // enumerate that former worker safely. The bond therefore has to close at the
   // exact same boundary, rather than surviving until a later cancel.
+  // Revision 9: plain reject applies only off single-worker review tasks; bonds
+  // are Exclusive-only, so this runs on a legacy multi-worker Exclusive task.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
-  const m = await runManualSettlement(w, { decision: "reject", postBonds: true });
+  const m = await runManualSettlement(w, { decision: "reject", postBonds: true, legacyMultiWorker: true });
 
   assert.ok(decode(w.svm, "Task", m.task).status.Open !== undefined, "task reopened to Open after reject");
   assert.ok(isClosed(w.svm, m.workerBond), "worker bond refunded and closed by reject");
@@ -1250,10 +1252,14 @@ test("configure_task_validation: a non-hired task can still be pinned to manual 
 /// Drive a manual-validation (V2) task through settlement: create+configure (CreatorReview)
 /// -> moderate -> publish -> claim -> submit_task_result -> accept|reject_task_result.
 /// Requires a moderation-enabled world. Returns handles + the worker balance snapshot.
-async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle = false, postBonds = false } = {}) {
+async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle = false, postBonds = false, legacyMultiWorker = false } = {}) {
   const modProg = makeProgram(w.modAuth);
   const m = await setupManualTask(w, { mode: 1 }); // CreatorReview, non-hired
   const { task, escrow, validation, hireRecord, reward } = m;
+  // Revision 9 refuses a plain reject on a single-worker review task (6418). An
+  // Exclusive task made before the max_workers == 1 rule (max_workers 2) is not
+  // one, so the plain-reject paths stay covered on that legacy state.
+  if (legacyMultiWorker) await mutateTask(w, task, (t) => { t.max_workers = 2; });
 
   // moderate + publish a job spec (required to claim)
   const jobHash = id32();
@@ -1335,9 +1341,22 @@ test("completion bond: accept_task_result refunds BOTH bonds", async () => {
   assert.ok(isClosed(w.svm, r.workerBond), "worker bond refunded + closed on accept");
 });
 
-test("manual validation (CreatorReview): reject does NOT pay the worker or settle", async () => {
+test("manual validation (CreatorReview): a plain reject of a single-worker review task is refused (rev9: freeze instead)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const r = await runManualSettlement(w, { decision: "reject" });
+  const r = await runManualSettlement(w, { decision: "none" });
+  expectFail(send(w.svm, await w.buyerProg.methods
+    .rejectTaskResult(arr(id32()))
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, agentStats: null, workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0] })
+    .instruction(), [w.buyer]), "SingleWorkerRejectMustFreeze", "rev9: single-worker reject must freeze");
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.PendingValidation !== undefined, `task still under review (got ${JSON.stringify(t.status)})`);
+  assert.ok(!isClosed(w.svm, r.claim), "claim kept");
+  assert.ok(!isClosed(w.svm, r.escrow), "escrow still holds the reward");
+});
+
+test("manual validation (CreatorReview): reject does NOT pay the worker or settle (legacy multi-worker Exclusive)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runManualSettlement(w, { decision: "reject", legacyMultiWorker: true });
   const t = decode(w.svm, "Task", r.task);
   assert.ok(t.status.Completed === undefined, `task NOT Completed after reject (got ${JSON.stringify(t.status)})`);
   assert.ok(!isClosed(w.svm, r.escrow), "escrow still holds the reward after reject");
@@ -1478,6 +1497,11 @@ test("reject_and_freeze: terminal reject freezes the task and retains the claim 
   assert.ok(!isClosed(w.svm, r.claim), "claim retained for the frozen exit");
   assert.ok(!isClosed(w.svm, r.escrow), "escrow retained (no payout on freeze)");
   assert.equal(Number(w.svm.getBalance(w.provider.publicKey)), workerBefore, "no worker payout on freeze");
+  // Revision 9: the freeze opens the fixed 72-hour dispute window (not the
+  // review window) and is marked disputable.
+  const sub = decode(w.svm, "TaskSubmission", r.submission);
+  assert.equal(Number(sub.review_deadline_at.toString()) - Number(sub.rejected_at.toString()), 259_200, "dispute window is 72 hours");
+  assert.equal(sub._reserved[2], 1, "freeze_kind == FREEZE_KIND_DISPUTABLE");
 });
 
 test("reject_and_freeze: rejected on a Collaborative task (audit — would strand the multi-worker escrow)", async () => {
@@ -1511,6 +1535,24 @@ async function setupFrozen(w, { postBonds = false } = {}) {
   assert.ok(decode(w.svm, "Task", r.task).status.RejectFrozen !== undefined, "task is RejectFrozen");
   return { ...r, creatorBond, workerBond };
 }
+
+// Revision 9: the worker disputes a revision 9 freeze (bond into ["dispute_bond", task]).
+async function fileRejectionDispute(w, f) {
+  const disputeBond = disputeBondPda(f.task);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .disputeRejection(arr(Buffer.alloc(32, 3)), "agenc://evidence/frozen")
+    .accounts({ task: f.task, claim: f.claim, taskSubmission: f.submission, worker: w.providerAgent, disputeBond,
+      creatorStats: creatorStatsPda(w.buyer.publicKey), protocolConfig: w.protocolPda,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "frozen:dispute");
+  return disputeBond;
+}
+
+const frozenRecords = (w, f) => ({
+  disputeBond: disputeBondPda(f.task),
+  workerStats: agentStatsPda(w.providerAgent),
+  creatorStats: creatorStatsPda(w.buyer.publicKey),
+});
 
 test("negative: a RejectFrozen task is refused by cancel / accept / request_changes / reject_and_freeze", async () => {
   const w = await freshWorld({ moderationEnabled: true });
@@ -1560,19 +1602,23 @@ test("resolve_reject_frozen (approve): pays the worker, refunds worker bond, for
   const owner2 = Keypair.generate(); w.svm.airdrop(owner2.publicKey, BigInt(10e9));
   await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
   const f = await setupFrozen(w, { postBonds: true });
+  // Revision 9: a ruling on a revision 9 freeze needs the worker's dispute.
+  const disputeBond = await fileRejectionDispute(w, f);
   const signerMetas = [{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }, { pubkey: owner2.publicKey, isSigner: true, isWritable: false }];
-  const accts = { task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId };
+  const accts = { task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId, ...frozenRecords(w, f) };
+  const rationale = [arr(Buffer.alloc(32, 5)), "agenc://ruling/frozen-approve"];
 
   // a single signer cannot pass the 2-of-2 gate.
-  expectFail(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true).accounts(accts).remainingAccounts([signerMetas[0]]).instruction(), [w.admin]), "MultisigNotEnoughSigners", "single signer rejected");
+  expectFail(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true, ...rationale).accounts(accts).remainingAccounts([signerMetas[0]]).instruction(), [w.admin]), "MultisigNotEnoughSigners", "single signer rejected");
 
   const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
-  expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true).accounts(accts).remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve approve");
+  expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true, ...rationale).accounts(accts).remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve approve");
   assert.ok(decode(w.svm, "Task", f.task).status.Completed !== undefined, "task Completed (worker vindicated)");
   assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > workerBefore, "worker paid");
   assert.ok(isClosed(w.svm, f.workerBond), "worker bond refunded + closed");
   assert.ok(isClosed(w.svm, f.creatorBond), "creator bond forfeited + closed");
   assert.ok(isClosed(w.svm, f.escrow), "escrow settled");
+  assert.ok(isClosed(w.svm, disputeBond), "dispute bond settled (back to the worker)");
 });
 
 test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond, refunds creator bond (multisig)", async () => {
@@ -1580,17 +1626,21 @@ test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond,
   const owner2 = Keypair.generate(); w.svm.airdrop(owner2.publicKey, BigInt(10e9));
   await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
   const f = await setupFrozen(w, { postBonds: true });
+  // Revision 9: a ruling on a revision 9 freeze needs the worker's dispute.
+  const disputeBond = await fileRejectionDispute(w, f);
+  const bondPrincipal = Number(decode(w.svm, "DisputeBond", disputeBond).amount.toString());
   const signerMetas = [{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }, { pubkey: owner2.publicKey, isSigner: true, isWritable: false }];
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
   // Worker holds a live claim slot going into the uphold path.
   assert.equal(Number(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks), 1, "worker active_tasks == 1 before resolve");
   assert.equal(Number(decode(w.svm, "Task", f.task).current_workers), 1, "task current_workers == 1 before resolve");
-  expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(false)
-    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId })
+  expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(false, arr(Buffer.alloc(32, 5)), "agenc://ruling/frozen-uphold")
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId, ...frozenRecords(w, f) })
     .remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve reject");
   assert.ok(decode(w.svm, "Task", f.task).status.Cancelled !== undefined, "task Cancelled (rejection upheld)");
   assert.ok(isClosed(w.svm, f.escrow), "escrow refunded + closed");
-  assert.ok(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore >= f.reward, "creator refunded the reward");
+  assert.ok(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore >= f.reward + bondPrincipal, "creator refunded the reward and given the worker's dispute bond");
+  assert.ok(isClosed(w.svm, disputeBond), "dispute bond settled");
   assert.ok(isClosed(w.svm, f.workerBond), "worker bond forfeited + closed");
   assert.ok(isClosed(w.svm, f.creatorBond), "creator bond refunded + closed");
   // Revert-sensitive (audit: uphold branch never released the claim slot): drop the
@@ -1601,12 +1651,15 @@ test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond,
   assert.equal(Number(decode(w.svm, "Task", f.task).current_workers), 0, "task current_workers zeroed (close_task now possible)");
 });
 
-test("expire_reject_frozen: after the review window defaults to the worker + refunds both bonds (permissionless, exit-safe)", async () => {
+test("expire_reject_frozen: a revision 8 freeze after the review window defaults to the worker + refunds both bonds (permissionless, exit-safe)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const f = await setupFrozen(w, { postBonds: true });
+  // Revision 9 keeps revision 8 rules for freezes made before the upgrade
+  // (freeze_kind 0). rev9-turn-down.test.mjs covers the revision 9 refund.
+  await injectRevision8Freeze(w, f.submission, 3600);
   const cleaner = Keypair.generate(); w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
   const expireIx = async () => makeProgram(cleaner).methods.expireRejectFrozen()
-    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: cleaner.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId }).instruction();
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: cleaner.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId, ...frozenRecords(w, f) }).instruction();
 
   // before the review window lapses -> rejected.
   expectFail(send(w.svm, await expireIx(), [cleaner]), "RejectFrozenTimeoutNotElapsed", "expire too early");

@@ -51,7 +51,10 @@ async function setupClaimed(w, reviewWindow) {
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(REWARD), 1, new BN(now + 7 * 86_400), 0, null, 0, null, null, 0)
+    // Collaborative (one worker): revision 9 refuses both a plain reject and a
+    // worker's dispute during review on single-worker review tasks, so the AGNC-03
+    // coverage lives on a Collaborative review task, which keeps both.
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(REWARD), 1, new BN(now + 7 * 86_400), 1, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "create task");
   expectOk(send(w.svm, await w.buyerProg.methods

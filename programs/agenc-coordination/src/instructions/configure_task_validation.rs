@@ -7,6 +7,8 @@ use crate::instructions::task_validation_helpers::{
     validate_attestor, validate_configurable_task, validate_review_window_for_mode,
     validate_task_supports_validation_mode, validate_validation_mode, validate_validator_quorum,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::TaskType;
 use crate::state::{
     ProtocolConfig, Task, TaskAttestorConfig, TaskValidationConfig, ValidationMode,
     MANUAL_VALIDATION_SENTINEL,
@@ -109,6 +111,9 @@ pub fn handler(
         parsed_mode != ValidationMode::ValidatorQuorum,
         CoordinationError::InvalidValidationMode
     );
+    // Revision 9 (A): every reviewed single-worker task needs a working freeze.
+    #[cfg(not(feature = "mainnet-canary"))]
+    validate_rev9_review_mode(&ctx.accounts.task, parsed_mode)?;
     validate_review_window_for_mode(parsed_mode, review_window_secs)?;
     validate_validator_quorum(parsed_mode, validator_quorum)?;
     validate_attestor(parsed_mode, attestor)?;
@@ -185,4 +190,88 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+/// Revision 9 (A) closures for NEW validation configs, so every reviewed task has
+/// a working freeze:
+/// - ExternalAttestation closes like ValidatorQuorum: a creator-chosen attestor
+///   could reject and the creator could then cancel for a free refund.
+/// - CreatorReview needs a SOL reward (the freeze settles in lamports only) and a
+///   task type the freeze accepts (it refuses BidExclusive). Contests and bid
+///   tasks are already SOL-only, so this changes nothing for them.
+///
+/// Existing configs are untouched (this runs only when configuring).
+#[cfg(not(feature = "mainnet-canary"))]
+pub(crate) fn validate_rev9_review_mode(task: &Task, mode: ValidationMode) -> Result<()> {
+    require!(
+        mode != ValidationMode::ExternalAttestation,
+        CoordinationError::ValidationModeClosed
+    );
+    if mode == ValidationMode::CreatorReview {
+        require!(
+            task.reward_mint.is_none() && task.task_type != TaskType::BidExclusive,
+            CoordinationError::CreatorReviewUnsupportedForTask
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(test, not(feature = "mainnet-canary")))]
+mod tests {
+    use super::*;
+
+    fn code(result: Result<()>) -> u32 {
+        match result {
+            Err(anchor_lang::error::Error::AnchorError(e)) => e.error_code_number,
+            other => panic!("expected an AnchorError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rev9_closes_attestation_and_unfreezable_creator_review() {
+        let sol = Task::default();
+        assert!(validate_rev9_review_mode(&sol, ValidationMode::CreatorReview).is_ok());
+        assert_eq!(
+            code(validate_rev9_review_mode(
+                &sol,
+                ValidationMode::ExternalAttestation
+            )),
+            u32::from(CoordinationError::ValidationModeClosed)
+        );
+        let token = Task {
+            reward_mint: Some(Pubkey::new_unique()),
+            ..Task::default()
+        };
+        assert_eq!(
+            code(validate_rev9_review_mode(
+                &token,
+                ValidationMode::CreatorReview
+            )),
+            u32::from(CoordinationError::CreatorReviewUnsupportedForTask)
+        );
+        let bid = Task {
+            task_type: TaskType::BidExclusive,
+            ..Task::default()
+        };
+        assert_eq!(
+            code(validate_rev9_review_mode(
+                &bid,
+                ValidationMode::CreatorReview
+            )),
+            u32::from(CoordinationError::CreatorReviewUnsupportedForTask)
+        );
+        // Collaborative and contest (Competitive) SOL tasks keep CreatorReview.
+        for task_type in [TaskType::Collaborative, TaskType::Competitive] {
+            let t = Task {
+                task_type,
+                ..Task::default()
+            };
+            assert!(validate_rev9_review_mode(&t, ValidationMode::CreatorReview).is_ok());
+        }
+        assert_eq!(u32::from(CoordinationError::ValidationModeClosed), 6428);
+        assert_eq!(
+            u32::from(CoordinationError::CreatorReviewUnsupportedForTask),
+            6429
+        );
+    }
 }

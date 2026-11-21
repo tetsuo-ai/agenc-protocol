@@ -9,6 +9,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskChangesRequested;
+use crate::instructions::constants::MIN_RESUBMIT_WINDOW_SECS;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_contest_configured_task, is_manual_validation_task, note_submission_left_review,
@@ -127,12 +128,11 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     // completion bond — stealing the bond of someone who actually delivered work.
     // Extend both bounds to at least now + the review window so the worker always
     // has time to resubmit before the task can become no-show-cancellable. Read the
-    // window before borrowing claim/task mutably below.
-    let resubmit_window = ctx
-        .accounts
-        .task_validation_config
-        .review_window_secs
-        .max(0);
+    // window before borrowing claim/task mutably below. Revision 9: never less than
+    // MIN_RESUBMIT_WINDOW_SECS, so a short review window cannot turn a change
+    // request into a no-show refund.
+    let resubmit_window =
+        resubmit_window_secs(ctx.accounts.task_validation_config.review_window_secs);
     let min_resubmit_deadline = clock
         .unix_timestamp
         .checked_add(resubmit_window)
@@ -189,4 +189,32 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     });
 
     Ok(())
+}
+
+/// Revision 9 (A): the resubmit window a change request guarantees:
+/// `max(review_window_secs, MIN_RESUBMIT_WINDOW_SECS)`.
+pub(crate) fn resubmit_window_secs(review_window_secs: i64) -> i64 {
+    review_window_secs.max(MIN_RESUBMIT_WINDOW_SECS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Design 11.1: a one-second review window still gives the full resubmit floor.
+    #[test]
+    fn resubmit_window_has_a_floor() {
+        let floor = MIN_RESUBMIT_WINDOW_SECS;
+        #[cfg(not(feature = "validation-timings"))]
+        assert_eq!(floor, 86_400);
+        #[cfg(feature = "validation-timings")]
+        assert_eq!(floor, 60);
+        assert_eq!(resubmit_window_secs(1), floor);
+        assert_eq!(resubmit_window_secs(0), floor);
+        assert_eq!(resubmit_window_secs(-5), floor);
+        assert_eq!(resubmit_window_secs(floor - 1), floor);
+        assert_eq!(resubmit_window_secs(floor), floor);
+        assert_eq!(resubmit_window_secs(floor + 1), floor + 1);
+        assert_eq!(resubmit_window_secs(604_800), 604_800);
+    }
 }

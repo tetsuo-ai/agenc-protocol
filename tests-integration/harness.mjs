@@ -58,6 +58,69 @@ export function recordCreationCost(svm, address, size) {
 export const agentStatsCreationCost = (svm, agent) => recordCreationCost(svm, agentStatsPda(agent), 121);
 export const creatorStatsCreationCost = (svm, wallet) => recordCreationCost(svm, creatorStatsPda(wallet), 129);
 
+// Revision 9 closes ExternalAttestation, and CreatorReview on token and bid
+// tasks, for NEW configs (errors 6428 / 6429). Configs made before revision 9
+// keep their settlement paths. To keep testing those paths, write the two
+// validation PDAs exactly as a pre-revision-9 configure left them and mark the
+// task manual. Existing accounts are overwritten in place (keeping lamports);
+// missing ones are created rent-exempt.
+export const MANUAL_VALIDATION_SENTINEL = Buffer.from("agenc-manual-validation-v2-seed!");
+export async function injectLegacyValidation(w, task, { mode = "CreatorReview", reviewWindowSecs = 3600, attestor = null } = {}) {
+  const t = coder.accounts.decode("Task", Buffer.from(w.svm.getAccount(task).data));
+  const now = new BN(Number(w.svm.getClock().unixTimestamp));
+  const write = async (address, name, value) => {
+    const data = await coder.accounts.encode(name, value);
+    const existing = w.svm.getAccount(address);
+    const lamports = existing && existing.data.length > 0
+      ? Number(existing.lamports)
+      : Number(w.svm.minimumBalanceForRentExemption(BigInt(data.length)));
+    w.svm.setAccount(address, { lamports, data, owner: PID, executable: false, rentEpoch: 0 });
+  };
+  const [validation, validationBump] = pda([enc("task_validation"), task.toBuffer()]);
+  await write(validation, "TaskValidationConfig", {
+    task, creator: t.creator, mode: { [mode]: {} }, review_window_secs: new BN(reviewWindowSecs),
+    created_at: now, updated_at: now, bump: validationBump, _reserved: [0, 0, 0, 0, 0, 0, 0],
+  });
+  const [attestorConfig, attestorBump] = pda([enc("task_attestor"), task.toBuffer()]);
+  await write(attestorConfig, "TaskAttestorConfig", {
+    task, creator: t.creator, attestor: attestor ?? PublicKey.default,
+    created_at: now, updated_at: now, bump: attestorBump, _reserved: [0, 0, 0, 0, 0, 0, 0],
+  });
+  // Mark the task manual in place (the Task buffer keeps its 466 bytes).
+  const taskAccount = w.svm.getAccount(task);
+  t.constraint_hash = Array.from(MANUAL_VALIDATION_SENTINEL);
+  const encoded = await coder.accounts.encode("Task", t);
+  const buf = Buffer.from(taskAccount.data);
+  encoded.copy(buf, 0);
+  w.svm.setAccount(task, { ...taskAccount, data: buf });
+  return { validation, attestorConfig };
+}
+
+// Rewrite fields of a Task in place (the 466-byte buffer keeps its size), for
+// tests that need a legacy state no current instruction can create.
+export async function mutateTask(w, task, mutate) {
+  const acct = w.svm.getAccount(task);
+  const t = coder.accounts.decode("Task", Buffer.from(acct.data));
+  mutate(t);
+  const encoded = await coder.accounts.encode("Task", t);
+  const buf = Buffer.from(acct.data);
+  encoded.copy(buf, 0);
+  w.svm.setAccount(task, { ...acct, data: buf });
+}
+
+// Turn a revision 9 freeze into the state a revision 8 freeze leaves: the
+// freeze_kind byte (TaskSubmission._reserved[2]) reads 0 and review_deadline_at
+// is the end of the buyer's review window counted from the freeze.
+export async function injectRevision8Freeze(w, submission, reviewWindowSecs) {
+  const acct = w.svm.getAccount(submission);
+  const s = coder.accounts.decode("TaskSubmission", Buffer.from(acct.data));
+  s._reserved[2] = 0;
+  s.review_deadline_at = new BN(Number(s.rejected_at.toString()) + reviewWindowSecs);
+  const data = await coder.accounts.encode("TaskSubmission", s);
+  w.svm.setAccount(submission, { ...acct, data });
+}
+export const disputeBondPda = (subject) => pda([enc("dispute_bond"), subject.toBuffer()])[0];
+
 export const CREATOR_STATS_DISCRIMINATOR = crypto
   .createHash("sha256").update("account:CreatorStats").digest().subarray(0, 8);
 export function readCreatorStats(svm, address) {
