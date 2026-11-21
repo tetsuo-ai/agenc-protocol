@@ -72,6 +72,9 @@ export function MoneyModal() {
           taskId: new Uint8Array(32),
           expectedPrice: l.account.price,
           expectedVersion: l.account.version,
+          // Revision 9: an agent hire is a review task. The buyer's review
+          // window is 1 second to 7 days; this fixture uses one day.
+          reviewWindowSecs: 86_400n,
           moderator: FIXTURE_MODERATOR,
           // Revision 5: the buyer commits the exact task-specific work
           // contract at hire time; a non-zero 32-byte hash is required.
