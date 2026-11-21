@@ -332,7 +332,9 @@ with `localnet-mac.mjs status` instead of `localnet-status.mjs`.
   faucet carry on (RPC is down for a few seconds). `compact --if-wal-over 600`
   restarts only above 600 MB. The harness's `waitForClock` compacts during long
   waits on this launcher, and `scripts/rev9-localnet-scenarios.mjs` compacts
-  between scenarios.
+  between scenarios. When several suites share the validator, create
+  `.localnet/compact.hold` until all of them are inside their waits: a
+  compaction while one of them is sending fails that send.
 - **React localnet E2E.** Seed the running validator with
   `node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --env-file .localnet/env.json`;
   `npm run test:localnet` in `packages/marketplace-react` then reuses the
