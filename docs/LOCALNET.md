@@ -304,6 +304,40 @@ its step 4 initializers ↔ our step 5; its seeding hook ↔ the same seeder scr
   reaped. This guarantee covers validators managed by these scripts; a same-user
   process launched manually outside the rail must not reuse this private ledger.
 
+## macOS
+
+The rail above proves process identity through procfs, pidfd and flock, which
+macOS does not have. `scripts/localnet-mac.mjs` boots the same disposable
+dev-ready marketplace on a Mac from a binary you name; it never builds:
+
+```bash
+node scripts/localnet-mac.mjs up --validator <solana-test-validator> \
+  --so programs/agenc-coordination/target/deploy/agenc_coordination.so \
+  --ledger <dir> [--short-disputes] [--profile production|validation-timings]
+node scripts/localnet-mac.mjs status      # PID, genesis hash, deployed bytes
+node scripts/localnet-mac.mjs compact     # restart on the same ledger (see below)
+node scripts/localnet-mac.mjs down --purge
+```
+
+It generates its three keys, injects the same ProtocolConfig fixture as
+`--dev-ready`, sets up the bid marketplace and 2-of-3 task moderation, and
+writes `.localnet/env.json` with `launcher: "localnet-mac"`, the program
+profile, the genesis hash and the program's sha256. The RPC suites check it
+with `localnet-mac.mjs status` instead of `localnet-status.mjs`.
+
+- **Ledger growth.** agave keeps RocksDB write-ahead logs up to 4 GiB whatever
+  `--limit-ledger-size` says, and an idle validator writes about 1.6 MB of
+  shreds a second. `compact` restarts the validator without `--reset`: RocksDB
+  flushes on recovery and drops the logs, and the accounts, program, clock and
+  faucet carry on (RPC is down for a few seconds). `compact --if-wal-over 600`
+  restarts only above 600 MB. The harness's `waitForClock` compacts during long
+  waits on this launcher, and `scripts/rev9-localnet-scenarios.mjs` compacts
+  between scenarios.
+- **React localnet E2E.** Seed the running validator with
+  `node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --env-file .localnet/env.json`;
+  `npm run test:localnet` in `packages/marketplace-react` then reuses the
+  healthy seeded sandbox (it starts its own only through the Linux rail).
+
 ## Verified run (2026-06-09, this machine)
 
 Real transcript of the full stack — boot, seed, local attestor, the first-hire
