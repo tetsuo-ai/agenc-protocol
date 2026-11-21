@@ -21,6 +21,7 @@ import {
   makeProgram, send, sendMany, expectOk, expectFail, decode, BN, Keypair, PublicKey,
   setMultisig, freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,9 @@ async function hireDriveComplete(w, { referrer = null, referrerFeeBps = 0 } = {}
   const taskId = id32();
   const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod, referrer, referrerFeeBps });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
 
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
@@ -231,6 +235,9 @@ test("REFERRER PROTECTION: a referred task cannot be completed without paying th
   const taskId = id32();
   const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod, referrer: referrerKp.publicKey, referrerFeeBps: 500 });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
 
   const modProg = makeProgram(w.modAuth);
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);

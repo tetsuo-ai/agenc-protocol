@@ -45,9 +45,10 @@ async function hireAndClaim(w) {
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [authorityRateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0, w.modAuth.publicKey, arr(jobHash))
+    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey, arr(jobHash))
     .accounts({
-      task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
+      task, escrow, hireRecord, taskValidationConfig: pda([enc("task_validation"), task.toBuffer()])[0],
+      listing: w.listing, providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
       moderationBlock: moderationBlockPda(w.specHash)[0],

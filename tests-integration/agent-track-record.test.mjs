@@ -49,6 +49,7 @@ import {
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
   creatorStatsPda, readCreatorStats, disputeBondPda, findEvents,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 
 // Derive the AgentStats PDA for an agent ["agent_stats", agent].
@@ -231,6 +232,9 @@ async function hireClaimDispute(w, { resolutionType }) {
   const taskId = id32();
   const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod });
   expectOk(send(w.svm, hix, [w.buyer]), "disp-trk:hire");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
 
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);

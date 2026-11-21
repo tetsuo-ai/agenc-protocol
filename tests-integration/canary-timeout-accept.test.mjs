@@ -140,8 +140,11 @@ test(
     // It does prove against an actual SBF dispatcher that the unchanged legacy
     // set_task_job_spec entry and the absent hire entries all fail closed on the
     // exact v2 bytes.
+    // Revision 9 (D) moved the agent-door hire to the v3 discriminator
+    // (`sha256("global:hire_from_listing_v3")`); the frozen canary must fail
+    // closed on it the same way.
     const revision5ChangedWrites = [
-      ["hire_from_listing", "f15e7f0768aef074"],
+      ["hire_from_listing", "48262ced035dfd6c"],
       ["hire_from_listing_humanless", "e5a3ab722674d755"],
       ["set_task_job_spec", "7609633ad7573a3b"],
     ];

@@ -1251,17 +1251,21 @@ pub mod agenc_coordination {
     /// Hire a provider from a standing service listing, minting a one-shot task
     /// that snapshots the listing's terms and funds escrow from the buyer.
     ///
-    /// The explicit v2 discriminator (`sha256("global:hire_from_listing_v2")[0..8]`)
-    /// is an atomic rollout boundary: the old
-    /// program rejects new clients instead of silently ignoring the appended
-    /// task-job-spec commitment, and the upgraded program rejects old clients.
+    /// Revision 9 (v3): the buying agent reviews the work. The hire takes the
+    /// buyer's `review_window_secs` and creates a CreatorReview config, so the
+    /// provider is paid on accept or auto-accept, never by `complete_task`. The
+    /// explicit v3 discriminator (`sha256("global:hire_from_listing_v3")[0..8]`)
+    /// is the atomic rollout boundary: v2 clients fail loudly instead of
+    /// minting an unreviewed hire.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[instruction(discriminator = [241, 94, 127, 7, 104, 174, 240, 116])]
+    #[allow(clippy::too_many_arguments)]
+    #[instruction(discriminator = [72, 38, 44, 237, 3, 93, 253, 108])]
     pub fn hire_from_listing(
         ctx: Context<HireFromListing>,
         task_id: [u8; 32],
         expected_price: u64,
         expected_version: u64,
+        review_window_secs: i64,
         referrer: Option<Pubkey>,
         referrer_fee_bps: u16,
         moderator: Pubkey,
@@ -1272,6 +1276,7 @@ pub mod agenc_coordination {
             task_id,
             expected_price,
             expected_version,
+            review_window_secs,
             referrer,
             referrer_fee_bps,
             moderator,

@@ -85,6 +85,8 @@ pub fn handler(
     // route settlement through accept_task_result, which is not hire-aware and would
     // silently drop the operator's cut. Reject it. (Non-hired tasks pass the empty
     // system-owned ["hire", task] PDA and proceed.)
+    // Revision 9 (D): every hire now creates its own CreatorReview config, so this
+    // refusal also keeps a hire's config immutable.
     require!(
         ctx.accounts.hire_record.owner != &crate::ID,
         CoordinationError::HiredTaskValidationUnsupported

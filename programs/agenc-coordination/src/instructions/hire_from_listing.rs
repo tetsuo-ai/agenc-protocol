@@ -1,6 +1,15 @@
 //! Hire a provider from a standing `ServiceListing` by minting a one-shot Task
 //! (embeddable marketplace, Batch 1).
 //!
+//! Revision 9 (D): the buying agent reviews the work, exactly like a bare-wallet
+//! hire. The hire pins a `TaskValidationConfig` in `CreatorReview` (window
+//! chosen by the buyer, 1 second to 7 days) and sets the manual-validation
+//! sentinel, so the provider submits with `submit_task_result` and is paid on
+//! accept or auto-accept; `complete_task` refuses these hires. The wire carries
+//! the new `review_window_secs` argument and the config account, so the entry
+//! point takes the v3 discriminator and old clients fail loudly. Hires made
+//! before the upgrade keep Auto mode until they end.
+//!
 //! Additive: snapshots the listing's terms into a fresh `Task` + `TaskEscrow`
 //! exactly the way `create_task` would, so the entire existing task lifecycle
 //! (`set_task_job_spec` -> `claim_task` -> `submit` -> `accept` / `cancel_task` /
@@ -34,10 +43,12 @@ use crate::instructions::rate_limit_helpers::check_task_creation_with_optional_q
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
 };
+use crate::instructions::task_validation_helpers::validate_review_window_for_mode;
 use crate::state::{
     is_publishable_task_moderation_status, AgentRegistration, AgentStatus, AuthorityRateLimit,
     HireRecord, ListingModeration, ListingState, ModerationAttestor, ModerationConfig,
-    ProtocolConfig, ServiceListing, Task, TaskEscrow, TaskType, TASK_MODERATION_RISK_SCORE_MAX,
+    ProtocolConfig, ServiceListing, Task, TaskEscrow, TaskType, TaskValidationConfig,
+    ValidationMode, MANUAL_VALIDATION_SENTINEL, TASK_MODERATION_RISK_SCORE_MAX,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -271,6 +282,18 @@ pub struct HireFromListing<'info> {
     )]
     pub hire_record: Box<Account<'info, HireRecord>>,
 
+    /// Revision 9 (D): the hire's CreatorReview config, created here (as on the
+    /// bare-wallet door) so an agent-door hire never settles on the auto-pay
+    /// path; the buying agent's wallet reviews first.
+    #[account(
+        init,
+        payer = creator,
+        space = TaskValidationConfig::SIZE,
+        seeds = [b"task_validation", task.key().as_ref()],
+        bump
+    )]
+    pub task_validation_config: Box<Account<'info, TaskValidationConfig>>,
+
     /// Standing listing being hired from. Mutable to record the hire
     /// (`total_hires`, `updated_at`).
     #[account(
@@ -374,13 +397,17 @@ pub struct HireFromListing<'info> {
 /// - `task_id`: caller-chosen unique id for the new task (PDA seed).
 /// - `expected_price` / `expected_version`: the listing terms the buyer agreed
 ///   to; the hire is rejected if the on-chain listing no longer matches.
+/// - `review_window_secs` (revision 9): the buyer's CreatorReview window,
+///   1 second to 7 days, as on the bare-wallet door.
 /// - `task_job_spec_hash`: immutable buyer-specific work instructions. This is
 ///   committed before funds move and later enforced by `set_task_job_spec`.
+#[allow(clippy::too_many_arguments)]
 pub fn handler(
     ctx: Context<HireFromListing>,
     task_id: [u8; 32],
     expected_price: u64,
     expected_version: u64,
+    review_window_secs: i64,
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
     moderator: Pubkey,
@@ -402,6 +429,8 @@ pub fn handler(
             && !ctx.accounts.creator_agent.is_retired_identity(),
         CoordinationError::AgentNotActive
     );
+    // Revision 9 (D): forced CreatorReview, so the window must be valid for it.
+    validate_agent_hire_review_window(review_window_secs)?;
 
     // Snapshot every listing field we need BEFORE taking any mutable borrow.
     let listing = ctx.accounts.listing.as_ref();
@@ -547,6 +576,10 @@ pub fn handler(
         0,    // min_reputation: listing hires do not gate on reputation in Batch 1
         None, // reward_mint: SOL only in Batch 1
     )?;
+    // Revision 9 (D): mark the task as manual-validation so submit and accept
+    // route through CreatorReview (mirrors the bare-wallet door); the config is
+    // pinned below.
+    task.constraint_hash = MANUAL_VALIDATION_SENTINEL;
 
     // §4: stamp the operator terms onto the Task itself so settlement reads the
     // 3-way split from the Task (the HireRecord stays the fallback for tasks hired
@@ -635,6 +668,16 @@ pub fn handler(
     hire_record.referrer = referrer_key;
     hire_record.referrer_fee_bps = referrer_bps;
 
+    // Revision 9 (D): pin CreatorReview so the buying agent reviews before payout.
+    let vc = ctx.accounts.task_validation_config.as_mut();
+    vc.task = task_key;
+    vc.creator = creator_key;
+    vc.mode = ValidationMode::CreatorReview;
+    vc.review_window_secs = review_window_secs;
+    vc.created_at = clock.unix_timestamp;
+    vc.updated_at = clock.unix_timestamp;
+    vc.bump = ctx.bumps.task_validation_config;
+
     // Emit TaskCreated so the hired task is indistinguishable to existing
     // indexers/flows, plus a hire event linking listing -> task.
     emit!(TaskCreated {
@@ -663,9 +706,26 @@ pub fn handler(
     Ok(())
 }
 
+/// Revision 9 (D): an agent-door hire forces CreatorReview, so its review window
+/// follows that mode's bounds (1 second to 7 days), as on the bare-wallet door.
+pub(crate) fn validate_agent_hire_review_window(review_window_secs: i64) -> Result<()> {
+    validate_review_window_for_mode(ValidationMode::CreatorReview, review_window_secs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Revision 9 (D): the v3 review window argument.
+    #[test]
+    fn agent_hire_review_window_bounds() {
+        for ok in [1, 3_600, 604_800] {
+            assert!(validate_agent_hire_review_window(ok).is_ok(), "{ok}");
+        }
+        for bad in [0, -1, 604_801] {
+            assert!(validate_agent_hire_review_window(bad).is_err(), "{bad}");
+        }
+    }
 
     fn ok_terms() -> (
         ListingState,

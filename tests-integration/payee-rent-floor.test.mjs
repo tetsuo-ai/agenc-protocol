@@ -25,6 +25,7 @@ import {
   freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram, agentStatsPda,
+  injectLegacyAutoHire,
 } from "./harness.mjs";
 
 const PROTOCOL_FEE_BPS = 100; // harness injectProtocolConfig
@@ -69,6 +70,9 @@ async function hireAndClaim(w, { referrer = null, referrerFeeBps = 0 } = {}) {
 
   const { ix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId: id32(), listingModeration: listingMod, referrer, referrerFeeBps });
   expectOk(send(w.svm, ix, [w.buyer]), "hire");
+  // Revision 9 (D): only a hire made before the upgrade (Auto mode) still settles by
+  // complete_task and can reach a task dispute; new agent-door hires are CreatorReview.
+  await injectLegacyAutoHire(w, task);
 
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);

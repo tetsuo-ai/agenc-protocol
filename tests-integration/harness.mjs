@@ -108,6 +108,17 @@ export async function mutateTask(w, task, mutate) {
   w.svm.setAccount(task, { ...acct, data: buf });
 }
 
+// Revision 9 (D): turn a fresh agent-door hire into the state a hire made
+// before the upgrade has: Auto mode, no manual-validation sentinel and no
+// validation config. New agent-door hires are CreatorReview, so a test of a flow
+// only an Auto hire reaches (complete_task on a hire, a task dispute on a hire)
+// injects this legacy state; such hires keep Auto mode until they end.
+export async function injectLegacyAutoHire(w, task) {
+  await mutateTask(w, task, (t) => { t.constraint_hash = Array(32).fill(0); });
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  w.svm.setAccount(validation, { lamports: 0, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false, rentEpoch: 0 });
+}
+
 // Turn a revision 9 freeze into the state a revision 8 freeze leaves: the
 // freeze_kind byte (TaskSubmission._reserved[2]) reads 0 and review_deadline_at
 // is the end of the buyer's review window counted from the freeze.
@@ -663,7 +674,9 @@ export function moderationBlockPda(contentHash) {
 /// P1.2: `moderator` names the attestor whose record the hire consumes (defaults to
 /// the world's global moderation authority); the required `moderationBlock` floor
 /// account is derived from the listing's pinned spec hash.
-export async function hireIx(w, { taskId, expectedPrice, expectedVersion, taskJobSpecHash = null, asProvider = false, listingModeration = w.defaultListingModeration ?? null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null } = {}) {
+// Revision 9 (D): the agent-door hire is v3: it takes the buyer's review window
+// (default one hour here) and creates the task's CreatorReview config.
+export async function hireIx(w, { taskId, expectedPrice, expectedVersion, taskJobSpecHash = null, asProvider = false, listingModeration = w.defaultListingModeration ?? null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null, reviewWindowSecs = 3600 } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;
@@ -675,9 +688,10 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, taskJo
   const [moderationBlock] = moderationBlockPda(w.specHash);
   const committedTaskJobSpecHash = taskJobSpecHash ?? id32();
   const ix = await prog.methods
-    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps, moderator ?? w.modAuth.publicKey, arr(committedTaskJobSpecHash))
+    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), new BN(reviewWindowSecs), referrer, referrerFeeBps, moderator ?? w.modAuth.publicKey, arr(committedTaskJobSpecHash))
     .accounts({
-      task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
+      task, escrow, hireRecord, taskValidationConfig: pda([enc("task_validation"), task.toBuffer()])[0],
+      listing: w.listing, providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration, moderationAttestor, moderationBlock,
       creatorAgent: agent, authorityRateLimit, authority: signer.publicKey,

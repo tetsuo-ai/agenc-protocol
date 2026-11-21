@@ -300,27 +300,11 @@ test("rev9 records: a no-show expiry counts claims_expired and the cranker pays 
 // cancel_dispute charges only the filer's record. fed99ab: no records.
 // ---------------------------------------------------------------------------
 test("rev9 records: cancelling one's own dispute charges the filer's disputes_lost only (fed99ab: no record)", async () => {
-  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
-  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
-  if (isClosed(w.svm, listingMod)) {
-    expectOk(send(w.svm, await makeProgram(w.modAuth).methods
-      .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-      .instruction(), [w.modAuth]), "listing-mod");
-  }
-  const { ix: hix, task, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { listingModeration: listingMod });
-  expectOk(send(w.svm, hix, [w.buyer]), "hire");
-  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
-  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
-  expectOk(send(w.svm, await makeProgram(w.modAuth).methods
-    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-    .instruction(), [w.modAuth]), "task-mod");
-  expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rev9-cancel-dispute", w.modAuth.publicKey)
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.buyer]), "publish");
-  const { ix: cix, claim } = await claimIx(w, { task, jobSpec, hireRecord, jobHash });
+  const w = await freshWorld({ moderationEnabled: true });
+  // An Auto-mode task: the creator may file a task dispute there.
+  const pt = await publishedTask(w, { reward: 3_000_000, review: false });
+  const { task } = pt;
+  const { ix: cix, claim } = await claimIx(w, pt);
   expectOk(send(w.svm, cix, [w.provider]), "claim");
 
   const tid = decode(w.svm, "Task", task).task_id;
@@ -741,25 +725,11 @@ test("rev9 deposit: reclaim_terminal_claim gives a stranded claim's deposit to t
 // creator and its record counts it. fed99ab: the worker keeps it.
 // ---------------------------------------------------------------------------
 test("rev9 deposit: expire_dispute with no-show evidence gives the deposit to the creator and counts deposits_received (fed99ab: worker keeps it)", async () => {
-  const w = await freshWorld({ moderationEnabled: true, price: 200_000_000 });
-  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
-  expectOk(send(w.svm, await makeProgram(w.modAuth).methods
-    .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-    .instruction(), [w.modAuth]), "listing-mod");
-  const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { listingModeration: listingMod });
-  expectOk(send(w.svm, hix, [w.buyer]), "hire");
-  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
-  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
-  expectOk(send(w.svm, await makeProgram(w.modAuth).methods
-    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-    .instruction(), [w.modAuth]), "task-mod");
-  expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rev9-deposit-dispute", w.modAuth.publicKey)
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.buyer]), "publish");
-  const { ix: cix, claim } = await claimIx(w, { task, jobSpec, hireRecord, jobHash });
+  const w = await freshWorld({ moderationEnabled: true });
+  // An Auto-mode task: the creator may dispute the no-show there.
+  const pt = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 3600 });
+  const { task, escrow, hireRecord } = pt;
+  const { ix: cix, claim } = await claimIx(w, pt);
   expectOk(send(w.svm, cix, [w.provider]), "claim");
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
