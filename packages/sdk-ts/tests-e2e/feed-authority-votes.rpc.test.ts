@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { setTimeout as delay } from "node:timers/promises";
 import * as sdk from "../src/index.js";
 import { id32, localRpcHarness, RPC_ENABLED } from "./rpc-harness.js";
 import { rpcAgent, rpcPublish } from "./rpc-fixtures.js";
@@ -126,21 +125,12 @@ describe.skipIf(!RPC_ENABLED)(
         sdk.AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED,
       );
       expect(await h.info(post)).toBeNull();
-      const watchdog = Date.now() + 3_700_000;
-      let notice = 0;
-      while ((await h.clock()) < registeredAt + 3600n) {
-        if (Date.now() > watchdog)
-          throw new Error(
-            "validator did not reach actual one-hour feed author age",
-          );
-        if (Date.now() - notice > 60_000) {
-          console.log(
-            `#275 waiting for actual author age: ${registeredAt + 3600n}; current ${await h.clock()}`,
-          );
-          notice = Date.now();
-        }
-        await delay(1000);
-      }
+      // Waits until the clock reaches registeredAt + 3600 (passes one second less).
+      await h.waitForClock(
+        registeredAt + 3599n,
+        "#275 actual one-hour feed author age",
+        3_700_000,
+      );
       await h.send("post after real age boundary", author.signer, [postIx]);
       const voteIx = (worker: typeof author, presentedAuthor = author.agent) =>
         sdk.facade.upvotePost({
