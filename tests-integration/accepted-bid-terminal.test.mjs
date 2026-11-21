@@ -27,6 +27,7 @@ import {
   BN,
   Keypair,
   SystemProgram, agentStatsPda, agentStatsCreationCost, creatorStatsCreationCost, injectLegacyValidation, disputeBondPda,
+  sendMany, creatorStatsPda, disputeRespondent,
 } from "./harness.mjs";
 import {
   createPublishedTaskFixture as createPublishedTask,
@@ -1428,4 +1429,66 @@ test("accepted-bid no-show applies only the snapshotted partial slash, then clos
     "task reopens for another bid round",
   );
   assert.equal(task.current_workers, 0);
+});
+
+// Review R3-3: the R1-1 shape on a bid task. The creator's dispute keeps the
+// bidder from delivering; once the claim lapses, the creator cancels its
+// dispute and expires the claim in one transaction. expire_claim took the
+// accepted bid's no-show slash although a filing had blocked the bidder. It now
+// follows the task's dispute flag, like the cancel drain: the bidder gets its
+// whole bid bond back.
+test("expire_claim after the creator's own dispute takes no bid slash (review R3-3; b6fdbe4: the creator takes the slash)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const b = await setupAcceptedBid(w, {
+    minBond: 400_000,
+    noShowSlashBps: 10_000,
+    tag: "accepted-bid-r3-3",
+  });
+  const deadline = Number(decode(w.svm, "Task", b.task).deadline.toString());
+  const setClock = (unixTimestamp) => {
+    const clock = w.svm.getClock();
+    clock.unixTimestamp = BigInt(unixTimestamp);
+    w.svm.setClock(clock);
+    w.svm.expireBlockhash();
+  };
+  setClock(deadline - 1_800);
+  const dispute = await initiateAcceptedBidDispute(w, b, 0, "bid:creator files against the bidder");
+  const bondPrincipal = BigInt(decode(w.svm, "DisputeBond", disputeBondPda(dispute)).amount.toString());
+  setClock(Number(decode(w.svm, "TaskClaim", b.claim).expires_at.toString()) + 61);
+
+  const cancel = await w.buyerProg.methods
+    .cancelDispute()
+    .accounts({ protocolConfig: w.protocolPda, dispute, task: b.task, authority: w.buyer.publicKey,
+      disputeBond: disputeBondPda(dispute), respondent: disputeRespondent(w.svm, dispute),
+      workerStats: agentStatsPda(w.providerAgent), creatorStats: creatorStatsPda(w.buyer.publicKey),
+      systemProgram: SystemProgram.programId })
+    .remainingAccounts([{ pubkey: w.providerAgent, isSigner: false, isWritable: true }])
+    .instruction();
+  const expire = await w.buyerProg.methods.expireClaim().accounts({ creatorStats: null,
+    authority: w.buyer.publicKey,
+    task: b.task,
+    escrow: b.escrow,
+    claim: b.claim,
+    worker: w.providerAgent,
+    protocolConfig: w.protocolPda,
+    taskValidationConfig: null,
+    taskSubmission: null,
+    rentRecipient: w.provider.publicKey,
+    workerCompletionBond: null,
+    bondCreator: null,
+    agentStats: agentStatsPda(w.providerAgent),
+    treasury: null,
+    systemProgram: SystemProgram.programId,
+  }).remainingAccounts(bidSettlementSuffix(w, b, "no-show")).instruction();
+  const bidBalance = accountLamports(w.svm, b.bid);
+  const claimBalance = accountLamports(w.svm, b.claim);
+  assert.equal(BigInt(decode(w.svm, "TaskBid", b.bid).bond_lamports.toString()), 400_000n, "a 400,000-lamport bid bond");
+  const providerBefore = accountLamports(w.svm, w.provider.publicKey);
+  expectOk(sendMany(w.svm, [cancel, expire], [w.buyer]), "bid:[cancel_dispute, expire_claim]");
+  assert.equal(
+    accountLamports(w.svm, w.provider.publicKey) - providerBefore,
+    bidBalance + claimBalance + bondPrincipal,
+    "the bidder gets its whole bid account, its claim rent and the dispute bond principal",
+  );
+  assert.ok(isClosed(w.svm, b.bid), "the bid is closed after one disposition");
 });
