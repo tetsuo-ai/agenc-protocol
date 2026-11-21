@@ -318,6 +318,7 @@ for (const { filer, ending, principalTo } of endings) {
     const before = {
       creator: bal(w, w.buyer.publicKey), worker: bal(w, w.provider.publicKey),
       escrow: bal(w, t.escrow), claim: bal(w, t.claim), submission: bal(w, t.submission),
+      claimRent: rent(w, w.svm.getAccount(t.claim).data.length),
     };
     const creatorRecordCost = creatorStatsCreationCost(w.svm, w.buyer.publicKey);
     let res;
@@ -351,9 +352,16 @@ for (const { filer, ending, principalTo } of endings) {
         assert.equal(d.creator, bondCreator - TX_FEE - creatorRecordCost, "creator: bond rent only, less its fee");
         assert.equal(d.worker, bondWorker, "worker: the bond principal");
         assert.equal(status(w, t.task, "Task"), "InProgress", "task restored");
+      } else if (ending === "expire") {
+        // The unruled expiry refunds the whole escrow; the no-show evidence (the
+        // claim expired without a delivery) also forfeits the claim deposit.
+        const claimDeposit = before.claim - before.claimRent;
+        assert.equal(claimDeposit, 20_000_000n, "the claim held a deposit of 10% of 0.2 SOL");
+        assert.equal(d.creator, before.escrow + bondCreator + claimDeposit, "creator: whole escrow, its bond share and the no-show's deposit");
+        assert.equal(d.worker, before.claimRent + bondWorker, "worker: claim rent only plus its bond share");
       } else {
-        // A Refund ruling (approved or rejected) and an expiry all refund the
-        // whole escrow to the creator, as today.
+        // A Refund ruling (approved or rejected) refunds the whole escrow to the
+        // creator, as today.
         assert.equal(d.creator, before.escrow + bondCreator, "creator: whole escrow plus its bond share");
         assert.equal(d.worker, claimBack + bondWorker, "worker: claim rent (unless a slash defers it) plus its bond share");
       }

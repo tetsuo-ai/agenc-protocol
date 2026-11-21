@@ -186,7 +186,7 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   expectFail(
     send(w.svm, await makeProgram(w.provider).methods
       .reclaimTerminalClaim()
-      .accounts({
+      .accounts({ creator: decode(w.svm, "Task", r.task).creator,
         authority: w.provider.publicKey, task: r.task, claim: r.claim, taskSubmission: submission,
         taskValidationConfig: null,
         worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
@@ -202,7 +202,7 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   expectFail(
     send(w.svm, await makeProgram(w.provider).methods
       .reclaimTerminalClaim()
-      .accounts({
+      .accounts({ creator: decode(w.svm, "Task", r.task).creator,
         authority: w.provider.publicKey, task: r.task, claim: r.claim, taskSubmission: submission,
         taskValidationConfig: null,
         worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
@@ -288,7 +288,7 @@ test("upgrade compatibility: deployed Refund state rejects generic reclaim and r
       w.svm,
       await makeProgram(w.admin).methods
         .reclaimTerminalClaim()
-        .accounts({
+        .accounts({ creator: decode(w.svm, "Task", r.task).creator,
           authority: w.admin.publicKey,
           task: r.task,
           claim: r.claim,

@@ -17,18 +17,20 @@
 //!   Rejected submission, or a still-Submitted Collaborative straggler after
 //!   completion;
 //! - closes the claim and any eligible live submission to the worker. Empty and
-//!   Rejected forms forfeit claim surplus to the treasury; Submitted
-//!   Collaborative stragglers receive the full claim balance;
+//!   Rejected forms of a contest claim forfeit its entry deposit to the
+//!   treasury; Submitted Collaborative stragglers receive the full claim
+//!   balance. Revision 9 (E): any other claim's deposit goes to the creator once
+//!   the claim is past its expiry, and back to the worker before it;
 //! - decrements `task.current_workers` and the worker's `active_tasks`;
 //! - takes NO escrow account (closed by then) and pays NO cleanup reward.
 //!
 //! Full module only — the canary surface is unchanged.
 
 use crate::errors::CoordinationError;
-use crate::events::TerminalClaimReclaimed;
+use crate::events::{ClaimDepositSettled, TerminalClaimReclaimed};
 use crate::instructions::task_validation_helpers::{
-    decrement_pending_submission_count, ensure_validation_config, note_submission_left_review,
-    saturating_dec_counter,
+    decrement_pending_submission_count, ensure_validation_config, is_contest_configured_task,
+    note_submission_left_review, saturating_dec_counter,
 };
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
@@ -137,6 +139,38 @@ pub struct ReclaimTerminalClaim<'info> {
         constraint = rent_recipient.key() == worker.authority @ CoordinationError::InvalidRentRecipient
     )]
     pub rent_recipient: UncheckedAccount<'info>,
+
+    /// Revision 9 (E): receives a non-contest claim deposit once the claim is past
+    /// its expiry (the claim ended without a delivery).
+    /// CHECK: validated against `task.creator`; used only as a lamport recipient.
+    #[account(
+        mut,
+        constraint = creator.key() == task.creator @ CoordinationError::InvalidCreator
+    )]
+    pub creator: UncheckedAccount<'info>,
+}
+
+/// Revision 9 (E): where the surplus of an empty or Rejected claim goes on
+/// terminal cleanup. A contest entry deposit is forfeited to the treasury (as
+/// before). Any other surplus is the claim deposit: the creator gets it once the
+/// claim is past its expiry, the worker keeps it before (a Collaborative peer
+/// stranded on a completed task). A Rejected claim delivered once, so its deposit
+/// came back at submit and its surplus is zero in practice.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ReclaimSurplus {
+    Treasury,
+    Creator,
+    Worker,
+}
+
+fn reclaim_surplus_recipient(contest: bool, now: i64, claim_expires_at: i64) -> ReclaimSurplus {
+    if contest {
+        ReclaimSurplus::Treasury
+    } else if now > claim_expires_at {
+        ReclaimSurplus::Creator
+    } else {
+        ReclaimSurplus::Worker
+    }
 }
 
 pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
@@ -234,25 +268,56 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     worker.active_tasks = saturating_dec_counter(worker.active_tasks);
 
     // Split the claim lamports (FIX 4 forfeit rule): rent-exempt minimum back to
-    // the worker, any surplus (the contest entry deposit) to the treasury — a
-    // no-show exit forfeits the deposit; only submitters are made whole.
+    // the worker, any surplus by `reclaim_surplus_recipient`. A contest no-show
+    // forfeits its entry deposit to the treasury; revision 9 sends a non-contest
+    // claim deposit to the creator after the claim's expiry and leaves it with
+    // the worker before. Only submitters are always made whole.
     let claim_info = claim.to_account_info();
     let total = claim_info.lamports();
-    let forfeited = if submitted_straggler {
+    let surplus = if submitted_straggler {
         0
     } else {
         let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
         total.saturating_sub(rent_min)
     };
+    let recipient = reclaim_surplus_recipient(
+        is_contest_configured_task(task),
+        clock.unix_timestamp,
+        claim.expires_at,
+    );
+    let forfeited = if recipient == ReclaimSurplus::Worker {
+        0
+    } else {
+        surplus
+    };
     if forfeited > 0 {
-        let treasury_info = ctx.accounts.treasury.to_account_info();
+        let recipient_info = if recipient == ReclaimSurplus::Treasury {
+            ctx.accounts.treasury.to_account_info()
+        } else {
+            ctx.accounts.creator.to_account_info()
+        };
         **claim_info.try_borrow_mut_lamports()? = total
             .checked_sub(forfeited)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
-        **treasury_info.try_borrow_mut_lamports()? = treasury_info
+        **recipient_info.try_borrow_mut_lamports()? = recipient_info
             .lamports()
             .checked_add(forfeited)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
+    }
+    if surplus > 0 && recipient != ReclaimSurplus::Treasury {
+        emit!(ClaimDepositSettled {
+            task: task.key(),
+            claim: claim.key(),
+            worker_agent: worker.key(),
+            recipient: if recipient == ReclaimSurplus::Creator {
+                task.creator
+            } else {
+                ctx.accounts.rent_recipient.key()
+            },
+            amount: surplus,
+            forfeited: recipient == ReclaimSurplus::Creator,
+            timestamp: clock.unix_timestamp,
+        });
     }
     let worker_refund = claim_info.lamports();
 
@@ -308,6 +373,29 @@ mod tests {
         task.set_worker_slash_pending(false);
         task.current_workers = 0;
         assert!(validate_terminal_claim_not_dispute_reserved(&task).is_err());
+    }
+
+    // Revision 9 (E): a contest deposit stays a treasury forfeit; any other
+    // claim deposit goes to the creator strictly after the claim's expiry.
+    #[test]
+    fn reclaim_surplus_follows_contest_and_claim_expiry() {
+        let expires = 1_000;
+        assert_eq!(
+            reclaim_surplus_recipient(true, expires - 1, expires),
+            ReclaimSurplus::Treasury
+        );
+        assert_eq!(
+            reclaim_surplus_recipient(true, expires + 1, expires),
+            ReclaimSurplus::Treasury
+        );
+        assert_eq!(
+            reclaim_surplus_recipient(false, expires, expires),
+            ReclaimSurplus::Worker
+        );
+        assert_eq!(
+            reclaim_surplus_recipient(false, expires + 1, expires),
+            ReclaimSurplus::Creator
+        );
     }
 
     #[test]

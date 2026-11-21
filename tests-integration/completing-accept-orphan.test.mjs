@@ -556,7 +556,7 @@ test("F-3b: a bounced claim stranded by a peer's completing accept is reclaimed 
       w.svm,
       await makeProgram(a.kp)
         .methods.reclaimTerminalClaim()
-        .accounts({
+        .accounts({ creator: decode(w.svm, "Task", m.task).creator,
           authority: a.kp.publicKey,
           task: m.task,
           claim: sA.claim,

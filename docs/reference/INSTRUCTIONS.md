@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**105 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**106 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -78,6 +78,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`register_store`](#register_store)
 - [`reject_and_freeze`](#reject_and_freeze)
 - [`reject_task_result`](#reject_task_result)
+- [`release_claim`](#release_claim)
 - [`repair_dispute_initiator_counter`](#repair_dispute_initiator_counter)
 - [`request_attestor_exit`](#request_attestor_exit)
 - [`request_changes`](#request_changes)
@@ -1035,7 +1036,7 @@ _None._
 Expire a stale claim to free up task slot.
 Can only be called after claim.expires_at has passed.
 
-### Accounts (14)
+### Accounts (15)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1053,6 +1054,7 @@ Can only be called after claim.expires_at has passed.
 | 12 | `agent_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
 | 13 | `treasury` | yes |  | yes |  | Receives the FORFEITED contest entry-deposit surplus on a no-show expiry (never the creator). Required whenever the expiring claim carries a contest deposit; enforced in the handler (non-skippable). Full-surface only — canary builds are contest-incapable (see `validate_task_supports_validation_mode`), so the frozen canary account list for `expire_claim` is unchanged. |
 | 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 15 | `creator_stats` | yes |  | yes | PDA ["creator_stats", account:task.creator (Task)] | here and OPTIONAL so cranks stay cheap (design 5.3). When it is passed and exists, a forfeited claim deposit counts `deposits_received`; an omitted or not-yet-created record writes nothing and is never created here. Full surface only. |
 
 ### Args (0)
 
@@ -1684,7 +1686,7 @@ returns eligible claim/submission balances to the worker, and forfeits any
 applicable no-show/rejection surplus to the treasury. Exit path — settles
 even while paused (money never locks).
 
-### Accounts (9)
+### Accounts (10)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1697,6 +1699,7 @@ even while paused (money never locks).
 | 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 8 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |
 | 9 | `rent_recipient` | yes |  |  |  | Receives the eligible claim refund (rent minimum for an empty or Rejected record; full balance for a Submitted Collaborative straggler) and any closed submission balance. No caller-supplied-account trust. |
+| 10 | `creator` | yes |  |  |  | Revision 9 (E): receives a non-contest claim deposit once the claim is past its expiry (the claim ended without a delivery). |
 
 ### Args (0)
 
@@ -1939,6 +1942,32 @@ Reject a creator-reviewed submission and return the task to active work.
 | # | Arg | Type |
 |---|---|---|
 | 1 | `rejection_hash` | `[u8; 32]` |
+
+## release_claim
+
+Revision 9: the worker gives up an undelivered claim before it expires.
+Within one hour of claiming its deposit comes back; later the deposit goes
+to the buyer and the worker's record counts an expired claim. Exit path.
+
+### Accounts (11)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
+| 3 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] | The claim's worker; only its own wallet can release. |
+| 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] | Rejected submission of this claim (bounced by a change request), which is closed to the worker. Inspected in the handler. |
+| 5 | `task_validation_config` |  |  | yes | PDA ["task_validation", account:task] | Required for a manual-validation task, to resync its status. |
+| 6 | `worker_completion_bond` |  |  |  | PDA ["completion_bond", account:task, account:authority] | live bond (a bonded claim settles through its own paths). |
+| 7 | `creator` | yes |  |  |  | the grace. |
+| 8 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. A release after the grace bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
+| 9 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 10 | `authority` | yes | yes |  |  | The worker wallet: gets the claim rent (and the deposit within the grace). — has_one → worker |
+| 11 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (0)
+
+_None._
 
 ## repair_dispute_initiator_counter
 

@@ -2,7 +2,13 @@
 //! Live assignment is `claim_task_with_job_spec` -> `handler_with_job_spec`.
 
 use crate::errors::CoordinationError;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::events::ClaimDepositPosted;
 use crate::events::{reputation_reason, ReputationChanged, TaskClaimed};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::claim_deposit_helpers::{
+    claim_deposit_lamports, sol_worker_share_lamports,
+};
 use crate::instructions::completion_helpers::validate_task_dependency_for_assignment;
 use crate::instructions::constants::{
     CONTEST_ENTRY_DEPOSIT_LAMPORTS, DISPUTE_SAFE_MAX_WORKERS, MAX_REPUTATION, REPUTATION_DECAY_MIN,
@@ -229,6 +235,34 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
             ),
             CONTEST_ENTRY_DEPOSIT_LAMPORTS,
         )?;
+    }
+
+    // Revision 9 (E): every other claim puts down a deposit of max(10% of the
+    // worker's share, 0.005 SOL), also as surplus lamports on the claim. It comes
+    // back on the worker's first delivery (or with the claim when an Auto task
+    // completes); a claim that ends without a delivery after its expiry gives it
+    // to the buyer. Bid claims never reach this instruction. Full surface only:
+    // the canary keeps today's behavior.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if !is_contest_configured_task(&ctx.accounts.task) {
+        let deposit = claim_deposit_lamports(sol_worker_share_lamports(&ctx.accounts.task)?)?;
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.authority.to_account_info(),
+                    to: ctx.accounts.claim.to_account_info(),
+                },
+            ),
+            deposit,
+        )?;
+        emit!(ClaimDepositPosted {
+            task: task_key,
+            claim: ctx.accounts.claim.key(),
+            worker_agent: worker_key,
+            amount: deposit,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
     }
 
     Ok(())

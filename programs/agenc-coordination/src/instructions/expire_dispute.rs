@@ -18,6 +18,8 @@ use crate::instructions::bid_settlement_helpers::{
     accepted_bid_no_show_bond_disposition, settle_accepted_bid, AcceptedBidBookDisposition,
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+use crate::instructions::claim_deposit_helpers::settle_claim_deposit;
+use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::dispute_bond_helpers::{settle_dispute_bond, BondEnding};
 use crate::instructions::dispute_helpers::{
     expected_peer_bundles, settle_dispute_submission_evidence, validate_dispute_worker_accounts,
@@ -26,7 +28,7 @@ use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::post_completion_bond::dependency_parent_completed;
 use crate::instructions::program_account_helpers::{remaining_account_at, remaining_account_range};
 use crate::instructions::record_account_helpers::{
-    count_agent_stats, ensure_agent_stats, ensure_creator_stats,
+    count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
 };
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_escrow_account,
@@ -545,6 +547,23 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         )?;
     }
 
+    // Revision 9 (E): the same objective no-show evidence forfeits the claim
+    // deposit to the creator before the claim's rent closes to the worker; the
+    // creator's record counts it. A delivered claim had its deposit back at
+    // submit, and a bid claim carries a bid bond instead (settled above).
+    let deposit_forfeited = if no_show_penalty_allowed && task.task_type != TaskType::BidExclusive {
+        settle_claim_deposit(
+            &claim.to_account_info(),
+            &ctx.accounts.creator.to_account_info(),
+            task_key,
+            defendant_worker_key,
+            true,
+            clock.unix_timestamp,
+        )?
+    } else {
+        0
+    };
+
     claim.close(worker_wallet_info.clone())?;
 
     // Completion-bond accounts remain mandatory so a permissionless terminal exit
@@ -637,6 +656,14 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
             &ctx.accounts.worker_stats.to_account_info(),
             defendant_worker_key,
             Counter::ClaimsExpired,
+            clock.unix_timestamp,
+        )?;
+    }
+    if deposit_forfeited > 0 {
+        count_creator_stats(
+            &ctx.accounts.creator_stats.to_account_info(),
+            ctx.accounts.creator.key(),
+            CreatorCounter::DepositsReceived,
             clock.unix_timestamp,
         )?;
     }

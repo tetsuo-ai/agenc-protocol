@@ -115,7 +115,11 @@ test("expire_dispute: unresolved principal returns to the creator while a proven
   w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
   const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
-  const claimRent = Number(w.svm.getBalance(r.claim));
+  // Revision 9 (E): the claim holds its rent plus the deposit the no-show forfeits.
+  const claimBalance = Number(w.svm.getBalance(r.claim));
+  const claimRent = Number(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(r.claim).data.length)));
+  const claimDeposit = claimBalance - claimRent;
+  assert.equal(claimDeposit, 5_000_000, "the claim carries the deposit floor");
   const workerBondBalance = Number(w.svm.getBalance(r.workerBond));
   const workerBondPrincipal = Number(decode(w.svm, "CompletionBond", r.workerBond).amount);
   const workerBondRent = workerBondBalance - workerBondPrincipal;
@@ -134,8 +138,8 @@ test("expire_dispute: unresolved principal returns to the creator while a proven
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
   assert.equal(
     buyerDelta,
-    escrowBalance + workerBondPrincipal + disputeBondBalance,
-    `creator received escrow + no-show bond + its dispute bond (got ${buyerDelta})`,
+    escrowBalance + workerBondPrincipal + disputeBondBalance + claimDeposit,
+    `creator received escrow + no-show bond + its dispute bond + the claim deposit (got ${buyerDelta})`,
   );
   assert.ok(escrowBalance > REWARD, "the escrow held the full reward plus its rent");
   assert.ok(isClosed(w.svm, disputeBond), "dispute bond settled and closed");

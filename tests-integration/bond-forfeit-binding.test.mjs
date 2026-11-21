@@ -184,6 +184,10 @@ test("F-1: the legit no-show forfeit still works (bond of the LIVE no-show worke
 
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
   const escrowBefore = Number(w.svm.getBalance(r.escrow)); // refund (4M) + rent, drained to the creator on cancel
+  // Revision 9 (E): the claim also carries a deposit (its surplus above rent), which a
+  // no-show forfeits to the creator.
+  const vDeposit = Number(w.svm.getBalance(vClaim)) - Number(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(vClaim).data.length)));
+  assert.equal(vDeposit, 5_000_000, "V's claim carries the deposit floor");
   expectOk(send(w.svm, await w.buyerProg.methods
     .cancelTask()
     .accounts({
@@ -205,7 +209,7 @@ test("F-1: the legit no-show forfeit still works (bond of the LIVE no-show worke
   // MINUS the 5,000-lamport tx fee (the buyer is fee payer); V's bond PDA is settled;
   // W's bond was already refunded at rejection.
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
-  assert.equal(buyerDelta, escrowBefore + 1_000_000 - 5_000, `creator received escrow (${escrowBefore}) + the live no-show worker's bond, less the tx fee (got ${buyerDelta})`);
+  assert.equal(buyerDelta, escrowBefore + 1_000_000 + vDeposit - 5_000, `creator received escrow (${escrowBefore}) + the live no-show worker's bond and claim deposit, less the tx fee (got ${buyerDelta})`);
   assert.ok(isClosed(w.svm, vBond), "V's bond PDA settled");
   assert.ok(isClosed(w.svm, r.workerBond), "W's bond remains safely refunded");
 });

@@ -1365,7 +1365,7 @@ test("accepted-bid no-show applies only the snapshotted partial slash, then clos
   const creatorBefore = accountLamports(w.svm, w.buyer.publicKey);
   const bidBalance = accountLamports(w.svm, b.bid);
   const claimBalance = accountLamports(w.svm, b.claim);
-  let expireBuilder = makeProgram(cleaner).methods.expireClaim().accounts({
+  let expireBuilder = makeProgram(cleaner).methods.expireClaim().accounts({ creatorStats: null,
     authority: cleaner.publicKey,
     task: b.task,
     escrow: b.escrow,

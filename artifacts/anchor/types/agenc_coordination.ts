@@ -6962,6 +6962,44 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "creatorStats",
+          "docs": [
+            "here and OPTIONAL so cranks stay cheap (design 5.3). When it is passed and",
+            "exists, a forfeited claim deposit counts `deposits_received`; an omitted or",
+            "not-yet-created record writes nothing and is never created here. Full",
+            "surface only."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -11229,6 +11267,14 @@ export type AgencCoordination = {
             "closed submission balance. No caller-supplied-account trust."
           ],
           "writable": true
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "Revision 9 (E): receives a non-contest claim deposit once the claim is past",
+            "its expiry (the claim ended without a delivery)."
+          ],
+          "writable": true
         }
       ],
       "args": []
@@ -12865,6 +12911,289 @@ export type AgencCoordination = {
           }
         }
       ]
+    },
+    {
+      "name": "releaseClaim",
+      "docs": [
+        "Revision 9: the worker gives up an undelivered claim before it expires.",
+        "Within one hour of claiming its deposit comes back; later the deposit goes",
+        "to the buyer and the worker's record counts an expired claim. Exit path."
+      ],
+      "discriminator": [
+        109,
+        194,
+        80,
+        47,
+        30,
+        93,
+        16,
+        253
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "docs": [
+            "The claim's worker; only its own wallet can release."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "docs": [
+            "Rejected submission of this claim (bounced by a change request), which is",
+            "closed to the worker. Inspected in the handler."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "Required for a manual-validation task, to resync its status."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "workerCompletionBond",
+          "docs": [
+            "live bond (a bonded claim settles through its own paths)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "the grace."
+          ],
+          "writable": true
+        },
+        {
+          "name": "workerStats",
+          "docs": [
+            "here. A release after the grace bumps `claims_expired`. Created when missing",
+            "by `ensure_agent_stats`, paid by `authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The worker wallet: gets the claim rent (and the deposit within the grace)."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "worker"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "repairDisputeInitiatorCounter",

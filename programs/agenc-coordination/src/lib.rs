@@ -482,6 +482,14 @@ pub mod agenc_coordination {
         instructions::expire_claim::handler(ctx)
     }
 
+    /// Revision 9: the worker gives up an undelivered claim before it expires.
+    /// Within one hour of claiming its deposit comes back; later the deposit goes
+    /// to the buyer and the worker's record counts an expired claim. Exit path.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn release_claim(ctx: Context<ReleaseClaim>) -> Result<()> {
+        instructions::release_claim::handler(ctx)
+    }
+
     /// Submit a result for creator review before final settlement.
     pub fn submit_task_result(
         ctx: Context<SubmitTaskResult>,
