@@ -11,6 +11,7 @@ import {
   findClaimPda,
   findCreatorStatsPda,
   findDisputeRejectionDisputeBondPda,
+  findEscrowPda,
   findModerationAttestorPda,
   findWorkerStatsPda,
   getCreateServiceListingInstructionDataDecoder,
@@ -191,7 +192,9 @@ describe("prepare_hire handler", () => {
     expect(ix.accounts.length).toBeGreaterThan(0);
     expect(typeof ix.dataBase64).toBe("string");
     expect(ix.dataBase64.length).toBeGreaterThan(0);
-    expect(ix.accounts[4]!.address).toBe(A_PROVIDER);
+    // Revision 9 v3: the buyer's review config sits after the hire record,
+    // so the provider binding moves to slot 5.
+    expect(ix.accounts[5]!.address).toBe(A_PROVIDER);
 
     // The buyer wallet appears as a writable signer (fee payer); a noop signer
     // carries the address but never produced a signature.
@@ -204,6 +207,36 @@ describe("prepare_hire handler", () => {
       decodeDataBase64(ix),
     );
     expect(decoded.moderator).toBe(A_MODERATOR);
+    // Revision 9: a CreatorReview window, one day unless asked otherwise.
+    expect(decoded.reviewWindowSecs).toBe(86_400n);
+  });
+
+  it("takes the buyer's review window and refuses one outside 1 second to 7 days (revision 9)", async () => {
+    const base = {
+      listing: A_LISTING_PDA,
+      providerAgent: A_PROVIDER,
+      buyer: A_AUTHORITY,
+      creatorAgent: A_PROVIDER,
+      taskId: HEX32,
+      expectedPrice: "50000000",
+      expectedVersion: "4",
+      moderator: A_MODERATOR,
+      listingSpecHash: HEX32,
+      taskJobSpecHash: HEX32,
+    };
+    const ix = (await getTool("prepare_hire")!.handler(
+      { ...base, reviewWindowSecs: "3600" },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(
+      getHireFromListingInstructionDataDecoder().decode(decodeDataBase64(ix))
+        .reviewWindowSecs,
+    ).toBe(3_600n);
+    for (const reviewWindowSecs of ["0", "604801"]) {
+      await expect(
+        getTool("prepare_hire")!.handler({ ...base, reviewWindowSecs }, ctx),
+      ).rejects.toThrow(/reviewWindowSecs/);
+    }
   });
 
   it("encodes an optional referrer leg for registered-agent hires", async () => {
@@ -441,7 +474,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
     expect(ix.accounts[3]!.address).toBe(A_CREATOR);
   });
 
-  it("prepare_hire emits the 15-account provider-bound shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
+  it("prepare_hire emits the 16-account revision 9 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_hire")!.handler(
       {
         listing: A_LISTING_PDA,
@@ -457,8 +490,8 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(15);
-    expect(ix.accounts[8]!.address).toBe(NONE_PLACEHOLDER);
+    expect(ix.accounts).toHaveLength(16);
+    expect(ix.accounts[9]!.address).toBe(NONE_PLACEHOLDER);
   });
 
   it("prepare_hire with moderatorIsAttestor:true attaches the roster PDA; the legacy listingModeration override lands in the record slot", async () => {
@@ -479,12 +512,12 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(15);
-    expect(ix.accounts[7]!.address).toBe(A_CREATOR);
+    expect(ix.accounts).toHaveLength(16);
+    expect(ix.accounts[8]!.address).toBe(A_CREATOR);
     const [rosterPda] = await findModerationAttestorPda({
       attestor: A_MODERATOR,
     });
-    expect(ix.accounts[8]!.address).toBe(rosterPda);
+    expect(ix.accounts[9]!.address).toBe(rosterPda);
     expect(rosterPda).not.toBe(NONE_PLACEHOLDER);
   });
 
@@ -938,5 +971,35 @@ describe("prepare_register_agent handler", () => {
       );
     expect(err).toBeInstanceOf(MarketplaceToolError);
     expect((err as MarketplaceToolError).code).toBe("INVALID_TOOL_INPUT");
+  });
+});
+
+describe("revision 9 cancel and close tools", () => {
+  it("prepare_cancel_task appends a dependent task's parent so a real no-show forfeits", async () => {
+    const plain = (await getTool("prepare_cancel_task")!.handler(
+      { task: A_TASK_PDA, authority: A_AUTHORITY },
+      ctx,
+    )) as UnsignedInstructionView;
+    const dependent = (await getTool("prepare_cancel_task")!.handler(
+      { task: A_TASK_PDA, authority: A_AUTHORITY, dependencyParent: A_LISTING_PDA },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(dependent.accounts).toHaveLength(plain.accounts.length + 1);
+    expect(dependent.accounts.at(-1)).toEqual({
+      address: A_LISTING_PDA,
+      role: { writable: false, signer: false },
+    });
+  });
+
+  it("prepare_close_task passes the canonical escrow, writable, so a settled one left behind closes", async () => {
+    const ix = (await getTool("prepare_close_task")!.handler(
+      { task: A_TASK_PDA, authority: A_AUTHORITY },
+      ctx,
+    )) as UnsignedInstructionView;
+    const [escrow] = await findEscrowPda({ task: A_TASK_PDA as never });
+    expect(ix.accounts[2]).toEqual({
+      address: escrow,
+      role: { writable: true, signer: false },
+    });
   });
 });
