@@ -67,8 +67,11 @@ async function setupWorkerDispute(w, { resolutionType, stake = 2_000_000 }) {
   const taskDescription = Buffer.alloc(64);
   taskDescription.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
+    // Revision 9 refuses task disputes on single-worker review tasks (6425): the buyer
+    // freezes and the worker disputes the freeze. Disputes here run on a one-worker
+    // Collaborative task, which keeps the same claim, counters and exits.
     .createTask(arr(taskId), new BN(1), arr(taskDescription), new BN(4_000_000), 1,
-      new BN(now + 3600), 0, null, 0, null, null, 0)
+      new BN(now + 3600), 1, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
       authorityRateLimit: createRate, authority: w.buyer.publicKey,
       creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,

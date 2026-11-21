@@ -121,6 +121,31 @@ export async function injectRevision8Freeze(w, submission, reviewWindowSecs) {
 }
 export const disputeBondPda = (subject) => pda([enc("dispute_bond"), subject.toBuffer()])[0];
 
+// Decode the Anchor events a transaction emitted (its "Program data:" log lines)
+// and return the ones named `name`, with their snake_case fields.
+export function findEvents(res, name) {
+  const logs = typeof res.logs === "function" ? res.logs() : res.meta().logs();
+  const prefix = "Program data: ";
+  const out = [];
+  for (const line of logs) {
+    if (!line.startsWith(prefix)) continue;
+    const event = coder.events.decode(line.slice(prefix.length));
+    if (event && event.name === name) out.push(event.data);
+  }
+  return out;
+}
+
+// Revision 9 (B): the respondent of a task dispute's bond, read from chain state:
+// the creator when a worker filed, the defendant worker's wallet when the
+// creator filed. cancel_dispute takes it as the `respondent` account.
+export function disputeRespondent(svm, dispute) {
+  const d = coder.accounts.decode("Dispute", Buffer.from(svm.getAccount(dispute).data));
+  if (d.initiated_by_creator) {
+    return coder.accounts.decode("AgentRegistration", Buffer.from(svm.getAccount(d.defendant).data)).authority;
+  }
+  return coder.accounts.decode("Task", Buffer.from(svm.getAccount(d.task).data)).creator;
+}
+
 export const CREATOR_STATS_DISCRIMINATOR = crypto
   .createHash("sha256").update("account:CreatorStats").digest().subarray(0, 8);
 export function readCreatorStats(svm, address) {

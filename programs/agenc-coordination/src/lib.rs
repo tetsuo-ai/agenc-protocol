@@ -600,6 +600,8 @@ pub mod agenc_coordination {
     /// Cancel an active dispute. Only the initiator can cancel, and only while
     /// the dispute is still active. The retired voter-count byte must be
     /// historical zero or the current `0xff` initiator-outcome provenance marker.
+    /// Revision 9: the bond principal goes to the respondent, its rent back to
+    /// the filer.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn cancel_dispute(ctx: Context<CancelDispute>) -> Result<()> {
         instructions::cancel_dispute::handler(ctx)
@@ -633,6 +635,10 @@ pub mod agenc_coordination {
     /// * `task_id` - Related task ID
     /// * `evidence_hash` - Hash of evidence supporting the dispute
     /// * `resolution_type` - 0=refund, 1=complete, 2=split
+    ///
+    /// Revision 9: the filer posts a bond of max(10% of the disputed amount,
+    /// 0.01 SOL) into `["dispute_bond", dispute]`; single-worker review tasks
+    /// refuse task disputes (the buyer freezes, the worker disputes the freeze).
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn initiate_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, InitiateDispute<'info>>,
@@ -769,6 +775,10 @@ pub mod agenc_coordination {
     /// 32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.
     /// Both are persisted on the dispute alongside the deciding resolver, and the hash
     /// + resolver are emitted in `DisputeResolved`.
+    ///
+    /// Revision 9: the bond goes back to the filer on an approval (a Split
+    /// included) and its principal to the respondent on a rejection; owners with a
+    /// stake in the ruling do not count toward the direct M-of-N threshold.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn resolve_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>,
@@ -824,6 +834,7 @@ pub mod agenc_coordination {
     }
 
     /// Expire a dispute after the maximum duration has passed.
+    /// Revision 9: an unruled dispute returns the whole bond to the filer.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn expire_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>,

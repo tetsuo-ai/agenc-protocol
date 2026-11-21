@@ -19,6 +19,7 @@ import {
   freshWorld, hireIx, injectAgentStake,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram, agentStatsPda, creatorStatsPda,
+  disputeRespondent,
 } from "./harness.mjs";
 
 // ---------------------------------------------------------------------------
@@ -349,7 +350,7 @@ test("cancel_dispute: initiator cancels an Active (no-vote) dispute -> Cancelled
       w.svm,
       await w.buyerProg.methods
         .cancelDispute()
-        .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", d.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", d.task).creator) })
+        .accounts({ respondent: disputeRespondent(w.svm, d.dispute), protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", d.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", d.task).creator) })
         .remainingAccounts([{ pubkey: d.defendant, isSigner: false, isWritable: true }])
         .instruction(),
       [w.buyer],
@@ -376,7 +377,7 @@ test("cancel_dispute: a non-initiator cannot cancel the dispute", async () => {
       w.svm,
       await w.providerProg.methods
         .cancelDispute()
-        .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", d.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", d.task).creator) })
+        .accounts({ respondent: disputeRespondent(w.svm, d.dispute), protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.provider.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", d.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", d.task).creator) })
         .remainingAccounts([{ pubkey: d.defendant, isSigner: false, isWritable: true }])
         .instruction(),
       [w.provider],
@@ -395,7 +396,7 @@ test("cancel_dispute: cancelling an already-Cancelled dispute is rejected (Dispu
   const buildCancel = async () =>
     w.buyerProg.methods
       .cancelDispute()
-      .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", d.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", d.task).creator) })
+      .accounts({ respondent: disputeRespondent(w.svm, d.dispute), protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey, workerStats: agentStatsPda(decode(w.svm, "Dispute", d.dispute).defendant), creatorStats: creatorStatsPda(decode(w.svm, "Task", d.task).creator) })
       .remainingAccounts([{ pubkey: d.defendant, isSigner: false, isWritable: true }])
       .instruction();
 

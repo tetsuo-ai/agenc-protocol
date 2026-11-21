@@ -26,7 +26,7 @@ import {
   moderationBlockPda,
   BN,
   Keypair,
-  SystemProgram, agentStatsPda, agentStatsCreationCost, creatorStatsCreationCost, injectLegacyValidation,
+  SystemProgram, agentStatsPda, agentStatsCreationCost, creatorStatsCreationCost, injectLegacyValidation, disputeBondPda,
 } from "./harness.mjs";
 import {
   createPublishedTaskFixture as createPublishedTask,
@@ -964,6 +964,8 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
     "bid:initiate-complete-dispute",
   );
   const before = snapshotCompletion(w, b);
+  // Revision 9: the creator filed, so its whole bond (principal and rent) comes back.
+  const bondBefore = accountLamports(w.svm, disputeBondPda(dispute));
   // Revision 9: the resolver creates the creator wallet record if it is missing.
   const resolverRecordCost = creatorStatsCreationCost(w.svm, w.buyer.publicKey);
 
@@ -1014,8 +1016,8 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
   );
   assert.equal(
     accountLamports(w.svm, w.buyer.publicKey) - before.creator,
-    before.escrow - BigInt(b.bidPrice),
-    "resolve: creator recovers all uncommitted budget and escrow rent",
+    before.escrow - BigInt(b.bidPrice) + bondBefore,
+    "resolve: creator recovers all uncommitted budget, escrow rent and its bond",
   );
   assert.equal(
     accountLamports(w.svm, w.admin.publicKey) - before.treasury,
@@ -1095,6 +1097,8 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
     "Split: worker AgentStats starts absent",
   );
   const before = snapshotCompletion(w, b);
+  // Revision 9: the creator filed, so its whole bond (principal and rent) comes back.
+  const bondBefore = accountLamports(w.svm, disputeBondPda(dispute));
   // Revision 9: the worker record exists from the claim; the resolver pays only a
   // missing creator wallet record.
   const splitRecordCost =
@@ -1175,8 +1179,8 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
   );
   assert.equal(
     accountLamports(w.svm, w.buyer.publicKey) - before.creator,
-    creatorContractShare + unusedBudget + escrowRent,
-    "Split: creator receives the rounded-up half, unused budget, and escrow rent",
+    creatorContractShare + unusedBudget + escrowRent + bondBefore,
+    "Split: creator receives the rounded-up half, unused budget, escrow rent and its bond",
   );
   assert.equal(
     creatorContractShare + unusedBudget + workerNet + referrerFee,
@@ -1267,6 +1271,8 @@ test("expire_dispute refunds principal and applies the evidence-bound accepted-b
     (BigInt(acceptedBid.bond_lamports.toString()) * BigInt(noShowSlashBps)) /
     10_000n;
   const before = snapshotCompletion(w, b);
+  // Revision 9: the creator filed, so its whole bond (principal and rent) comes back.
+  const bondBefore = accountLamports(w.svm, disputeBondPda(dispute));
 
   const disputeState = decode(w.svm, "Dispute", dispute);
   const claimState = decode(w.svm, "TaskClaim", b.claim);
@@ -1315,8 +1321,8 @@ test("expire_dispute refunds principal and applies the evidence-bound accepted-b
   assert.ok(isClosed(w.svm, b.bid), "expiry: accepted bid closed");
   assert.equal(
     accountLamports(w.svm, w.buyer.publicKey) - before.creator,
-    before.escrow + slash,
-    "expiry: creator receives all escrow and only the snapshotted bid slash",
+    before.escrow + slash + bondBefore,
+    "expiry: creator receives all escrow, only the snapshotted bid slash, and its bond",
   );
   assert.equal(
     accountLamports(w.svm, w.provider.publicKey) - before.provider,

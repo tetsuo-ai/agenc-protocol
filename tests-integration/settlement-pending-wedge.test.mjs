@@ -26,7 +26,7 @@ import {
   moderationBlockPda,
   BN,
   Keypair,
-  SystemProgram, agentStatsPda,
+  SystemProgram, agentStatsPda, disputeBondPda,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
@@ -726,6 +726,9 @@ for (const taskType of [1, 2]) {
         });
         expectOk(send(w.svm, ix, [resolver]), "resolve");
       }
+      // Revision 9 (B): the creator's dispute bond is settled by the ruling or
+      // the expiry itself; peer settlement below never touches it.
+      assert.ok(isClosed(w.svm, disputeBondPda(r.dispute)), "bond settled before any peer settlement");
       const generation = decode(w.svm, "Task", r.task)._reserved.slice(3, 11);
       assertSettlement(w, r, { total: 3, settled: 0, terminal, workerSlash });
       for (let i = 0; i < r.peers.length; i++) {

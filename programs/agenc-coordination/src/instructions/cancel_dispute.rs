@@ -10,6 +10,9 @@
 //! - Only active disputes can be cancelled
 //! - The retired voter-count byte is either historical zero or the current
 //!   `0xff` initiator-outcome provenance marker
+//!
+//! Revision 9 (B): withdrawing a dispute costs the filer its bond. The principal
+//! goes to the respondent, the rent back to the filer.
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeCancelled;
@@ -17,13 +20,14 @@ use crate::instructions::agent_stats_helpers::Counter;
 use crate::instructions::creator_stats_helpers::{
     cancelled_dispute_charge, CancelledDisputeCharge, CreatorCounter,
 };
+use crate::instructions::dispute_bond_helpers::{settle_dispute_bond, BondEnding};
 use crate::instructions::record_account_helpers::{
     count_agent_stats, count_creator_stats, ensure_agent_stats, ensure_creator_stats,
 };
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::validation::validate_account_owner;
 use crate::state::{
-    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskStatus,
+    AgentRegistration, Dispute, DisputeBond, DisputeStatus, ProtocolConfig, Task, TaskStatus,
     TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
@@ -60,6 +64,19 @@ pub struct CancelDispute<'info> {
         constraint = authority.key() == dispute.initiator_authority @ CoordinationError::UnauthorizedResolver
     )]
     pub authority: Signer<'info>,
+
+    /// CHECK: revision 9 dispute bond `["dispute_bond", dispute]`, seeds-pinned here.
+    /// A system-owned account with no data is a dispute filed before the upgrade (no
+    /// bond, nothing moves); a live bond is validated and settled by
+    /// `settle_dispute_bond`.
+    #[account(mut, seeds = [b"dispute_bond", dispute.key().as_ref()], bump)]
+    pub dispute_bond: UncheckedAccount<'info>,
+
+    /// CHECK: the bond's respondent wallet (the creator when a worker filed, the
+    /// defendant worker's wallet when the creator filed). `settle_dispute_bond`
+    /// requires it to equal the stored respondent; it receives the principal.
+    #[account(mut)]
+    pub respondent: UncheckedAccount<'info>,
 
     /// CHECK: revision 9 worker record `["agent_stats", dispute.defendant]`, seeds-pinned
     /// here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by
@@ -219,6 +236,19 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
     // Use AnchorSerialize::serialize (Borsh only) — see dispute_helpers.rs comment (fix #960).
     AnchorSerialize::serialize(&defendant, &mut &mut defendant_data[8..])
         .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize)?;
+
+    // Revision 9 (B): the filer withdrew, so the bond principal goes to the
+    // respondent and its rent back to the filer (the signing initiator).
+    settle_dispute_bond(
+        &ctx.accounts.dispute_bond.to_account_info(),
+        &dispute.key(),
+        &task.key(),
+        DisputeBond::KIND_TASK_DISPUTE,
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.respondent.to_account_info(),
+        BondEnding::FilerCancelled,
+        clock.unix_timestamp,
+    )?;
 
     emit!(DisputeCancelled {
         dispute_id: dispute.dispute_id,
