@@ -25,18 +25,19 @@ import {
   type InstructionWithAccounts,
   type InstructionWithData,
   type ReadonlyAccount,
-  type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
+  type WritableSignerAccount,
 } from "@solana/kit";
 
 import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
+  getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findProtocolConfigPda } from "../pdas";
+import { findDisputeBondPda, findProtocolConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const CANCEL_DISPUTE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -53,6 +54,12 @@ export type CancelDisputeInstruction<
   TAccountDispute extends string | AccountMeta<string> = string,
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountDisputeBond extends string | AccountMeta<string> = string,
+  TAccountRespondent extends string | AccountMeta<string> = string,
+  TAccountWorkerStats extends string | AccountMeta<string> = string,
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
+  TAccountSystemProgram extends string | AccountMeta<string> =
+    "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -68,9 +75,24 @@ export type CancelDisputeInstruction<
         ? WritableAccount<TAccountTask>
         : TAccountTask,
       TAccountAuthority extends string
-        ? ReadonlySignerAccount<TAccountAuthority> &
+        ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountDisputeBond extends string
+        ? WritableAccount<TAccountDisputeBond>
+        : TAccountDisputeBond,
+      TAccountRespondent extends string
+        ? WritableAccount<TAccountRespondent>
+        : TAccountRespondent,
+      TAccountWorkerStats extends string
+        ? WritableAccount<TAccountWorkerStats>
+        : TAccountWorkerStats,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
+      TAccountSystemProgram extends string
+        ? ReadonlyAccount<TAccountSystemProgram>
+        : TAccountSystemProgram,
       ...TRemainingAccounts,
     ]
   >;
@@ -111,12 +133,43 @@ export type CancelDisputeAsyncInput<
   TAccountDispute extends string = string,
   TAccountTask extends string = string,
   TAccountAuthority extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountRespondent extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
-  /** Only the initiator's authority can cancel */
+  /**
+   * Only the initiator's authority can cancel. Writable (revision 9): it pays for
+   * a missing record.
+   */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * A system-owned account with no data is a dispute filed before the upgrade (no
+   * bond, nothing moves); a live bond is validated and settled by
+   * `settle_dispute_bond`.
+   */
+  disputeBond?: Address<TAccountDisputeBond>;
+  /**
+   * defendant worker's wallet when the creator filed). `settle_dispute_bond`
+   * requires it to equal the stored respondent; it receives the principal.
+   */
+  respondent: Address<TAccountRespondent>;
+  /**
+   * here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
+  /**
+   * seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
+  /** Required by the record creation (revision 9). */
+  systemProgram?: Address<TAccountSystemProgram>;
 };
 
 export async function getCancelDisputeInstructionAsync<
@@ -124,13 +177,23 @@ export async function getCancelDisputeInstructionAsync<
   TAccountDispute extends string,
   TAccountTask extends string,
   TAccountAuthority extends string,
+  TAccountDisputeBond extends string,
+  TAccountRespondent extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelDisputeAsyncInput<
     TAccountProtocolConfig,
     TAccountDispute,
     TAccountTask,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountDisputeBond,
+    TAccountRespondent,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -139,7 +202,12 @@ export async function getCancelDisputeInstructionAsync<
     TAccountProtocolConfig,
     TAccountDispute,
     TAccountTask,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountDisputeBond,
+    TAccountRespondent,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >
 > {
   // Program address.
@@ -151,7 +219,12 @@ export async function getCancelDisputeInstructionAsync<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     dispute: { value: input.dispute ?? null, isWritable: true },
     task: { value: input.task ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    respondent: { value: input.respondent ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -162,6 +235,18 @@ export async function getCancelDisputeInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.disputeBond.value) {
+    accounts.disputeBond.value = await findDisputeBondPda({
+      dispute: getAddressFromResolvedInstructionAccount(
+        "dispute",
+        accounts.dispute.value,
+      ),
+    });
+  }
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -170,6 +255,11 @@ export async function getCancelDisputeInstructionAsync<
       getAccountMeta("dispute", accounts.dispute),
       getAccountMeta("task", accounts.task),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("respondent", accounts.respondent),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getCancelDisputeInstructionDataEncoder().encode({}),
     programAddress,
@@ -178,7 +268,12 @@ export async function getCancelDisputeInstructionAsync<
     TAccountProtocolConfig,
     TAccountDispute,
     TAccountTask,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountDisputeBond,
+    TAccountRespondent,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >);
 }
 
@@ -187,12 +282,43 @@ export type CancelDisputeInput<
   TAccountDispute extends string = string,
   TAccountTask extends string = string,
   TAccountAuthority extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountRespondent extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
-  /** Only the initiator's authority can cancel */
+  /**
+   * Only the initiator's authority can cancel. Writable (revision 9): it pays for
+   * a missing record.
+   */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * A system-owned account with no data is a dispute filed before the upgrade (no
+   * bond, nothing moves); a live bond is validated and settled by
+   * `settle_dispute_bond`.
+   */
+  disputeBond: Address<TAccountDisputeBond>;
+  /**
+   * defendant worker's wallet when the creator filed). `settle_dispute_bond`
+   * requires it to equal the stored respondent; it receives the principal.
+   */
+  respondent: Address<TAccountRespondent>;
+  /**
+   * here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
+  /**
+   * seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
+  /** Required by the record creation (revision 9). */
+  systemProgram?: Address<TAccountSystemProgram>;
 };
 
 export function getCancelDisputeInstruction<
@@ -200,13 +326,23 @@ export function getCancelDisputeInstruction<
   TAccountDispute extends string,
   TAccountTask extends string,
   TAccountAuthority extends string,
+  TAccountDisputeBond extends string,
+  TAccountRespondent extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelDisputeInput<
     TAccountProtocolConfig,
     TAccountDispute,
     TAccountTask,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountDisputeBond,
+    TAccountRespondent,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
 ): CancelDisputeInstruction<
@@ -214,7 +350,12 @@ export function getCancelDisputeInstruction<
   TAccountProtocolConfig,
   TAccountDispute,
   TAccountTask,
-  TAccountAuthority
+  TAccountAuthority,
+  TAccountDisputeBond,
+  TAccountRespondent,
+  TAccountWorkerStats,
+  TAccountCreatorStats,
+  TAccountSystemProgram
 > {
   // Program address.
   const programAddress =
@@ -225,12 +366,23 @@ export function getCancelDisputeInstruction<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     dispute: { value: input.dispute ?? null, isWritable: true },
     task: { value: input.task ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    respondent: { value: input.respondent ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
     ResolvedInstructionAccount
   >;
+
+  // Resolve default values.
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -239,6 +391,11 @@ export function getCancelDisputeInstruction<
       getAccountMeta("dispute", accounts.dispute),
       getAccountMeta("task", accounts.task),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("respondent", accounts.respondent),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getCancelDisputeInstructionDataEncoder().encode({}),
     programAddress,
@@ -247,7 +404,12 @@ export function getCancelDisputeInstruction<
     TAccountProtocolConfig,
     TAccountDispute,
     TAccountTask,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountDisputeBond,
+    TAccountRespondent,
+    TAccountWorkerStats,
+    TAccountCreatorStats,
+    TAccountSystemProgram
   >);
 }
 
@@ -260,8 +422,34 @@ export type ParsedCancelDisputeInstruction<
     protocolConfig: TAccountMetas[0];
     dispute: TAccountMetas[1];
     task: TAccountMetas[2];
-    /** Only the initiator's authority can cancel */
+    /**
+     * Only the initiator's authority can cancel. Writable (revision 9): it pays for
+     * a missing record.
+     */
     authority: TAccountMetas[3];
+    /**
+     * A system-owned account with no data is a dispute filed before the upgrade (no
+     * bond, nothing moves); a live bond is validated and settled by
+     * `settle_dispute_bond`.
+     */
+    disputeBond: TAccountMetas[4];
+    /**
+     * defendant worker's wallet when the creator filed). `settle_dispute_bond`
+     * requires it to equal the stored respondent; it receives the principal.
+     */
+    respondent: TAccountMetas[5];
+    /**
+     * here. REQUIRED: bumps `disputes_lost` when the worker filed. Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
+     */
+    workerStats: TAccountMetas[6];
+    /**
+     * seeds-pinned here. REQUIRED: bumps `disputes_lost` when the creator filed. Created when missing by
+     * `ensure_creator_stats`, paid by `authority`.
+     */
+    creatorStats: TAccountMetas[7];
+    /** Required by the record creation (revision 9). */
+    systemProgram: TAccountMetas[8];
   };
   data: CancelDisputeInstructionData;
 };
@@ -274,12 +462,12 @@ export function parseCancelDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCancelDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 4) {
+  if (instruction.accounts.length < 9) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 4,
+        expectedAccountMetas: 9,
       },
     );
   }
@@ -296,6 +484,11 @@ export function parseCancelDisputeInstruction<
       dispute: getNextAccount(),
       task: getNextAccount(),
       authority: getNextAccount(),
+      disputeBond: getNextAccount(),
+      respondent: getNextAccount(),
+      workerStats: getNextAccount(),
+      creatorStats: getNextAccount(),
+      systemProgram: getNextAccount(),
     },
     data: getCancelDisputeInstructionDataDecoder().decode(instruction.data),
   };

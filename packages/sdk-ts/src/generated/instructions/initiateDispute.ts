@@ -51,6 +51,7 @@ import {
 } from "@solana/program-client-core";
 import {
   findAuthorityRateLimitPda,
+  findDisputeBondPda,
   findDisputePda,
   findInitiatorClaimPda,
   findProtocolConfigPda,
@@ -78,6 +79,7 @@ export type InitiateDisputeInstruction<
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountDisputeBond extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -117,6 +119,9 @@ export type InitiateDisputeInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountDisputeBond extends string
+        ? WritableAccount<TAccountDisputeBond>
+        : TAccountDisputeBond,
       ...TRemainingAccounts,
     ]
   >;
@@ -191,6 +196,7 @@ export type InitiateDisputeAsyncInput<
   TAccountTaskSubmission extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountDisputeBond extends string = string,
 > = {
   dispute?: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -211,6 +217,12 @@ export type InitiateDisputeAsyncInput<
   taskSubmission?: Address<TAccountTaskSubmission>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Revision 9 (B): the filer's bond. Created here, paid by `authority` (rent),
+   * which also posts the bond above the rent. Anchor's `init` allocates over an
+   * address that only holds lamports, so pre-funding cannot block a dispute.
+   */
+  disputeBond?: Address<TAccountDisputeBond>;
   disputeId: InitiateDisputeInstructionDataArgs["disputeId"];
   taskId: InitiateDisputeInstructionDataArgs["taskId"];
   evidenceHash: InitiateDisputeInstructionDataArgs["evidenceHash"];
@@ -230,6 +242,7 @@ export async function getInitiateDisputeInstructionAsync<
   TAccountTaskSubmission extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
+  TAccountDisputeBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: InitiateDisputeAsyncInput<
@@ -243,7 +256,8 @@ export async function getInitiateDisputeInstructionAsync<
     TAccountWorkerClaim,
     TAccountTaskSubmission,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -259,7 +273,8 @@ export async function getInitiateDisputeInstructionAsync<
     TAccountWorkerClaim,
     TAccountTaskSubmission,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond
   >
 > {
   // Program address.
@@ -282,6 +297,7 @@ export async function getInitiateDisputeInstructionAsync<
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -327,6 +343,14 @@ export async function getInitiateDisputeInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.disputeBond.value) {
+    accounts.disputeBond.value = await findDisputeBondPda({
+      dispute: getAddressFromResolvedInstructionAccount(
+        "dispute",
+        accounts.dispute.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -342,6 +366,7 @@ export async function getInitiateDisputeInstructionAsync<
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("disputeBond", accounts.disputeBond),
     ],
     data: getInitiateDisputeInstructionDataEncoder().encode(
       args as InitiateDisputeInstructionDataArgs,
@@ -359,7 +384,8 @@ export async function getInitiateDisputeInstructionAsync<
     TAccountWorkerClaim,
     TAccountTaskSubmission,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond
   >);
 }
 
@@ -375,6 +401,7 @@ export type InitiateDisputeInput<
   TAccountTaskSubmission extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountDisputeBond extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -395,6 +422,12 @@ export type InitiateDisputeInput<
   taskSubmission?: Address<TAccountTaskSubmission>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * Revision 9 (B): the filer's bond. Created here, paid by `authority` (rent),
+   * which also posts the bond above the rent. Anchor's `init` allocates over an
+   * address that only holds lamports, so pre-funding cannot block a dispute.
+   */
+  disputeBond: Address<TAccountDisputeBond>;
   disputeId: InitiateDisputeInstructionDataArgs["disputeId"];
   taskId: InitiateDisputeInstructionDataArgs["taskId"];
   evidenceHash: InitiateDisputeInstructionDataArgs["evidenceHash"];
@@ -414,6 +447,7 @@ export function getInitiateDisputeInstruction<
   TAccountTaskSubmission extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
+  TAccountDisputeBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: InitiateDisputeInput<
@@ -427,7 +461,8 @@ export function getInitiateDisputeInstruction<
     TAccountWorkerClaim,
     TAccountTaskSubmission,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond
   >,
   config?: { programAddress?: TProgramAddress },
 ): InitiateDisputeInstruction<
@@ -442,7 +477,8 @@ export function getInitiateDisputeInstruction<
   TAccountWorkerClaim,
   TAccountTaskSubmission,
   TAccountAuthority,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountDisputeBond
 > {
   // Program address.
   const programAddress =
@@ -464,6 +500,7 @@ export function getInitiateDisputeInstruction<
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -493,6 +530,7 @@ export function getInitiateDisputeInstruction<
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("disputeBond", accounts.disputeBond),
     ],
     data: getInitiateDisputeInstructionDataEncoder().encode(
       args as InitiateDisputeInstructionDataArgs,
@@ -510,7 +548,8 @@ export function getInitiateDisputeInstruction<
     TAccountWorkerClaim,
     TAccountTaskSubmission,
     TAccountAuthority,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond
   >);
 }
 
@@ -539,6 +578,12 @@ export type ParsedInitiateDisputeInstruction<
     taskSubmission?: TAccountMetas[8] | undefined;
     authority: TAccountMetas[9];
     systemProgram: TAccountMetas[10];
+    /**
+     * Revision 9 (B): the filer's bond. Created here, paid by `authority` (rent),
+     * which also posts the bond above the rent. Anchor's `init` allocates over an
+     * address that only holds lamports, so pre-funding cannot block a dispute.
+     */
+    disputeBond: TAccountMetas[11];
   };
   data: InitiateDisputeInstructionData;
 };
@@ -551,12 +596,12 @@ export function parseInitiateDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedInitiateDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 11) {
+  if (instruction.accounts.length < 12) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 11,
+        expectedAccountMetas: 12,
       },
     );
   }
@@ -586,6 +631,7 @@ export function parseInitiateDisputeInstruction<
       taskSubmission: getNextOptionalAccount(),
       authority: getNextAccount(),
       systemProgram: getNextAccount(),
+      disputeBond: getNextAccount(),
     },
     data: getInitiateDisputeInstructionDataDecoder().decode(instruction.data),
   };

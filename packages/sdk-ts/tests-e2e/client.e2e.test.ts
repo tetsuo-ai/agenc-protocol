@@ -47,6 +47,12 @@ import {
   ValidationMode,
   AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES,
   AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED,
+  AGENC_COORDINATION_ERROR__SINGLE_WORKER_REJECT_MUST_FREEZE,
+  findWorkerStatsPda,
+  findCreatorStatsPda,
+  getAgentStatsDecoder,
+  getCreatorStatsDecoder,
+  values,
 } from "../src/index.js";
 import { AgencError, createMarketplaceClient } from "../src/client/index.js";
 import {
@@ -1028,7 +1034,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     );
   });
 
-  it("rejects a CreatorReview submission without paying out escrow", async () => {
+  it("turns a single-worker CreatorReview delivery down with a freeze, never a plain reject (revision 9)", async () => {
     const svm = freshSvm();
     const admin = await fundedSigner(svm);
     const modAuth = await fundedSigner(svm);
@@ -1159,42 +1165,83 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const claimRentBefore = balance(svm, claim);
     const submissionRentBefore = balance(svm, submission);
     const rejectionHash = new Uint8Array(32).fill(120);
-    await creatorClient.rejectTaskResult({
-      task,
-      claim,
-      worker: workerAgent,
-      creator,
-      workerAuthority: worker.address,
-      rejectionHash,
-    });
+    // Revision 9 (deliberate change): a plain reject reopened the task, so the
+    // buyer could cancel and take back the price of delivered work. On a
+    // single-worker review task it is refused; the turn-down is a freeze.
+    const plainReject = await creatorClient
+      .rejectTaskResult({
+        task,
+        claim,
+        worker: workerAgent,
+        creator,
+        workerAuthority: worker.address,
+        rejectionHash,
+      })
+      .catch((error: unknown) => error);
+    expect(plainReject).toBeInstanceOf(AgencError);
+    expect((plainReject as AgencError).code).toBe(
+      AGENC_COORDINATION_ERROR__SINGLE_WORKER_REJECT_MUST_FREEZE,
+    );
 
-    const rejectedTask = getTaskDecoder().decode(accountData(svm, task)!);
-    expect(rejectedTask.status).toBe(TaskStatus.Open);
-    expect(rejectedTask.currentWorkers).toBe(0);
-    expect(taskClaimGeneration(rejectedTask.reserved)).toBe(1n);
-    // Batch 3 WS-CONTEST §1: a creator reject closes the submission (with the
-    // claim) and returns BOTH rents to the worker — no straggler, no rent sink.
-    expect(accountData(svm, submission)).toBeNull();
-    expect(accountData(svm, claim)).toBeNull();
+    // The deposit came back at the first delivery: the claim holds only rent.
+    expect(claimRentBefore).toBe(
+      svm.minimumBalanceForRentExemption(BigInt(accountData(svm, claim)!.length)),
+    );
+
+    const frozeAt = svm.getClock().unixTimestamp;
+    await creatorClient.send([
+      await facade.rejectAndFreeze({
+        task,
+        worker: workerAgent,
+        creator,
+        rejectionHash,
+      }),
+    ]);
+
+    const frozenTask = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(frozenTask.status).toBe(TaskStatus.RejectFrozen);
+    expect(frozenTask.currentWorkers).toBe(1);
+    // The claim and the submission stay with the job until an exit runs.
+    expect(balance(svm, claim)).toBe(claimRentBefore);
+    expect(balance(svm, submission)).toBe(submissionRentBefore);
+    const frozenSubmission = getTaskSubmissionDecoder().decode(
+      accountData(svm, submission)!,
+    );
+    expect(frozenSubmission.status).toBe(SubmissionStatus.Rejected);
+    expect(values.isDisputableFreeze(frozenSubmission)).toBe(true);
+    // A revision 9 freeze carries the dispute deadline, not the review window.
+    expect(frozenSubmission.reviewDeadlineAt).toBe(
+      frozeAt + values.REJECT_DISPUTE_WINDOW_SECS,
+    );
     const escrowAfter = getTaskEscrowDecoder().decode(
       accountData(svm, escrow)!,
     );
     expect(escrowAfter.amount).toBe(escrowBefore.amount);
     expect(escrowAfter.distributed).toBe(escrowBefore.distributed);
     expect(escrowAfter.isClosed).toBe(false);
-    expectLamportDelta(
-      svm,
-      worker.address,
-      workerBalBefore,
-      claimRentBefore + submissionRentBefore,
-    );
+    expectLamportDelta(svm, worker.address, workerBalBefore, 0n);
     expectLamportDelta(svm, admin.address, treasuryBalBefore, 0n);
-    const workerAgentAfterReject = getAgentRegistrationDecoder().decode(
+    const workerAgentAfterFreeze = getAgentRegistrationDecoder().decode(
       accountData(svm, workerAgent)!,
     );
-    expect(workerAgentAfterReject.activeTasks).toBe(0);
-    expect(workerAgentAfterReject.tasksCompleted).toBe(0n);
-    expect(workerAgentAfterReject.totalEarned).toBe(0n);
+    expect(workerAgentAfterFreeze.activeTasks).toBe(1);
+    expect(workerAgentAfterFreeze.tasksCompleted).toBe(0n);
+    expect(workerAgentAfterFreeze.totalEarned).toBe(0n);
+    // Both records count the turn-down: the worker's (created at claim) and
+    // the creator's wallet-keyed record (created here, paid by the creator).
+    const [workerRecord] = await findWorkerStatsPda({ worker: workerAgent });
+    expect(
+      getAgentStatsDecoder().decode(accountData(svm, workerRecord)!)
+        .tasksRejected,
+    ).toBe(1n);
+    const [creatorRecord] = await findCreatorStatsPda({
+      authority: creator.address,
+    });
+    const creatorStats = getCreatorStatsDecoder().decode(
+      accountData(svm, creatorRecord)!,
+    );
+    expect(creatorStats.wallet).toBe(creator.address);
+    expect(creatorStats.rejections).toBe(1n);
   });
 
   it("auto-accepts a humanless hire after review timeout with the same fee split", async () => {

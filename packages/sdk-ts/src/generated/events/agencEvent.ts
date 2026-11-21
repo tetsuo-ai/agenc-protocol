@@ -95,9 +95,25 @@ import {
   type BondRefundedEventData,
 } from "./bondRefunded";
 import {
+  getClaimDepositPostedEventDecoder,
+  type ClaimDepositPostedEventData,
+} from "./claimDepositPosted";
+import {
+  getClaimDepositSettledEventDecoder,
+  type ClaimDepositSettledEventData,
+} from "./claimDepositSettled";
+import {
+  getClaimReleasedEventDecoder,
+  type ClaimReleasedEventData,
+} from "./claimReleased";
+import {
   getContestDepositForfeitedEventDecoder,
   type ContestDepositForfeitedEventData,
 } from "./contestDepositForfeited";
+import {
+  getCreatorTrackRecordUpdatedEventDecoder,
+  type CreatorTrackRecordUpdatedEventData,
+} from "./creatorTrackRecordUpdated";
 import {
   getDefaultTrustListUpdatedEventDecoder,
   type DefaultTrustListUpdatedEventData,
@@ -106,6 +122,14 @@ import {
   getDependentTaskCreatedEventDecoder,
   type DependentTaskCreatedEventData,
 } from "./dependentTaskCreated";
+import {
+  getDisputeBondPostedEventDecoder,
+  type DisputeBondPostedEventData,
+} from "./disputeBondPosted";
+import {
+  getDisputeBondSettledEventDecoder,
+  type DisputeBondSettledEventData,
+} from "./disputeBondSettled";
 import {
   getDisputeCancelledEventDecoder,
   type DisputeCancelledEventData,
@@ -279,6 +303,14 @@ import {
   type RejectFrozenResolvedEventData,
 } from "./rejectFrozenResolved";
 import {
+  getRejectionDisputeSettledEventDecoder,
+  type RejectionDisputeSettledEventData,
+} from "./rejectionDisputeSettled";
+import {
+  getRejectionDisputedEventDecoder,
+  type RejectionDisputedEventData,
+} from "./rejectionDisputed";
+import {
   getReleaseSurfaceStampedEventDecoder,
   type ReleaseSurfaceStampedEventData,
 } from "./releaseSurfaceStamped";
@@ -374,6 +406,10 @@ import {
   getTaskClosedEventDecoder,
   type TaskClosedEventData,
 } from "./taskClosed";
+import {
+  getTaskCompactedEventDecoder,
+  type TaskCompactedEventData,
+} from "./taskCompacted";
 import {
   getTaskCompletedEventDecoder,
   type TaskCompletedEventData,
@@ -473,9 +509,15 @@ export type AgencEvent =
   | { eventName: "BondForfeited"; data: BondForfeitedEventData }
   | { eventName: "BondPosted"; data: BondPostedEventData }
   | { eventName: "BondRefunded"; data: BondRefundedEventData }
+  | { eventName: "ClaimDepositPosted"; data: ClaimDepositPostedEventData }
+  | { eventName: "ClaimDepositSettled"; data: ClaimDepositSettledEventData }
+  | { eventName: "ClaimReleased"; data: ClaimReleasedEventData }
   | { eventName: "ContestDepositForfeited"; data: ContestDepositForfeitedEventData }
+  | { eventName: "CreatorTrackRecordUpdated"; data: CreatorTrackRecordUpdatedEventData }
   | { eventName: "DefaultTrustListUpdated"; data: DefaultTrustListUpdatedEventData }
   | { eventName: "DependentTaskCreated"; data: DependentTaskCreatedEventData }
+  | { eventName: "DisputeBondPosted"; data: DisputeBondPostedEventData }
+  | { eventName: "DisputeBondSettled"; data: DisputeBondSettledEventData }
   | { eventName: "DisputeCancelled"; data: DisputeCancelledEventData }
   | { eventName: "DisputeExpired"; data: DisputeExpiredEventData }
   | { eventName: "DisputeInitiated"; data: DisputeInitiatedEventData }
@@ -519,6 +561,8 @@ export type AgencEvent =
   | { eventName: "ReferrerFeePaid"; data: ReferrerFeePaidEventData }
   | { eventName: "RejectFrozenExpired"; data: RejectFrozenExpiredEventData }
   | { eventName: "RejectFrozenResolved"; data: RejectFrozenResolvedEventData }
+  | { eventName: "RejectionDisputeSettled"; data: RejectionDisputeSettledEventData }
+  | { eventName: "RejectionDisputed"; data: RejectionDisputedEventData }
   | { eventName: "ReleaseSurfaceStamped"; data: ReleaseSurfaceStampedEventData }
   | { eventName: "ReputationChanged"; data: ReputationChangedEventData }
   | { eventName: "ReputationDelegationRetired"; data: ReputationDelegationRetiredEventData }
@@ -543,6 +587,7 @@ export type AgencEvent =
   | { eventName: "TaskClaimExpired"; data: TaskClaimExpiredEventData }
   | { eventName: "TaskClaimed"; data: TaskClaimedEventData }
   | { eventName: "TaskClosed"; data: TaskClosedEventData }
+  | { eventName: "TaskCompacted"; data: TaskCompactedEventData }
   | { eventName: "TaskCompleted"; data: TaskCompletedEventData }
   | { eventName: "TaskCreated"; data: TaskCreatedEventData }
   | { eventName: "TaskCreationQuotaConfigured"; data: TaskCreationQuotaConfiguredEventData }
@@ -734,11 +779,39 @@ export const AGENC_EVENT_DECODERS: {
       data: getBondRefundedEventDecoder().decode(payload),
     }),
   },
+  "afeeafc71d2276fe": {
+    eventName: "ClaimDepositPosted",
+    decode: (payload) => ({
+      eventName: "ClaimDepositPosted",
+      data: getClaimDepositPostedEventDecoder().decode(payload),
+    }),
+  },
+  "9e6636b12178be08": {
+    eventName: "ClaimDepositSettled",
+    decode: (payload) => ({
+      eventName: "ClaimDepositSettled",
+      data: getClaimDepositSettledEventDecoder().decode(payload),
+    }),
+  },
+  "f56d71dd67452d5d": {
+    eventName: "ClaimReleased",
+    decode: (payload) => ({
+      eventName: "ClaimReleased",
+      data: getClaimReleasedEventDecoder().decode(payload),
+    }),
+  },
   "1edf1a42ff5c64e9": {
     eventName: "ContestDepositForfeited",
     decode: (payload) => ({
       eventName: "ContestDepositForfeited",
       data: getContestDepositForfeitedEventDecoder().decode(payload),
+    }),
+  },
+  "ca3f223907b7d261": {
+    eventName: "CreatorTrackRecordUpdated",
+    decode: (payload) => ({
+      eventName: "CreatorTrackRecordUpdated",
+      data: getCreatorTrackRecordUpdatedEventDecoder().decode(payload),
     }),
   },
   "5c3a0eae86782b50": {
@@ -753,6 +826,20 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "DependentTaskCreated",
       data: getDependentTaskCreatedEventDecoder().decode(payload),
+    }),
+  },
+  "628351384142000c": {
+    eventName: "DisputeBondPosted",
+    decode: (payload) => ({
+      eventName: "DisputeBondPosted",
+      data: getDisputeBondPostedEventDecoder().decode(payload),
+    }),
+  },
+  "fb9a7a7c4a82b122": {
+    eventName: "DisputeBondSettled",
+    decode: (payload) => ({
+      eventName: "DisputeBondSettled",
+      data: getDisputeBondSettledEventDecoder().decode(payload),
     }),
   },
   "2650bde170be9cb2": {
@@ -1056,6 +1143,20 @@ export const AGENC_EVENT_DECODERS: {
       data: getRejectFrozenResolvedEventDecoder().decode(payload),
     }),
   },
+  "2d6c27ae48bd1d59": {
+    eventName: "RejectionDisputeSettled",
+    decode: (payload) => ({
+      eventName: "RejectionDisputeSettled",
+      data: getRejectionDisputeSettledEventDecoder().decode(payload),
+    }),
+  },
+  "0fad87678f8a6fa8": {
+    eventName: "RejectionDisputed",
+    decode: (payload) => ({
+      eventName: "RejectionDisputed",
+      data: getRejectionDisputedEventDecoder().decode(payload),
+    }),
+  },
   "746890e96896b811": {
     eventName: "ReleaseSurfaceStamped",
     decode: (payload) => ({
@@ -1222,6 +1323,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "TaskClosed",
       data: getTaskClosedEventDecoder().decode(payload),
+    }),
+  },
+  "f483417fe05c83b6": {
+    eventName: "TaskCompacted",
+    decode: (payload) => ({
+      eventName: "TaskCompacted",
+      data: getTaskCompactedEventDecoder().decode(payload),
     }),
   },
   "84df629802093980": {

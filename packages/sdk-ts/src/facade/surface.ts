@@ -82,8 +82,18 @@ export const SURFACE_REVISION_TASK_QUOTAS = 7;
  */
 export const SURFACE_REVISION_FEE_QUALIFIED_RATINGS = 8;
 
+/**
+ * Revision 9: accountable review. A turn-down on a single-worker review task is
+ * a freeze the worker may dispute with a bond, every dispute costs its filer a
+ * bond, every claim carries a deposit, and worker and creator records are
+ * required. Several instructions changed their wires (new accounts, a new
+ * `resolve_reject_frozen` discriminator), so revision 9 writers must not send to
+ * a revision 8 program. Mirrors `ProtocolConfig::SURFACE_REVISION_ACCOUNTABLE_REVIEW`.
+ */
+export const SURFACE_REVISION_ACCOUNTABLE_REVIEW = 9;
+
 /** Highest surface revision understood by this SDK build. */
-export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_FEE_QUALIFIED_RATINGS;
+export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_ACCOUNTABLE_REVIEW;
 
 /**
  * Reviewed release evidence plus the current ProtocolConfig approval set.
@@ -173,6 +183,11 @@ export type CapabilitySet = {
   readonly taskCreationQuotas: boolean;
   /** Future ratings require a recorded qualifying SOL protocol fee. */
   readonly feeQualifiedRatings: boolean;
+  /**
+   * Revision 9 accountable review: disputable turn-downs, dispute bonds, claim
+   * deposits, `release_claim`, required records, and the revision 9 wires.
+   */
+  readonly accountableReview: boolean;
 };
 
 /** The conservative capability set: the canary / unstamped / old-layout surface. */
@@ -192,6 +207,7 @@ function canarySurface(surfaceRevision: number): CapabilitySet {
     feedAuthorityVotes: false,
     taskCreationQuotas: false,
     feeQualifiedRatings: false,
+    accountableReview: false,
   };
 }
 
@@ -213,6 +229,7 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
     taskCreationQuotas: surfaceRevision >= SURFACE_REVISION_TASK_QUOTAS,
     feeQualifiedRatings:
       surfaceRevision >= SURFACE_REVISION_FEE_QUALIFIED_RATINGS,
+    accountableReview: surfaceRevision >= SURFACE_REVISION_ACCOUNTABLE_REVIEW,
   };
 }
 
@@ -220,6 +237,10 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
  * Map a raw `surface_revision` to a typed {@link CapabilitySet}. `SURFACE_REVISION_FULL`
  * (or any higher known value) → full surface; anything else (including `0` = unstamped)
  * → the conservative canary surface.
+ *
+ * Revision 8 still maps to the full surface (reads keep working against it) with
+ * `accountableReview: false`; revision 9 adds `accountableReview: true`. A revision
+ * above {@link SURFACE_REVISION_CURRENT} is unknown and maps to the canary set.
  *
  * @param surfaceRevision - the raw on-chain u16.
  */

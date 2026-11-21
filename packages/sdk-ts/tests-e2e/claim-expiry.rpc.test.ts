@@ -235,7 +235,7 @@ describe.skipIf(!RPC_ENABLED)(
                 task,
                 bidder: worker.agent,
               });
-              const [stats] = await sdk.findExpireClaimAgentStatsPda({
+              const [stats] = await sdk.findWorkerStatsPda({
                 worker: worker.agent,
               });
               const state = await h.read(claim, sdk.getTaskClaimDecoder());

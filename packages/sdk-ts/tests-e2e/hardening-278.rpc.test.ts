@@ -450,7 +450,7 @@ describe.skipIf(!RPC_ENABLED)(
         ).toBe(0);
       }
       const [claim] = await sdk.findClaimPda({ task, bidder: middle.agent });
-      const [stats] = await sdk.findExpireClaimAgentStatsPda({
+      const [stats] = await sdk.findWorkerStatsPda({
         worker: middle.agent,
       });
       const claimRent = (await h.info(claim))!.lamports;

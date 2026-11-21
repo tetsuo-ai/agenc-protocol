@@ -14,12 +14,12 @@ import {
   type ProgramDerivedAddress,
 } from "@solana/kit";
 
-export type ExpireClaimAgentStatsSeeds = {
-  worker: Address;
+export type ExpireDisputeCreatorStatsSeeds = {
+  creator: Address;
 };
 
-export async function findExpireClaimAgentStatsPda(
-  seeds: ExpireClaimAgentStatsSeeds,
+export async function findExpireDisputeCreatorStatsPda(
+  seeds: ExpireDisputeCreatorStatsSeeds,
   config: { programAddress?: Address | undefined } = {},
 ): Promise<ProgramDerivedAddress> {
   const {
@@ -29,9 +29,11 @@ export async function findExpireClaimAgentStatsPda(
     programAddress,
     seeds: [
       getBytesEncoder().encode(
-        new Uint8Array([97, 103, 101, 110, 116, 95, 115, 116, 97, 116, 115]),
+        new Uint8Array([
+          99, 114, 101, 97, 116, 111, 114, 95, 115, 116, 97, 116, 115,
+        ]),
       ),
-      getAddressEncoder().encode(seeds.worker),
+      getAddressEncoder().encode(seeds.creator),
     ],
   });
 }

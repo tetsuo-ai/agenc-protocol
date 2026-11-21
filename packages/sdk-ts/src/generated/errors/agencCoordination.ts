@@ -850,6 +850,38 @@ export const AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_UNPAYABLE = 0x190f; // 
 export const AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_REPAIR_NOT_APPLICABLE = 0x1910; // 6416
 /** DisputeCounterNotDeficient: Initiator counter still holds a unit; finalize the outcomes that own one first */
 export const AGENC_COORDINATION_ERROR__DISPUTE_COUNTER_NOT_DEFICIENT = 0x1911; // 6417
+/** SingleWorkerRejectMustFreeze: A single-worker review task must be refused with reject_and_freeze */
+export const AGENC_COORDINATION_ERROR__SINGLE_WORKER_REJECT_MUST_FREEZE = 0x1912; // 6418
+/** RejectionDisputeWindowClosed: The window to dispute this rejection has closed */
+export const AGENC_COORDINATION_ERROR__REJECTION_DISPUTE_WINDOW_CLOSED = 0x1913; // 6419
+/** RejectionNotDisputable: Only a revision 9 freeze can be disputed */
+export const AGENC_COORDINATION_ERROR__REJECTION_NOT_DISPUTABLE = 0x1914; // 6420
+/** RejectionDisputeRequired: Ruling on this freeze needs a filed dispute */
+export const AGENC_COORDINATION_ERROR__REJECTION_DISPUTE_REQUIRED = 0x1915; // 6421
+/** RejectionWindowStillOpen: The dispute or ruling window is still open */
+export const AGENC_COORDINATION_ERROR__REJECTION_WINDOW_STILL_OPEN = 0x1916; // 6422
+/** RulingWindowClosed: The ruling window has closed */
+export const AGENC_COORDINATION_ERROR__RULING_WINDOW_CLOSED = 0x1917; // 6423
+/** InvalidDisputeBond: Dispute bond account is missing or does not match */
+export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_BOND = 0x1918; // 6424
+/** DisputeRefusedOnReviewTask: Disputes are refused on single-worker review tasks */
+export const AGENC_COORDINATION_ERROR__DISPUTE_REFUSED_ON_REVIEW_TASK = 0x1919; // 6425
+/** ClaimDepositRecipientRequired: The task creator account must receive the claim deposit */
+export const AGENC_COORDINATION_ERROR__CLAIM_DEPOSIT_RECIPIENT_REQUIRED = 0x191a; // 6426
+/** ClaimNotReleasable: This claim cannot be released */
+export const AGENC_COORDINATION_ERROR__CLAIM_NOT_RELEASABLE = 0x191b; // 6427
+/** ValidationModeClosed: This validation mode is closed for new tasks */
+export const AGENC_COORDINATION_ERROR__VALIDATION_MODE_CLOSED = 0x191c; // 6428
+/** CreatorReviewUnsupportedForTask: Creator review needs a SOL reward and a non-bid task */
+export const AGENC_COORDINATION_ERROR__CREATOR_REVIEW_UNSUPPORTED_FOR_TASK = 0x191d; // 6429
+/** TaskNotCompactable: Task cannot be compacted yet */
+export const AGENC_COORDINATION_ERROR__TASK_NOT_COMPACTABLE = 0x191e; // 6430
+/** InvalidTaskMarker: Account is neither a Task nor a TaskMarker */
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_MARKER = 0x191f; // 6431
+/** ModeratorIsTaskCreator: A task creator cannot moderate its own task */
+export const AGENC_COORDINATION_ERROR__MODERATOR_IS_TASK_CREATOR = 0x1920; // 6432
+/** InvalidModerationRentPayer: Moderation rent payer must be the task creator or the moderator */
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RENT_PAYER = 0x1921; // 6433
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -908,8 +940,10 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__BOND_TASK_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BOND_UNSUPPORTED_TASK_TYPE
   | typeof AGENC_COORDINATION_ERROR__CLAIM_ALREADY_COMPLETED
+  | typeof AGENC_COORDINATION_ERROR__CLAIM_DEPOSIT_RECIPIENT_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__CLAIM_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED
+  | typeof AGENC_COORDINATION_ERROR__CLAIM_NOT_RELEASABLE
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK
   | typeof AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING
@@ -934,6 +968,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__CORRUPTED_DATA
   | typeof AGENC_COORDINATION_ERROR__CREATOR_AUTHORITY_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__CREATOR_REVIEW_UNSUPPORTED_FOR_TASK
   | typeof AGENC_COORDINATION_ERROR__DEADLINE_PASSED
   | typeof AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED
@@ -945,6 +980,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_PEER_BUNDLES_RETIRED
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_REFUSED_ON_REVIEW_TASK
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT
@@ -1001,6 +1037,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_DEADLINE
   | typeof AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE
   | typeof AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION
+  | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_BOND
   | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER
   | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD
   | typeof AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH
@@ -1026,6 +1063,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD
+  | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RENT_PAYER
   | typeof AGENC_COORDINATION_ERROR__INVALID_NULLIFIER
   | typeof AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__INVALID_OUTPUT_COMMITMENT
@@ -1060,6 +1098,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_ID
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_URI
+  | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MARKER
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_AUTHORITY
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_RISK_SCORE
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_STATUS
@@ -1101,6 +1140,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS
   | typeof AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__MODERATOR_IS_TASK_CREATOR
   | typeof AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER
   | typeof AGENC_COORDINATION_ERROR__MULTISIG_DUPLICATE_SIGNER
   | typeof AGENC_COORDINATION_ERROR__MULTISIG_INVALID_SIGNERS
@@ -1147,6 +1187,10 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED
+  | typeof AGENC_COORDINATION_ERROR__REJECTION_DISPUTE_REQUIRED
+  | typeof AGENC_COORDINATION_ERROR__REJECTION_DISPUTE_WINDOW_CLOSED
+  | typeof AGENC_COORDINATION_ERROR__REJECTION_NOT_DISPUTABLE
+  | typeof AGENC_COORDINATION_ERROR__REJECTION_WINDOW_STILL_OPEN
   | typeof AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_ACCOUNT_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_DIGEST_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__RELEASE_PROGRAM_DATA_NOT_SETTLED
@@ -1171,7 +1215,9 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL
   | typeof AGENC_COORDINATION_ERROR__ROUTER_ACCOUNT_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__RULING_WINDOW_CLOSED
   | typeof AGENC_COORDINATION_ERROR__SELF_TASK_NOT_ALLOWED
+  | typeof AGENC_COORDINATION_ERROR__SINGLE_WORKER_REJECT_MUST_FREEZE
   | typeof AGENC_COORDINATION_ERROR__SKILL_CONTENT_CHANGED
   | typeof AGENC_COORDINATION_ERROR__SKILL_INVALID_CONTENT_HASH
   | typeof AGENC_COORDINATION_ERROR__SKILL_INVALID_ID
@@ -1217,6 +1263,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TASK_MODERATION_TASK_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_BID_EXCLUSIVE
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_CLOSABLE
+  | typeof AGENC_COORDINATION_ERROR__TASK_NOT_COMPACTABLE
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_COMPLETED_FOR_RATING
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_FOUND
@@ -1256,6 +1303,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_UPGRADE
   | typeof AGENC_COORDINATION_ERROR__UPDATE_TOO_FREQUENT
   | typeof AGENC_COORDINATION_ERROR__VALIDATION_ALREADY_RECORDED
+  | typeof AGENC_COORDINATION_ERROR__VALIDATION_MODE_CLOSED
   | typeof AGENC_COORDINATION_ERROR__VALIDATION_MODE_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__VALIDATION_MODE_UNSUPPORTED_TASK_TYPE
   | typeof AGENC_COORDINATION_ERROR__VALIDATOR_AGENT_REQUIRED
@@ -1332,8 +1380,10 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__BOND_TASK_MISMATCH]: `Completion bond does not belong to this task`,
     [AGENC_COORDINATION_ERROR__BOND_UNSUPPORTED_TASK_TYPE]: `Completion bonds are single-worker (Exclusive) only in v1`,
     [AGENC_COORDINATION_ERROR__CLAIM_ALREADY_COMPLETED]: `Claim has already been completed`,
+    [AGENC_COORDINATION_ERROR__CLAIM_DEPOSIT_RECIPIENT_REQUIRED]: `The task creator account must receive the claim deposit`,
     [AGENC_COORDINATION_ERROR__CLAIM_EXPIRED]: `Claim has expired`,
     [AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED]: `Claim has not expired yet`,
+    [AGENC_COORDINATION_ERROR__CLAIM_NOT_RELEASABLE]: `This claim cannot be released`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION]: `reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK]: `reclaim_terminal_claim requires a terminal (Completed/Cancelled) task`,
     [AGENC_COORDINATION_ERROR__CLAIM_SETTLEMENT_PENDING]: `Claim is reserved for pending dispute peer settlement; use settle_dispute_claim`,
@@ -1358,6 +1408,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG]: `Cooldown value exceeds maximum allowed (1 week)`,
     [AGENC_COORDINATION_ERROR__CORRUPTED_DATA]: `Account data is corrupted`,
     [AGENC_COORDINATION_ERROR__CREATOR_AUTHORITY_MISMATCH]: `Creator must match authority to prevent social engineering`,
+    [AGENC_COORDINATION_ERROR__CREATOR_REVIEW_UNSUPPORTED_FOR_TASK]: `Creator review needs a SOL reward and a non-bid task`,
     [AGENC_COORDINATION_ERROR__DEADLINE_PASSED]: `Task deadline has passed`,
     [AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED]: `Delegation must be active for minimum duration before revocation`,
     [AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED]: `Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use.`,
@@ -1369,6 +1420,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED]: `Dispute has not expired`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED]: `Dispute has not been resolved`,
     [AGENC_COORDINATION_ERROR__DISPUTE_PEER_BUNDLES_RETIRED]: `Dispute rulings no longer accept peer worker bundles; use settle_dispute_claim`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_REFUSED_ON_REVIEW_TASK]: `Disputes are refused on single-worker review tasks`,
     [AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED]: `The dispute resolution window has expired; use expire_dispute`,
     [AGENC_COORDINATION_ERROR__DISPUTE_SETTLEMENT_NOT_PENDING]: `The dispute has no deferred worker settlement pending`,
     [AGENC_COORDINATION_ERROR__DISPUTE_TERMINAL_STATUS_CORRUPT]: `The dispute's recorded terminal status is invalid`,
@@ -1425,6 +1477,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_DEADLINE]: `Invalid deadline: deadline must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE]: `Invalid dependency type`,
     [AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION]: `Invalid description: cannot be empty`,
+    [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_BOND]: `Dispute bond account is missing or does not match`,
     [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER]: `Invalid dispute resolver: pubkey must be non-zero`,
     [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD]: `Invalid dispute threshold: must be 1-100 (percentage of votes required)`,
     [AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH]: `Invalid evidence hash: cannot be all zeros`,
@@ -1450,6 +1503,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW]: `Moderation liveness window is outside the allowed [1 day, 400 day] range`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE]: `Block rationale hash and URI are required (non-zero, non-empty, bounded)`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD]: `Moderation record account is not the canonical PDA, not program-owned, or not a moderation record`,
+    [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RENT_PAYER]: `Moderation rent payer must be the task creator or the moderator`,
     [AGENC_COORDINATION_ERROR__INVALID_NULLIFIER]: `Invalid nullifier: nullifier value cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT]: `Operator payee account does not match the hire record operator`,
     [AGENC_COORDINATION_ERROR__INVALID_OUTPUT_COMMITMENT]: `Invalid output commitment: output_commitment cannot be all zeros`,
@@ -1484,6 +1538,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_TASK_ID]: `Invalid task ID: cannot be zero`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH]: `Invalid task job specification hash`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_URI]: `Invalid task job specification URI`,
+    [AGENC_COORDINATION_ERROR__INVALID_TASK_MARKER]: `Account is neither a Task nor a TaskMarker`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_AUTHORITY]: `Invalid task moderation authority`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_RISK_SCORE]: `Invalid task moderation risk score`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_STATUS]: `Invalid task moderation status`,
@@ -1525,6 +1580,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT]: `Referrer payee account is missing for a task that carries a referrer fee`,
     [AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS]: `Token accounts not provided for token-denominated task`,
     [AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH]: `Supplied moderation attestor entry does not match the signing moderator`,
+    [AGENC_COORDINATION_ERROR__MODERATOR_IS_TASK_CREATOR]: `A task creator cannot moderate its own task`,
     [AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER]: `Multisig signer cannot be default pubkey`,
     [AGENC_COORDINATION_ERROR__MULTISIG_DUPLICATE_SIGNER]: `Duplicate multisig signer provided`,
     [AGENC_COORDINATION_ERROR__MULTISIG_INVALID_SIGNERS]: `Invalid multisig signer configuration`,
@@ -1571,6 +1627,10 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY]: `RejectFrozen review is single-worker (Exclusive) only`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY]: `Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED]: `RejectFrozen review timeout has not elapsed`,
+    [AGENC_COORDINATION_ERROR__REJECTION_DISPUTE_REQUIRED]: `Ruling on this freeze needs a filed dispute`,
+    [AGENC_COORDINATION_ERROR__REJECTION_DISPUTE_WINDOW_CLOSED]: `The window to dispute this rejection has closed`,
+    [AGENC_COORDINATION_ERROR__REJECTION_NOT_DISPUTABLE]: `Only a revision 9 freeze can be disputed`,
+    [AGENC_COORDINATION_ERROR__REJECTION_WINDOW_STILL_OPEN]: `The dispute or ruling window is still open`,
     [AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_ACCOUNT_MISMATCH]: `A release-boundary account does not match its reviewed identity or loader state`,
     [AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_DIGEST_MISMATCH]: `A release-boundary account data digest changed before the atomic stamp`,
     [AGENC_COORDINATION_ERROR__RELEASE_PROGRAM_DATA_NOT_SETTLED]: `The reviewed ProgramData upgrade slot has not settled before the release stamp`,
@@ -1595,7 +1655,9 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED]: `Review window has not elapsed yet`,
     [AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL]: `Reward too small: worker must receive at least 1 lamport`,
     [AGENC_COORDINATION_ERROR__ROUTER_ACCOUNT_MISMATCH]: `RISC0 router account constraints failed`,
+    [AGENC_COORDINATION_ERROR__RULING_WINDOW_CLOSED]: `The ruling window has closed`,
     [AGENC_COORDINATION_ERROR__SELF_TASK_NOT_ALLOWED]: `Cannot claim own task: worker authority matches task creator`,
+    [AGENC_COORDINATION_ERROR__SINGLE_WORKER_REJECT_MUST_FREEZE]: `A single-worker review task must be refused with reject_and_freeze`,
     [AGENC_COORDINATION_ERROR__SKILL_CONTENT_CHANGED]: `Skill content hash changed since preview; re-read the skill and retry`,
     [AGENC_COORDINATION_ERROR__SKILL_INVALID_CONTENT_HASH]: `Skill content hash cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__SKILL_INVALID_ID]: `Skill ID cannot be all zeros`,
@@ -1641,6 +1703,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TASK_MODERATION_TASK_MISMATCH]: `Task moderation account does not belong to this task`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_BID_EXCLUSIVE]: `Task is not a Marketplace V2 bid-exclusive task`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_CLOSABLE]: `Task can only be closed once it is in a terminal state with no active workers`,
+    [AGENC_COORDINATION_ERROR__TASK_NOT_COMPACTABLE]: `Task cannot be compacted yet`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_COMPLETED_FOR_RATING]: `Only a completed hired task can be rated`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_EXPIRED]: `Task deadline has not passed`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_FOUND]: `Task not found`,
@@ -1680,6 +1743,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_UPGRADE]: `Only upgrade authority can perform this action`,
     [AGENC_COORDINATION_ERROR__UPDATE_TOO_FREQUENT]: `Agent update too frequent: must wait cooldown period`,
     [AGENC_COORDINATION_ERROR__VALIDATION_ALREADY_RECORDED]: `Validation for this submission round has already been recorded`,
+    [AGENC_COORDINATION_ERROR__VALIDATION_MODE_CLOSED]: `This validation mode is closed for new tasks`,
     [AGENC_COORDINATION_ERROR__VALIDATION_MODE_MISMATCH]: `Validation instruction does not match the task's configured validation mode`,
     [AGENC_COORDINATION_ERROR__VALIDATION_MODE_UNSUPPORTED_TASK_TYPE]: `Task Validation V2 is only supported for exclusive task flows`,
     [AGENC_COORDINATION_ERROR__VALIDATOR_AGENT_REQUIRED]: `Validator agent account is required for validator-quorum mode`,

@@ -40,6 +40,11 @@ import {
   getDistributeGhostShareInstructionDataDecoder,
   getReclaimTerminalClaimInstructionDataDecoder,
   getSetTaskJobSpecInstructionDataDecoder,
+  getReleaseClaimInstructionDataDecoder,
+  findClaimPda,
+  findCreatorStatsPda,
+  findWorkerStatsPda,
+  findTaskValidationConfigPda,
   findTaskPda,
   findHireRecordPda,
   findProtocolConfigPda,
@@ -72,6 +77,9 @@ import {
   createContestTask,
   distributeGhostShare,
   reclaimTerminalClaim,
+  releaseClaim,
+  findWorkerRecordPda,
+  findCreatorRecordPda,
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   CONTEST_SELECTION_WINDOW_SECS,
 } from "../src/facade/tasks.js";
@@ -487,7 +495,7 @@ describe("task facade async intent boundaries", () => {
         build: (bytes: Uint8Array) =>
           rejectAndFreeze({
             task: A,
-            claim: C,
+            worker: B,
             creator: createNoopSigner(signerA.address),
             rejectionHash: bytes,
           }),
@@ -742,6 +750,11 @@ describe("claimTaskWithJobSpec facade instruction", () => {
     expect(names[7]).toBe(B); // worker
     expect(names[8]).toBe(signerA.address); // authority
     expect(names[9]).toBe(SYSTEM_PROGRAM);
+    // Revision 9: the worker's record is created at claim, paid by the worker.
+    const [workerRecord] = await findWorkerStatsPda({ worker: B });
+    expect(names[10]).toBe(workerRecord);
+    expect(ix.accounts[10]?.role).toBe(AccountRole.WRITABLE);
+    expect(names).toHaveLength(11);
 
     // Empty-args instruction: data is just the 8-byte discriminator.
     const decoded = getClaimTaskWithJobSpecInstructionDataDecoder().decode(
@@ -767,7 +780,8 @@ describe("claimTaskWithJobSpec facade instruction", () => {
       address: C,
       role: AccountRole.READONLY,
     });
-    expect(ix.accounts).toHaveLength(11);
+    // 11 named accounts (revision 9 appends the worker record), then the parent.
+    expect(ix.accounts).toHaveLength(12);
   });
 });
 
@@ -864,12 +878,23 @@ describe("rejectTaskResult facade instruction", () => {
     // protocolConfig auto-derived (5).
     expect(names[6]).toBe(signerA.address); // creator
     expect(names[7]).toBe(D); // workerAuthority
+    // Revision 9: the worker's record is required (8), the system program (9).
+    const [workerRecord] = await findWorkerStatsPda({ worker: B });
+    expect(names[8]).toBe(workerRecord);
+    expect(names[9]).toBe(SYSTEM_PROGRAM);
     const [workerBond] = await findWorkerCompletionBondPda({
       task: A,
       workerAuthority: D,
     });
-    expect(names.at(-1)).toBe(workerBond);
-    expect(ix.accounts.at(-1)?.role).toBe(AccountRole.WRITABLE);
+    expect(names[10]).toBe(workerBond);
+    expect(ix.accounts[10]?.role).toBe(AccountRole.WRITABLE);
+    // ... and the creator's record is appended (11).
+    const [creatorRecord] = await findCreatorStatsPda({
+      authority: signerA.address,
+    });
+    expect(names[11]).toBe(creatorRecord);
+    expect(ix.accounts[11]?.role).toBe(AccountRole.WRITABLE);
+    expect(names).toHaveLength(12);
 
     const decoded = getRejectTaskResultInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.rejectionHash)).toEqual(Array.from(HASH32));
@@ -903,11 +928,12 @@ describe("rejectTaskResult facade instruction", () => {
       settlement.acceptedBid = SYSTEM_PROGRAM;
       settlement.bidderMarketState = SYSTEM_PROGRAM;
 
-      // reject_task_result has 11 generated accounts. Rust consumes an
-      // optional Proof parent followed by exactly three settlement accounts;
-      // the named workerAuthority receives the refund and is not repeated.
+      // reject_task_result has 12 generated accounts (revision 9 appends the
+      // creator record). Rust consumes an optional Proof parent followed by
+      // exactly three settlement accounts; the named workerAuthority receives
+      // the refund and is not repeated.
       expect(
-        (await pending).accounts.slice(11).map((meta) => meta.address),
+        (await pending).accounts.slice(12).map((meta) => meta.address),
       ).toEqual([...(includesParent ? [A] : []), B, C, D]);
     },
   );
@@ -1213,20 +1239,72 @@ describe("rejectAndFreeze facade instruction", () => {
   it("targets the program, orders accounts, and round-trips data", async () => {
     const ix = await rejectAndFreeze({
       task: A,
-      claim: C,
+      worker: B,
       creator: signerA,
       rejectionHash: HASH32,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const names = ix.accounts.map((a) => a.address);
+    expect(names).toHaveLength(9);
     expect(names[0]).toBe(A); // task
-    expect(names[1]).toBe(C); // claim
+    const [claim] = await findClaimPda({ task: A, bidder: B });
+    expect(names[1]).toBe(claim); // claim, derived from the worker
     // validationConfig, submission, protocolConfig auto-derived (2..4).
     expect(names[5]).toBe(signerA.address); // creator
+    // Revision 9: the worker's record (required, seeded by claim.worker), the
+    // system program, then the creator's record.
+    const [workerRecord] = await findWorkerStatsPda({ worker: B });
+    expect(names[6]).toBe(workerRecord);
+    expect(ix.accounts[6]?.role).toBe(AccountRole.WRITABLE);
+    expect(names[7]).toBe(SYSTEM_PROGRAM);
+    const [creatorRecord] = await findCreatorStatsPda({
+      authority: signerA.address,
+    });
+    expect(names[8]).toBe(creatorRecord);
+    expect(ix.accounts[8]?.role).toBe(AccountRole.WRITABLE);
 
     const decoded = getRejectAndFreezeInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.rejectionHash)).toEqual(Array.from(HASH32));
+  });
+
+  it("accepts an explicit claim and record, and refuses a claim that is not the worker's", async () => {
+    const explicit = await rejectAndFreeze({
+      task: A,
+      claim: C,
+      agentStats: D,
+      creator: signerA,
+      rejectionHash: HASH32,
+    });
+    expect(explicit.accounts[1]?.address).toBe(C);
+    expect(explicit.accounts[6]?.address).toBe(D);
+
+    await expect(
+      rejectAndFreeze({
+        task: A,
+        claim: C,
+        worker: B,
+        creator: signerA,
+        rejectionHash: HASH32,
+      }),
+    ).rejects.toThrow(/not the canonical claim/);
+    await expect(
+      rejectAndFreeze({
+        task: A,
+        claim: C,
+        creator: signerA,
+        rejectionHash: HASH32,
+      }),
+    ).rejects.toThrow(/worker record/);
+  });
+
+  it("names the record helpers after the program seeds", async () => {
+    expect(await findWorkerRecordPda(B)).toBe(
+      (await findWorkerStatsPda({ worker: B }))[0],
+    );
+    expect(await findCreatorRecordPda(signerA.address)).toBe(
+      (await findCreatorStatsPda({ authority: signerA.address }))[0],
+    );
   });
 });
 
@@ -1277,9 +1355,36 @@ describe("cancelTask facade instruction", () => {
     expect(names[2]).toBe(signerA.address); // authority
     // protocolConfig auto-derived (3).
     expect(names[4]).toBe(SYSTEM_PROGRAM);
+    // Revision 9: the creator's record is the last named account (15).
+    const [creatorRecord] = await findCreatorStatsPda({
+      authority: signerA.address,
+    });
+    expect(names[15]).toBe(creatorRecord);
+    expect(ix.accounts[15]?.role).toBe(AccountRole.WRITABLE);
+    expect(names).toHaveLength(16);
 
     const decoded = getCancelTaskInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
+  });
+
+  it("keeps the worker triples after the creator record", async () => {
+    const ix = await cancelTask({
+      task: A,
+      authority: signerA,
+      workerBondAuthority: signerB.address,
+      workerAccounts: [
+        { claim: B, workerAgent: C, workerAuthority: signerB.address },
+      ],
+    });
+    const [creatorRecord] = await findCreatorStatsPda({
+      authority: signerA.address,
+    });
+    expect(ix.accounts.map((account) => account.address).slice(15)).toEqual([
+      creatorRecord,
+      B,
+      C,
+      signerB.address,
+    ]);
   });
 
   it("appends the canonical BidExclusive open-book settlement account", async () => {
@@ -1730,6 +1835,41 @@ describe("expireClaim facade instruction", () => {
 
     const decoded = getExpireClaimInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
+    // Revision 9: the worker's record is required (11); the creator's record
+    // is optional (14) and left out without `creator`.
+    const [workerRecord] = await findWorkerStatsPda({ worker: B });
+    expect(names[11]).toBe(workerRecord);
+    expect(names[13]).toBe(SYSTEM_PROGRAM);
+    expect(names[14]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(names[10]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // no bondCreator
+  });
+
+  it("routes a no-show deposit to the creator when `creator` is passed", async () => {
+    const ix = await expireClaim({
+      authority: signerA,
+      task: A,
+      worker: B,
+      rentRecipient: C,
+      creator: D,
+    });
+    const names = ix.accounts.map((a) => a.address);
+    expect(names[10]).toBe(D); // bondCreator receives the forfeited deposit
+    expect(ix.accounts[10]?.role).toBe(AccountRole.WRITABLE);
+    const [creatorRecord] = await findCreatorStatsPda({ authority: D });
+    expect(names[14]).toBe(creatorRecord);
+    expect(ix.accounts[14]?.role).toBe(AccountRole.WRITABLE);
+    expect(names).toHaveLength(15);
+
+    await expect(
+      expireClaim({
+        authority: signerA,
+        task: A,
+        worker: B,
+        rentRecipient: C,
+        creator: D,
+        bondCreator: C,
+      }),
+    ).rejects.toThrow(/bondCreator/);
   });
 
   it("orders a dependency parent before the four-account BidExclusive suffix", async () => {
@@ -2124,6 +2264,7 @@ describe("reclaimTerminalClaim facade instruction", () => {
       worker: B,
       treasury: C,
       rentRecipient: D,
+      creator: signerB.address,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -2133,12 +2274,61 @@ describe("reclaimTerminalClaim facade instruction", () => {
     // claim, submission, optional validation config auto-derived (2..4).
     expect(names[5]).toBe(B); // worker
     // protocolConfig auto-derived (6).
-    expect(names[7]).toBe(C); // treasury (forfeited deposit surplus, never creator)
+    expect(names[7]).toBe(C); // treasury (forfeited contest surplus)
     expect(names[8]).toBe(D); // rentRecipient
+    // Revision 9: the creator receives an expired claim's stranded deposit.
+    expect(names[9]).toBe(signerB.address);
+    expect(ix.accounts[9]?.role).toBe(AccountRole.WRITABLE);
+    expect(names).toHaveLength(10);
 
     const decoded = getReclaimTerminalClaimInstructionDataDecoder().decode(
       ix.data,
     );
     expect(decoded.discriminator).toHaveLength(8);
+  });
+});
+
+describe("releaseClaim facade instruction", () => {
+  it("targets the program, derives the claim, bond and record, and passes the review config", async () => {
+    const ix = await releaseClaim({
+      task: A,
+      worker: B,
+      creator: D,
+      authority: signerA,
+    });
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const names = ix.accounts.map((a) => a.address);
+    expect(names).toHaveLength(11);
+    const [claim] = await findClaimPda({ task: A, bidder: B });
+    const [validation] = await findTaskValidationConfigPda({ task: A });
+    const [workerRecord] = await findWorkerStatsPda({ worker: B });
+    const [protocolConfig] = await findProtocolConfigPda();
+    expect(names[0]).toBe(A);
+    expect(names[1]).toBe(claim);
+    expect(names[2]).toBe(B);
+    expect(names[4]).toBe(validation);
+    // [5] is the worker's completion bond, which must not be live.
+    expect(names[6]).toBe(D); // creator: a late release pays the deposit here
+    expect(ix.accounts[6]?.role).toBe(AccountRole.WRITABLE);
+    expect(names[7]).toBe(workerRecord);
+    expect(names[8]).toBe(protocolConfig);
+    expect(names[9]).toBe(signerA.address);
+    expect(ix.accounts[9]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    expect(names[10]).toBe(SYSTEM_PROGRAM);
+    const decoded = getReleaseClaimInstructionDataDecoder().decode(ix.data);
+    expect(Array.from(decoded.discriminator)).toEqual([
+      109, 194, 80, 47, 30, 93, 16, 253,
+    ]);
+  });
+
+  it("passes no validation config for an Auto task", async () => {
+    const ix = await releaseClaim({
+      task: A,
+      worker: B,
+      creator: D,
+      authority: signerA,
+      taskValidationConfig: null,
+    });
+    expect(ix.accounts[4]?.address).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
   });
 });

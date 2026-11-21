@@ -40,10 +40,10 @@ import {
 import {
   findAcceptTaskResultClaimPda,
   findEscrowPda,
-  findExpireClaimAgentStatsPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findWorkerStatsPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -72,6 +72,7 @@ export type ExpireClaimInstruction<
   TAccountTreasury extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -120,6 +121,9 @@ export type ExpireClaimInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -168,6 +172,7 @@ export type ExpireClaimAsyncInput<
   TAccountAgentStats extends string = string,
   TAccountTreasury extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   /** Caller who triggers the expiration - receives cleanup reward */
   authority: TransactionSigner<TAccountAuthority>;
@@ -197,10 +202,8 @@ export type ExpireClaimAsyncInput<
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   bondCreator?: Address<TAccountBondCreator>;
   /**
-   * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
-   * no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
-   * `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
-   * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+   * here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
    */
   agentStats?: Address<TAccountAgentStats>;
   /**
@@ -213,6 +216,13 @@ export type ExpireClaimAsyncInput<
    */
   treasury?: Address<TAccountTreasury>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * here and OPTIONAL so cranks stay cheap (design 5.3). When it is passed and
+   * exists, a forfeited claim deposit counts `deposits_received`; an omitted or
+   * not-yet-created record writes nothing and is never created here. Full
+   * surface only.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
 };
 
 export async function getExpireClaimInstructionAsync<
@@ -230,6 +240,7 @@ export async function getExpireClaimInstructionAsync<
   TAccountAgentStats extends string,
   TAccountTreasury extends string,
   TAccountSystemProgram extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireClaimAsyncInput<
@@ -246,7 +257,8 @@ export async function getExpireClaimInstructionAsync<
     TAccountBondCreator,
     TAccountAgentStats,
     TAccountTreasury,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -265,7 +277,8 @@ export async function getExpireClaimInstructionAsync<
     TAccountBondCreator,
     TAccountAgentStats,
     TAccountTreasury,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorStats
   >
 > {
   // Program address.
@@ -294,6 +307,7 @@ export async function getExpireClaimInstructionAsync<
     agentStats: { value: input.agentStats ?? null, isWritable: true },
     treasury: { value: input.treasury ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -341,7 +355,7 @@ export async function getExpireClaimInstructionAsync<
     });
   }
   if (!accounts.agentStats.value) {
-    accounts.agentStats.value = await findExpireClaimAgentStatsPda({
+    accounts.agentStats.value = await findWorkerStatsPda({
       worker: getAddressFromResolvedInstructionAccount(
         "worker",
         accounts.worker.value,
@@ -370,6 +384,7 @@ export async function getExpireClaimInstructionAsync<
       getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getExpireClaimInstructionDataEncoder().encode({}),
     programAddress,
@@ -388,7 +403,8 @@ export async function getExpireClaimInstructionAsync<
     TAccountBondCreator,
     TAccountAgentStats,
     TAccountTreasury,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorStats
   >);
 }
 
@@ -407,6 +423,7 @@ export type ExpireClaimInput<
   TAccountAgentStats extends string = string,
   TAccountTreasury extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   /** Caller who triggers the expiration - receives cleanup reward */
   authority: TransactionSigner<TAccountAuthority>;
@@ -436,12 +453,10 @@ export type ExpireClaimInput<
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   bondCreator?: Address<TAccountBondCreator>;
   /**
-   * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
-   * no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
-   * `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
-   * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+   * here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
    */
-  agentStats?: Address<TAccountAgentStats>;
+  agentStats: Address<TAccountAgentStats>;
   /**
    * Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
    * (never the creator). Required whenever the expiring claim carries a
@@ -452,6 +467,13 @@ export type ExpireClaimInput<
    */
   treasury?: Address<TAccountTreasury>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * here and OPTIONAL so cranks stay cheap (design 5.3). When it is passed and
+   * exists, a forfeited claim deposit counts `deposits_received`; an omitted or
+   * not-yet-created record writes nothing and is never created here. Full
+   * surface only.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
 };
 
 export function getExpireClaimInstruction<
@@ -469,6 +491,7 @@ export function getExpireClaimInstruction<
   TAccountAgentStats extends string,
   TAccountTreasury extends string,
   TAccountSystemProgram extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireClaimInput<
@@ -485,7 +508,8 @@ export function getExpireClaimInstruction<
     TAccountBondCreator,
     TAccountAgentStats,
     TAccountTreasury,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): ExpireClaimInstruction<
@@ -503,7 +527,8 @@ export function getExpireClaimInstruction<
   TAccountBondCreator,
   TAccountAgentStats,
   TAccountTreasury,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountCreatorStats
 > {
   // Program address.
   const programAddress =
@@ -531,6 +556,7 @@ export function getExpireClaimInstruction<
     agentStats: { value: input.agentStats ?? null, isWritable: true },
     treasury: { value: input.treasury ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -560,6 +586,7 @@ export function getExpireClaimInstruction<
       getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getExpireClaimInstructionDataEncoder().encode({}),
     programAddress,
@@ -578,7 +605,8 @@ export function getExpireClaimInstruction<
     TAccountBondCreator,
     TAccountAgentStats,
     TAccountTreasury,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorStats
   >);
 }
 
@@ -616,12 +644,10 @@ export type ParsedExpireClaimInstruction<
     workerCompletionBond?: TAccountMetas[9] | undefined;
     bondCreator?: TAccountMetas[10] | undefined;
     /**
-     * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
-     * no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
-     * `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
-     * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+     * here. REQUIRED: a pure no-show bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
      */
-    agentStats?: TAccountMetas[11] | undefined;
+    agentStats: TAccountMetas[11];
     /**
      * Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
      * (never the creator). Required whenever the expiring claim carries a
@@ -632,6 +658,13 @@ export type ParsedExpireClaimInstruction<
      */
     treasury?: TAccountMetas[12] | undefined;
     systemProgram: TAccountMetas[13];
+    /**
+     * here and OPTIONAL so cranks stay cheap (design 5.3). When it is passed and
+     * exists, a forfeited claim deposit counts `deposits_received`; an omitted or
+     * not-yet-created record writes nothing and is never created here. Full
+     * surface only.
+     */
+    creatorStats?: TAccountMetas[14] | undefined;
   };
   data: ExpireClaimInstructionData;
 };
@@ -644,12 +677,12 @@ export function parseExpireClaimInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedExpireClaimInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 14) {
+  if (instruction.accounts.length < 15) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 14,
+        expectedAccountMetas: 15,
       },
     );
   }
@@ -679,9 +712,10 @@ export function parseExpireClaimInstruction<
       rentRecipient: getNextAccount(),
       workerCompletionBond: getNextOptionalAccount(),
       bondCreator: getNextOptionalAccount(),
-      agentStats: getNextOptionalAccount(),
+      agentStats: getNextAccount(),
       treasury: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
+      creatorStats: getNextOptionalAccount(),
     },
     data: getExpireClaimInstructionDataDecoder().decode(instruction.data),
   };

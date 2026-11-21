@@ -5,7 +5,27 @@
 // Everything here is browser-safe (no Node built-ins, no `Buffer`).
 
 export { randomId32 } from "./random.js";
-export { DISPUTE_SAFE_MAX_WORKERS } from "./protocol-limits.js";
+export {
+  DISPUTE_SAFE_MAX_WORKERS,
+  CLAIM_DEPOSIT_BPS,
+  MIN_CLAIM_DEPOSIT_LAMPORTS,
+  DISPUTE_BOND_BPS,
+  MIN_DISPUTE_BOND_LAMPORTS,
+  CLAIM_RELEASE_GRACE_SECS,
+  REJECT_DISPUTE_WINDOW_SECS,
+  REJECT_RULING_WINDOW_SECS,
+  MIN_RESUBMIT_WINDOW_SECS,
+  FREEZE_KIND_DISPUTABLE,
+  SUBMISSION_FREEZE_KIND_INDEX,
+  workerShareLamports,
+  claimDepositLamports,
+  claimDepositForTask,
+  disputeBondLamports,
+  disputeBondForTask,
+  submissionFreezeKind,
+  isDisputableFreeze,
+  type WorkerShareTask,
+} from "./protocol-limits.js";
 export {
   snapshotByteArray,
   snapshotFixedBytes,

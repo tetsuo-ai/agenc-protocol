@@ -22,6 +22,7 @@ import {
   SURFACE_REVISION_AUTHORITY_FEED,
   SURFACE_REVISION_TASK_QUOTAS,
   SURFACE_REVISION_FEE_QUALIFIED_RATINGS,
+  SURFACE_REVISION_ACCOUNTABLE_REVIEW,
   SURFACE_REVISION_CURRENT,
   SURFACE_REVISION_OFFSET,
   OLD_PROTOCOL_CONFIG_SIZE,
@@ -148,15 +149,44 @@ describe("capabilitiesForRevision (typed mapping)", () => {
 
   it("maps the audit-hardening/current revision as a monotonic full surface", () => {
     expect(SURFACE_REVISION_AUDIT_HARDENING).toBe(5);
-    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_FEE_QUALIFIED_RATINGS);
+    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_ACCOUNTABLE_REVIEW);
     const caps = capabilitiesForRevision(SURFACE_REVISION_CURRENT);
     expect(caps.fullSurface).toBe(true);
     expect(caps.goods).toBe(true);
-    expect(caps.surfaceRevision).toBe(8);
+    expect(caps.feeQualifiedRatings).toBe(true);
+    expect(caps.accountableReview).toBe(true);
+    expect(caps.surfaceRevision).toBe(9);
+  });
+
+  it("requires revision 9 for accountable review, and keeps revision 8 a full surface", () => {
+    expect(SURFACE_REVISION_ACCOUNTABLE_REVIEW).toBe(9);
+    for (const revision of [0, 1, 4, 5, 6, 7, 8, 10, 65535]) {
+      const caps = capabilitiesForRevision(revision);
+      expect(caps.accountableReview).toBe(false);
+      expect(() => assertCapability(caps, "accountableReview")).toThrow(
+        SurfaceNotDeployedError,
+      );
+    }
+    // Revision 8 still reads as the full surface it is (reads keep working);
+    // only the revision 9 wires are withheld.
+    const revision8 = capabilitiesForRevision(8);
+    expect(revision8.fullSurface).toBe(true);
+    expect(revision8.listings).toBe(true);
+    expect(revision8.feeQualifiedRatings).toBe(true);
+    // Revision 9 is no longer an unknown revision mapped to the canary set.
+    const revision9 = capabilitiesForRevision(9);
+    expect(revision9.fullSurface).toBe(true);
+    expect(revision9.listings).toBe(true);
+    expect(revision9.disputes).toBe(true);
+    expect(revision9.goods).toBe(true);
+    expect(revision9.feedAuthorityVotes).toBe(true);
+    expect(revision9.taskCreationQuotas).toBe(true);
+    expect(revision9.feeQualifiedRatings).toBe(true);
+    expect(() => assertCapability(revision9, "accountableReview")).not.toThrow();
   });
 
   it("requires the distinct revision-6 wallet-vote capability", () => {
-    for (const revision of [0, 1, 2, 3, 4, 5, 9, 65535]) {
+    for (const revision of [0, 1, 2, 3, 4, 5, 10, 65535]) {
       const caps = capabilitiesForRevision(revision);
       expect(caps.feedAuthorityVotes).toBe(false);
       expect(() => assertCapability(caps, "feedAuthorityVotes")).toThrow(
@@ -168,7 +198,7 @@ describe("capabilitiesForRevision (typed mapping)", () => {
   });
 
   it("requires revision 7 for optional task creation quotas", () => {
-    for (const revision of [0, 5, 6, 9, 65535]) {
+    for (const revision of [0, 5, 6, 10, 65535]) {
       expect(capabilitiesForRevision(revision).taskCreationQuotas).toBe(false);
     }
     expect(capabilitiesForRevision(7).taskCreationQuotas).toBe(true);
@@ -219,12 +249,13 @@ describe("getDeployedSurface (the acceptance test)", () => {
 });
 
 describe("revision 8 (live on mainnet since 2026-10-28)", () => {
-  it("is exported from the package root as the current surface", async () => {
+  it("is exported from the package root, below the current revision 9", async () => {
     const root = await import("../src/index.js");
     expect(root.SURFACE_REVISION_FEE_QUALIFIED_RATINGS).toBe(8);
-    expect(root.SURFACE_REVISION_CURRENT).toBe(8);
+    expect(root.SURFACE_REVISION_ACCOUNTABLE_REVIEW).toBe(9);
+    expect(root.SURFACE_REVISION_CURRENT).toBe(9);
     expect(root.SURFACE_REVISION_CURRENT).toBe(
-      root.SURFACE_REVISION_FEE_QUALIFIED_RATINGS,
+      root.SURFACE_REVISION_ACCOUNTABLE_REVIEW,
     );
     expect(root.SURFACE_REVISION_AUTHORITY_FEED).toBe(6);
     expect(root.SURFACE_REVISION_TASK_QUOTAS).toBe(7);
@@ -242,6 +273,7 @@ describe("revision 8 (live on mainnet since 2026-10-28)", () => {
       feedAuthorityVotes: true,
       taskCreationQuotas: true,
       feeQualifiedRatings: true,
+      accountableReview: false,
     });
     for (const capability of [
       "feedAuthorityVotes",
@@ -250,6 +282,20 @@ describe("revision 8 (live on mainnet since 2026-10-28)", () => {
     ] as const) {
       expect(() => assertCapability(surface, capability)).not.toThrow();
     }
+  });
+
+  it("reads a stamped revision-9 ProtocolConfig as the full surface with accountable review", async () => {
+    const surface = await getDeployedSurface(
+      makeAccountRpc(newLayoutBuffer(SURFACE_REVISION_ACCOUNTABLE_REVIEW)),
+    );
+    expect(surface).toMatchObject({
+      surfaceRevision: 9,
+      fullSurface: true,
+      listings: true,
+      disputes: true,
+      feeQualifiedRatings: true,
+      accountableReview: true,
+    });
   });
 });
 

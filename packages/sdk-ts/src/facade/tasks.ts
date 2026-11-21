@@ -47,6 +47,7 @@ import {
   getConfigureTaskValidationInstructionAsync,
   getDistributeGhostShareInstructionAsync,
   getReclaimTerminalClaimInstructionAsync,
+  getReleaseClaimInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   findProtocolConfigPda,
@@ -60,6 +61,8 @@ import {
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
   findBidBookPda,
+  findCreatorStatsPda,
+  findWorkerStatsPda,
   type CreateTaskAsyncInput,
   type CreateTaskHumanlessAsyncInput,
   type CreateDependentTaskAsyncInput,
@@ -79,6 +82,7 @@ import {
   type ConfigureTaskValidationAsyncInput,
   type DistributeGhostShareAsyncInput,
   type ReclaimTerminalClaimAsyncInput,
+  type ReleaseClaimAsyncInput,
   type SetTaskJobSpecAsyncInput,
   DependencyType,
   ValidationMode,
@@ -106,6 +110,27 @@ export {
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
 };
+
+/**
+ * Revision 9 worker record (`AgentStats`, `["agent_stats", workerAgent]`).
+ * Every revision 9 claim creates it, paid by the worker.
+ */
+export async function findWorkerRecordPda(
+  workerAgent: Address,
+): Promise<Address> {
+  return (await findWorkerStatsPda({ worker: workerAgent }))[0];
+}
+
+/**
+ * Revision 9 creator record (`CreatorStats`, `["creator_stats", wallet]`).
+ * Keyed by the task creator's wallet, so bare-wallet buyers and agent buyers
+ * both have one. Created at the creator's first freeze, cancel or dispute.
+ */
+export async function findCreatorRecordPda(
+  creatorWallet: Address,
+): Promise<Address> {
+  return (await findCreatorStatsPda({ authority: creatorWallet }))[0];
+}
 
 /**
  * The demand-side referral leg (P6.2) on a create/hire input. Both fields are
@@ -300,9 +325,16 @@ export async function createDependentTask(
 /**
  * Claim a task against its pre-existing pinned job-spec pointer. Wraps claim_task_with_job_spec
  * (plain claim_task is fail-closed in the program). Auto-derives the task-job-spec
- * pointer, the claim PDA, and protocol config from `task`/`worker`. Proof-dependent
- * tasks must pass their exact `parentTask`; the facade appends it as the read-only
- * remaining account required by the on-chain assignment gate.
+ * pointer, the claim PDA, protocol config and the worker's revision 9 record
+ * (`AgentStats`, created at the first claim and paid by the worker) from
+ * `task`/`worker`. Proof-dependent tasks must pass their exact `parentTask`; the
+ * facade appends it as the read-only remaining account required by the on-chain
+ * assignment gate.
+ *
+ * Revision 9: a non-contest claim also moves a claim deposit from the worker
+ * wallet onto the claim (`values.claimDepositForTask`: 10% of the worker's share,
+ * at least 0.005 SOL). It comes back on the first delivery. It goes to the buyer
+ * when the claim ends without a delivery after its expiry. Fund the wallet for it.
  */
 export type ClaimTaskWithJobSpecInput = Omit<
   ClaimTaskWithJobSpecAsyncInput,
@@ -581,7 +613,13 @@ export async function acceptTaskResult(input: AcceptTaskResultInput) {
 
 /**
  * Creator rejects a submitted result (with a rejection hash). Auto-derives
- * validation config, submission, and protocol-config PDAs from `task`/`worker`.
+ * validation config, submission, protocol config, the worker's record (from
+ * `worker`) and the creator's record (from `creator`).
+ *
+ * Revision 9: refused with `SingleWorkerRejectMustFreeze` (6418) on a
+ * single-worker review task (Exclusive, one worker, CreatorReview). Turn that
+ * work down with {@link rejectAndFreeze} instead. Collaborative and contest
+ * tasks keep this path.
  */
 export type RejectTaskResultInput = RejectTaskResultAsyncInput &
   BidRejectionRemainingAccounts;
@@ -777,18 +815,74 @@ export async function requestChanges(input: RequestChangesAsyncInput) {
 }
 
 /**
- * Creator rejects and freezes a submission (with a rejection hash) pending
- * dispute. Auto-derives validation config, submission, and protocol config.
+ * Friendly input for {@link rejectAndFreeze}. The worker's record is required
+ * on revision 9 and is seeded by the claim's worker, which the builder cannot
+ * read from here: pass that worker agent as `worker` (or both `claim` and the
+ * record itself as `agentStats`).
  */
-export async function rejectAndFreeze(input: RejectAndFreezeAsyncInput) {
+export type RejectAndFreezeInput = Omit<
+  RejectAndFreezeAsyncInput,
+  "agentStats" | "claim"
+> & {
+  /** The claim's worker AgentRegistration; derives the claim and its record. */
+  worker?: Address;
+  /** Defaults to the canonical `["claim", task, worker]` PDA. */
+  claim?: Address;
+  /** Override for the worker's record; derived from `worker` when omitted. */
+  agentStats?: Address;
+};
+
+/**
+ * Creator turns a submission down and freezes the price (with a rejection
+ * hash). Auto-derives validation config, submission, protocol config, the
+ * worker's record (from `worker`) and the creator's record (from `creator`).
+ * A record missing on chain is created by the program, paid by the creator.
+ *
+ * Revision 9 freeze (the program sets `freeze_kind = 1`): the worker has the
+ * dispute window (72 hours on the production build; the frozen submission's
+ * `reviewDeadlineAt` holds the exact end) to dispute it with
+ * {@link disputeRejection}, posting a bond. With no dispute, the buyer is
+ * refunded once the window ends (`expireRejectFrozen`). A disputed turn-down is
+ * ruled by the 2-of-3 multisig (`resolveRejectFrozen`). If nobody rules in
+ * time, the buyer is refunded and the worker's bond comes back.
+ */
+export async function rejectAndFreeze(input: RejectAndFreezeInput) {
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["creator"]);
+  // Detach the hash before any derivation can yield.
+  const rejectionHash = snapshotFixedBytes(
+    stableInput.rejectionHash,
+    32,
+    "rejectAndFreeze: rejectionHash",
+  );
+  const { worker, claim, agentStats, ...generatedInput } = stableInput;
+  if (
+    worker === undefined &&
+    (agentStats === undefined || claim === undefined)
+  ) {
+    throw new Error(
+      "rejectAndFreeze: provide the claim's worker agent as `worker` (or both `claim` and `agentStats`) so the required worker record can be derived",
+    );
+  }
+  let claimAddress = claim;
+  if (worker !== undefined) {
+    const [canonicalClaim] = await findClaimPda({
+      task: generatedInput.task,
+      bidder: worker,
+    });
+    if (claimAddress !== undefined && claimAddress !== canonicalClaim) {
+      throw new Error(
+        "rejectAndFreeze: `claim` is not the canonical claim of `worker` on this task",
+      );
+    }
+    claimAddress = canonicalClaim;
+  }
+  const record =
+    agentStats ?? (await findWorkerStatsPda({ worker: worker! }))[0];
   return getRejectAndFreezeInstructionAsync({
-    ...stableInput,
-    rejectionHash: snapshotFixedBytes(
-      stableInput.rejectionHash,
-      32,
-      "rejectAndFreeze: rejectionHash",
-    ),
+    ...generatedInput,
+    claim: claimAddress!,
+    agentStats: record,
+    rejectionHash,
   });
 }
 
@@ -925,6 +1019,11 @@ function snapshotCancelTaskWorkerAccounts(
  * select `bidSettlement`: `open` derives and closes the empty bid book, while
  * `accepted` appends the book, accepted bid, and bidder market state after the
  * single worker triple in the exact order required by the program.
+ *
+ * Revision 9: the creator's record (`CreatorStats`, derived from `authority`)
+ * is required. The program creates it at the creator's first cancel, paid by
+ * the creator, and counts the cancel there. A no-show drain sends each drained
+ * non-contest claim's deposit to the creator.
  */
 export async function cancelTask(input: CancelTaskInput) {
   const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
@@ -1369,6 +1468,15 @@ export type ExpireClaimBidSettlement = {
 };
 
 export type ExpireClaimInput = ExpireClaimAsyncInput & {
+  /**
+   * The task's creator wallet (`task.creator`). Revision 9: a no-show of a
+   * claim that carries a deposit forfeits it to the creator, so the program
+   * requires `bondCreator` then (`ClaimDepositRecipientRequired`, 6426).
+   * Passing `creator` defaults `bondCreator` to it and `creatorStats` to the
+   * creator's record, where the forfeit is counted when the record exists
+   * (it is never created here).
+   */
+  creator?: Address;
   /** Parent prefix when the Rust exit path requires dependency evidence. */
   dependencyParent?: Address;
   /** Required for BidExclusive claim expiry. */
@@ -1386,7 +1494,26 @@ export async function expireClaim(input: ExpireClaimInput) {
       "expireClaim: bidSettlement",
     ),
   };
-  const { dependencyParent, bidSettlement, ...generatedInput } = stableInput;
+  const { creator, dependencyParent, bidSettlement, ...rest } = stableInput;
+  if (
+    creator !== undefined &&
+    rest.bondCreator !== undefined &&
+    rest.bondCreator !== creator
+  ) {
+    throw new Error(
+      "expireClaim: `bondCreator` must be the task creator passed as `creator`",
+    );
+  }
+  const generatedInput =
+    creator === undefined
+      ? rest
+      : {
+          ...rest,
+          bondCreator: rest.bondCreator ?? creator,
+          creatorStats:
+            rest.creatorStats ??
+            (await findCreatorStatsPda({ authority: creator }))[0],
+        };
   const instruction = await getExpireClaimInstructionAsync(generatedInput);
   const remainingAccounts: { address: Address; role: AccountRole }[] = [];
   if (dependencyParent) {
@@ -1664,10 +1791,58 @@ export async function distributeGhostShare(
  * `treasury`; a Submitted Collaborative straggler receives the full claim and
  * submission balances. Claim, submission, and protocol-config PDAs auto-derive
  * from `task`/`worker`.
+ *
+ * Revision 9: pass the task's `creator` wallet. A stranded non-contest claim
+ * deposit goes to the creator once the claim has expired, and back to the
+ * worker before that.
  */
 export async function reclaimTerminalClaim(
   input: ReclaimTerminalClaimAsyncInput,
 ) {
   const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   return getReclaimTerminalClaimInstructionAsync(stableInput);
+}
+
+/**
+ * Friendly input for {@link releaseClaim}. `creator` is the task's creator
+ * wallet (`task.creator`); it receives the deposit of a late release.
+ */
+export type ReleaseClaimInput = Omit<
+  ReleaseClaimAsyncInput,
+  "taskValidationConfig"
+> & {
+  /**
+   * The task's validation config. Defaults to the canonical
+   * `["task_validation", task]` PDA, which every review task (and so every
+   * revision 9 hire) has and the program requires there. Pass `null` for an
+   * Auto task that has no config.
+   */
+  taskValidationConfig?: Address | null;
+};
+
+/**
+ * Revision 9: a worker gives up an undelivered claim before it expires.
+ * Within `values.CLAIM_RELEASE_GRACE_SECS` of claiming (1 hour on the
+ * production build) the claim deposit comes back to the worker; later it goes
+ * to the buyer and the worker's record counts an expired claim. Either way the
+ * slot is freed and the claim rent comes back. Use it when the job cannot be
+ * done, for example when its spec content cannot be fetched.
+ *
+ * Refused (`ClaimNotReleasable`, 6427) for delivered work under review, an
+ * expired claim, a claim with a live completion bond, contests and bid claims.
+ * Auto-derives the claim, submission, worker completion bond, worker record and
+ * protocol config from `task`/`worker`/`authority`.
+ */
+export async function releaseClaim(input: ReleaseClaimInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { taskValidationConfig, ...generatedInput } = stableInput;
+  const validation =
+    taskValidationConfig === null
+      ? AGENC_COORDINATION_PROGRAM_ADDRESS
+      : (taskValidationConfig ??
+        (await findTaskValidationConfigPda({ task: generatedInput.task }))[0]);
+  return getReleaseClaimInstructionAsync({
+    ...generatedInput,
+    taskValidationConfig: validation,
+  });
 }

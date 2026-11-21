@@ -7,6 +7,8 @@
  */
 
 import {
+  addDecoderSizePrefix,
+  addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
   getBooleanDecoder,
@@ -14,26 +16,33 @@ import {
   getBytesDecoder,
   getStructDecoder,
   getStructEncoder,
+  getU32Decoder,
+  getU32Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
   type AccountMeta,
   type AccountSignerMeta,
   type Address,
-  type FixedSizeCodec,
-  type FixedSizeDecoder,
-  type FixedSizeEncoder,
+  type Codec,
+  type Decoder,
+  type Encoder,
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
   type ReadonlyAccount,
-  type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
+  type WritableSignerAccount,
 } from "@solana/kit";
 
 import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -41,16 +50,19 @@ import {
 } from "@solana/program-client-core";
 import {
   findCreatorCompletionBondPda,
+  findDisputeRejectionDisputeBondPda,
   findEscrowPda,
+  findExpireDisputeCreatorStatsPda,
   findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findWorkerCompletionBondPda,
+  findWorkerStatsPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const RESOLVE_REJECT_FROZEN_DISCRIMINATOR: ReadonlyUint8Array =
-  new Uint8Array([247, 17, 223, 213, 12, 193, 235, 127]);
+  new Uint8Array([64, 51, 69, 144, 38, 227, 148, 59]);
 
 export function getResolveRejectFrozenDiscriminatorBytes(): ReadonlyUint8Array {
   return getFixedBytesEncoder(8).encode(RESOLVE_REJECT_FROZEN_DISCRIMINATOR);
@@ -75,6 +87,9 @@ export type ResolveRejectFrozenInstruction<
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountDisputeBond extends string | AccountMeta<string> = string,
+  TAccountWorkerStats extends string | AccountMeta<string> = string,
+  TAccountCreatorStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -117,7 +132,7 @@ export type ResolveRejectFrozenInstruction<
         ? WritableAccount<TAccountReferrer>
         : TAccountReferrer,
       TAccountAuthority extends string
-        ? ReadonlySignerAccount<TAccountAuthority> &
+        ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
       TAccountCreatorCompletionBond extends string
@@ -129,6 +144,15 @@ export type ResolveRejectFrozenInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountDisputeBond extends string
+        ? WritableAccount<TAccountDisputeBond>
+        : TAccountDisputeBond,
+      TAccountWorkerStats extends string
+        ? WritableAccount<TAccountWorkerStats>
+        : TAccountWorkerStats,
+      TAccountCreatorStats extends string
+        ? WritableAccount<TAccountCreatorStats>
+        : TAccountCreatorStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -136,17 +160,26 @@ export type ResolveRejectFrozenInstruction<
 export type ResolveRejectFrozenInstructionData = {
   discriminator: ReadonlyUint8Array;
   approveCompletion: boolean;
+  rationaleHash: ReadonlyUint8Array;
+  rationaleUri: string;
 };
 
 export type ResolveRejectFrozenInstructionDataArgs = {
   approveCompletion: boolean;
+  rationaleHash: ReadonlyUint8Array;
+  rationaleUri: string;
 };
 
-export function getResolveRejectFrozenInstructionDataEncoder(): FixedSizeEncoder<ResolveRejectFrozenInstructionDataArgs> {
+export function getResolveRejectFrozenInstructionDataEncoder(): Encoder<ResolveRejectFrozenInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
       ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["approveCompletion", getBooleanEncoder()],
+      ["rationaleHash", getFixedBytesEncoder(32, "rationaleHash")],
+      [
+        "rationaleUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
     ]),
     (value) => ({
       ...value,
@@ -155,14 +188,19 @@ export function getResolveRejectFrozenInstructionDataEncoder(): FixedSizeEncoder
   );
 }
 
-export function getResolveRejectFrozenInstructionDataDecoder(): FixedSizeDecoder<ResolveRejectFrozenInstructionData> {
+export function getResolveRejectFrozenInstructionDataDecoder(): Decoder<ResolveRejectFrozenInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["approveCompletion", getBooleanDecoder()],
+    ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
+    [
+      "rationaleUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
   ]);
 }
 
-export function getResolveRejectFrozenInstructionDataCodec(): FixedSizeCodec<
+export function getResolveRejectFrozenInstructionDataCodec(): Codec<
   ResolveRejectFrozenInstructionDataArgs,
   ResolveRejectFrozenInstructionData
 > {
@@ -189,6 +227,9 @@ export type ResolveRejectFrozenAsyncInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -203,7 +244,10 @@ export type ResolveRejectFrozenAsyncInput<
   hireRecord?: Address<TAccountHireRecord>;
   operator?: Address<TAccountOperator>;
   referrer?: Address<TAccountReferrer>;
-  /** Multisig review authority; `remaining_accounts` carries the co-signers. */
+  /**
+   * Multisig review authority; `remaining_accounts` carries the co-signers.
+   * Writable (revision 9): it pays for a missing record.
+   */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond
@@ -212,7 +256,25 @@ export type ResolveRejectFrozenAsyncInput<
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * system-owned account with no data means "not disputed" (whatever lamports
+   * it holds); a live bond is validated and settled by `settle_dispute_bond`.
+   */
+  disputeBond?: Address<TAccountDisputeBond>;
+  /**
+   * here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats?: Address<TAccountWorkerStats>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats?: Address<TAccountCreatorStats>;
   approveCompletion: ResolveRejectFrozenInstructionDataArgs["approveCompletion"];
+  rationaleHash: ResolveRejectFrozenInstructionDataArgs["rationaleHash"];
+  rationaleUri: ResolveRejectFrozenInstructionDataArgs["rationaleUri"];
 };
 
 export async function getResolveRejectFrozenInstructionAsync<
@@ -232,6 +294,9 @@ export async function getResolveRejectFrozenInstructionAsync<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountSystemProgram extends string,
+  TAccountDisputeBond extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ResolveRejectFrozenAsyncInput<
@@ -250,7 +315,10 @@ export async function getResolveRejectFrozenInstructionAsync<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -271,7 +339,10 @@ export async function getResolveRejectFrozenInstructionAsync<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >
 > {
   // Program address.
@@ -292,7 +363,7 @@ export async function getResolveRejectFrozenInstructionAsync<
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     operator: { value: input.operator ?? null, isWritable: true },
     referrer: { value: input.referrer ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -302,6 +373,9 @@ export async function getResolveRejectFrozenInstructionAsync<
       isWritable: true,
     },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -367,6 +441,30 @@ export async function getResolveRejectFrozenInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.disputeBond.value) {
+    accounts.disputeBond.value = await findDisputeRejectionDisputeBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
+  if (!accounts.workerStats.value) {
+    accounts.workerStats.value = await findWorkerStatsPda({
+      worker: getAddressFromResolvedInstructionAccount(
+        "worker",
+        accounts.worker.value,
+      ),
+    });
+  }
+  if (!accounts.creatorStats.value) {
+    accounts.creatorStats.value = await findExpireDisputeCreatorStatsPda({
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -387,6 +485,9 @@ export async function getResolveRejectFrozenInstructionAsync<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getResolveRejectFrozenInstructionDataEncoder().encode(
       args as ResolveRejectFrozenInstructionDataArgs,
@@ -409,7 +510,10 @@ export async function getResolveRejectFrozenInstructionAsync<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >);
 }
 
@@ -430,6 +534,9 @@ export type ResolveRejectFrozenInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountDisputeBond extends string = string,
+  TAccountWorkerStats extends string = string,
+  TAccountCreatorStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -444,7 +551,10 @@ export type ResolveRejectFrozenInput<
   hireRecord: Address<TAccountHireRecord>;
   operator?: Address<TAccountOperator>;
   referrer?: Address<TAccountReferrer>;
-  /** Multisig review authority; `remaining_accounts` carries the co-signers. */
+  /**
+   * Multisig review authority; `remaining_accounts` carries the co-signers.
+   * Writable (revision 9): it pays for a missing record.
+   */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond
@@ -453,7 +563,25 @@ export type ResolveRejectFrozenInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * system-owned account with no data means "not disputed" (whatever lamports
+   * it holds); a live bond is validated and settled by `settle_dispute_bond`.
+   */
+  disputeBond: Address<TAccountDisputeBond>;
+  /**
+   * here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by
+   * `authority`.
+   */
+  workerStats: Address<TAccountWorkerStats>;
+  /**
+   * to the task creator),
+   * seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by
+   * `ensure_creator_stats`, paid by `authority`.
+   */
+  creatorStats: Address<TAccountCreatorStats>;
   approveCompletion: ResolveRejectFrozenInstructionDataArgs["approveCompletion"];
+  rationaleHash: ResolveRejectFrozenInstructionDataArgs["rationaleHash"];
+  rationaleUri: ResolveRejectFrozenInstructionDataArgs["rationaleUri"];
 };
 
 export function getResolveRejectFrozenInstruction<
@@ -473,6 +601,9 @@ export function getResolveRejectFrozenInstruction<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountSystemProgram extends string,
+  TAccountDisputeBond extends string,
+  TAccountWorkerStats extends string,
+  TAccountCreatorStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ResolveRejectFrozenInput<
@@ -491,7 +622,10 @@ export function getResolveRejectFrozenInstruction<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): ResolveRejectFrozenInstruction<
@@ -511,7 +645,10 @@ export function getResolveRejectFrozenInstruction<
   TAccountAuthority,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountDisputeBond,
+  TAccountWorkerStats,
+  TAccountCreatorStats
 > {
   // Program address.
   const programAddress =
@@ -531,7 +668,7 @@ export function getResolveRejectFrozenInstruction<
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     operator: { value: input.operator ?? null, isWritable: true },
     referrer: { value: input.referrer ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
+    authority: { value: input.authority ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -541,6 +678,9 @@ export function getResolveRejectFrozenInstruction<
       isWritable: true,
     },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    disputeBond: { value: input.disputeBond ?? null, isWritable: true },
+    workerStats: { value: input.workerStats ?? null, isWritable: true },
+    creatorStats: { value: input.creatorStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -575,6 +715,9 @@ export function getResolveRejectFrozenInstruction<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("disputeBond", accounts.disputeBond),
+      getAccountMeta("workerStats", accounts.workerStats),
+      getAccountMeta("creatorStats", accounts.creatorStats),
     ],
     data: getResolveRejectFrozenInstructionDataEncoder().encode(
       args as ResolveRejectFrozenInstructionDataArgs,
@@ -597,7 +740,10 @@ export function getResolveRejectFrozenInstruction<
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountDisputeBond,
+    TAccountWorkerStats,
+    TAccountCreatorStats
   >);
 }
 
@@ -620,7 +766,10 @@ export type ParsedResolveRejectFrozenInstruction<
     hireRecord: TAccountMetas[9];
     operator?: TAccountMetas[10] | undefined;
     referrer?: TAccountMetas[11] | undefined;
-    /** Multisig review authority; `remaining_accounts` carries the co-signers. */
+    /**
+     * Multisig review authority; `remaining_accounts` carries the co-signers.
+     * Writable (revision 9): it pays for a missing record.
+     */
     authority: TAccountMetas[12];
     /**
      * cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond
@@ -629,6 +778,22 @@ export type ParsedResolveRejectFrozenInstruction<
     creatorCompletionBond: TAccountMetas[13];
     workerCompletionBond: TAccountMetas[14];
     systemProgram: TAccountMetas[15];
+    /**
+     * system-owned account with no data means "not disputed" (whatever lamports
+     * it holds); a live bond is validated and settled by `settle_dispute_bond`.
+     */
+    disputeBond: TAccountMetas[16];
+    /**
+     * here. REQUIRED: the ruling moves `disputes_won` or `disputes_lost`. Created when missing by `ensure_agent_stats`, paid by
+     * `authority`.
+     */
+    workerStats: TAccountMetas[17];
+    /**
+     * to the task creator),
+     * seeds-pinned here. REQUIRED: the ruling moves the mirror counter. Created when missing by
+     * `ensure_creator_stats`, paid by `authority`.
+     */
+    creatorStats: TAccountMetas[18];
   };
   data: ResolveRejectFrozenInstructionData;
 };
@@ -641,12 +806,12 @@ export function parseResolveRejectFrozenInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedResolveRejectFrozenInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 16) {
+  if (instruction.accounts.length < 19) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 16,
+        expectedAccountMetas: 19,
       },
     );
   }
@@ -681,6 +846,9 @@ export function parseResolveRejectFrozenInstruction<
       creatorCompletionBond: getNextAccount(),
       workerCompletionBond: getNextAccount(),
       systemProgram: getNextAccount(),
+      disputeBond: getNextAccount(),
+      workerStats: getNextAccount(),
+      creatorStats: getNextAccount(),
     },
     data: getResolveRejectFrozenInstructionDataDecoder().decode(
       instruction.data,
