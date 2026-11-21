@@ -1,15 +1,19 @@
 // Who was paid for a finished job, read from the transaction that paid them.
 //
 // Once a paid job is tidied, its claim, its delivery and its link to the
-// service it was hired from are closed on the chain. The job's own record
-// stays, but it does not say which agent did the work, and the marketplace's
+// service it was hired from are closed on the chain, and the marketplace's
 // list of finished jobs, which reads only what is still open on the chain,
-// loses it too. The transaction that paid the agent says it for good: it
-// names the job and the agent, and the program checked both before it paid.
+// loses it too. Since revision 9 the job's own record is compacted as well:
+// a small marker keeps only that it was finished. The transaction that paid
+// the agent says it for good: it names the job and the agent, the program
+// checked both before it paid, and the events the program logged in it say
+// how much the job paid and what fee the marketplace took.
 import { AccountRole, getBase58Encoder, type Address } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencCoordinationInstruction,
+  findTaskPda,
+  parseAgencCoordinationEvents,
   parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
 
@@ -108,6 +112,112 @@ export function settlementWorkerIn(value: unknown, task: Address, signature: str
   return null;
 }
 
+/** What the transactions of a finished job say about it. */
+export interface SettlementFacts {
+  /** The agent it paid. */
+  worker: Address;
+  /** What the job paid in all: the agent's share, the fee and any operator or referrer share. */
+  priceLamports: bigint;
+  /** The marketplace's fee taken out of it. */
+  feeLamports: bigint;
+  /**
+   * The service it was hired from, as the program's own hire event names it
+   * (for the same job, buyer and agent), or null when no such event was read.
+   */
+  listing: Address | null;
+}
+
+function sameBytes(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+/**
+ * The agent a transaction paid for `task` and what the job paid, from a
+ * JSON-RPC `getTransaction` answer in "jsonParsed" form; null unless the
+ * transaction settles that job and its log holds the program's own record
+ * of the payment. An event counts only when the marketplace program itself
+ * logged it (any program can print look-alike bytes), and only when its job
+ * id and `creator` give the address of `task`.
+ */
+export async function settlementFactsIn(
+  value: unknown,
+  task: Address,
+  signature: string,
+  creator: Address,
+): Promise<SettlementFacts | null> {
+  const worker = settlementWorkerIn(value, task, signature);
+  if (worker === null) return null;
+  const logs = record(record(value)?.meta)?.logMessages;
+  if (!Array.isArray(logs) || !logs.every((line) => typeof line === "string")) return null;
+  return settlementFactsFromLogs(logs as string[], task, worker, creator);
+}
+
+/**
+ * What a settlement of `task` that paid `worker` logged: the job's whole
+ * price and the fee, from the events the marketplace program itself logged
+ * (see {@link settlementFactsIn}). Null when the log holds no such record.
+ */
+export async function settlementFactsFromLogs(
+  logs: readonly string[],
+  task: Address,
+  worker: Address,
+  creator: Address,
+): Promise<SettlementFacts | null> {
+  const events = parseAgencCoordinationEvents(logs);
+  for (const event of events) {
+    if (event.eventName !== "RewardDistributed" || event.data.recipient !== worker) continue;
+    const [paid] = await findTaskPda({ creator, taskId: event.data.taskId });
+    if (paid !== task) continue;
+    let shares = 0n;
+    for (const other of events) {
+      if (
+        (other.eventName === "OperatorFeePaid" || other.eventName === "ReferrerFeePaid") &&
+        sameBytes(other.data.taskId, event.data.taskId)
+      ) {
+        shares += other.data.amount;
+      }
+    }
+    return {
+      worker,
+      priceLamports: event.data.amount + event.data.protocolFee + shares,
+      feeLamports: event.data.protocolFee,
+      listing: null,
+    };
+  }
+  return null;
+}
+
+/**
+ * The service `task` was hired from, from the program's own hire event in a
+ * transaction's log: only when it names this job, its buyer `creator` and
+ * the agent `worker`. Null when the log holds no such event.
+ */
+export function hiredListingFromLogs(
+  logs: readonly string[],
+  task: Address,
+  creator: Address,
+  worker: Address,
+): Address | null {
+  for (const event of parseAgencCoordinationEvents(logs)) {
+    if (event.eventName !== "ServiceListingHired") continue;
+    const hire = event.data;
+    if (hire.task === task && hire.buyer === creator && hire.providerAgent === worker) return hire.listing;
+  }
+  return null;
+}
+
+function logsOf(value: unknown): string[] | null {
+  const answer = record(value);
+  const meta = record(answer?.meta);
+  if (meta === null || meta.err !== null) return null;
+  const logs = meta.logMessages;
+  return Array.isArray(logs) && logs.every((line) => typeof line === "string") ? (logs as string[]) : null;
+}
+
 /** How far back a job's history is read for the transaction that paid for it. */
 export const SETTLEMENT_HISTORY_LIMIT = 20;
 
@@ -121,6 +231,45 @@ export interface SettlementHistoryRpc {
     signature: string,
     config: { commitment: "confirmed"; encoding: "jsonParsed"; maxSupportedTransactionVersion: 0 },
   ): { send(): Promise<unknown> };
+}
+
+/**
+ * What the transaction that paid for finishing `task` says (see
+ * {@link settlementFactsIn}), from the job's own recent history on the
+ * chain, newest first. `creator` is the job's buyer, as its record or its
+ * marker names it. Null when none of it settles the job. Throws when the
+ * history cannot be read.
+ */
+export async function readSettlementFacts(
+  rpc: SettlementHistoryRpc,
+  task: Address,
+  creator: Address,
+  options: { listing?: boolean; limit?: number } = {},
+): Promise<SettlementFacts | null> {
+  const limit = options.limit ?? SETTLEMENT_HISTORY_LIMIT;
+  const history = await rpc.getSignaturesForAddress(task, { limit, commitment: "confirmed" }).send();
+  let facts: SettlementFacts | null = null;
+  for (const entry of history) {
+    if (typeof entry.signature !== "string" || entry.err !== null) continue;
+    const transaction = await rpc
+      .getTransaction(entry.signature, {
+        commitment: "confirmed",
+        encoding: "jsonParsed",
+        maxSupportedTransactionVersion: 0,
+      })
+      .send();
+    if (facts === null) {
+      facts = await settlementFactsIn(transaction, task, entry.signature, creator);
+      // Newest first: what was read before the settlement came after it.
+      if (facts !== null && options.listing !== true) return facts;
+      continue;
+    }
+    // The hire came before the settlement: its event names the service.
+    const logs = logsOf(transaction);
+    const listing = logs === null ? null : hiredListingFromLogs(logs, task, creator, facts.worker);
+    if (listing !== null) return { ...facts, listing };
+  }
+  return facts;
 }
 
 /**

@@ -2,9 +2,15 @@
 //
 // The marketplace lets a job be posted, or a service be hired, only once an
 // approver has recorded that its words passed the safety check. Recording
-// takes a deposit from the approver that never comes back, so the approver
-// does not pay it. It signs the record and hands the transaction to whoever
-// asked, who pays the deposit and the fee and sends it.
+// takes a deposit, which the approver does not pay. It signs the record and
+// hands the transaction to whoever asked, who pays the deposit and the fee
+// and sends it.
+//
+// For a job (revision 9) the one who asked pays the record's deposit itself,
+// as the record's rent payer, and the record remembers that: when the
+// finished job is tidied, the deposit comes back to that wallet. For a
+// service the deposit is still a plain transfer to the approver and does not
+// come back.
 //
 // That transaction was built somewhere else and is about to be signed with
 // one of this wallet's keys, so nothing in it is taken on trust. It is read
@@ -51,7 +57,10 @@ const MAX_TRANSACTION_BYTES = 1232;
 const STATUS_CLEAN = 0;
 const SYSTEM_TRANSFER = 2;
 
-/** The deposit behind the permanent record one approval creates. Never returned. */
+/**
+ * The deposit behind the record one approval creates. A job's comes back to
+ * the buyer when the job is tidied (revision 9); a service's does not.
+ */
 export function approvalDeposit(chain: Chain, kind: ApprovalTarget["kind"]): Promise<bigint> {
   return chain.getMinimumBalanceForRentExemption(
     kind === "task" ? getTaskModerationSize() : getListingModerationSize(),
@@ -82,7 +91,11 @@ function sameBytes(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
 export interface CheckedApproval {
   /** The transaction, decoded. Signed by the approver, not yet by the payer. */
   transaction: Transaction;
-  /** What it moves from the payer to the approver. Zero when the record exists. */
+  /**
+   * What it moves from the payer to the approver. Zero when the record
+   * exists, and always zero for a job: there the payer funds the record
+   * itself and gets the deposit back when the job is tidied.
+   */
   depositLamports: bigint;
 }
 
@@ -91,10 +104,13 @@ export interface CheckedApproval {
  *
  *  - paid for by `payer` and signed by `payer` and `moderator`, nobody else;
  *  - with no account that is not written out in it (no lookup tables);
- *  - at most a plain transfer from `payer` to `moderator` of no more than
- *    `maxDepositLamports`, and then
- *  - one "record this approval" instruction of the marketplace program, for
- *    this target and this hash, as passed, in which `payer` takes no part.
+ *  - for a service: at most a plain transfer from `payer` to `moderator` of
+ *    no more than `maxDepositLamports`, and then one "record this approval"
+ *    instruction of the marketplace program, for this target and this hash,
+ *    as passed, in which `payer` takes no part;
+ *  - for a job (revision 9): only the "record this approval" instruction,
+ *    for this target and this hash, in which `payer` is named once, as the
+ *    record's rent payer.
  *
  * Nothing else may be in it: no other program, no fee bidding, no second
  * transfer. Pure: no network, nothing signed.
@@ -152,6 +168,10 @@ export async function checkApprovalTransaction(
 
   const instructions = message.instructions;
   if (instructions.length !== 1 && instructions.length !== 2) refuse("the wrong number of steps");
+  // A job's record is paid by its rent payer, never by a transfer.
+  if (expected.target.kind === "task" && instructions.length !== 1) {
+    refuse("a job's approval pays its deposit by a transfer");
+  }
 
   let depositLamports = 0n;
   if (instructions.length === 2) {
@@ -191,19 +211,24 @@ export async function checkApprovalTransaction(
   const subject = target.kind === "task" ? target.task : target.listing;
   const named = (approval.accountIndices ?? []).map((index) => accounts[index]);
   // The fifth place holds the approver's roster entry, or the program's own
-  // address when the approver is the marketplace's authority and has none.
+  // address when the approver is the marketplace's authority and has none. A
+  // job's approval (revision 9) names its rent payer last: the payer itself.
   if (
-    named.length !== 6 ||
+    named.length !== (target.kind === "task" ? 7 : 6) ||
     named[0] !== config ||
     named[1] !== subject ||
     named[2] !== moderator ||
     named[3] !== record ||
     (named[4] !== roster && named[4] !== AGENC_COORDINATION_PROGRAM_ADDRESS) ||
-    named[5] !== SYSTEM_PROGRAM_ADDRESS
+    named[5] !== SYSTEM_PROGRAM_ADDRESS ||
+    (target.kind === "task" && named[6] !== expected.payer)
   ) {
     refuse("the approval is for something else");
   }
-  if (named.includes(expected.payer)) refuse("the payer takes part in the approval");
+  const payerPlaces = named.filter((account) => account === expected.payer).length;
+  if (payerPlaces !== (target.kind === "task" ? 1 : 0)) {
+    refuse("the payer takes part in the approval");
+  }
 
   const decoder =
     target.kind === "task"

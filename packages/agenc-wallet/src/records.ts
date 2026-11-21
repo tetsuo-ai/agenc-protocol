@@ -18,12 +18,21 @@
 //    than the list and the ratings account for, the finished jobs that name
 //    its services' descriptions are found on the chain, and the transaction
 //    that paid for each one says which agent did it (settlement.ts).
+//  - Compacted jobs (revision 9): tidying a finished job now compacts its
+//    record into a small marker that keeps only its buyer and that it was
+//    finished. Such a job counts when the transaction that paid for it,
+//    whose events the program logged, says which agent it paid, the price
+//    and the fee; its rating or its hire's own event says which service it
+//    was. A marker no longer names the service's description, so the scan
+//    by description cannot find it: unless the marketplace's list or a
+//    rating names it, a compacted job is not seen.
 //
 // The jobs are then weighed by money (trust.ts), and the marketplace's own
 // accounts are left out (first-party.ts).
 import type { Address } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  facade,
   findAgentStatsPda,
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
@@ -40,6 +49,7 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain, RawAccount } from "./chain.js";
 import type { MarketServices } from "./services.js";
+import type { SettlementFacts } from "./settlement.js";
 import { isFirstPartyJob, tally, type FirstParty, type PaidJob, type TrustRecord } from "./trust.js";
 
 /** What is known of the agent behind a service. */
@@ -123,7 +133,28 @@ interface FinishedTask {
   listingSpecHex: string;
 }
 
-function finishedTask(account: RawAccount | null): FinishedTask | null {
+/** A finished job whose record was compacted: only its buyer is left. */
+interface CompactedTask {
+  compacted: true;
+  buyer: string;
+}
+
+function compactedTask(account: RawAccount | null): CompactedTask | null {
+  if (account === null) return null;
+  let read: facade.TaskAccountRead;
+  try {
+    read = facade.decodeTaskAccount({ owner: account.owner, data: account.data });
+  } catch {
+    return null;
+  }
+  return read.kind === "closed" && read.status === "completed"
+    ? { compacted: true, buyer: read.marker.creator }
+    : null;
+}
+
+function finishedTask(account: RawAccount | null): FinishedTask | CompactedTask | null {
+  const compacted = compactedTask(account);
+  if (compacted !== null) return compacted;
   const task = decoded(account, getTaskDiscriminatorBytes(), (data) => getTaskDecoder().decode(data));
   if (task === null) return null;
   if (Number(task.status) !== TaskStatus.Completed) return null;
@@ -149,6 +180,11 @@ export interface RecordSource {
    * so this is kept from one read to the next.
    */
   settledBy?: Map<string, string | null>;
+  /**
+   * What each compacted job's settlement said, as looked up so far, or null
+   * when its history holds none. Kept from one read to the next too.
+   */
+  settledFacts?: Map<string, SettlementFacts | null>;
 }
 
 // Where a job's record keeps what the scan for tidied jobs filters on: its
@@ -389,10 +425,68 @@ export async function readMarketRecord(source: RecordSource, rows: readonly Reco
     specListings.set(key, [...(specListings.get(key) ?? []), row.listing]);
   }
   const jobs: PaidJob[] = [];
-  tasks.forEach((task, index) => {
-    const record = finishedTask(taskAccounts[index] ?? null);
-    if (record === null) return;
+  const factsCache = source.settledFacts ?? new Map<string, SettlementFacts | null>();
+  let factLookups = 0;
+  let factsFailed = false;
+  let pending = settled.pending;
+  for (const [index, task] of tasks.entries()) {
+    const found = finishedTask(taskAccounts[index] ?? null);
+    if (found === null) continue;
     const rating = ratings.get(task);
+    if ("compacted" in found) {
+      // A compacted job counts only by what the transaction that paid for
+      // it says. The agent it paid must be the one the list or the rating
+      // names. Its rating, or the event the program logged when it was
+      // hired, ties it to one service.
+      let paid = factsCache.get(task);
+      if (paid === undefined) {
+        const find = source.chain.findSettlement;
+        if (find === undefined) continue;
+        const named = claimed.get(task);
+        if (factsFailed) {
+          if (named !== undefined) unread.add(named);
+          continue;
+        }
+        if (factLookups >= SETTLEMENT_LOOKUPS_PER_READ) {
+          pending += 1;
+          continue;
+        }
+        factLookups += 1;
+        try {
+          // Only an unrated job needs its hire read for its service.
+          paid = await find(task as Address, found.buyer as Address, { listing: rating === undefined });
+        } catch {
+          factsFailed = true;
+          if (named !== undefined) unread.add(named);
+          continue;
+        }
+        factsCache.set(task, paid);
+      }
+      if (paid === null) continue;
+      const ratedProvider =
+        rating !== undefined && listingProvider.has(rating.listing)
+          ? listingProvider.get(rating.listing)!
+          : null;
+      const provider = ratedProvider ?? claimed.get(task) ?? null;
+      if (provider === null || provider !== paid.worker) continue;
+      // The service: the rating's, else the one the hire's own event names
+      // when it is one of this agent's services.
+      const hiredFrom =
+        paid.listing !== null && listingProvider.get(paid.listing) === provider ? paid.listing : null;
+      const job: PaidJob = {
+        task,
+        listing: ratedProvider !== null ? rating!.listing : hiredFrom,
+        provider,
+        buyer: found.buyer,
+        priceLamports: paid.priceLamports,
+        feeLamports: paid.feeLamports,
+        score: rating !== undefined && rating.buyer === found.buyer ? rating.score : null,
+      };
+      if (isFirstPartyJob(job, facts.get(provider)?.wallet ?? null, firstParty)) continue;
+      jobs.push(job);
+      continue;
+    }
+    const record = found;
     // A rating ties its job to a service, and so to its agent, for good;
     // otherwise the job's description does, when it names exactly one of
     // the agent's services.
@@ -405,7 +499,7 @@ export async function readMarketRecord(source: RecordSource, rows: readonly Reco
       const matches = specListings.get(`${provider} ${record.listingSpecHex}`) ?? [];
       listing = matches.length === 1 ? matches[0]! : null;
     }
-    if (provider === null) return;
+    if (provider === null) continue;
     const job: PaidJob = {
       task,
       listing,
@@ -416,9 +510,9 @@ export async function readMarketRecord(source: RecordSource, rows: readonly Reco
       // Only the job's own buyer rates it.
       score: rating !== undefined && rating.buyer === record.buyer ? rating.score : null,
     };
-    if (isFirstPartyJob(job, facts.get(provider)?.wallet ?? null, firstParty)) return;
+    if (isFirstPartyJob(job, facts.get(provider)?.wallet ?? null, firstParty)) continue;
     jobs.push(job);
-  });
+  }
 
   const byListing = new Map<string, PaidJob[]>();
   const byProvider = new Map<string, PaidJob[]>();
@@ -431,7 +525,7 @@ export async function readMarketRecord(source: RecordSource, rows: readonly Reco
     providers: new Map([...byProvider].map(([agent, list]) => [agent, tally(list)])),
     facts,
     unread,
-    pending: settled.pending,
+    pending,
   };
 }
 
@@ -461,7 +555,11 @@ export interface RecordKeeper {
 /** Keep one record, read in the background and used for a few minutes. */
 export function createRecordKeeper(source: RecordSource, now: () => number = Date.now): RecordKeeper {
   // Who each finished job paid is looked up once and kept: it never changes.
-  const reader: RecordSource = { ...source, settledBy: source.settledBy ?? new Map() };
+  const reader: RecordSource = {
+    ...source,
+    settledBy: source.settledBy ?? new Map(),
+    settledFacts: source.settledFacts ?? new Map(),
+  };
   let known: { at: number; record: MarketRecord } | null = null;
   let reading: Promise<void> | null = null;
   let failedAt: number | null = null;

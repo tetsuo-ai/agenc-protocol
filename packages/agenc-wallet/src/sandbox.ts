@@ -23,6 +23,7 @@ import {
   type Address,
   type Instruction,
   type KeyPairSigner,
+  type TransactionSigner,
 } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -42,6 +43,7 @@ import {
   getProtocolConfigEncoder,
   getServiceListingDecoder,
   getTaskModerationSize,
+  parseAgencCoordinationEvents,
   taskThread,
   values,
   type GpaFilter,
@@ -67,7 +69,7 @@ import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
-import { settlementOf } from "./settlement.js";
+import { hiredListingFromLogs, settlementFactsFromLogs, settlementOf } from "./settlement.js";
 import {
   buildJobSpec,
   decodeResultPointer,
@@ -342,6 +344,17 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     if (data.length < hireDiscriminator.length || hireDiscriminator.some((byte, index) => data[index] !== byte)) return null;
     return data;
   };
+  /** A job whose record was compacted into a Completed marker (revision 9). */
+  const compactedFinished = (task: Address): boolean => {
+    const found = svm.getAccount(task);
+    if (!found || !found.exists) return false;
+    try {
+      const read = facade.decodeTaskAccount({ owner: found.programAddress, data: Uint8Array.from(found.data) });
+      return read.kind === "closed" && read.status === "completed";
+    } catch {
+      return false;
+    }
+  };
   const rememberHire = (account: Address): void => {
     const data = hireRecordData(account);
     if (data === null) return;
@@ -352,9 +365,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       // Not a hire record after all; nothing to remember.
     }
   };
-  // The agent each settled job paid, from the transactions that settled
-  // them: the history the live network keeps and litesvm does not.
+  // The agent each settled job paid, and the log of the transaction that
+  // settled it: the history the live network keeps and litesvm does not.
   const settledBy = new Map<Address, Address>();
+  const settledLogs = new Map<Address, readonly string[]>();
+  // The log of the transaction that hired each job, which names its service.
+  const hireLogs = new Map<Address, readonly string[]>();
   const gpa: ProgramAccountsTransport = {
     async getProgramAccounts({ filters }) {
       const out: Array<{ address: Address; data: Uint8Array }> = [];
@@ -393,7 +409,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             accounts: accounts as Address[],
             data: Uint8Array.from(instruction.data ?? []),
           });
-          if (settled !== null) settledBy.set(settled.task, settled.worker);
+          if (settled !== null) {
+            settledBy.set(settled.task, settled.worker);
+            settledLogs.set(settled.task, result.logs);
+          }
+        }
+        for (const event of parseAgencCoordinationEvents(result.logs)) {
+          if (event.eventName === "ServiceListingHired") hireLogs.set(event.data.task, result.logs);
         }
       } catch {
         // Indexing is best effort; the transaction itself succeeded.
@@ -444,6 +466,14 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     gpa,
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
+    findSettlement: async (task, creator, options) => {
+      const worker = settledBy.get(task);
+      const logs = settledLogs.get(task);
+      if (worker === undefined || logs === undefined) return null;
+      const facts = await settlementFactsFromLogs(logs, task, worker, creator);
+      if (facts === null || options?.listing !== true) return facts;
+      return { ...facts, listing: hiredListingFromLogs(hireLogs.get(task) ?? [], task, creator, worker) };
+    },
   };
 
   const moderatorClient = chain.clientFor(market.moderator.signer);
@@ -499,19 +529,25 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     record: Address,
     recordSpace: number,
     instruction: Instruction,
+    payerFundsRecord?: TransactionSigner,
   ): Promise<ApprovalPayment> {
     const moderator = market.moderator.signer;
     const full = BigInt(svm.minimumBalanceForRentExemption(BigInt(recordSpace)));
     const held = readInfo(record);
     // A record that exists is reused; an address somebody already sent money
-    // to is topped up to the full deposit; a new record takes all of it.
-    const deposit =
-      held === null
+    // to is topped up to the full deposit; a new record takes all of it. A
+    // job's record (revision 9) is funded by its payer as rent payer instead,
+    // so no transfer goes to the approver.
+    const deposit = payerFundsRecord !== undefined
+      ? 0n
+      : held === null
         ? full
         : held.owner !== SYSTEM_PROGRAM_ADDRESS || held.lamports >= full
           ? 0n
           : full - held.lamports;
-    const payerSigner = createNoopSigner(payer);
+    // One signer object per address: the rent payer and the fee payer of a
+    // job's approval are the same wallet.
+    const payerSigner = payerFundsRecord ?? createNoopSigner(payer);
     const latest = await transport.getLatestBlockhash();
     const message = pipe(
       createTransactionMessage({ version: 0 }),
@@ -576,8 +612,14 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return rows;
     },
     async finishedJobs(provider) {
+      // Revision 9: tidying compacts a finished job's record into a marker,
+      // so the marketplace keeps the history of finished jobs itself: a hire
+      // whose record was compacted after it finished is still named.
       return [...hiredFrom]
-        .filter(([, hire]) => hire.provider === provider && hireRecordData(hire.link) !== null)
+        .filter(
+          ([task, hire]) =>
+            hire.provider === provider && (hireRecordData(hire.link) !== null || compactedFinished(task)),
+        )
         .map(([task]) => task);
     },
     async trustedModerators() {
@@ -656,16 +698,21 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         jobSpecHash: hash.bytes,
         moderator: market.moderator.address,
       });
+      // Revision 9: the buyer pays the record's rent as its rent payer and
+      // gets it back when the finished job is tidied.
+      const payerSigner = createNoopSigner(input.payer);
       return approvalFor(
         input.payer,
         record,
         getTaskModerationSize(),
         (await facade.recordTaskModeration({
           moderator: market.moderator.signer,
+          rentPayer: payerSigner,
           task: input.task,
           jobSpecHash: hash.bytes,
           ...CLEAN,
         })) as Instruction,
+        payerSigner,
       );
     },
     async fetchResult({ proofHashHex, resultData }) {

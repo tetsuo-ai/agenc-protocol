@@ -31,7 +31,11 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
-import { readSettlementWorker } from "./settlement.js";
+import {
+  readSettlementFacts,
+  readSettlementWorker,
+  type SettlementFacts,
+} from "./settlement.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
 const CLOCK_SYSVAR_ADDRESS = address("SysvarC1ock11111111111111111111111111111111");
@@ -84,6 +88,18 @@ export interface Chain {
    * Absent where the chain keeps no history to read.
    */
   findSettlementWorker?(task: Address): Promise<Address | null>;
+  /**
+   * What the transactions of a finished task say: the agent it paid, the
+   * job's whole price and the marketplace's fee, read from the task's
+   * history (see `settlementFactsIn`), and, when `listing` is asked for, the
+   * service its hire named. `creator` is the task's buyer. Null when none of
+   * the history settles the task. Absent where the chain keeps no history.
+   */
+  findSettlement?(
+    task: Address,
+    creator: Address,
+    options?: { listing?: boolean },
+  ): Promise<SettlementFacts | null>;
 }
 
 /** A System Program transfer, built by hand so no extra package is needed. */
@@ -394,6 +410,8 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
+    findSettlement: (task, creator, options) =>
+      network(() => readSettlementFacts(rpc, task, creator, options)),
   };
 }
 

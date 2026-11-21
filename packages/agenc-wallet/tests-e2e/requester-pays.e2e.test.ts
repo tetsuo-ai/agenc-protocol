@@ -43,7 +43,7 @@ import { BASE_FEE_LAMPORTS, transferInstruction, type Chain } from "../src/chain
 import type { AgentView } from "../src/client/types.js";
 import type { Sandbox } from "../src/sandbox.js";
 import type { ApprovalPayment, MarketServices } from "../src/services.js";
-import { CENT, checkCost, eventually, startWorld, type World } from "./harness.js";
+import { CENT, MARKER_SPACE, checkCost, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -269,10 +269,10 @@ describe("the wallet pays for its own approvals", () => {
     const approver = sandbox.market.moderator.address;
     const rent = (space: number) => sandbox.chain.getMinimumBalanceForRentExemption(space);
 
-    // The cost is part of what every job is said to cost before it is hired.
-    expect(BigInt((await wallet.networkFee()).lamports)).toBe(
-      (await rent(466)) + (await rent(getTaskModerationSize())) + 30_000n,
-    );
+    // What every job is said to cost before it is hired, and keeps: since
+    // revision 9 only the marker its tidied record is compacted into and the
+    // fees. The check's deposit comes back with the tidy.
+    expect(BigInt((await wallet.networkFee()).lamports)).toBe((await rent(MARKER_SPACE)) + 30_000n);
 
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, POLICY);
@@ -302,11 +302,10 @@ describe("the wallet pays for its own approvals", () => {
 
     const { approval } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
 
-    // What never comes back: the job record, the first hire's one-time
-    // record, and the deposit behind the safety check of the request.
-    expect(BigInt(approval!.fees.lamports)).toBe(
-      (await rent(466)) + (await rent(67)) + (await rent(getTaskModerationSize())),
-    );
+    // What never comes back: the marker the tidied job record is compacted
+    // into and the first hire's one-time record. The deposit behind the
+    // safety check of the request comes back since revision 9.
+    expect(BigInt(approval!.fees.lamports)).toBe((await rent(MARKER_SPACE)) + (await rent(67)));
     expect(BigInt(approval!.deposits.lamports)).toBeGreaterThan(BigInt(approval!.fees.lamports));
   });
 
@@ -471,7 +470,9 @@ describe("the wallet pays for its own approvals", () => {
     // Hired, but not posted: the wallet would not sign what came back.
     expect(seen.asked).toBe(1);
     expect(job.status).toBe("starting");
-    expect(lines.join("\n")).toMatch(/approval transaction refused: the transfer is \d+, above the deposit of \d+/);
+    // Revision 9: a job's approval never pays its deposit to the approver,
+    // so any transfer in it is refused, the greedy one first of all.
+    expect(lines.join("\n")).toMatch(/approval transaction refused: a job's approval pays its deposit by a transfer/);
     expect(await world.balance(approver)).toBe(before.approver);
     expect(await approvalRecordOf(world, job.task as Address)).toBeUndefined();
     // It keeps refusing for as long as the answer stays the same.
@@ -487,13 +488,13 @@ describe("the wallet pays for its own approvals", () => {
     expect(refunded.statusText).toMatch(/price returned/);
     expect(await world.balance(approver)).toBe(before.approver);
     // Gone from the buyer: only what the network keeps for a job that was
-    // hired, cancelled and tidied (its record, the first hire's one-time
-    // record, three fees, and, since revision 9, the record of turn-downs
-    // and cancels this first cancel started). Not the check, and not the
-    // ten cents.
+    // hired, cancelled and tidied (since revision 9 the marker its record
+    // was compacted into, the first hire's one-time record, three fees, and
+    // the record of turn-downs and cancels this first cancel started). Not
+    // the check, and not the ten cents.
     const rent = (space: number) => sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(before.buyer - (await world.balance(agent.address))).toBe(
-      (await rent(466)) + (await rent(67)) + (await rent(129)) + 3n * 5_000n,
+      (await rent(MARKER_SPACE)) + (await rent(67)) + (await rent(129)) + 3n * 5_000n,
     );
   });
 

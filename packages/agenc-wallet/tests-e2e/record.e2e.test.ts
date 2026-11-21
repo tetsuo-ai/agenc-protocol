@@ -118,11 +118,14 @@ describe("a service's record", () => {
     expect(await sandbox.services.finishedJobs!(provider)).toHaveLength(1);
 
     // A job nobody rated waits an hour for its stars, then is tidied: its
-    // link to the service closes, and the marketplace's list, which reads
-    // only what is still open, no longer names it.
+    // link to the service closes and (revision 9) its record is compacted
+    // into a marker that keeps no price. The marketplace keeps naming it,
+    // and the transaction that paid for it says the price and the fee.
     clock.now += 60 * 60_000 + 1_000;
     await wallet.tick();
-    expect(await sandbox.services.finishedJobs!(provider)).toEqual([]);
+    const task = (await sandbox.services.finishedJobs!(provider))[0]!;
+    const compacted = await sandbox.chain.readAccountInfo(task as Address);
+    expect(compacted?.data.length).toBe(56);
 
     const [after] = (await wallet.find({ query: "haiku" })).services;
     expect(after).toMatchObject({

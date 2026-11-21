@@ -6,7 +6,7 @@ import { SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, SolanaError } from "@solana/ki
 import { AgencError } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
-import { checkCost, startWorld, type World } from "./harness.js";
+import { CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -305,11 +305,13 @@ describe("crash safety", () => {
     await wallet.tick();
     const jobs = await wallet.listJobs({ role: "buying" }, true);
     expect(jobs).toHaveLength(1);
-    // Exactly one price left the wallet, plus what one job costs the network.
+    // Exactly one price left the wallet, plus what one tidied job keeps on
+    // the network (revision 9: the marker its record was compacted into, the
+    // first hire's record, the fees and the check's signatures).
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe("2000000");
     const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(before - (await world.balance(agent.address))).toBe(
-      2_000_000n + (await rent(466)) + (await rent(67)) + 4n * 5_000n + (await checkCost(world)),
+      2_000_000n + (await rent(MARKER_SPACE)) + (await rent(67)) + 4n * 5_000n + CHECK_FEE,
     );
   });
 

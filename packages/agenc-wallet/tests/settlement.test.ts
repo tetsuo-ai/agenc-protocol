@@ -2,16 +2,34 @@
 // it: only the program's own settlement of that very job counts, and only
 // when the transaction went through.
 import { describe, expect, it } from "vitest";
-import { getAddressDecoder, getBase58Decoder, type Address } from "@solana/kit";
+import {
+  fixEncoderSize,
+  getAddressDecoder,
+  getAddressEncoder,
+  getBase58Decoder,
+  getBytesEncoder,
+  getI64Encoder,
+  getOptionEncoder,
+  getStructEncoder,
+  getU16Encoder,
+  getU64Encoder,
+  type Address,
+} from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  findTaskPda,
+  OPERATOR_FEE_PAID_EVENT_DISCRIMINATOR,
+  REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR,
+  SERVICE_LISTING_HIRED_EVENT_DISCRIMINATOR,
   getAcceptTaskResultInstructionDataEncoder,
   getAutoAcceptTaskResultInstructionDataEncoder,
   getCloseTaskInstructionDataEncoder,
   getCompleteTaskInstructionDataEncoder,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
+  readSettlementFacts,
   readSettlementWorker,
+  settlementFactsIn,
   settlementOf,
   settlementWorkerIn,
   type SentInstruction,
@@ -142,5 +160,140 @@ describe("a job's history", () => {
   it("names nobody when none of it settles the job", async () => {
     const { rpc } = history([{ signature: "tidied", transaction: answer([asSent(tidy())], { signature: "tidied" }) }]);
     expect(await readSettlementWorker(rpc, TASK)).toBeNull();
+  });
+});
+
+// Revision 9: a tidied job's record is compacted into a marker without its
+// price, so what it paid is read from the events the program logged when it
+// settled, and its service from the event of its hire.
+const BUYER = at(4);
+const TASK_ID = new Uint8Array(32).fill(9);
+const LISTING = at(5);
+const [PAID_TASK] = await findTaskPda({ creator: BUYER, taskId: TASK_ID });
+
+function eventLine(discriminator: ArrayLike<number>, payload: Uint8Array): string {
+  const bytes = new Uint8Array(8 + payload.length);
+  bytes.set(discriminator, 0);
+  bytes.set(payload, 8);
+  return `Program data: ${Buffer.from(bytes).toString("base64")}`;
+}
+
+const rewardPayload = (taskId: Uint8Array, recipient: Address, amount: bigint, fee: bigint) =>
+  Uint8Array.from(
+    getStructEncoder([
+      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["recipient", getAddressEncoder()],
+      ["amount", getU64Encoder()],
+      ["protocolFee", getU64Encoder()],
+      ["timestamp", getI64Encoder()],
+    ]).encode({ taskId, recipient, amount, protocolFee: fee, timestamp: 1n }),
+  );
+
+const operatorPayload = (taskId: Uint8Array, amount: bigint) =>
+  Uint8Array.from(
+    getStructEncoder([
+      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["operator", getAddressEncoder()],
+      ["amount", getU64Encoder()],
+      ["operatorFeeBps", getU16Encoder()],
+      ["timestamp", getI64Encoder()],
+    ]).encode({ taskId, operator: at(6), amount, operatorFeeBps: 100, timestamp: 1n }),
+  );
+
+const hiredPayload = (task: Address, buyer: Address, provider: Address) =>
+  Uint8Array.from(
+    getStructEncoder([
+      ["listing", getAddressEncoder()],
+      ["task", getAddressEncoder()],
+      ["providerAgent", getAddressEncoder()],
+      ["buyer", getAddressEncoder()],
+      ["price", getU64Encoder()],
+      ["totalHires", getU64Encoder()],
+      ["openJobs", getU16Encoder()],
+      ["moderationAttestor", getOptionEncoder(getAddressEncoder())],
+      ["timestamp", getI64Encoder()],
+    ]).encode({
+      listing: LISTING,
+      task,
+      providerAgent: provider,
+      buyer,
+      price: 2_000_000n,
+      totalHires: 1n,
+      openJobs: 1,
+      moderationAttestor: null,
+      timestamp: 1n,
+    }),
+  );
+
+/** Lines the program itself logged, inside its own invocation. */
+const byProgram = (...lines: string[]) => [`Program ${PROGRAM} invoke [1]`, ...lines, `Program ${PROGRAM} success`];
+
+function paidAnswer(logs: string[], signature = "settled", task: Address = PAID_TASK): unknown {
+  const settled = answer([asSent(accept(task))], { signature }) as { meta: Record<string, unknown> };
+  settled.meta.logMessages = logs;
+  return settled;
+}
+
+describe("what a settlement paid (revision 9)", () => {
+  it("is the agent's share, the fee and any operator share, from the program's own events", async () => {
+    const logs = byProgram(
+      eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(TASK_ID, WORKER, 1_850_000n, 100_000n)),
+      eventLine(OPERATOR_FEE_PAID_EVENT_DISCRIMINATOR, operatorPayload(TASK_ID, 50_000n)),
+    );
+    expect(await settlementFactsIn(paidAnswer(logs), PAID_TASK, "settled", BUYER)).toEqual({
+      worker: WORKER,
+      priceLamports: 2_000_000n,
+      feeLamports: 100_000n,
+      listing: null,
+    });
+  });
+
+  it("counts nothing another program logged, nor an event of another job or another agent", async () => {
+    const reward = eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(TASK_ID, WORKER, 1n, 1n));
+    const foreign = [`Program ${at(7)} invoke [1]`, reward, `Program ${at(7)} success`];
+    expect(await settlementFactsIn(paidAnswer(foreign), PAID_TASK, "settled", BUYER)).toBeNull();
+    const otherJob = byProgram(
+      eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(new Uint8Array(32).fill(8), WORKER, 1n, 1n)),
+    );
+    expect(await settlementFactsIn(paidAnswer(otherJob), PAID_TASK, "settled", BUYER)).toBeNull();
+    const otherAgent = byProgram(
+      eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(TASK_ID, at(8), 1n, 1n)),
+    );
+    expect(await settlementFactsIn(paidAnswer(otherAgent), PAID_TASK, "settled", BUYER)).toBeNull();
+    // Another buyer gives another job address for the same id.
+    const logs = byProgram(reward);
+    expect(await settlementFactsIn(paidAnswer(logs), PAID_TASK, "settled", at(9))).toBeNull();
+  });
+
+  it("names the service its hire's event names, reading back only when asked", async () => {
+    const settledLogs = byProgram(
+      eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(TASK_ID, WORKER, 1_900_000n, 100_000n)),
+    );
+    const hiredLogs = byProgram(eventLine(SERVICE_LISTING_HIRED_EVENT_DISCRIMINATOR, hiredPayload(PAID_TASK, BUYER, WORKER)));
+    const entries = [
+      { signature: "tidied", transaction: answer([asSent(tidy())], { signature: "tidied" }) },
+      { signature: "settled", transaction: paidAnswer(settledLogs) },
+      { signature: "hired", transaction: { ...(answer([], { signature: "hired" }) as object), meta: { err: null, logMessages: hiredLogs } } },
+    ];
+    const fetched: string[] = [];
+    const rpc: SettlementHistoryRpc = {
+      getSignaturesForAddress: () => ({
+        send: async () => entries.map((entry) => ({ signature: entry.signature, err: null })),
+      }),
+      getTransaction: (signature) => ({
+        send: async () => {
+          fetched.push(signature);
+          return entries.find((entry) => entry.signature === signature)?.transaction ?? null;
+        },
+      }),
+    };
+    expect(await readSettlementFacts(rpc, PAID_TASK, BUYER)).toMatchObject({ listing: null, priceLamports: 2_000_000n });
+    expect(fetched).toEqual(["tidied", "settled"]);
+    fetched.length = 0;
+    expect(await readSettlementFacts(rpc, PAID_TASK, BUYER, { listing: true })).toMatchObject({
+      worker: WORKER,
+      listing: LISTING,
+    });
+    expect(fetched).toEqual(["tidied", "settled", "hired"]);
   });
 });

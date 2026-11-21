@@ -17,6 +17,7 @@ import {
   findCreatorStatsPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
+  findEscrowPda,
   findHireRatingPda,
   findHireRecordPda,
   findListingModerationPda,
@@ -56,6 +57,7 @@ import {
   getTaskJobSpecDiscriminatorBytes,
   getTaskModerationDecoder,
   getTaskModerationDiscriminatorBytes,
+  getTaskMarkerSize,
   getTaskModerationSize,
   getTaskClaimDecoder,
   getTaskClaimDiscriminatorBytes,
@@ -405,9 +407,10 @@ export async function findTaskGate(
 
 /**
  * Lamports a purchase sets aside on top of the price: the deposits behind the
- * accounts it creates, plus fee headroom. Most deposits return when the
- * finished job is tidied. Two never do: the task record's own, and the one
- * behind the safety check of the job's request, which the buyer pays for.
+ * accounts it creates, plus fee headroom. Revision 9: almost all of it comes
+ * back when the finished job is tidied, the deposit behind the safety check
+ * of the job's request included. Only the small marker that stays where the
+ * job's record was keeps a deposit.
  */
 export function purchaseDeposits(
   chain: Chain,
@@ -433,7 +436,7 @@ async function jobDeposits(
   hired: boolean,
 ): Promise<{ total: bigint; kept: bigint }> {
   const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
-  const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent] =
+  const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent, markerRent] =
     await Promise.all([
       rent(TASK_ACCOUNT_SPACE),
       rent(getTaskEscrowSize()),
@@ -441,6 +444,7 @@ async function jobDeposits(
       rent(getTaskValidationConfigSize()),
       rent(TASK_JOB_SPEC_SPACE),
       rent(getTaskModerationSize()),
+      rent(getTaskMarkerSize()),
     ]);
   let total =
     taskRent +
@@ -450,7 +454,10 @@ async function jobDeposits(
     jobSpecRent +
     approvalRent +
     FEE_HEADROOM_LAMPORTS;
-  let kept = taskRent + approvalRent;
+  // Revision 9: tidying compacts the job's record into a marker, which keeps
+  // only its own deposit; the rest of the record's and the safety check's
+  // deposits come back.
+  let kept = markerRent;
   // The marketplace keeps one record per paying wallet of how often it posts:
   // made, and kept, on that wallet's first job of either kind.
   const [rateLimit] = await findCreateTaskHumanlessAuthorityRateLimitPda({ creator: payer });
@@ -781,6 +788,12 @@ export interface JobOnChain {
   } | null;
   /** While the job is turned down (reject_frozen): the turn-down. Null otherwise. */
   turnDown: TurnDownOnChain | null;
+  /**
+   * Revision 9: the job was tidied and its record compacted into a marker
+   * that keeps only how it ended. Its deadline, price and counts are then
+   * gone (read as 0).
+   */
+  closed: boolean;
 }
 
 /** Read a turned-down job's turn-down, or null when the job is not frozen. */
@@ -837,8 +850,33 @@ export async function inspectJob(
   task: Address,
   providerAgent: Address | null,
 ): Promise<JobOnChain | null> {
-  const account = await readTask(chain, task);
-  if (account === null) return null;
+  const read = await facade.readTask(snapshotReader(chain), task);
+  if (read.kind === "missing") return null;
+  if (read.kind === "closed") {
+    const submission = providerAgent === null ? null : await readSubmission(chain, task, providerAgent);
+    return {
+      status: read.status,
+      deadline: 0,
+      rewardLamports: 0n,
+      workers: 0,
+      completions: 0,
+      activated: false,
+      submission:
+        submission === null
+          ? null
+          : {
+              address: submission.address,
+              status: submission.account.status,
+              proofHashHex: values.bytesToHex(new Uint8Array(submission.account.proofHash)),
+              resultData: new Uint8Array(submission.account.resultData),
+              reviewDeadlineAt: Number(submission.account.reviewDeadlineAt),
+              submissionCount: submission.account.submissionCount,
+            },
+      turnDown: null,
+      closed: true,
+    };
+  }
+  const account = read.task;
   const status = STATUS_NAMES[Number(account.status)];
   if (status === undefined) {
     throw new WalletError("INTERNAL", "The marketplace reported a job state this wallet does not know.");
@@ -867,6 +905,7 @@ export async function inspectJob(
             submissionCount: submission.account.submissionCount,
           },
     turnDown,
+    closed: false,
   };
 }
 
@@ -1242,10 +1281,50 @@ export async function sendCancel(
   throw new WalletError("NOT_ALLOWED", "This job can no longer be cancelled.");
 }
 
+/** At most this many of a job's safety-check records are collected in one tidy. */
+const TIDY_MODERATION_RECORDS = 4;
+/** Where a safety-check record keeps its job: right after its kind (8 bytes). */
+const TASK_MODERATION_TASK_OFFSET = 8;
+
+/**
+ * The safety-check records of `task` whose deposit comes back to `buyer`:
+ * revision 9 records the buyer paid as rent payer. A record the approver paid
+ * goes back to the approver and is left alone.
+ */
+async function buyerPaidModerationRecords(
+  chain: Chain,
+  task: Address,
+  buyer: Address,
+): Promise<Address[]> {
+  const found = await resolveProgramAccountsTransport(chain.gpa).getProgramAccounts({
+    filters: [
+      { memcmp: { offset: 0, bytes: Uint8Array.from(getTaskModerationDiscriminatorBytes()) } },
+      { memcmp: { offset: TASK_MODERATION_TASK_OFFSET, bytes: Uint8Array.from(getAddressEncoder().encode(task)) } },
+    ],
+  });
+  const records: Address[] = [];
+  for (const { address, data } of found) {
+    let record: ReturnType<ReturnType<typeof getTaskModerationDecoder>["decode"]>;
+    try {
+      record = getTaskModerationDecoder().decode(data);
+    } catch {
+      continue;
+    }
+    if (record.task !== task) continue;
+    if (facade.taskModerationRentRecipient(record) !== buyer) continue;
+    records.push(address);
+    if (records.length === TIDY_MODERATION_RECORDS) break;
+  }
+  return records;
+}
+
 /**
  * Tidy a finished job: release the provider's capacity slot and collect the
- * deposits that can come back. Safe to call again; returns null when there
- * is nothing left to collect.
+ * deposits that can come back. Revision 9: the job's record is compacted
+ * into a small marker and the rest of its deposit comes back, with the
+ * safety-check record the buyer paid for and any escrow left behind. Safe to
+ * call again: on a marker it collects what is still left, and it returns null
+ * when there is nothing left to collect.
  */
 export async function sendTidy(
   chain: Chain,
@@ -1253,14 +1332,20 @@ export async function sendTidy(
   task: Address,
   providerAgent: Address | null,
 ): Promise<string | null> {
-  const account = await readTask(chain, task);
-  if (account === null) return null;
-  const status = Number(account.status);
-  if (status !== TaskStatus.Completed && status !== TaskStatus.Cancelled) return null;
-  if (account.currentWorkers !== 0) return null;
+  const read = await facade.readTask(snapshotReader(chain), task);
+  if (read.kind === "missing") return null;
+  if (read.kind === "task") {
+    const status = Number(read.task.status);
+    if (status !== TaskStatus.Completed && status !== TaskStatus.Cancelled) return null;
+    if (read.task.currentWorkers !== 0) return null;
+  } else if (read.marker.creator !== buyer.address) {
+    return null;
+  }
+  const closed = read.kind === "closed";
 
-  const hire = await readHireRecord(chain, task);
-  const activated = await isActivated(chain, task);
+  // A marker has no hire link or job-spec pointer left to close.
+  const hire = closed ? null : await readHireRecord(chain, task);
+  const activated = closed ? false : await isActivated(chain, task);
   const children: Parameters<typeof facade.closeTask>[0]["children"] & unknown[] = [];
 
   const [validationConfig] = await findTaskValidationConfigPda({ task });
@@ -1291,7 +1376,16 @@ export async function sendTidy(
     }
   }
 
-  if (hire === null && !activated && children.length === 0) return null;
+  for (const record of await buyerPaidModerationRecords(chain, task, buyer.address)) {
+    children.push({ kind: "namedRecipient", account: record, recipient: buyer.address });
+  }
+
+  // On a marker, a settled escrow that was left behind comes back too (the
+  // close passes the canonical escrow address by default).
+  const [escrow] = await findEscrowPda({ task });
+  const escrowLeft = closed && (await chain.readAccountInfo(escrow))?.owner === AGENC_COORDINATION_PROGRAM_ADDRESS;
+  // A Task always has its own deposit to give back; a marker only what is left.
+  if (closed && children.length === 0 && !escrowLeft) return null;
 
   const [creatorCompletionBond] = await findCreatorCompletionBondPda({
     task,

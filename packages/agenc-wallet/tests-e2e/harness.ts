@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Address } from "@solana/kit";
-import { approvalCost } from "../src/approval.js";
+import { APPROVAL_FEE_LAMPORTS, approvalCost } from "../src/approval.js";
 import type { Chain } from "../src/chain.js";
 import type { EarnOptions } from "../src/earn.js";
 import { startSandbox, type HouseService, type Sandbox } from "../src/sandbox.js";
@@ -77,12 +77,19 @@ export async function startWorld(options: {
 
 /**
  * What the safety check of one job's request costs the buyer who asked for
- * it: the deposit behind its permanent record and the fee of the two
- * signatures on its transaction. None of it comes back.
+ * it while the job is open: the deposit behind its record and the fee of the
+ * two signatures on its transaction. Revision 9: the deposit comes back when
+ * the job is tidied; the fee does not ({@link CHECK_FEE}).
  */
 export function checkCost(world: World): Promise<bigint> {
   return approvalCost(world.sandbox.chain, "task");
 }
+
+/** The part of a job's safety check that never comes back: its two signatures. */
+export const CHECK_FEE = APPROVAL_FEE_LAMPORTS;
+
+/** Size of the marker a tidied job's record is compacted into (revision 9). */
+export const MARKER_SPACE = 56;
 
 /** Poll `check` until it returns a value, or fail after `timeoutMs`. */
 export async function eventually<T>(

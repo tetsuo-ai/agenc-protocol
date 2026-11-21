@@ -2,7 +2,7 @@
 // service from its own allowance, a house provider delivers, the delivery is
 // approved, rated and tidied. Money is checked at every step.
 import { afterEach, describe, expect, it } from "vitest";
-import { CENT, checkCost, startWorld, type World } from "./harness.js";
+import { CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -57,18 +57,20 @@ describe("buying from an allowance", () => {
     expect(view.spent.lamports).toBe((20n * CENT).toString());
     expect(view.held.lamports).toBe("0");
     const final = await world.balance(agent.address);
-    // Everything the buyer paid, to the lamport: the price, the permanent job
-    // record, the one-time rate-limit record of a first hire, the rating's
-    // permanent record, five transaction fees (hire, post, pay, rate, tidy),
-    // and the safety check of its request. Every other deposit came back.
+    // Everything the buyer paid, to the lamport: the price, the marker its
+    // tidied job record was compacted into (revision 9), the one-time
+    // rate-limit record of a first hire, the rating's permanent record, five
+    // transaction fees (hire, post, pay, rate, tidy), and the signatures of
+    // the safety check of its request. Every other deposit came back, the
+    // safety check's included.
     const rent = (space: number) => world!.sandbox.chain.getMinimumBalanceForRentExemption(space);
     expect(funded - final).toBe(
       20n * CENT +
-        (await rent(466)) +
+        (await rent(MARKER_SPACE)) +
         (await rent(67)) +
         (await rent(439)) +
         5n * 5_000n +
-        (await checkCost(world)),
+        CHECK_FEE,
     );
     const [tidied] = await wallet.listJobs({ role: "buying" }, true);
     expect(tidied!.canRate).toBe(false);

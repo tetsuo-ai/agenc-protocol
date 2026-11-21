@@ -9,7 +9,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
-import { AgencError, findClaimPda, taskThread, values } from "@tetsuo-ai/marketplace-sdk";
+import {
+  AgencError,
+  findClaimPda,
+  getTaskMarkerSize,
+  taskThread,
+  values,
+} from "@tetsuo-ai/marketplace-sdk";
 import { isNetworkTrouble, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
@@ -31,7 +37,6 @@ import type {
 import {
   APPROVAL_FEE_LAMPORTS,
   approvalCost,
-  approvalDeposit,
   signApproval,
   type ApprovalTarget,
 } from "./approval.js";
@@ -88,7 +93,6 @@ import {
   sendRetireAgent,
   sendTidy,
   sendUpdateListing,
-  TASK_ACCOUNT_SPACE,
   taskAddressFor,
   turnDownReason,
   waitingHires,
@@ -1480,16 +1484,17 @@ export class AgencWallet {
 
   /**
    * What every job costs on top of its price and never comes back: the
-   * deposits behind the permanent job record and behind the safety check of
-   * the request, plus the fees of its transactions.
+   * deposit of the small marker that stays where the finished job's record
+   * was, plus the fees of its transactions. Revision 9: the rest of the
+   * record's deposit and the deposit behind the safety check of the request
+   * come back when the job is tidied.
    */
   async networkFee(): Promise<Money> {
-    const [record, approval, rate] = await Promise.all([
-      this.#chain.getMinimumBalanceForRentExemption(TASK_ACCOUNT_SPACE),
-      approvalDeposit(this.#chain, "task"),
+    const [marker, rate] = await Promise.all([
+      this.#chain.getMinimumBalanceForRentExemption(getTaskMarkerSize()),
       this.#displayRate(),
     ]);
-    return money(record + approval + JOB_TRANSACTION_FEES_LAMPORTS, rate);
+    return money(marker + JOB_TRANSACTION_FEES_LAMPORTS, rate);
   }
 
   /**

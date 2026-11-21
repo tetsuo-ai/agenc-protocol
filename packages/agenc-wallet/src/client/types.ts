@@ -197,10 +197,11 @@ export interface WalletOverview {
   backup: { at: number | null; upToDate: boolean };
   /**
    * What posting a request from the main balance costs on top of its reward
-   * (`wallet.post`): `kept` is not returned (the permanent job record, the
-   * safety check of the request, the fees, and on a first job the record of
-   * how often this balance posts); `setAside` comes back when the job ends.
-   * Null until it has been read.
+   * (`wallet.post`): `kept` is not returned (the marker that stays where the
+   * job's record was once it is tidied, the fees, and on a first job the
+   * record of how often this balance posts); `setAside` comes back when the
+   * job ends, the safety check's deposit included. Null until it has been
+   * read.
    */
   postCost: { kept: Money; setAside: Money } | null;
 }
