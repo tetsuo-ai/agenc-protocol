@@ -257,6 +257,11 @@ export interface JobRecord {
     rulingUntil: number | null;
     /** Whether the provider may dispute it now, by the cluster's clock at the last look. */
     disputeOpen: boolean;
+    /**
+     * The marketplace suspended the provider's agent at the last look, so it
+     * cannot dispute. Absent in records written before this was read.
+     */
+    providerSuspended?: boolean;
   };
   /**
    * Lamports the paying wallet lacked, at the last try, to cancel the job for

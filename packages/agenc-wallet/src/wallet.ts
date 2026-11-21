@@ -94,8 +94,10 @@ import {
   sendTidy,
   sendUpdateListing,
   taskAddressFor,
+  readTurnDownOnChain,
   turnDownReason,
   waitingHires,
+  type AmountWords,
   type ListingTerms,
   type RequestIntent,
   type TurnDownOnChain,
@@ -124,7 +126,7 @@ import {
 } from "./store.js";
 import { compareRecords, EMPTY_RECORD, type TrustRecord } from "./trust.js";
 import { KeyVault } from "./vault.js";
-import { activityView, approvalView, jobStatus, jobView, money } from "./views.js";
+import { activityView, amountWords, approvalView, jobStatus, jobView, money } from "./views.js";
 
 const MAIN_KEY = "main";
 /**
@@ -150,6 +152,9 @@ const NO_SHOW_GRACE_SECS = 120;
  * The first one may still be on its way, or the other side may have sent it.
  */
 const FROZEN_SETTLE_RETRY_MS = 120_000;
+/** Tries, and the gap between them, to read a turn-down back right after it lands. */
+const FREEZE_READ_BACK_TRIES = 3;
+const FREEZE_READ_BACK_GAP_MS = 500;
 const MAX_RESULT_TEXT = 20_000;
 /**
  * True when a delivery's text is an SVG drawing: after an optional byte-order
@@ -473,6 +478,7 @@ function turnDownRecord(turnDown: TurnDownOnChain | null): JobRecord["turnDown"]
     bondLamports: turnDown.bondLamports.toString(),
     rulingUntil: turnDown.rulingUntil,
     disputeOpen: turnDown.disputeOpen,
+    providerSuspended: turnDown.providerSuspended,
   };
 }
 
@@ -483,7 +489,8 @@ function sameTurnDown(a: JobRecord["turnDown"], b: JobRecord["turnDown"]): boole
     a.disputeUntil === b.disputeUntil &&
     a.bondLamports === b.bondLamports &&
     a.rulingUntil === b.rulingUntil &&
-    a.disputeOpen === b.disputeOpen
+    a.disputeOpen === b.disputeOpen &&
+    (a.providerSuspended === true) === (b.providerSuspended === true)
   );
 }
 
@@ -689,6 +696,11 @@ export class AgencWallet {
     if (fresh !== null) return fresh;
     const last = this.#store.state.lastSolUsd;
     return last !== null && this.#now() - last.ts < STALE_PRICE_MS ? last.value : null;
+  }
+
+  /** How a refusal for lack of money says its amounts: the person's money. */
+  async #amountWords(): Promise<AmountWords> {
+    return amountWords(await this.#displayRate());
   }
 
   async #toLamports(amount: AmountInput): Promise<bigint> {
@@ -2606,7 +2618,13 @@ export class AgencWallet {
   /** Cancel a hired job that never got posted, and record the refund. */
   async #cancelUnposted(job: JobRecord, message: string): Promise<void> {
     const payer = await this.#payerSigner(job);
-    const signature = await sendCancel(this.#chain, payer, job.task as Address, this.#provider(job));
+    const signature = await sendCancel(
+      this.#chain,
+      payer,
+      job.task as Address,
+      this.#provider(job),
+      await this.#amountWords(),
+    );
     this.#recordRefund(job.id, signature, message);
   }
 
@@ -3040,6 +3058,7 @@ export class AgencWallet {
           await this.#vault.signer(agent.keyId),
           task,
           provider,
+          await this.#amountWords(),
         );
       } catch (error) {
         if (error instanceof WalletError) throw error;
@@ -3395,6 +3414,22 @@ export class AgencWallet {
    * fixed. A first turn-down or cancel also starts the buyer's marketplace
    * record, paid once by the buyer.
    */
+  /**
+   * A turn-down this wallet just sent, read back from the chain: a few tries,
+   * since the freeze is confirmed but a node may lag. Null when it cannot be
+   * read yet.
+   */
+  async #readFreezeBack(task: Address, provider: Address): Promise<TurnDownOnChain | null> {
+    for (let attempt = 0; attempt < FREEZE_READ_BACK_TRIES; attempt += 1) {
+      const frozen = await readTurnDownOnChain(this.#chain, task, provider).catch(() => null);
+      if (frozen !== null) return frozen;
+      if (attempt + 1 < FREEZE_READ_BACK_TRIES) {
+        await new Promise((resolve) => setTimeout(resolve, FREEZE_READ_BACK_GAP_MS));
+      }
+    }
+    return null;
+  }
+
   async refundJob(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
     if (initial.phase === "needs_approval") {
@@ -3450,7 +3485,14 @@ export class AgencWallet {
             deliveryHashHex: delivery,
             requestHashHex: job.jobSpecHashHex,
           });
-          sent = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash);
+          sent = await sendRejectAndFreeze(
+            this.#chain,
+            payer,
+            task,
+            provider,
+            reason.hash,
+            await this.#amountWords(),
+          );
         } catch (error) {
           // The record a first turn-down starts is checked before signing,
           // and its message says what to add.
@@ -3472,12 +3514,18 @@ export class AgencWallet {
         }
         const { signature } = sent;
         this.#forgetRecordCost(job);
+        // Read the freeze back before answering, so the answer already has
+        // its clock, its bond and its rule. If the read fails, the job reads
+        // as a revision 9 turn-down just made (no clock) until the next look.
+        const frozen = await this.#readFreezeBack(task, provider);
+        const frozenRecord = turnDownRecord(frozen);
         this.#patchJob(jobId, (entry, draft) => {
           entry.chainStatus = "reject_frozen";
           entry.signatures.reject = signature;
           entry.providerRecorded = true;
-          // The dispute clock is read back from the chain on the next look.
-          entry.reviewDeadlineAt = null;
+          entry.reviewDeadlineAt = frozen === null ? null : (frozen.rulingUntil ?? frozen.disputeUntil);
+          if (frozenRecord === undefined) delete entry.turnDown;
+          else entry.turnDown = frozenRecord;
           this.#note(draft, {
             kind: "note",
             text: isRequest(entry)
@@ -3494,7 +3542,13 @@ export class AgencWallet {
       try {
         // Before anyone takes a request there is nobody to name; afterwards
         // the cancel names whoever holds it, once their deadline has passed.
-        const signature = await sendCancel(this.#chain, payer, task, this.#provider(job));
+        const signature = await sendCancel(
+          this.#chain,
+          payer,
+          task,
+          this.#provider(job),
+          await this.#amountWords(),
+        );
         this.#recordRefund(jobId, signature, null);
       } catch (error) {
         if (error instanceof WalletError) throw error;

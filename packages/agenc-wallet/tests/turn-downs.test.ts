@@ -74,9 +74,30 @@ describe("a turned-down job, for the buyer", () => {
       disputed: false,
       bond: { lamports: "10000000", usdCents: 100 },
       ifNobodyActs: "buyer_refunded",
+      providerSuspended: false,
     });
     // The buyer never disputes its own turn-down.
     expect(view.canDispute).toBe(false);
+  });
+
+  it("reads a turn-down just made as one under the new rule, before its clock is read back", () => {
+    // The answer to a turn-down carries its clock; when the read-back failed,
+    // the job has no turn-down and no clock yet, and that is never the old rule.
+    const { turnDown: _turnDown, ...base } = hire({ reviewDeadlineAt: null });
+    const view = jobView(base, context);
+    expect(view.status).toBe("in_review");
+    expect(view.statusText).toBe(
+      "You turned this down. If the provider does not dispute it in time, the price comes back.",
+    );
+    expect(view.turnDown).toEqual({
+      disputable: true,
+      disputeEndsAt: null,
+      disputed: false,
+      bond: null,
+      ifNobodyActs: "buyer_refunded",
+      providerSuspended: false,
+    });
+    expect(view.statusText).not.toMatch(/while it is reviewed|is paid/);
   });
 
   it("says a disputed turn-down is ruled by the reviewers, and the price comes back if nobody rules", () => {
@@ -174,8 +195,33 @@ describe("a turned-down job, for the provider", () => {
       refundBlockedLamports: "1000000",
     });
     expect(jobView(waiting, context).statusText).toBe(
-      "This job is due for its refund, which needs 0.001 SOL more in this wallet: a first cancel starts the wallet's marketplace record. Add it and the price comes back.",
+      "This job is due for its refund, which needs $0.10 more: a first cancel starts your marketplace record. Add it and the price comes back.",
     );
+    // What to add is rounded up, never down; without a rate it is exact SOL.
+    const { turnDown: _other, ...odd } = hire({ chainStatus: "open", refundBlockedLamports: "1000001" });
+    expect(jobView(odd, context).statusText).toMatch(/needs \$0\.11 more:/);
+    expect(jobView(waiting, { ...context, usdPerSol: null }).statusText).toMatch(/needs 0\.001 SOL more:/);
+  });
+
+  it("offers no dispute when the marketplace suspended the provider's agent", () => {
+    const suspended = working({
+      turnDown: {
+        disputable: true,
+        disputeUntil: NOW_SECS + 3 * 86_400,
+        bondLamports: "10000000",
+        rulingUntil: null,
+        disputeOpen: true,
+        providerSuspended: true,
+      },
+    });
+    const view = jobView(suspended, context);
+    expect(view.canDispute).toBe(false);
+    expect(view.turnDown?.providerSuspended).toBe(true);
+    expect(view.statusText).toBe(
+      "The buyer turned this down. The marketplace has suspended your agent, and a suspended agent cannot dispute. When the time to dispute ends in 3 days, the price goes back to the buyer.",
+    );
+    // Lifted again: the offer is back.
+    expect(jobView(working(), context).canDispute).toBe(true);
   });
 
   it("does not call an unpaid job a cancellation", () => {

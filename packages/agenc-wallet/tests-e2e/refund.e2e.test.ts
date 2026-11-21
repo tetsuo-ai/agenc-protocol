@@ -170,6 +170,18 @@ describe("refunds", () => {
     const beforeTurnDown = await world.balance(agent.address);
     const turnedDown = await wallet.refundJob(job.id, true);
     expect(turnedDown.status).toBe("in_review");
+    // The answer itself already has the new rule, its clock and its bond:
+    // the wallet read the freeze back before answering.
+    expect(turnedDown.statusText).toMatch(/The time to dispute it ends.*If nobody disputes it, the price comes back then/);
+    expect(turnedDown.turnDown).toMatchObject({
+      disputable: true,
+      disputed: false,
+      ifNobodyActs: "buyer_refunded",
+      providerSuspended: false,
+      bond: { lamports: values.MIN_DISPUTE_BOND_LAMPORTS.toString() },
+    });
+    expect(turnedDown.turnDown!.disputeEndsAt).not.toBeNull();
+    expect(turnedDown.reviewEndsAt).toBe(turnedDown.turnDown!.disputeEndsAt);
     expect(await turnDowns(world, looked.provider!)).toBe(1n);
     // The delivery carries a reason anyone can work out again from what the
     // chain holds: this delivery, this request, and why.
@@ -187,6 +199,8 @@ describe("refunds", () => {
       bond: { lamports: values.MIN_DISPUTE_BOND_LAMPORTS.toString() },
     });
     expect(held.reviewEndsAt).toBe(held.turnDown!.disputeEndsAt);
+    // The next look reads the same clock the answer had.
+    expect(held.turnDown!.disputeEndsAt).toBe(turnedDown.turnDown!.disputeEndsAt);
     expect(held.autoApproveAt).toBeNull();
     // Nothing more to decide while it is held, and no second turn-down.
     expect(held.canApprove).toBe(false);
