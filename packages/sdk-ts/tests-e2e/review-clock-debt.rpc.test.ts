@@ -35,6 +35,10 @@ describe.skipIf(!RPC_ENABLED)(
       });
       const [validation] = await sdk.findTaskValidationConfigPda({ task });
       const spec = id32();
+      // Collaborative (one worker): revision 9 refuses a worker's dispute
+      // during review on a single-worker review task (6425), so this coverage
+      // lives on a Collaborative review task, which keeps the dispute and the
+      // plain reject.
       await h.send("fund review task", creator.signer, [
         await sdk.facade.createTask({
           taskId,
@@ -46,7 +50,7 @@ describe.skipIf(!RPC_ENABLED)(
           rewardAmount: 4_000_000n,
           maxWorkers: 1,
           deadline: (await h.clock()) + 86400n,
-          taskType: 0,
+          taskType: 1,
           constraintHash: null,
           minReputation: 0,
           rewardMintArg: null,

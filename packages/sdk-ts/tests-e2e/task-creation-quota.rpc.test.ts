@@ -250,11 +250,21 @@ describe.skipIf(!RPC_ENABLED)(
         treasuryBefore + (reward * BigInt(h.config.protocolFeeBps)) / 10000n,
       );
       // Refund the other 255 funded tasks through actual signed cancellation.
+      // Revision 9 (E): the creator's first cancel creates its CreatorStats
+      // record, paid by the creator before the refund.
+      const [creatorStats] = await sdk.findCreatorStatsPda({
+        authority: wallet.address,
+      });
+      const creatorStatsRent = await h.rpc
+        .getMinimumBalanceForRentExemption(BigInt(sdk.getCreatorStatsSize()))
+        .send();
       for (let i = 1; i < jobs.length; i += 2) {
         const batch = jobs.slice(i, i + 2);
         let refundable = 0n;
         for (const job of batch)
           refundable += (await h.info(job.escrow))!.lamports;
+        const recordCost =
+          (await h.info(creatorStats)) === null ? creatorStatsRent : 0n;
         const before = await h.balance(wallet.address);
         const cancelled = await h.send(
           "refund unclaimed quota work",
@@ -270,7 +280,7 @@ describe.skipIf(!RPC_ENABLED)(
           ),
         );
         expect(await h.balance(wallet.address)).toBe(
-          before + refundable - cancelled.meta!.fee,
+          before + refundable - cancelled.meta!.fee - recordCost,
         );
         for (const job of batch) expect(await h.info(job.escrow)).toBeNull();
       }

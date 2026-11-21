@@ -142,7 +142,19 @@ describe.skipIf(!RPC_ENABLED)(
           defendant: defendant.agent,
           peers: peers.map((peer) => peer.agent),
         };
-        await h.send("initiate dispute", creator.signer, [
+        // Revision 9 (B): the filer posts a bond of 10% of the defendant's
+        // share with a 0.01 SOL floor. The share here is 1,000,000 lamports,
+        // so the bond is the floor.
+        const [bond] = await sdk.findDisputeBondPda({ dispute });
+        const bondAmount = sdk.values.disputeBondForTask(
+          await h.read(task, sdk.getTaskDecoder()),
+        );
+        expect(bondAmount).toBe(10_000_000n);
+        const bondRent = await h.rpc
+          .getMinimumBalanceForRentExemption(BigInt(sdk.getDisputeBondSize()))
+          .send();
+        const filerBefore = await h.balance(creator.signer.address);
+        const filed = await h.send("initiate dispute", creator.signer, [
           await sdk.facade.initiateDispute({
             task,
             disputeId,
@@ -157,6 +169,16 @@ describe.skipIf(!RPC_ENABLED)(
             resolutionType: scenario.resolutionType,
           }),
         ]);
+        const disputeRent = (await h.info(dispute))!.lamports;
+        expect(await h.balance(bond)).toBe(bondRent + bondAmount);
+        expect(await h.balance(creator.signer.address)).toBe(
+          filerBefore - disputeRent - bondRent - bondAmount - filed.meta!.fee,
+        );
+        expect(await h.read(bond, sdk.getDisputeBondDecoder())).toMatchObject({
+          amount: bondAmount,
+          filer: creator.signer.address,
+          respondent: defendant.signer.address,
+        });
         const exit = expiry
           ? await sdk.facade.expireDispute({
               dispute,
@@ -246,9 +268,35 @@ describe.skipIf(!RPC_ENABLED)(
         expect(await h.balance(creator.signer.address)).toBe(creatorBefore);
         expect(await h.balance(defendant.signer.address)).toBe(defendantBefore);
 
-        await h.send(expiry ? "expire" : "resolve", expiry ? crank : h.admin, [
-          exit,
-        ]);
+        const defendantClaimBalance = (await h.info(defendantClaim))?.lamports ?? 0n;
+        const respondentBefore = await h.balance(defendant.signer.address);
+        const exited = await h.send(
+          expiry ? "expire" : "resolve",
+          expiry ? crank : h.admin,
+          [exit],
+        );
+        // The bond settles in the same transaction: its principal goes back
+        // to the filer on an approval or an expiry and to the respondent on a
+        // rejection; its rent always goes back to the filer.
+        expect(await h.balance(bond)).toBe(0n);
+        const settledBond = sdk
+          .parseAgencCoordinationEvents(exited.meta!.logMessages ?? [])
+          .filter((event) => event.eventName === "DisputeBondSettled");
+        expect(settledBond).toHaveLength(1);
+        expect(settledBond[0]!.data).toMatchObject({
+          subject: dispute,
+          recipient: scenario.approve || expiry
+            ? creator.signer.address
+            : defendant.signer.address,
+          amount: bondAmount,
+        });
+        if (!scenario.approve) {
+          // A rejection: the respondent gets the principal, and its claim
+          // (rent and deposit) closes to its wallet at the ruling.
+          expect(
+            (await h.balance(defendant.signer.address)) - respondentBefore,
+          ).toBe(bondAmount + defendantClaimBalance);
+        }
         const finalizer = await sdk.facade.applyInitiatorSlash({
           dispute,
           initiatorAgent: creator.agent,
