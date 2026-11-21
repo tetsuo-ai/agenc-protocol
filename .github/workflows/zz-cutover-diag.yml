@@ -9,17 +9,30 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Time the cutover's endpoints from a hosted runner
+      - name: Time OtterSec and the cutover itself from a hosted runner
         shell: bash
         run: |
-          PD=E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw
+          set +e
           P=HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
           echo "runner ip: $(curl -s --max-time 10 https://api.ipify.org)"
-          for R in https://api.mainnet-beta.solana.com https://solana-rpc.publicnode.com https://solana-mainnet.public.blastapi.io https://solana.api.onfinality.io/public https://api.mainnet.solana.com; do
-            for t in 1 2 3; do
-              curl -s -o /tmp/g.json -w "$R genesis try$t: %{http_code} %{time_total}s\n" --max-time 30 -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}' $R
-              curl -s -o /tmp/pd.json -w "$R programdata try$t: %{http_code} %{size_download}B ttfb=%{time_starttransfer}s total=%{time_total}s\n" --max-time 30 -H 'Content-Type: application/json' -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$PD\",{\"encoding\":\"base64\",\"commitment\":\"finalized\"}]}" $R
-              head -c 160 /tmp/pd.json | tr -d '\n' | sed 's/"data":\["[A-Za-z0-9+\/=]*/"data":["~/'; echo
-            done
-          done
-          for t in 1 2 3; do curl -s -o /dev/null -w "osec status-all try$t: %{http_code} %{time_total}s\n" --max-time 30 https://verify.osec.io/status-all/$P; done
+          for t in 1 2 3 4 5; do curl -s -o /tmp/o.json -w "osec status-all try$t: %{http_code} ttfb=%{time_starttransfer}s total=%{time_total}s %{size_download}B\n" --max-time 40 -H 'accept: application/json' https://verify.osec.io/status-all/$P; head -c 200 /tmp/o.json; echo; done
+          curl -s -o /dev/null -w "npm registry: %{http_code} %{time_total}s\n" --max-time 30 https://registry.npmjs.org/@tetsuo-ai%2fprotocol
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
+      - name: Run the real cutover gate three times with per-call timing
+        shell: bash
+        env:
+          AGENC_MAINNET_RPC_URLS_JSON: '["https://api.mainnet-beta.solana.com","https://solana-rpc.publicnode.com"]'
+          EXPECTED_MAINNET_PROGRAM_SHA256: baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608
+          EXPECTED_VERIFIED_SOURCE_COMMIT: 154d286659592c799bd111bf416fdba7ccc704b4
+        run: |
+          set +e
+          cat > /tmp/timing.mjs <<'JS'
+          const orig = globalThis.fetch;
+          globalThis.fetch = async (url, init) => { const t = Date.now(); try { const r = await orig(url, init); console.error(`fetch ${String(url).slice(0,70)} -> ${r.status} in ${Date.now()-t} ms`); return r; } catch (e) { console.error(`fetch ${String(url).slice(0,70)} FAILED after ${Date.now()-t} ms: ${e.name}`); throw e; } };
+          JS
+          for t in 1 2 3; do echo "== cutover try $t"; node --import /tmp/timing.mjs scripts/release-policy.mjs cutover; echo "exit $?"; done
