@@ -145,7 +145,8 @@ pub struct ReclaimTerminalClaim<'info> {
     pub rent_recipient: UncheckedAccount<'info>,
 
     /// Revision 9 (E): receives a non-contest claim deposit once the claim is past
-    /// its expiry (the claim ended without a delivery).
+    /// its expiry (the claim ended without a delivery). A Competitive claim
+    /// stranded on a Completed task lost the race and keeps it (review R2-6).
     /// CHECK: validated against `task.creator`; used only as a lamport recipient.
     #[account(
         mut,
@@ -158,8 +159,8 @@ pub struct ReclaimTerminalClaim<'info> {
 /// terminal cleanup. A contest entry deposit is forfeited to the treasury (as
 /// before). Any other surplus is the claim deposit: the creator gets it once the
 /// claim is past its expiry, the worker keeps it before (a Collaborative peer
-/// stranded on a completed task). A Rejected claim delivered once, so its deposit
-/// came back at submit and its surplus is zero in practice.
+/// stranded on a completed task, design 5.5). A Rejected claim delivered once,
+/// so its deposit came back at submit and its surplus is zero in practice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ReclaimSurplus {
     Treasury,
@@ -168,16 +169,19 @@ enum ReclaimSurplus {
 }
 
 /// Review R1-1: a task a dispute was ever filed on returns the deposit to the
-/// worker (the dispute blocked it from delivering).
+/// worker (the dispute blocked it from delivering). Review R2-6: so does a
+/// non-contest Competitive claim stranded on a Completed task, whatever the
+/// time: it lost the race, it was not a no-show, and the buyer got its work.
 fn reclaim_surplus_recipient(
     contest: bool,
     dispute_filed: bool,
+    competitive_loser: bool,
     now: i64,
     claim_expires_at: i64,
 ) -> ReclaimSurplus {
     if contest {
         ReclaimSurplus::Treasury
-    } else if !dispute_filed && now > claim_expires_at {
+    } else if !dispute_filed && !competitive_loser && now > claim_expires_at {
         ReclaimSurplus::Creator
     } else {
         ReclaimSurplus::Worker
@@ -282,7 +286,8 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     // the worker, any surplus by `reclaim_surplus_recipient`. A contest no-show
     // forfeits its entry deposit to the treasury; revision 9 sends a non-contest
     // claim deposit to the creator after the claim's expiry and leaves it with
-    // the worker before. Only submitters are always made whole.
+    // the worker before, and with a Competitive race loser always. Only
+    // submitters are always made whole.
     let claim_info = claim.to_account_info();
     let total = claim_info.lamports();
     let surplus = if submitted_straggler {
@@ -294,6 +299,7 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     let recipient = reclaim_surplus_recipient(
         is_contest_configured_task(task),
         task.dispute_filed(),
+        task.status == TaskStatus::Completed && task.task_type == TaskType::Competitive,
         clock.unix_timestamp,
         claim.expires_at,
     );
@@ -406,25 +412,39 @@ mod tests {
     fn reclaim_surplus_follows_contest_and_claim_expiry() {
         let expires = 1_000;
         assert_eq!(
-            reclaim_surplus_recipient(true, false, expires - 1, expires),
+            reclaim_surplus_recipient(true, false, false, expires - 1, expires),
             ReclaimSurplus::Treasury
         );
         assert_eq!(
-            reclaim_surplus_recipient(true, false, expires + 1, expires),
+            reclaim_surplus_recipient(true, false, false, expires + 1, expires),
             ReclaimSurplus::Treasury
         );
         assert_eq!(
-            reclaim_surplus_recipient(false, false, expires, expires),
+            reclaim_surplus_recipient(false, false, false, expires, expires),
             ReclaimSurplus::Worker
         );
         assert_eq!(
-            reclaim_surplus_recipient(false, false, expires + 1, expires),
+            reclaim_surplus_recipient(false, false, false, expires + 1, expires),
             ReclaimSurplus::Creator
         );
         // Review R1-1: after a dispute filing the deposit stays with the worker.
         assert_eq!(
-            reclaim_surplus_recipient(false, true, expires + 1, expires),
+            reclaim_surplus_recipient(false, true, false, expires + 1, expires),
             ReclaimSurplus::Worker
+        );
+        // Review R2-6: a Competitive race loser keeps it whatever the time; a
+        // contest still forfeits its entry deposit to the treasury.
+        assert_eq!(
+            reclaim_surplus_recipient(false, false, true, expires + 1, expires),
+            ReclaimSurplus::Worker
+        );
+        assert_eq!(
+            reclaim_surplus_recipient(false, false, true, expires, expires),
+            ReclaimSurplus::Worker
+        );
+        assert_eq!(
+            reclaim_surplus_recipient(true, false, true, expires + 1, expires),
+            ReclaimSurplus::Treasury
         );
     }
 
