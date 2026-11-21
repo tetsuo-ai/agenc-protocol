@@ -454,8 +454,6 @@ fn process_cancel_task_impl<'info>(
 
     // Transfer refund to creator
     let is_token_task = task.reward_mint.is_some();
-    #[cfg(feature = "spl-token-rewards")]
-    let mut token_escrow_starting_amount: Option<u64> = None;
     #[cfg(not(feature = "spl-token-rewards"))]
     require!(!is_token_task, CoordinationError::InvalidTokenMint);
     #[cfg(feature = "spl-token-rewards")]
@@ -498,10 +496,9 @@ fn process_cancel_task_impl<'info>(
             &mint.key(),
             &accounts.escrow.key(),
         )?;
-        token_escrow_starting_amount = Some(
+        let token_escrow_starting_amount =
             anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
-                .map_err(|_| CoordinationError::TokenTransferFailed)?,
-        );
+                .map_err(|_| CoordinationError::TokenTransferFailed)?;
 
         let task_key = task.key();
         let task_key_bytes = task_key.to_bytes();
@@ -518,8 +515,25 @@ fn process_cancel_task_impl<'info>(
             token_program,
         )?;
 
-        // NOTE: Token escrow ATA close is deferred until after worker processing
-        // to ensure all claims are resolved before the ATA is closed.
+        // Revision 9: close the token escrow ATA here, before the claim drain
+        // below. The drain now moves claim deposits to the creator directly, and
+        // a CPI made after those moves fails the runtime's lamport-balance check
+        // (UnbalancedInstruction): the creator is an account of this CPI and the
+        // drained claims are not. (It used to run after the drain to keep the
+        // claims first; the transaction is atomic, so a claim that fails below
+        // still undoes this close.)
+        let residual_amount = token_escrow_starting_amount
+            .checked_sub(refund_amount)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        close_token_escrow(
+            token_escrow,
+            residual_amount,
+            &creator_ta.to_account_info(),
+            &accounts.authority.to_account_info(),
+            &escrow_info,
+            escrow_seeds,
+            token_program,
+        )?;
     } else {
         // SOL path: existing lamport transfer (unchanged)
         transfer_lamports(
@@ -701,6 +715,23 @@ fn process_cancel_task_impl<'info>(
             }
         }
 
+        // Revision 9 (E): every claim drained here is a no-show (the task is past
+        // its deadline with no live delivery), so a non-contest claim's deposit
+        // goes to the creator (`authority`), not back with the claim rent. A
+        // delivered claim already had its deposit back at submit. Bid claims
+        // carry a bid bond instead (settled above). Full surface only.
+        #[cfg(not(feature = "mainnet-canary"))]
+        if !is_contest_configured_task(task) && task.task_type != TaskType::BidExclusive {
+            crate::instructions::claim_deposit_helpers::settle_claim_deposit(
+                claim_info,
+                &accounts.authority.to_account_info(),
+                task.key(),
+                worker_info.key(),
+                true,
+                clock.unix_timestamp,
+            )?;
+        }
+
         // Close claim account and return rent to worker authority.
         let claim_lamports = claim_info.lamports();
         **claim_info.try_borrow_mut_lamports()? = 0;
@@ -715,40 +746,6 @@ fn process_cancel_task_impl<'info>(
         let mut claim_data = claim_info.try_borrow_mut_data()?;
         claim_data.fill(0);
         claim_data[..8].copy_from_slice(&[255u8; 8]);
-    }
-
-    // Close token escrow ATA AFTER all worker claims are processed
-    #[cfg(feature = "spl-token-rewards")]
-    if is_token_task {
-        let token_escrow = accounts
-            .token_escrow_ata
-            .as_deref_mut()
-            .ok_or(CoordinationError::MissingTokenAccounts)?;
-        let token_program = accounts
-            .token_program
-            .as_ref()
-            .ok_or(CoordinationError::MissingTokenAccounts)?;
-        let creator_ta = accounts
-            .creator_token_account
-            .as_ref()
-            .ok_or(CoordinationError::MissingTokenAccounts)?;
-        let residual_amount = token_escrow_starting_amount
-            .ok_or(CoordinationError::MissingTokenAccounts)?
-            .checked_sub(refund_amount)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        let task_key = task.key();
-        let task_key_bytes = task_key.to_bytes();
-        let bump_slice = [escrow.bump];
-        let escrow_seeds: &[&[u8]] = &[b"escrow", task_key_bytes.as_ref(), &bump_slice];
-        close_token_escrow(
-            token_escrow,
-            residual_amount,
-            &creator_ta.to_account_info(),
-            &accounts.authority.to_account_info(),
-            &escrow_info,
-            escrow_seeds,
-            token_program,
-        )?;
     }
 
     // Reset current_workers since all workers are removed on cancel

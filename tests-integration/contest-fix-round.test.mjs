@@ -45,6 +45,9 @@ const CAP_COMPUTE = 1;
 const CAP_VALIDATOR = 1 << 8;
 const SELECTION_WINDOW_SECS = 172_800; // constants.rs::SELECTION_WINDOW_SECS (48h)
 const CONTEST_ENTRY_DEPOSIT = 10_000_000n; // constants.rs::CONTEST_ENTRY_DEPOSIT_LAMPORTS
+// Revision 9 (E): every non-contest claim carries max(10% of the share, 0.005 SOL).
+const REV9_CLAIM_DEPOSIT_FLOOR = 5_000_000n; // constants.rs::MIN_CLAIM_DEPOSIT_LAMPORTS
+const claimRent = (w, claim) => BigInt(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(claim).data.length)));
 
 const balance = (w, key) => BigInt(w.svm.getBalance(key));
 
@@ -416,7 +419,7 @@ async function expireIx(
 ) {
   return makeProgram(callerKp)
     .methods.expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: callerKp.publicKey,
       task: m.task,
       escrow: m.escrow,
@@ -438,7 +441,7 @@ async function expireIx(
 async function reclaimIx(w, m, entrant, entry, callerKp) {
   return makeProgram(callerKp)
     .methods.reclaimTerminalClaim()
-    .accounts({
+    .accounts({ creator: decode(w.svm, "Task", m.task).creator,
       authority: callerKp.publicKey,
       task: m.task,
       claim: entry.claim,
@@ -479,10 +482,10 @@ function closeTaskIx(w, m, remaining = [], { protocolConfig = null } = {}) {
 // FIX 4 — contest entry deposit charged (and only for contests)
 // ===========================================================================
 
-test("FIX 4: contest claims carry the 0.01 SOL entry deposit as claim surplus; non-contest claims pay none", async () => {
+test("FIX 4: contest claims carry the 0.01 SOL entry deposit as claim surplus; non-contest claims pay only the revision 9 deposit", async () => {
   const w = await freshWorld({ moderationEnabled: true });
 
-  // Non-contest baseline: Exclusive + CreatorReview claim = pure rent.
+  // Non-contest baseline: Exclusive + CreatorReview claim = rent + the revision 9 deposit.
   const mEx = await setupTask(w, {
     taskType: 0,
     maxWorkers: 1,
@@ -502,9 +505,14 @@ test("FIX 4: contest claims carry the 0.01 SOL entry deposit as claim surplus; n
   const contestClaimBalance = balance(w, entry.claim);
 
   assert.equal(
-    contestClaimBalance - exclusiveClaimBalance,
+    exclusiveClaimBalance - claimRent(w, entryEx.claim),
+    REV9_CLAIM_DEPOSIT_FLOOR,
+    "revision 9: a non-contest claim holds rent + its deposit (floor on a 0.002 SOL price)",
+  );
+  assert.equal(
+    contestClaimBalance - claimRent(w, entry.claim),
     CONTEST_ENTRY_DEPOSIT,
-    "REVERT-SENSITIVE (FIX 4): contest claim holds rent + exactly the 0.01 SOL deposit",
+    "REVERT-SENSITIVE (FIX 4): contest claim holds rent + exactly the 0.01 SOL deposit, no second one",
   );
   // Worker paid rent + deposit + tx fees (fees are why >=).
   assert.ok(
@@ -920,13 +928,19 @@ test("FIX 3: an AUTO-validation schema-1 Competitive task keeps dispute recourse
     );
   }
 
-  // Auto-mode Competitive pays NO contest deposit (it never enters the lifecycle).
+  // Auto-mode Competitive pays NO contest deposit (it never enters the lifecycle);
+  // as a non-contest claim it carries the revision 9 deposit instead.
   const autoClaimBalance = balance(w, ea.claim);
   const contestClaimBalance = balance(w, ec.claim);
   assert.equal(
-    contestClaimBalance - autoClaimBalance,
+    contestClaimBalance - claimRent(w, ec.claim),
     CONTEST_ENTRY_DEPOSIT,
-    "deposit charged only on the configured contest",
+    "contest deposit charged only on the configured contest",
+  );
+  assert.equal(
+    autoClaimBalance - claimRent(w, ea.claim),
+    REV9_CLAIM_DEPOSIT_FLOOR,
+    "the auto-mode claim carries the revision 9 deposit",
   );
 });
 

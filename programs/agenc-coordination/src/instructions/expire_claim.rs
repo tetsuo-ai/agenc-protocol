@@ -24,13 +24,19 @@ use crate::instructions::bid_settlement_helpers::{
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::claim_deposit_helpers::{claim_surplus_lamports, settle_claim_deposit};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::post_completion_bond::dependency_parent_completed;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::program_account_helpers::remaining_account_at;
 #[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::record_account_helpers::{count_agent_stats, ensure_agent_stats};
+use crate::instructions::record_account_helpers::{
+    count_agent_stats, count_creator_stats, ensure_agent_stats,
+};
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, saturating_dec_counter,
     sync_task_validation_status,
@@ -201,6 +207,15 @@ pub struct ExpireClaim<'info> {
     pub treasury: Option<UncheckedAccount<'info>>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: revision 9 creator record `["creator_stats", task.creator]`, seeds-pinned
+    /// here and OPTIONAL so cranks stay cheap (design 5.3). When it is passed and
+    /// exists, a forfeited claim deposit counts `deposits_received`; an omitted or
+    /// not-yet-created record writes nothing and is never created here. Full
+    /// surface only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut, seeds = [b"creator_stats", task.creator.as_ref()], bump)]
+    pub creator_stats: Option<UncheckedAccount<'info>>,
 }
 
 /// What the seeds-pinned `["task_submission", claim]` address proves.
@@ -584,6 +599,51 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
                 CompletionBond::ROLE_WORKER,
                 BondDisposition::Refund,
             )?;
+        }
+    }
+
+    // Revision 9 (E): a non-contest no-show forfeits its claim deposit to the
+    // creator before the claim's rent closes to the worker. `bond_creator`
+    // (validated == task.creator) is required whenever a deposit exists; this
+    // runs after the completion-bond block so an Exclusive no-show reports a
+    // missing bond account first, as before. A
+    // delivered claim already had its deposit back at submit, and a claim made
+    // before the upgrade has none, so both move only rent. Bid claims carry a
+    // bid bond instead and are left to their own settlement.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if is_pure_noshow
+        && !crate::instructions::task_validation_helpers::is_contest_configured_task(task)
+        && task.task_type != TaskType::BidExclusive
+    {
+        let claim_info = claim.to_account_info();
+        if claim_surplus_lamports(&claim_info)? > 0 {
+            let creator = ctx
+                .accounts
+                .bond_creator
+                .as_ref()
+                .ok_or(CoordinationError::ClaimDepositRecipientRequired)?;
+            require!(
+                creator.key() == task.creator,
+                CoordinationError::InvalidCreator
+            );
+            settle_claim_deposit(
+                &claim_info,
+                &creator.to_account_info(),
+                task.key(),
+                worker.key(),
+                true,
+                clock.unix_timestamp,
+            )?;
+            if let Some(record) = ctx.accounts.creator_stats.as_ref() {
+                if record.owner == &crate::ID {
+                    count_creator_stats(
+                        &record.to_account_info(),
+                        task.creator,
+                        CreatorCounter::DepositsReceived,
+                        clock.unix_timestamp,
+                    )?;
+                }
+            }
         }
     }
 

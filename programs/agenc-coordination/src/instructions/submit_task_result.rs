@@ -2,6 +2,10 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultSubmitted;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::claim_deposit_helpers::settle_claim_deposit;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::task_validation_helpers::is_contest_configured_task;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, increment_pending_submission_count, is_manual_validation_task,
     note_submission_entered_review,
@@ -178,6 +182,21 @@ pub fn handler(
     submission.bump = ctx.bumps.task_submission;
 
     task.status = TaskStatus::PendingValidation;
+
+    // Revision 9 (E): the first delivery returns the claim deposit to the worker
+    // wallet (a resubmission finds none left). A contest entry keeps its own
+    // deposit until its settlement. Full surface only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if !is_contest_configured_task(task) {
+        settle_claim_deposit(
+            &claim.to_account_info(),
+            &ctx.accounts.authority.to_account_info(),
+            task.key(),
+            ctx.accounts.worker.key(),
+            false,
+            clock.unix_timestamp,
+        )?;
+    }
 
     emit!(TaskResultSubmitted {
         task: task.key(),

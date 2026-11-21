@@ -148,7 +148,7 @@ test("F-4: expire_claim works on a token task and moves NO lamports out of the e
 
   const expired = expectOk(send(w.svm, await makeProgram(cleaner).methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
@@ -173,4 +173,50 @@ test("F-4: expire_claim works on a token task and moves NO lamports out of the e
   assert.equal(events[0].data.expired_by.toBase58(), cleaner.publicKey.toBase58());
   assert.equal(events[0].data.cleanup_reward.toString(), "0", "token expiry reports no SOL reward");
   assert.equal(events[0].data.task_reopened, true);
+});
+
+// Revision 9 (E): a token task's claim carries the SOL deposit floor (a token
+// reward has no SOL share). On a no-show cancel the drain moves that deposit to
+// the creator directly, so the token escrow close (a CPI that names the creator)
+// must run before the drain: a CPI after the direct move would fail the
+// runtime's lamport-balance check (UnbalancedInstruction). fed99ab: no deposit.
+test("rev9: a token task's no-show cancel pays the claim deposit to the creator and still closes the token escrow", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setupTokenTask(w, { manual: false });
+  const claimRent = BigInt(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(r.claim).data.length)));
+  const deposit = BigInt(w.svm.getBalance(r.claim)) - claimRent;
+  assert.equal(deposit, 5_000_000n, "a token task's claim carries the SOL deposit floor");
+
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 3_700n; // past the task deadline
+  w.svm.setClock(clk);
+  w.svm.expireBlockhash();
+
+  const buyerAta = getAssociatedTokenAddressSync(r.mint.publicKey, w.buyer.publicKey);
+  const escrowRent = BigInt(w.svm.getBalance(r.escrow));
+  const ataRent = BigInt(w.svm.getBalance(r.escrowAta));
+  const recordRent = BigInt(w.svm.minimumBalanceForRentExemption(129n)); // the creator's first record
+  const buyerBefore = BigInt(w.svm.getBalance(w.buyer.publicKey));
+  const workerBefore = BigInt(w.svm.getBalance(w.provider.publicKey));
+  const bond = (wallet) => pda([enc("completion_bond"), r.task.toBuffer(), wallet.toBuffer()])[0];
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .cancelTask()
+    .accounts({ task: r.task, escrow: r.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
+      systemProgram: SystemProgram.programId, tokenEscrowAta: r.escrowAta, creatorTokenAccount: buyerAta,
+      rewardMint: r.mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      creatorCompletionBond: bond(w.buyer.publicKey), workerCompletionBond: bond(w.provider.publicKey),
+      workerBondAuthority: w.provider.publicKey, creatorAgent: null, agentStats: null, treasury: null,
+      creatorStats: pda([enc("creator_stats"), w.buyer.publicKey.toBuffer()])[0] })
+    .remainingAccounts([
+      { pubkey: r.claim, isSigner: false, isWritable: true },
+      { pubkey: w.providerAgent, isSigner: false, isWritable: true },
+      { pubkey: w.provider.publicKey, isSigner: false, isWritable: true },
+    ])
+    .instruction(), [w.buyer]), "token no-show cancel");
+
+  assert.equal(tokenAmount(w.svm, buyerAta), BigInt(REWARD), "the token reward is back with the creator");
+  assert.ok(isClosed(w.svm, r.escrowAta) && isClosed(w.svm, r.escrow) && isClosed(w.svm, r.claim), "token escrow, escrow and claim closed");
+  assert.equal(BigInt(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore, escrowRent + ataRent + deposit - 5_000n - recordRent,
+    "creator: both escrow rents and the deposit, less the fee and its first record");
+  assert.equal(BigInt(w.svm.getBalance(w.provider.publicKey)) - workerBefore, claimRent, "worker: claim rent only");
 });

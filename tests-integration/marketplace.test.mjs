@@ -707,10 +707,13 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
   const cleaner = Keypair.generate();
   w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  // Revision 9 (E): the claim also carries a deposit (its surplus above rent), which a
+  // no-show forfeits to the creator.
+  const deposit = Number(w.svm.getBalance(r.claim)) - Number(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(r.claim).data.length)));
 
   expectOk(send(w.svm, await makeProgram(cleaner).methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
@@ -721,7 +724,7 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
 
   assert.ok(isClosed(w.svm, workerBond), "worker bond PDA closed after forfeit");
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
-  assert.equal(buyerDelta, 1_000_000, `creator received the forfeited bond principal (got ${buyerDelta})`);
+  assert.equal(buyerDelta, 1_000_000 + deposit, `creator received the forfeited bond principal and claim deposit (got ${buyerDelta})`);
 });
 
 test("completion bond (#70): rejection atomically refunds the worker bond before the claim disappears", async () => {
@@ -776,7 +779,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
   // The worker self-expires OMITTING the bond accounts (the #71 dodge). MUST be rejected.
   expectFail(send(w.svm, await w.providerProg.methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
@@ -795,7 +798,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
   const junkBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   expectFail(send(w.svm, await w.providerProg.methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
@@ -808,9 +811,12 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
   // The honest expire (correct canonical PDA + creator) still forfeits, proving the fix
   // does not freeze the legitimate no-show path.
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  // Revision 9 (E): the claim also carries a deposit (its surplus above rent), which a
+  // no-show forfeits to the creator.
+  const deposit = Number(w.svm.getBalance(r.claim)) - Number(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(r.claim).data.length)));
   expectOk(send(w.svm, await w.providerProg.methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
@@ -819,8 +825,8 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
     })
     .instruction(), [w.provider]), "honest self-expire forfeits the bond");
   assert.ok(isClosed(w.svm, workerBond), "worker bond forfeited + closed on honest expire");
-  assert.equal(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore, 1_000_000,
-    "creator received the forfeited principal even on a worker-initiated expire");
+  assert.equal(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore, 1_000_000 + deposit,
+    "creator received the forfeited principal and claim deposit even on a worker-initiated expire");
 });
 
 test("completion bond (#71): an UN-BONDED no-show still expires cleanly (fix must not freeze it)", async () => {
@@ -843,7 +849,7 @@ test("completion bond (#71): an UN-BONDED no-show still expires cleanly (fix mus
   w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
   expectOk(send(w.svm, await makeProgram(cleaner).methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
@@ -901,13 +907,14 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
     const cleaner = Keypair.generate();
     w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
     // null bond accounts MUST be accepted on a no-show for a non-Exclusive task (no bond can exist).
+    // Revision 9 (E): the claim deposit still needs the creator account as its recipient.
     const expireIx = await makeProgram(cleaner).methods
       .expireClaim()
-      .accounts({
+      .accounts({ creatorStats: null,
         authority: cleaner.publicKey, task, escrow, claim,
         worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: validation,
         taskSubmission: null, rentRecipient: w.provider.publicKey,
-        workerCompletionBond: null, bondCreator: null,
+        workerCompletionBond: null, bondCreator: w.buyer.publicKey,
         treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
       })
       .instruction();
@@ -1467,7 +1474,7 @@ test("expire_claim: a PendingValidation claim with live submitted work cannot be
   w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
   const expireWith = async (taskSubmission) => send(w.svm, await makeProgram(cleaner).methods
     .expireClaim()
-    .accounts({
+    .accounts({ creatorStats: null,
       authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission, rentRecipient: w.provider.publicKey,

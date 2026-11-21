@@ -156,6 +156,8 @@ pub mod reject_and_freeze;
 pub mod reject_frozen_exits;
 pub mod reject_task_result;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod release_claim;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod repair_dispute_initiator_counter;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod request_changes;
@@ -367,6 +369,9 @@ pub use reject_and_freeze::*;
 pub use reject_frozen_exits::*;
 #[allow(ambiguous_glob_reexports)]
 pub use reject_task_result::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use release_claim::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use repair_dispute_initiator_counter::*;

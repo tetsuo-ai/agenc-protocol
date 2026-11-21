@@ -410,7 +410,7 @@ function expireIx(w, r, crank) {
 function reclaimIx(w, r, crank) {
   return makeProgram(crank)
     .methods.reclaimTerminalClaim()
-    .accounts({
+    .accounts({ creator: decode(w.svm, "Task", r.task).creator,
       authority: crank.publicKey,
       task: r.task,
       claim: r.claimB,

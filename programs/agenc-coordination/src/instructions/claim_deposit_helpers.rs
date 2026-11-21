@@ -9,9 +9,11 @@
 #![cfg(not(feature = "mainnet-canary"))]
 
 use crate::errors::CoordinationError;
+use crate::events::ClaimDepositSettled;
 use crate::instructions::constants::{
     BASIS_POINTS_DIVISOR, CLAIM_DEPOSIT_BPS, CLAIM_RELEASE_GRACE_SECS, MIN_CLAIM_DEPOSIT_LAMPORTS,
 };
+use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::state::{Task, TaskType};
 use anchor_lang::prelude::*;
 
@@ -55,6 +57,43 @@ pub fn claim_deposit_lamports(share: u64) -> Result<u64> {
 /// that the deposit goes to the buyer.
 pub fn release_refunds_deposit(claimed_at: i64, now: i64) -> bool {
     now <= claimed_at.saturating_add(CLAIM_RELEASE_GRACE_SECS)
+}
+
+/// Lamports on a claim above its rent-exempt minimum: its deposit. Zero for a
+/// claim made before revision 9, and once the deposit has come back.
+pub fn claim_surplus_lamports(claim_info: &AccountInfo) -> Result<u64> {
+    let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
+    Ok(claim_info.lamports().saturating_sub(rent_min))
+}
+
+/// Move a non-contest claim's deposit (its surplus) to `recipient`: the worker
+/// wallet when it comes back (`forfeited == false`), the buyer when the claim
+/// ended without a delivery (`forfeited == true`). Emits `ClaimDepositSettled`.
+/// Returns the amount moved; a claim with no surplus moves and emits nothing.
+/// Direct lamport moves: callers make every CPI first.
+pub fn settle_claim_deposit<'info>(
+    claim_info: &AccountInfo<'info>,
+    recipient: &AccountInfo<'info>,
+    task: Pubkey,
+    worker_agent: Pubkey,
+    forfeited: bool,
+    now: i64,
+) -> Result<u64> {
+    let amount = claim_surplus_lamports(claim_info)?;
+    if amount == 0 {
+        return Ok(0);
+    }
+    transfer_lamports(claim_info, recipient, amount)?;
+    emit!(ClaimDepositSettled {
+        task,
+        claim: claim_info.key(),
+        worker_agent,
+        recipient: recipient.key(),
+        amount,
+        forfeited,
+        timestamp: now,
+    });
+    Ok(amount)
 }
 
 #[cfg(test)]
