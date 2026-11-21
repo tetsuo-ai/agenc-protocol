@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   LOCALNET_PROGRAM_ID,
@@ -24,6 +27,7 @@ import {
   assertLedgerLaunchIsAttested,
   expectedLocalnetProtocolMode,
   invalidateFixturesAfterValidatorBoot,
+  loadSigner as loadLocalnetSigner,
   localnetBidMarketplaceDiffs,
   localnetBidMarketplaceInitializeInput,
   parseArgs as parseLocalnetUpArgs,
@@ -146,6 +150,15 @@ test("short dispute windows are restricted to fresh disposable dev genesis", () 
   assert.equal(parseLocalnetUpArgs(["--dev-ready", "--short-disputes"]).shortDisputes, true);
   assert.throws(() => parseLocalnetUpArgs(["--short-disputes"]), /requires --dev-ready/);
   assert.throws(() => parseLocalnetUpArgs(["--short-disputes", "--dev-ready", "--keep-ledger"]), /fresh disposable genesis/);
+});
+
+test("localnet-up names a bad key file without echoing its content (review S-19)", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "localnet-key-"));
+  const file = path.join(dir, "authority.json");
+  writeFileSync(file, "[12,34,notakey");
+  const kit = { createKeyPairSignerFromBytes: async (bytes) => bytes };
+  await assert.rejects(loadLocalnetSigner(kit, file), (error) => error.message.includes(file) && !error.message.includes("notakey"));
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("the validation-timings label is explicit and restricted to disposable dev genesis", () => {
