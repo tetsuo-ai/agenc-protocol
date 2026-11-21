@@ -196,8 +196,9 @@ await buyerClient.closeTask({
   workerCompletionBond: null,
   authority: buyer,
 });
-// close_task decrements listing open_jobs and keeps the Task as a rent-exempt
-// tombstone. It does not close the Task PDA.
+// close_task decrements listing open_jobs and, on revision 9, compacts the Task
+// into a 56-byte TaskMarker at the same address: everything above the marker's
+// rent goes back to the buyer. Read a closed task with facade.readTask.
 
 const elapsed = (Date.now() - started) / 1000;
 console.log(
@@ -300,6 +301,25 @@ getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tet
     at today's mainnet rent). `missingRecordCost` reads that cost from live
     rent, so a wallet can show it and warn before it signs.
     `getCreatorTrackRecord` reads a creator's record.
+  - An agent hire (`hireFromListing`, the v3 wire) is a review task like the
+    bare-wallet hire: it takes `reviewWindowSecs` (1 second to 7 days), the
+    provider submits and the buyer accepts, asks for changes or turns it down.
+    `completeTask` refuses these hires. The indexer's `buildHireTransaction`
+    takes the window too and checks it in the returned transaction.
+  - `closeTask` compacts a finished Task into a 56-byte `TaskMarker` and
+    returns the rest of its rent to the creator. `facade.readTask` (and
+    `decodeTaskAccount`) reads a closed task as `closed` instead of failing.
+    A token-reward task passes `tokenEscrow: true`.
+  - `recordTaskModeration` takes a `rentPayer`: the task's creator or the
+    moderator (the default). A record the creator paid goes back to the
+    creator when the task is closed (`taskModerationRentRecipient`).
+  - `configureTaskModeration`, `suspendAgent`, `unsuspendAgent`, the
+    attestor roster and a heartbeat that changes the window need 2 of the 3
+    ProtocolConfig owners: pass them in `multisigSigners`.
+  - `settleDisputeClaim` names the peer's wallet (`workerAuthority`), which
+    receives the peer's claim and submission rent.
+  - A dependent task passes its parent to `expireClaim` (any task type) and
+    `cancelTask`, so a real no-show forfeits its deposit.
 - The older 0.12.0 package targets the superseded 101-instruction revision-5
   wire; its changed writes, such as the legacy feed vote, fail closed against
   the live program. Pre-1.0 versioning still applies.
@@ -313,8 +333,9 @@ The namespaced `history` API strictly identifies and decodes the three writes
 whose wire changed at revision 5: `hire_from_listing`,
 `hire_from_listing_humanless`, and `set_task_job_spec`. It preserves the exact
 revision-4 discriminators, data fields, and account-meta order alongside the
-current commitment-v2 layouts so indexers can backfill old mainnet
-transactions:
+commitment-v2 layouts so indexers can backfill old mainnet transactions. The
+revision 5 agent hire is kept as a frozen schema too, next to its revision 9
+`creator-review-v3` wire:
 
 ```ts
 import { history } from "@tetsuo-ai/marketplace-sdk";

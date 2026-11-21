@@ -31,7 +31,10 @@ async function moderationBlockFor(contentHash: Uint8Array) {
 //     -> seed ModerationConfig (harness)   -> recordListingModeration
 //     -> hireFromListing (mints Task + escrow + HireRecord)
 //     -> recordTaskModeration -> setTaskJobSpec -> claimTaskWithJobSpec
-//     -> completeTask (settles escrow, pays the worker)
+//     -> submitTaskResult -> acceptTaskResult (settles escrow, pays the worker)
+//
+// Revision 9: an agent hire is a CreatorReview task, so complete_task is
+// refused and the buyer's accept settles it.
 //
 // Each instruction is sent in its own real, signed transaction whose fee payer IS the
 // instruction's required authority signer, so signTransactionMessageWithSigners actually
@@ -141,6 +144,7 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
         taskId,
         expectedPrice: price,
         expectedVersion: 1n,
+        reviewWindowSecs: 3_600n,
         listingSpecHash,
         taskJobSpecHash: jobHash,
         moderator: moderator.address,
@@ -190,20 +194,42 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
     // never paid — the worker only signed the claim tx above).
     const workerBalBefore = svm.getBalance(provider.address) ?? 0n;
 
-    // 8) Worker completes the task — settles the escrow on the direct-pay path. The
-    //    HireRecord is ALWAYS required (its derived ["hire", task] address), even with
-    //    no operator fee, so a worker cannot omit it to dodge an operator's cut.
+    // 8) The direct-pay path is refused for a revision 9 agent hire: it is a
+    //    review task. The worker delivers and the buyer accepts, which settles
+    //    the escrow. The HireRecord is ALWAYS required (its derived ["hire",
+    //    task] address), even with no operator fee, so nobody can omit it to
+    //    dodge an operator's cut.
     const [hireRecord] = await findHireRecordPda({ task });
+    const complete = await facade.completeTask({
+      task,
+      creator: buyer.address,
+      worker: providerAgent,
+      treasury: admin.address,
+      authority: provider,
+      hireRecord,
+      proofHash: new Uint8Array(32).fill(66),
+      resultData: null,
+    });
+    await expect(send(svm, provider, [complete])).rejects.toThrow(
+      /ManualValidationRequiresReviewFlow/,
+    );
     await send(svm, provider, [
-      await facade.completeTask({
+      await facade.submitTaskResult({
         task,
-        creator: buyer.address,
         worker: providerAgent,
-        treasury: admin.address,
         authority: provider,
-        hireRecord,
         proofHash: new Uint8Array(32).fill(66),
         resultData: null,
+      }),
+    ]);
+    await send(svm, buyer, [
+      await facade.acceptTaskResult({
+        task,
+        worker: providerAgent,
+        creator: buyer,
+        treasury: admin.address,
+        workerAuthority: provider.address,
+        hireRecord,
       }),
     ]);
 

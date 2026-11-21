@@ -2,10 +2,22 @@
 import type { Address, Commitment } from "@solana/kit";
 import {
   getTaskDecoder,
+  getTaskMarkerDecoder,
+  getTaskMarkerDiscriminatorBytes,
+  getTaskMarkerSize,
   TaskStatus,
   type Task,
 } from "../generated/index.js";
 import { base64ToBytes, sleep } from "./internal.js";
+
+function isTaskMarkerData(bytes: Uint8Array): boolean {
+  const prefix = getTaskMarkerDiscriminatorBytes();
+  if (bytes.length < getTaskMarkerSize()) return false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    if (bytes[index] !== prefix[index]) return false;
+  }
+  return true;
+}
 
 /**
  * Minimal structural slice of a kit `Rpc` client used by
@@ -78,6 +90,16 @@ export async function waitForTaskStatus(
       if (bytes === null) {
         lastObserved = "undecodable account data (bad base64)";
       } else {
+        if (isTaskMarkerData(bytes)) {
+          // Revision 9: close_task compacted the task into a TaskMarker. A
+          // closed task never changes status again and has no Task to return.
+          const marker = getTaskMarkerDecoder().decode(bytes);
+          throw new Error(
+            `waitForTaskStatus: task ${taskPda} was closed (compacted to a ` +
+              `TaskMarker with status ${TaskStatus[marker.status] ?? marker.status}); ` +
+              "a closed task has no Task account to return",
+          );
+        }
         const task = getTaskDecoder().decode(bytes);
         if (task.status === status) return task;
         lastObserved = TaskStatus[task.status] ?? `status ${task.status}`;

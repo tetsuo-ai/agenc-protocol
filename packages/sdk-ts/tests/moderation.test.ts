@@ -36,6 +36,7 @@ import {
   setModerationBlock,
   clearModerationBlock,
   setDefaultTrustList,
+  moderationHeartbeat,
 } from "../src/facade/moderation.js";
 
 // Structural tests (the facade-loop template): build each instruction and assert program
@@ -118,11 +119,15 @@ describe("recordTaskModeration (generated instruction)", () => {
     const jobSpecHash = new Uint8Array(32).fill(3);
     const policyHash = new Uint8Array(32).fill(5);
     const scannerHash = new Uint8Array(32).fill(9);
+    const rentPayer = createNoopSigner(
+      address("Vote111111111111111111111111111111111111111"),
+    );
     const ix = getRecordTaskModerationInstruction({
       moderationConfig,
       task,
       taskModeration,
       moderator,
+      rentPayer,
       jobSpecHash,
       status: 1,
       riskScore: 42,
@@ -145,9 +150,13 @@ describe("recordTaskModeration (generated instruction)", () => {
       // optionalAccountStrategy: "programId").
       AGENC_COORDINATION_PROGRAM_ADDRESS,
       SYSTEM_PROGRAM,
+      // Revision 9: the record's rent payer is appended after system_program.
+      rentPayer.address,
     ]);
     expect(ix.accounts[2]?.role).toBe(AccountRole.WRITABLE_SIGNER);
     expect(ix.accounts[2]?.signer).toBe(moderator);
+    expect(ix.accounts[6]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    expect(ix.accounts[6]?.signer).toBe(rentPayer);
 
     const decoded = getRecordTaskModerationInstructionDataDecoder().decode(
       ix.data,
@@ -233,6 +242,7 @@ describe("moderation facade async transaction intent boundaries", () => {
       authority: authority.signer,
       moderationAuthority: changedSignerAddress,
       enabled: true,
+      multisigSigners: [] as TransactionSigner[],
     };
     const adversarialInput = new Proxy(target, {
       ownKeys(currentTarget) {
@@ -309,30 +319,56 @@ describe("moderation facade async transaction intent boundaries", () => {
     expect(decoded.scannerHash).toEqual(new Uint8Array(32).fill(43));
   });
 
-  it("builds authority-managed roster assign/revoke with Rust account order", async () => {
+  it("builds multisig roster assign/revoke with Rust account order (revision 9: protocol config and co-signers)", async () => {
     const authority = createNoopSigner(originalSignerAddress);
+    const approver = createNoopSigner(
+      address("Vote111111111111111111111111111111111111111"),
+    );
     const attestor = changedSignerAddress;
     const [moderationConfig] = await findModerationConfigPda();
+    const [protocolConfig] = await findProtocolConfigPda();
     const [roster] = await findModerationAttestorPda({ attestor });
 
-    const assign = await assignModerationAttestor({ authority, attestor });
+    const assign = await assignModerationAttestor({
+      authority,
+      attestor,
+      multisigSigners: [authority, approver],
+    });
     expect(assign.accounts.map((account) => account.address)).toEqual([
       moderationConfig,
       roster,
       originalSignerAddress,
       SYSTEM_PROGRAM,
+      protocolConfig,
+      originalSignerAddress,
+      approver.address,
     ]);
+    expect(assign.accounts[4]?.role).toBe(AccountRole.READONLY);
+    expect(assign.accounts[5]?.role).toBe(AccountRole.READONLY_SIGNER);
+    expect(assign.accounts[6]?.role).toBe(AccountRole.READONLY_SIGNER);
     expect(
       getAssignModerationAttestorInstructionDataDecoder().decode(assign.data)
         .attestor,
     ).toBe(attestor);
 
-    const revoke = await revokeModerationAttestor({ authority, attestor });
+    const revoke = await revokeModerationAttestor({
+      authority,
+      attestor,
+      multisigSigners: [authority, approver],
+    });
     expect(revoke.accounts.map((account) => account.address)).toEqual([
       moderationConfig,
       roster,
       originalSignerAddress,
+      protocolConfig,
+      originalSignerAddress,
+      approver.address,
     ]);
+    // The rent of a revoked entry goes to the proposer, so it is writable.
+    expect(revoke.accounts[2]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    await expect(
+      assignModerationAttestor({ authority, attestor } as never),
+    ).rejects.toThrow(/multisigSigners/);
     expect(
       getRevokeModerationAttestorInstructionDataDecoder().decode(revoke.data)
         .discriminator,
@@ -630,5 +666,114 @@ describe("setDefaultTrustList (P1.2, facade)", () => {
     expect(
       getSetDefaultTrustListInstructionDataDecoder().decode(ix.data).listHash,
     ).toEqual(new Uint8Array(32).fill(41));
+  });
+});
+
+describe("revision 9 moderation wires (G and buyer-paid rent)", () => {
+  const proposer = createNoopSigner(
+    address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  );
+  const ownerB = createNoopSigner(
+    address("Vote111111111111111111111111111111111111111"),
+  );
+  const creator = createNoopSigner(
+    address("Stake11111111111111111111111111111111111111"),
+  );
+  const task = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
+  const fields = {
+    jobSpecHash: new Uint8Array(32).fill(3),
+    status: 0,
+    riskScore: 0,
+    categoryMask: 0n,
+    policyHash: new Uint8Array(32).fill(5),
+    scannerHash: new Uint8Array(32).fill(9),
+    expiresAt: 0n,
+  };
+
+  it("configure_task_moderation appends every approval as a readonly signer after the four named accounts", async () => {
+    const ix = await configureTaskModeration({
+      authority: proposer,
+      moderationAuthority: ownerB.address,
+      enabled: false,
+      multisigSigners: [proposer, ownerB],
+    });
+    expect(ix.accounts).toHaveLength(6);
+    expect(ix.accounts[2]).toMatchObject({
+      address: proposer.address,
+      role: AccountRole.WRITABLE_SIGNER,
+    });
+    expect(ix.accounts.slice(4)).toEqual([
+      {
+        address: proposer.address,
+        role: AccountRole.READONLY_SIGNER,
+        signer: proposer,
+      },
+      {
+        address: ownerB.address,
+        role: AccountRole.READONLY_SIGNER,
+        signer: ownerB,
+      },
+    ]);
+    await expect(
+      configureTaskModeration({
+        authority: proposer,
+        moderationAuthority: ownerB.address,
+        enabled: false,
+      } as never),
+    ).rejects.toThrow(/multisigSigners/);
+  });
+
+  it("record_task_moderation defaults the rent payer to the moderator and takes the task's creator", async () => {
+    const byModerator = await recordTaskModeration({
+      task,
+      moderator: proposer,
+      ...fields,
+    });
+    expect(byModerator.accounts).toHaveLength(7);
+    expect(byModerator.accounts[6]).toMatchObject({
+      address: proposer.address,
+      role: AccountRole.WRITABLE_SIGNER,
+    });
+
+    const byCreator = await recordTaskModeration({
+      task,
+      moderator: proposer,
+      rentPayer: creator,
+      ...fields,
+    });
+    expect(byCreator.accounts[2]).toMatchObject({ address: proposer.address });
+    expect(byCreator.accounts[6]).toMatchObject({
+      address: creator.address,
+      role: AccountRole.WRITABLE_SIGNER,
+      signer: creator,
+    });
+  });
+
+  it("a heartbeat always passes the protocol config; a window change carries its approvals", async () => {
+    const [moderationConfig] = await findModerationConfigPda();
+    const [protocolConfig] = await findProtocolConfigPda();
+    const plain = await moderationHeartbeat({
+      authority: proposer,
+      newWindowSecs: null,
+    });
+    expect(plain.accounts.map((account) => account.address)).toEqual([
+      moderationConfig,
+      proposer.address,
+      protocolConfig,
+    ]);
+
+    const retune = await moderationHeartbeat({
+      authority: proposer,
+      newWindowSecs: 172_800,
+      multisigSigners: [proposer, ownerB],
+    });
+    expect(retune.accounts.map((account) => account.address)).toEqual([
+      moderationConfig,
+      proposer.address,
+      protocolConfig,
+      proposer.address,
+      ownerB.address,
+    ]);
+    expect(retune.accounts[4]?.role).toBe(AccountRole.READONLY_SIGNER);
   });
 });

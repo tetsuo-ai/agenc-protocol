@@ -258,7 +258,8 @@ const closeIx = await facade.closeTask({
   workerCompletionBond: null,
   authority: buyerAuthority,
 });
-// Task PDA stays as a rent-exempt tombstone. Listing open_jobs decrements.
+// Revision 9: the Task PDA is compacted into a 56-byte TaskMarker and the rest
+// of its rent goes back to the buyer. Listing open_jobs decrements.
 ```
 
 ## Local sandbox — run the whole flow for real

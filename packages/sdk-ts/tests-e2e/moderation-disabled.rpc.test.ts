@@ -11,14 +11,17 @@ describe.skipIf(!RPC_ENABLED)(
         const h = await localRpcHarness(
           `issue-274-${humanless ? "humanless" : "registered"}`,
         );
-        // The config changes below are signed authority transactions, not injected
-        // state. Only the shared disposable ProtocolConfig genesis is a fixture.
+        // The config changes below are signed multisig transactions, not
+        // injected state. Revision 9 (G) needs 2 of the 3 local owners (the
+        // authority and the moderator here). Only the shared disposable
+        // ProtocolConfig genesis is a fixture.
         async function enabled(value: boolean) {
           await h.send(`moderation enabled=${value}`, h.admin, [
             await sdk.facade.configureTaskModeration({
               authority: h.admin,
               moderationAuthority: h.moderator.address,
               enabled: value,
+              multisigSigners: [h.admin, h.moderator],
             }),
           ]);
         }
@@ -114,6 +117,7 @@ describe.skipIf(!RPC_ENABLED)(
                 })
               : await sdk.facade.hireFromListing({
                   ...base,
+                  reviewWindowSecs: 3600n,
                   authority: buyer,
                   creatorAgent: buyerAgent,
                 });
@@ -159,6 +163,19 @@ describe.skipIf(!RPC_ENABLED)(
             expect(await h.info(key)).toBeNull();
 
           const escrowLamports = (await h.info(existing.escrow))!.lamports;
+          // Revision 9: the buyer's first cancel starts its CreatorStats
+          // record, paid before the refund.
+          const [creatorStats] = await sdk.findCreatorStatsPda({
+            authority: buyer.address,
+          });
+          const recordCost =
+            (await h.info(creatorStats)) === null
+              ? await h.rpc
+                  .getMinimumBalanceForRentExemption(
+                    BigInt(sdk.getCreatorStatsSize()),
+                  )
+                  .send()
+              : 0n;
           const beforeCancel = await h.balance(buyer.address);
           const cancelled = await h.send(
             "cancel existing deposit while disabled",
@@ -172,7 +189,7 @@ describe.skipIf(!RPC_ENABLED)(
             ],
           );
           expect(await h.balance(buyer.address)).toBe(
-            beforeCancel + escrowLamports - cancelled.meta!.fee,
+            beforeCancel + escrowLamports - cancelled.meta!.fee - recordCost,
           );
           expect(await h.info(existing.escrow)).toBeNull();
           expect(
@@ -264,17 +281,17 @@ describe.skipIf(!RPC_ENABLED)(
             task: resumed.task,
             bidder: providerAgent,
           });
-          if (humanless) {
-            await h.send("submit", provider, [
-              await sdk.facade.submitTaskResult({
-                task: resumed.task,
-                worker: providerAgent,
-                authority: provider,
-                proofHash: id32(),
-                resultData: null,
-              }),
-            ]);
-          }
+          // Revision 9: both doors make a review task, so the provider
+          // delivers and the buyer accepts.
+          await h.send("submit", provider, [
+            await sdk.facade.submitTaskResult({
+              task: resumed.task,
+              worker: providerAgent,
+              authority: provider,
+              proofHash: id32(),
+              resultData: null,
+            }),
+          ]);
           const claimRent = (await h.info(claim))!.lamports;
           const [submission] = await sdk.findTaskSubmissionPda({ claim });
           const submissionRent = (await h.info(submission))?.lamports ?? 0n;
@@ -287,39 +304,19 @@ describe.skipIf(!RPC_ENABLED)(
                   .protocolFeeBps,
               )) /
             10_000n;
-          const settlement = await h.send(
-            "settle while disabled",
-            humanless ? buyer : provider,
-            [
-              humanless
-                ? await sdk.facade.acceptTaskResult({
-                    task: resumed.task,
-                    worker: providerAgent,
-                    creator: buyer,
-                    treasury: h.config.treasury,
-                    workerAuthority: provider.address,
-                    hireRecord: resumed.hireRecord,
-                  })
-                : await sdk.facade.completeTask({
-                    task: resumed.task,
-                    worker: providerAgent,
-                    authority: provider,
-                    creator: buyer.address,
-                    treasury: h.config.treasury,
-                    hireRecord: resumed.hireRecord,
-                    proofHash: id32(),
-                    resultData: null,
-                  }),
-            ],
-          );
+          await h.send("settle while disabled", buyer, [
+            await sdk.facade.acceptTaskResult({
+              task: resumed.task,
+              worker: providerAgent,
+              creator: buyer,
+              treasury: h.config.treasury,
+              workerAuthority: provider.address,
+              hireRecord: resumed.hireRecord,
+            }),
+          ]);
           expect(await h.balance(h.config.treasury)).toBe(treasuryBefore + fee);
           expect(await h.balance(provider.address)).toBe(
-            workerBefore +
-              price -
-              fee +
-              claimRent +
-              submissionRent -
-              (humanless ? 0n : settlement.meta!.fee),
+            workerBefore + price - fee + claimRent + submissionRent,
           );
           expect(
             (await h.read(resumed.task, sdk.getTaskDecoder())).status,

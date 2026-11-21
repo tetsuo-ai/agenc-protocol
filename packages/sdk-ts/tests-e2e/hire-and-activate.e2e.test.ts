@@ -559,6 +559,7 @@ describe("e2e: revision-5 hired job-spec commitment", () => {
       taskId: fixture.hireInput.taskId,
       expectedPrice: fixture.hireInput.expectedPrice,
       expectedVersion: fixture.hireInput.expectedVersion,
+      reviewWindowSecs: 3_600n,
       listingSpecHash: fixture.hireInput.listingSpecHash,
       taskJobSpecHash: fixture.hireInput.taskJobSpecHash,
       moderator: fixture.hireInput.moderator,

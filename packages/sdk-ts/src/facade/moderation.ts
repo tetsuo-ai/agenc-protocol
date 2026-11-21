@@ -116,16 +116,30 @@ export async function findLegacyListingModerationPda(seeds: {
 }
 
 /**
- * Build a configure_task_moderation instruction. The protocolConfig and moderationConfig
- * PDAs are auto-derived when omitted; only `authority` (signer), `moderationAuthority`,
- * and `enabled` are required.
+ * Build a configure_task_moderation instruction. The protocolConfig and
+ * moderationConfig PDAs are auto-derived when omitted; `authority` (signer,
+ * fee payer and proposer), `moderationAuthority` and `enabled` are required.
+ *
+ * Revision 9 (G): on the full surface the approval is the ProtocolConfig
+ * multisig threshold (2 of 3 on mainnet) over `remaining_accounts`, exactly as
+ * for {@link setModerationBlock}. Supply every approval in `multisigSigners`;
+ * an owner used as `authority` must appear there too for its approval to
+ * count. The canary build keeps the single protocol-authority signer and
+ * ignores the suffix.
  */
+export type ConfigureTaskModerationInput = ConfigureTaskModerationAsyncInput &
+  ModerationMultisigApprovals;
+
 export async function configureTaskModeration(
-  input: ConfigureTaskModerationAsyncInput,
+  input: ConfigureTaskModerationInput,
 ) {
-  return getConfigureTaskModerationInstructionAsync(
-    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
   );
+  const instruction =
+    await getConfigureTaskModerationInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
@@ -135,13 +149,30 @@ export async function configureTaskModeration(
  * when omitted; pass `task`, the `moderator` signer, and the moderation fields.
  * A registered (non-global-authority) attestor must also pass its
  * `moderationAttestor` roster PDA ({@link findModerationAttestorPda}).
+ *
+ * Revision 9: `rentPayer` signs and pays the record's rent. It must be the
+ * task's creator or the moderator (else `InvalidModerationRentPayer`, 6433),
+ * and the record remembers which: when the task is closed the rent goes back
+ * to the creator if the creator paid, else to the moderator. Defaults to the
+ * moderator. A moderator that is the task's creator is refused (6432).
  */
-export async function recordTaskModeration(
-  input: RecordTaskModerationAsyncInput,
-) {
-  const stableInput = canonicalizeFacadeInputSignerFields(input, ["moderator"]);
+export type RecordTaskModerationInput = Omit<
+  RecordTaskModerationAsyncInput,
+  "rentPayer"
+> & {
+  /** Pays the record's rent: the task's creator or the moderator (default). */
+  rentPayer?: RecordTaskModerationAsyncInput["rentPayer"];
+};
+
+export async function recordTaskModeration(input: RecordTaskModerationInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(
+    input,
+    ["moderator"],
+    ["rentPayer"],
+  );
   return getRecordTaskModerationInstructionAsync({
     ...stableInput,
+    rentPayer: stableInput.rentPayer ?? stableInput.moderator,
     jobSpecHash: snapshotFixedBytes(
       stableInput.jobSpecHash,
       32,
@@ -193,46 +224,71 @@ export async function recordListingModeration(
 }
 
 /**
- * Build an assign_moderation_attestor instruction (P6.8, authority-only).
+ * Build an assign_moderation_attestor instruction (P6.8).
  *
  * Adds `attestor` to the moderation-attestor roster so that wallet may record moderation
  * attestations (`recordTaskModeration` / `recordListingModeration`) in addition to the
  * single global moderation authority. The `moderationAttestor` roster PDA (seeded by
- * `attestor`), `moderationConfig`, and `systemProgram` all auto-derive in the generated
- * builder — the caller supplies only the `authority` signer and the `attestor` pubkey.
+ * `attestor`), `moderationConfig`, `protocolConfig` and `systemProgram` all auto-derive
+ * in the generated builder.
+ *
+ * Revision 9 (G): the roster needs the ProtocolConfig multisig threshold (2 of 3 on
+ * mainnet) over `remaining_accounts`. `authority` is the fee payer and proposer, and is
+ * recorded as the entry's `assigned_by`; supply every approval in `multisigSigners`
+ * (an owner used as `authority` must appear there too).
  *
  * P1.2 also added permissionless bonded self-registration. See
  * `docs/P1_2_OPEN_ROSTER_SPEC.md`. `docs/MODERATION_NEUTRALITY.md` is the
  * superseded pre-open-roster decision record.
  */
+export type AssignModerationAttestorInput = AssignModerationAttestorAsyncInput &
+  ModerationMultisigApprovals;
+
 export async function assignModerationAttestor(
-  input: AssignModerationAttestorAsyncInput,
+  input: AssignModerationAttestorInput,
 ) {
-  return getAssignModerationAttestorInstructionAsync(
-    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
   );
+  const instruction =
+    await getAssignModerationAttestorInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
- * Build a revoke_moderation_attestor instruction (P6.8; P1.2: `assigned_by`-scoped —
- * the authority may revoke only the entries IT deputized, not self-registered ones,
- * which exit via {@link requestAttestorExit}/{@link finalizeAttestorExit}).
+ * Build a revoke_moderation_attestor instruction (P6.8). Self-registered (bonded)
+ * entries cannot be revoked; they exit via {@link requestAttestorExit} /
+ * {@link finalizeAttestorExit}.
  *
  * Removes a wallet from the moderation-attestor roster, closing its assignment PDA. The
  * generated builder does NOT derive the roster PDA (its on-chain seed reads the stored
  * `attestor`), so the facade derives it from the `attestor` pubkey when `moderationAttestor`
- * is not passed explicitly. moderationConfig still auto-derives.
+ * is not passed explicitly. moderationConfig and protocolConfig still auto-derive.
+ *
+ * Revision 9 (G): needs the ProtocolConfig multisig threshold over `remaining_accounts`,
+ * like {@link assignModerationAttestor}. Any proposer may revoke a deputized entry
+ * (`bond_lamports == 0 && registered_at == 0`); the entry's rent goes to the proposer
+ * (`authority`).
  */
+export type RevokeModerationAttestorInput = Omit<
+  RevokeModerationAttestorAsyncInput,
+  "moderationAttestor"
+> & {
+  /** The roster member being removed. Used to derive the assignment PDA. */
+  attestor?: Address;
+  /** Optional pre-derived override for the assignment PDA. */
+  moderationAttestor?: Address;
+} & ModerationMultisigApprovals;
+
 export async function revokeModerationAttestor(
-  input: Omit<RevokeModerationAttestorAsyncInput, "moderationAttestor"> & {
-    /** The roster member being removed. Used to derive the assignment PDA. */
-    attestor?: Address;
-    /** Optional pre-derived override for the assignment PDA. */
-    moderationAttestor?: Address;
-  },
+  input: RevokeModerationAttestorInput,
 ) {
-  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
-  const { attestor, moderationAttestor, ...rest } = stableInput;
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
+  );
+  const { attestor, moderationAttestor, ...rest } = generatedInput;
   let roster = moderationAttestor;
   if (!roster) {
     if (!attestor) {
@@ -242,10 +298,11 @@ export async function revokeModerationAttestor(
     }
     roster = (await findModerationAttestorPda({ attestor }))[0];
   }
-  return getRevokeModerationAttestorInstructionAsync({
+  const instruction = await getRevokeModerationAttestorInstructionAsync({
     ...rest,
     moderationAttestor: roster,
   });
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
@@ -434,25 +491,41 @@ export async function setDefaultTrustList(input: SetDefaultTrustListInput) {
 
 /**
  * Build a moderation_heartbeat instruction (batch-2 A2, P1.3 moderation
- * liveness). The config authority or the moderation authority bumps the
- * deadman timestamp on `ModerationConfig` (PDA auto-derived); the config
- * authority may also retune the liveness window via `newWindowSecs`
- * (floored at 1 day on-chain — pass `none()` to leave it unchanged).
+ * liveness). Bumps the deadman timestamp on `ModerationConfig` (PDA
+ * auto-derived). `newWindowSecs` retunes the liveness window (floored at 1 day
+ * on-chain; pass `none()` to leave it unchanged).
+ *
+ * Revision 9 (G): a plain heartbeat may come from the config authority, the
+ * moderation authority, or any single ProtocolConfig owner. The facade always
+ * passes the optional `protocolConfig` (auto-derived), which an owner needs.
+ * A window change also needs the multisig threshold (2 of 3 on mainnet): pass
+ * every approval in `multisigSigners` (the sender must still be an allowed
+ * heartbeat sender, and appear there too if it is an owner whose approval
+ * counts). Otherwise the program refuses with
+ * `UnauthorizedModerationHeartbeat`.
  *
  * Silence past the window relaxes the moderation ALLOW gates to
  * moderation-optional (docs/MODERATION_LIVENESS.md), so a censoring-by-
  * abandonment authority cannot freeze the marketplace; the multisig BLOCK
  * floor never relaxes.
  */
-export async function moderationHeartbeat(
-  input: ModerationHeartbeatAsyncInput,
-) {
-  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
-  return getModerationHeartbeatInstructionAsync({
-    ...stableInput,
+export type ModerationHeartbeatInput = ModerationHeartbeatAsyncInput & {
+  /** Approvals for a window change; omit for a plain heartbeat. */
+  readonly multisigSigners?: readonly TransactionSigner[];
+};
+
+export async function moderationHeartbeat(input: ModerationHeartbeatInput) {
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
+    { multisigRequired: false },
+  );
+  const instruction = await getModerationHeartbeatInstructionAsync({
+    ...generatedInput,
     newWindowSecs: snapshotOptionOrNullable(
-      stableInput.newWindowSecs,
+      generatedInput.newWindowSecs,
       "moderationHeartbeat: newWindowSecs",
     ),
   });
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }

@@ -51,6 +51,7 @@ describe.skipIf(!RPC_ENABLED)(
               })
             : await sdk.facade.hireFromListing({
                 ...common,
+                reviewWindowSecs: 3600n,
                 authority: buyer.signer,
                 creatorAgent: buyer.agent,
               });
@@ -118,10 +119,12 @@ describe.skipIf(!RPC_ENABLED)(
           moderationBlock: block,
         }),
       ]);
+      // Revision 9 (G): suspension needs 2 of the 3 local owners.
       await h.send("suspend worker", h.admin, [
         await sdk.facade.suspendAgent({
           agent: provider.agent,
           authority: h.admin,
+          multisigSigners: [h.admin, h.moderator],
         }),
       ]);
       await h.reject(
@@ -184,6 +187,19 @@ describe.skipIf(!RPC_ENABLED)(
       );
       for (const job of [second, third]) {
         const deposit = (await h.info(job.escrow))!.lamports;
+        // Revision 9: a buyer's first cancel starts its CreatorStats record,
+        // paid before the refund.
+        const [creatorStats] = await sdk.findCreatorStatsPda({
+          authority: job.buyer.signer.address,
+        });
+        const recordCost =
+          (await h.info(creatorStats)) === null
+            ? await h.rpc
+                .getMinimumBalanceForRentExemption(
+                  BigInt(sdk.getCreatorStatsSize()),
+                )
+                .send()
+            : 0n;
         const buyerBefore = await h.balance(job.buyer.signer.address);
         const cancelled = await h.send(
           "refund unclaimed hire",
@@ -197,7 +213,7 @@ describe.skipIf(!RPC_ENABLED)(
           ],
         );
         expect(await h.balance(job.buyer.signer.address)).toBe(
-          buyerBefore + deposit - cancelled.meta!.fee,
+          buyerBefore + deposit - cancelled.meta!.fee - recordCost,
         );
       }
       for (const job of [first, second, third]) {
@@ -341,6 +357,7 @@ describe.skipIf(!RPC_ENABLED)(
         await sdk.facade.suspendAgent({
           agent: best.agent,
           authority: h.admin,
+          multisigSigners: [h.admin, h.moderator],
         }),
       ]);
       await h.reject(

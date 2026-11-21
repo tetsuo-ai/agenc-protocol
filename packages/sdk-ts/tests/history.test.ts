@@ -53,6 +53,19 @@ const REVISION_4_SET_TASK_JOB_SPEC = bytesFromHex(
     "00".repeat(32),
 );
 
+// Frozen revision-5 commitment-v2 agent hire. Revision 9 replaced it with the
+// creator-review-v3 wire, so the generated encoder can no longer produce it.
+const REVISION_5_HIRE_FROM_LISTING = bytesFromHex(
+  "f15e7f0768aef074" +
+    "55".repeat(32) +
+    "0800000000000000" +
+    "0900000000000000" +
+    "00" +
+    "0000" +
+    "00".repeat(32) +
+    "44".repeat(32),
+);
+
 const ZERO_ADDRESS = address("11111111111111111111111111111111");
 const ONE_BYTE_ADDRESS = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
 
@@ -91,7 +104,7 @@ describe("frozen marketplace write history decoder", () => {
     });
 
     const revision5Values = [
-      discriminatorHex(HIRE_FROM_LISTING_DISCRIMINATOR),
+      discriminatorHex(history.REVISION_5_HIRE_FROM_LISTING_DISCRIMINATOR),
       discriminatorHex(HIRE_FROM_LISTING_HUMANLESS_DISCRIMINATOR),
       discriminatorHex(SET_TASK_JOB_SPEC_DISCRIMINATOR),
     ];
@@ -103,14 +116,20 @@ describe("frozen marketplace write history decoder", () => {
     for (const discriminator of revision5Values) {
       expect(revision4Values).not.toContain(discriminator);
     }
+    // Revision 9's creator-review-v3 agent hire collides with neither table.
+    const revision9Hire = discriminatorHex(HIRE_FROM_LISTING_DISCRIMINATOR);
+    expect(revision9Hire).toBe("48262ced035dfd6c");
+    expect(revision4Values).not.toContain(revision9Hire);
+    expect(revision5Values).not.toContain(revision9Hire);
   });
 
-  it("identifies all three legacy-v1 and commitment-v2 discriminators", () => {
+  it("identifies all three legacy-v1, commitment-v2 and creator-review-v3 discriminators", () => {
     const current = [
       getHireFromListingInstructionDataEncoder().encode({
         taskId: new Uint8Array(32),
         expectedPrice: 1n,
         expectedVersion: 1n,
+        reviewWindowSecs: 60n,
         referrer: null,
         referrerFeeBps: 0,
         moderator: ZERO_ADDRESS,
@@ -148,7 +167,16 @@ describe("frozen marketplace write history decoder", () => {
         (data) =>
           history.identifyMarketplaceWriteInstruction({ data })?.wireVersion,
       ),
-    ).toEqual(["commitment-v2", "commitment-v2", "commitment-v2"]);
+    ).toEqual(["creator-review-v3", "commitment-v2", "commitment-v2"]);
+    expect(
+      history.identifyMarketplaceWriteInstruction(current[0]!)
+        ?.surfaceRevision,
+    ).toBe(9);
+    const frozenHire = history.identifyMarketplaceWriteInstruction(
+      REVISION_5_HIRE_FROM_LISTING,
+    );
+    expect(frozenHire?.wireVersion).toBe("commitment-v2");
+    expect(frozenHire?.surfaceRevision).toBe(5);
     expect(
       history.identifyMarketplaceWriteInstruction(new Uint8Array(7)),
     ).toBeNull();
@@ -162,6 +190,7 @@ describe("frozen marketplace write history decoder", () => {
       taskId: new Uint8Array(32).fill(0x41),
       expectedPrice: 1n,
       expectedVersion: 1n,
+      reviewWindowSecs: 60n,
       referrer: null,
       referrerFeeBps: 0,
       moderator: ZERO_ADDRESS,
@@ -202,7 +231,7 @@ describe("frozen marketplace write history decoder", () => {
       ).toBe("aee15144ac1361c2");
       expect(
         history.identifyMarketplaceWriteInstruction(currentWire)?.wireVersion,
-      ).toBe("commitment-v2");
+      ).toBe("creator-review-v3");
       const decodedAgain = history.decodeMarketplaceWriteInstruction(
         REVISION_4_HIRE_FROM_LISTING,
       );
@@ -278,18 +307,10 @@ describe("frozen marketplace write history decoder", () => {
     expect(decoded.data.moderator).toBe(ZERO_ADDRESS);
   });
 
-  it("strictly decodes commitment-v2 and retains its task commitment", () => {
-    const taskJobSpecHash = new Uint8Array(32).fill(0x44);
-    const wire = getHireFromListingInstructionDataEncoder().encode({
-      taskId: new Uint8Array(32).fill(0x55),
-      expectedPrice: 8n,
-      expectedVersion: 9n,
-      referrer: null,
-      referrerFeeBps: 0,
-      moderator: ZERO_ADDRESS,
-      taskJobSpecHash,
+  it("strictly decodes the frozen commitment-v2 hire and retains its task commitment", () => {
+    const decoded = history.decodeMarketplaceWriteInstruction({
+      data: REVISION_5_HIRE_FROM_LISTING,
     });
-    const decoded = history.decodeMarketplaceWriteInstruction({ data: wire });
     if (
       decoded?.wireVersion !== "commitment-v2" ||
       decoded.instruction !== "hire_from_listing"
@@ -297,7 +318,65 @@ describe("frozen marketplace write history decoder", () => {
       throw new Error("unexpected decoded instruction");
     }
     expect(decoded.surfaceRevision).toBe(5);
+    expect(decoded.data.taskId).toEqual(new Uint8Array(32).fill(0x55));
+    expect(decoded.data.expectedPrice).toBe(8n);
+    expect(decoded.data.expectedVersion).toBe(9n);
+    expect(decoded.data.taskJobSpecHash).toEqual(new Uint8Array(32).fill(0x44));
+    expect(decoded.accountSchema).toHaveLength(15);
+    expect(() =>
+      history.decodeMarketplaceWriteInstruction(
+        REVISION_5_HIRE_FROM_LISTING.slice(0, -1),
+      ),
+    ).toThrow(/Invalid hire_from_listing commitment-v2 instruction data/u);
+  });
+
+  it("strictly decodes the revision 9 creator-review-v3 hire with its review window", () => {
+    const taskJobSpecHash = new Uint8Array(32).fill(0x66);
+    const wire = getHireFromListingInstructionDataEncoder().encode({
+      taskId: new Uint8Array(32).fill(0x77),
+      expectedPrice: 10n,
+      expectedVersion: 11n,
+      reviewWindowSecs: 86_400n,
+      referrer: null,
+      referrerFeeBps: 0,
+      moderator: ZERO_ADDRESS,
+      taskJobSpecHash,
+    });
+    expect(wire).toHaveLength(131);
+    const decoded = history.decodeMarketplaceWriteInstruction({ data: wire });
+    if (
+      decoded?.wireVersion !== "creator-review-v3" ||
+      decoded.instruction !== "hire_from_listing"
+    ) {
+      throw new Error("unexpected decoded instruction");
+    }
+    expect(decoded.surfaceRevision).toBe(9);
+    expect(decoded.data.reviewWindowSecs).toBe(86_400n);
     expect(decoded.data.taskJobSpecHash).toEqual(taskJobSpecHash);
+    expect(decoded.accountSchema.map(({ name }) => name)).toEqual([
+      "task",
+      "escrow",
+      "hire_record",
+      "task_validation_config",
+      "listing",
+      "provider_agent",
+      "protocol_config",
+      "moderation_config",
+      "listing_moderation",
+      "moderation_attestor",
+      "moderation_block",
+      "creator_agent",
+      "authority_rate_limit",
+      "authority",
+      "creator",
+      "system_program",
+    ]);
+    // The referrer option tag sits after the review window, at byte 64.
+    const nonCanonical = new Uint8Array(wire);
+    nonCanonical[64] = 2;
+    expect(() =>
+      history.decodeMarketplaceWriteInstruction(nonCanonical),
+    ).toThrow(/option tag at byte 64 must be 0 or 1/u);
   });
 
   it("rejects recognized truncated and trailing-byte payloads", () => {

@@ -82,7 +82,12 @@ describe("optional wallet task quota wire", () => {
         dependencyType: 3,
         taskQuotaSurface: surface,
       }),
-      sdk.facade.hireFromListing({ ...hire, authority, creatorAgent: agent }),
+      sdk.facade.hireFromListing({
+        ...hire,
+        authority,
+        creatorAgent: agent,
+        reviewWindowSecs: 3600n,
+      }),
       sdk.facade.hireFromListingHumanless({ ...hire, reviewWindowSecs: 3600n }),
     ];
     surface.taskCreationQuotas = false;

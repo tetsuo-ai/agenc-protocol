@@ -20,6 +20,7 @@ const encoders = [
       return getHireFromListingInstructionDataEncoder().encode({
         expectedPrice: 1n,
         expectedVersion: 1n,
+        reviewWindowSecs: 60n,
         moderator,
         referrer: none(),
         referrerFeeBps: 0,

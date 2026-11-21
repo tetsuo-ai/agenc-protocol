@@ -416,9 +416,14 @@ export async function expireDispute(input: ExpireDisputeInput) {
  * Permissionlessly settle one deferred collaborative peer claim after a
  * dispute ruling (chunked settlement). One worker per transaction; the
  * dispute reaches its recorded terminal status when the last peer settles.
- * The defendant is excluded — its claim settles through the ruling and the
+ * The defendant is excluded: its claim settles through the ruling and the
  * slash finalizers. `taskSubmission` defaults to the canonical
  * [task_submission, claim] PDA.
+ *
+ * Revision 9: `workerAuthority` is required. It must be the `authority`
+ * stored in the peer's AgentRegistration (`worker`), else `UnauthorizedAgent`.
+ * The peer claim's whole balance (rent and any deposit) and the peer's
+ * submission rent close to that wallet; the AgentRegistration gets nothing.
  */
 export type SettleDisputeClaimInput = Omit<
   SettleDisputeClaimAsyncInput,

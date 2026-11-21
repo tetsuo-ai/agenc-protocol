@@ -284,8 +284,30 @@ describe.skipIf(!RPC_ENABLED)(
             rejection,
           );
           const [claim] = await sdk.findClaimPda({ task, bidder: peer.agent });
+          const [submission] = await sdk.findTaskSubmissionPda({ claim });
           const claimBalance = (await h.info(claim))!.lamports;
+          const submissionBalance = (await h.info(submission))?.lamports ?? 0n;
           const agentBalance = (await h.info(peer.agent))!.lamports;
+          const walletBalance = await h.balance(peer.signer.address);
+          // Revision 9: the peer claim's whole balance and the peer's
+          // submission rent close to the peer's own wallet, which must be the
+          // authority in its AgentRegistration; the registration gets nothing.
+          await h.reject(
+            "a peer settlement naming another wallet",
+            crank,
+            [
+              await sdk.facade.settleDisputeClaim({
+                dispute,
+                task,
+                claim,
+                worker: peer.agent,
+                authority: crank,
+                taskValidationConfig: validation,
+                workerAuthority: crank.address,
+              }),
+            ],
+            sdk.AGENC_COORDINATION_ERROR__UNAUTHORIZED_AGENT,
+          );
           await h.send("settle peer", crank, [
             await sdk.facade.settleDisputeClaim({
               dispute,
@@ -294,11 +316,13 @@ describe.skipIf(!RPC_ENABLED)(
               worker: peer.agent,
               authority: crank,
               taskValidationConfig: validation,
+              workerAuthority: peer.signer.address,
             }),
           ]);
           expect((await h.info(claim))?.lamports ?? 0n).toBe(0n);
-          expect((await h.info(peer.agent))!.lamports - agentBalance).toBe(
-            claimBalance,
+          expect((await h.info(peer.agent))!.lamports).toBe(agentBalance);
+          expect((await h.balance(peer.signer.address)) - walletBalance).toBe(
+            claimBalance + submissionBalance,
           );
           expect(
             (await h.read(peer.agent, sdk.getAgentRegistrationDecoder()))

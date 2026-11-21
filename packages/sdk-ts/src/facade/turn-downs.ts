@@ -32,16 +32,14 @@ import {
   getCreatorStatsSize,
   getDisputeBondDecoder,
   getDisputeBondDiscriminatorBytes,
-  getTaskDecoder,
-  getTaskDiscriminatorBytes,
   getTaskSubmissionDecoder,
   getTaskSubmissionDiscriminatorBytes,
   TaskStatus,
   type CreatorStats,
   type DisputeBond,
-  type Task,
   type TaskSubmission,
 } from "../generated/index.js";
+import { decodeTaskAccount } from "./task-read.js";
 import {
   disputeBondForTask,
   isDisputableFreeze,
@@ -205,13 +203,11 @@ export async function readTurnDown(
   read: ReadAccountSnapshot,
   input: { task: Address; worker: Address },
 ): Promise<TurnDown | null> {
-  const task = decodeProgramAccount<Task>(
-    await read(input.task),
-    getTaskDiscriminatorBytes(),
-    (data) => getTaskDecoder().decode(data),
-    "Task",
-  );
-  if (task === null || task.status !== TaskStatus.RejectFrozen) return null;
+  // A closed task (a TaskMarker) is no longer turned down.
+  const read_ = decodeTaskAccount(await read(input.task));
+  if (read_.kind !== "task") return null;
+  const task = read_.task;
+  if (task.status !== TaskStatus.RejectFrozen) return null;
   const [claim] = await findClaimPda({ task: input.task, bidder: input.worker });
   const [submissionAddress] = await findTaskSubmissionPda({ claim });
   const submission = decodeProgramAccount<TaskSubmission>(

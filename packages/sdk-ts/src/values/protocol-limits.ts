@@ -62,6 +62,31 @@ export const REJECT_RULING_WINDOW_SECS = 259_200n;
 export const MIN_RESUBMIT_WINDOW_SECS = 86_400n;
 
 /**
+ * Longest CreatorReview window a task may have (7 days). Both hire doors and
+ * `configure_task_validation` take 1 second up to this.
+ */
+export const MAX_REVIEW_WINDOW_SECS = 604_800n;
+
+/**
+ * Throw unless `secs` is a CreatorReview window the program accepts: a whole
+ * number of seconds from 1 to {@link MAX_REVIEW_WINDOW_SECS}.
+ */
+export function assertCreatorReviewWindow(
+  secs: number | bigint,
+  label: string,
+): void {
+  if (typeof secs === "number" && !Number.isSafeInteger(secs)) {
+    throw new RangeError(`${label}: reviewWindowSecs must be a whole number`);
+  }
+  const value = BigInt(secs);
+  if (value < 1n || value > MAX_REVIEW_WINDOW_SECS) {
+    throw new RangeError(
+      `${label}: reviewWindowSecs must be 1 to ${MAX_REVIEW_WINDOW_SECS} seconds (got ${value})`,
+    );
+  }
+}
+
+/**
  * `TaskSubmission.reserved[2]` (`freeze_kind`) value for a revision 9 freeze
  * the worker may dispute. Zero means a revision 8 freeze, or a submission
  * that was never frozen.
