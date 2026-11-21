@@ -10,6 +10,7 @@ import {
   TASK_MARKER_DISCRIMINATOR_HEX,
   accountDiscriminator,
   addTaskMarkerToArtifacts,
+  assertIdlListsTaskMarker,
   lowerCamel,
   parseAccountStruct,
 } from "./anchor-idl-task-marker.mjs";
@@ -143,4 +144,27 @@ test("the struct parser and camelCase rule reproduce types Anchor emitted", () =
   assert.equal(lowerCamel("TaskMarker"), "taskMarker");
   assert.equal(lowerCamel("closed_at"), "closedAt");
   assert.equal(lowerCamel("_reserved"), "reserved");
+});
+
+// Lead item 29: the IDL the upgrade publishes must list TaskMarker. The
+// committed artifact does; Anchor's raw output (the committed IDL without the
+// added entries) does not, and neither does an entry that drifted.
+test("the deploy check accepts the committed IDL and refuses one without a correct TaskMarker", () => {
+  const committed = JSON.parse(committedIdlText);
+  assert.equal(assertIdlListsTaskMarker(committed), committed);
+  const raw = JSON.parse(withoutTaskMarker().idlText);
+  assert.throws(
+    () => assertIdlListsTaskMarker(raw),
+    /IDL has no TaskMarker account entry; publish the committed artifacts\/anchor\/idl\/agenc_coordination\.json, not Anchor's raw target\/idl output/u,
+  );
+  const typeOnly = JSON.parse(committedIdlText);
+  typeOnly.types = typeOnly.types.filter((entry) => entry.name !== "TaskMarker");
+  assert.throws(() => assertIdlListsTaskMarker(typeOnly), /no TaskMarker type entry/u);
+  const wrongDiscriminator = JSON.parse(committedIdlText);
+  wrongDiscriminator.accounts.find((entry) => entry.name === "TaskMarker").discriminator[7] ^= 1;
+  assert.throws(() => assertIdlListsTaskMarker(wrongDiscriminator), /discriminator is not the pinned c10bc0c833d06cff/u);
+  const wrongFields = JSON.parse(committedIdlText);
+  wrongFields.types.find((entry) => entry.name === "TaskMarker").type.fields[2].type = "u16";
+  assert.throws(() => assertIdlListsTaskMarker(wrongFields), /fields differ from the pinned layout/u);
+  assert.throws(() => assertIdlListsTaskMarker({}), /no TaskMarker account entry/u);
 });

@@ -142,6 +142,39 @@ export function taskMarkerIdlEntries(stateSource) {
   return { account: { name: TASK_MARKER_NAME, discriminator }, type: typeDef };
 }
 
+/// The deploy check (lead item 29): an IDL to publish must list `TaskMarker`, as
+/// the committed `artifacts/anchor/idl/agenc_coordination.json` does, with the
+/// pinned discriminator and field layout. Anchor's raw `target/idl` output has
+/// no TaskMarker entry, so clients built from a published raw IDL could not
+/// decode a compacted task. Pure; throws with what is wrong.
+export function assertIdlListsTaskMarker(idl) {
+  const committed = "publish the committed artifacts/anchor/idl/agenc_coordination.json, not Anchor's raw target/idl output";
+  const account = Array.isArray(idl?.accounts)
+    ? idl.accounts.find((entry) => entry?.name === TASK_MARKER_NAME)
+    : undefined;
+  const type = Array.isArray(idl?.types)
+    ? idl.types.find((entry) => entry?.name === TASK_MARKER_NAME)
+    : undefined;
+  if (!account || !type) {
+    throw new Error(`IDL has no ${TASK_MARKER_NAME} ${account ? "type" : "account"} entry; ${committed}`);
+  }
+  if (
+    !Array.isArray(account.discriminator) ||
+    Buffer.from(account.discriminator).toString("hex") !== TASK_MARKER_DISCRIMINATOR_HEX
+  ) {
+    throw new Error(
+      `IDL ${TASK_MARKER_NAME} discriminator is not the pinned ${TASK_MARKER_DISCRIMINATOR_HEX}; ${committed}`,
+    );
+  }
+  const fields = type.type?.kind === "struct" && Array.isArray(type.type.fields)
+    ? type.type.fields.map(({ name, type: fieldType }) => ({ name, type: fieldType }))
+    : null;
+  if (JSON.stringify(fields) !== JSON.stringify(PINNED_FIELDS)) {
+    throw new Error(`IDL ${TASK_MARKER_NAME} fields differ from the pinned layout; ${committed}`);
+  }
+  return idl;
+}
+
 /// Anchor's TypeScript names: heck lowerCamelCase (`closed_at` -> `closedAt`,
 /// `_reserved` -> `reserved`, `TaskMarker` -> `taskMarker`).
 export function lowerCamel(name) {
