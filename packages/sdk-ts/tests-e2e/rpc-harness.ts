@@ -22,6 +22,7 @@ import {
   type KeyPairSigner,
 } from "@solana/kit";
 import { expect } from "vitest";
+import { readPlainKeypairFile } from "../../../scripts/keypair-file.mjs";
 import * as sdk from "../src/index.js";
 
 export const RPC_ENABLED = process.env.AGENC_RPC_E2E === "1";
@@ -81,10 +82,9 @@ export async function localRpcHarness(label: string) {
       rpc: landedRpc,
       commitment: "confirmed",
     });
+  // Review S-19: a bad key file is named, its content never quoted.
   const loadKey = async (file: string) =>
-    createKeyPairSignerFromBytes(
-      Uint8Array.from(JSON.parse(readFileSync(file, "utf8"))),
-    );
+    createKeyPairSignerFromBytes(readPlainKeypairFile(file));
   const admin = await loadKey(env.keypairs.authority);
   const moderator = await loadKey(env.keypairs.moderator);
   const [protocol] = await sdk.findProtocolConfigPda();
