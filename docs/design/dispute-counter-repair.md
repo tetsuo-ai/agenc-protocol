@@ -153,13 +153,22 @@ the CLI has no switch to bypass its mainnet or artifact checks.
 ## Completion-bond cutover gate
 
 The revision-4 eligibility predicate is required only when the live binary can
-post a completion bond while paused. The reviewed revision-5 payload and the
-approved candidate both reject this entry while the protocol is paused. The
-release rail recognizes revision 5 by the payload hash in the remediation record,
-not by the mutable surface stamp. It recognizes the approved candidate by reading
+post a completion bond while paused. The reviewed revision-5 payload, the live
+revision-8 payload and the approved candidate all reject this entry while the
+protocol is paused. The release rail recognizes revision 5 by the payload hash in
+the remediation record and revision 8 by the payload hash in the reviewed
+revision 8 record (`artifacts/explorer-metadata/2026-10-28-revision-8.json`), not
+by the mutable surface stamp. It recognizes the approved candidate by reading
 and hash-verifying the approved SBF before the first cutover scan, then matching
 the live payload with the same exact bytes and zero-padding rule used for deploy
 verification. Block (a) retains its independent artifact checks.
+
+Revision 9 does not fit the live ProgramData, so the reviewed `ExtendProgram`
+step runs before the preflight that passes block (a). The loader extends with
+zero bytes. The program is still revision 8, but the payload hash changes. The
+rail therefore also accepts exactly the reviewed revision 8 ELF (2,075,896 bytes,
+SHA-256 `0b450dab…`) followed only by zeros, at no less than the reviewed
+2,303,608-byte payload. A size or a prefix alone is never accepted.
 
 Both predeploy scans classify their own loader snapshot. Unknown payloads retain
 the revision-4 gate and its existing explicit bond-race opt-in. Postdeploy/prestamp
