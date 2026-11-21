@@ -395,19 +395,23 @@ pub fn resolve_handler(
         },
         clock.unix_timestamp,
     )?;
-    emit!(RejectionDisputeSettled {
-        task: task_key,
-        outcome: if approve_completion {
-            rejection_dispute_outcome::PAID_BY_RULING
-        } else {
-            rejection_dispute_outcome::REFUNDED_BY_RULING
-        },
-        bond_amount: bond.amount,
-        bond_recipient: bond.principal_recipient,
-        resolved_by: ctx.accounts.authority.key(),
-        rationale_hash,
-        timestamp: clock.unix_timestamp,
-    });
+    // Review R1-10 (a): the event reports how a dispute of a revision 9 freeze
+    // ended; a revision 8 freeze has none (`expire_reject_frozen` agrees).
+    if rules == FreezeRules::Revision9 {
+        emit!(RejectionDisputeSettled {
+            task: task_key,
+            outcome: if approve_completion {
+                rejection_dispute_outcome::PAID_BY_RULING
+            } else {
+                rejection_dispute_outcome::REFUNDED_BY_RULING
+            },
+            bond_amount: bond.amount,
+            bond_recipient: bond.principal_recipient,
+            resolved_by: ctx.accounts.authority.key(),
+            rationale_hash,
+            timestamp: clock.unix_timestamp,
+        });
+    }
 
     // Revision 9 (E): a ruling on a freeze is recorded on both sides: approving
     // the completion is a worker win and a creator loss, upholding the rejection

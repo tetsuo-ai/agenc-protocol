@@ -28,7 +28,11 @@ pub fn dispute_bond_lamports(disputed_amount: u64) -> Result<u64> {
 
 /// The bond a filer posts on this task: 10% of the task reward for a
 /// single-worker task, of the defendant's share for a Collaborative task, with
-/// the 0.01 SOL floor. A token-reward task pays the floor.
+/// the 0.01 SOL floor. A token-reward task pays the floor. On a BidExclusive
+/// task the reward is the creator's budget, at least the accepted price (a bid
+/// may ask up to it): the price lives on the TaskBid, which `initiate_dispute`
+/// does not read, so the bond can only be higher than 10% of the price, never
+/// lower (review R2-11; 0 live bid tasks).
 pub fn dispute_bond_for_task(task: &Task) -> Result<u64> {
     dispute_bond_lamports(sol_worker_share_lamports(task)?)
 }
