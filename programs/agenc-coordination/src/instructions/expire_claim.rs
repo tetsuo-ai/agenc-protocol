@@ -544,6 +544,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     // would otherwise MissingCompletionBondAccount-FREEZE every Collaborative/Competitive
     // no-show, permanently stranding the slot. Do not re-widen this guard unless bonds
     // are also permitted on those task types.
+    // Review R1-6 part 2: one dependency verdict for both no-show penalties. The
+    // bond block sets it; the deposit block below reads it, or computes it with
+    // the same mandatory parent evidence when no bond block ran.
+    #[cfg(not(feature = "mainnet-canary"))]
+    let mut parent_completed_verdict: Option<bool> = None;
     #[cfg(not(feature = "mainnet-canary"))]
     if is_pure_noshow && task.task_type == TaskType::Exclusive {
         // rent_recipient is constrained == worker.authority by the struct, so it is the
@@ -581,6 +586,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         let creator_info = creator.to_account_info();
         let parent_completed =
             dependency_parent_completed(task, ctx.remaining_accounts, ctx.program_id)?;
+        parent_completed_verdict = Some(parent_completed);
 
         // No-op when the canonical PDA holds no live bond (un-bonded task). A live
         // bond is always tombstoned so it cannot be replayed after task reopen.
@@ -649,32 +655,52 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
             posted_claim_deposit_lamports(task)?,
         ) > 0
         {
-            let creator = ctx
-                .accounts
-                .bond_creator
-                .as_ref()
-                .ok_or(CoordinationError::ClaimDepositRecipientRequired)?;
-            require!(
-                creator.key() == task.creator,
-                CoordinationError::InvalidCreator
-            );
-            forfeit_claim_deposit(
-                &claim_info,
-                &creator.to_account_info(),
-                task,
-                task.key(),
-                worker.key(),
-                clock.unix_timestamp,
-            )?;
-            if let Some(record) = ctx.accounts.creator_stats.as_ref() {
-                if record.owner == &crate::ID {
-                    count_creator_stats(
-                        &record.to_account_info(),
-                        task.creator,
-                        CreatorCounter::DepositsReceived,
-                        clock.unix_timestamp,
-                    )?;
+            // Review R1-6 part 2: and only on the dependency evidence that
+            // forfeits a worker completion bond. A dependent task must show its
+            // parent (a worker cannot hide a Completed parent); one that does not
+            // prove Completed makes the no-show no fault of the worker, and the
+            // deposit goes back with the claim.
+            let parent_completed = match parent_completed_verdict {
+                Some(verdict) => verdict,
+                None => dependency_parent_completed(task, ctx.remaining_accounts, ctx.program_id)?,
+            };
+            if dependency_allows_worker_bond_forfeit(task.dependency_type, parent_completed) {
+                let creator = ctx
+                    .accounts
+                    .bond_creator
+                    .as_ref()
+                    .ok_or(CoordinationError::ClaimDepositRecipientRequired)?;
+                require!(
+                    creator.key() == task.creator,
+                    CoordinationError::InvalidCreator
+                );
+                forfeit_claim_deposit(
+                    &claim_info,
+                    &creator.to_account_info(),
+                    task,
+                    task.key(),
+                    worker.key(),
+                    clock.unix_timestamp,
+                )?;
+                if let Some(record) = ctx.accounts.creator_stats.as_ref() {
+                    if record.owner == &crate::ID {
+                        count_creator_stats(
+                            &record.to_account_info(),
+                            task.creator,
+                            CreatorCounter::DepositsReceived,
+                            clock.unix_timestamp,
+                        )?;
+                    }
                 }
+            } else {
+                refund_claim_deposit(
+                    &claim_info,
+                    &ctx.accounts.rent_recipient.to_account_info(),
+                    task,
+                    task.key(),
+                    worker.key(),
+                    clock.unix_timestamp,
+                )?;
             }
         }
     }

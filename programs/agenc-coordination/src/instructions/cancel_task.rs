@@ -319,6 +319,24 @@ fn worker_bond_forfeit_allowed(
     is_no_show_cancel && dependency_parent_completed && !dispute_filed
 }
 
+/// Review R1-1, R1-5 and R1-6 part 2: the drain forfeits a non-contest claim
+/// deposit on exactly the evidence that forfeits a worker completion bond here
+/// (a no-show on a task whose parent, if any, proves Completed, with no dispute
+/// ever filed), and never while the claim is inside its release grace.
+#[cfg(not(feature = "mainnet-canary"))]
+fn drain_deposit_forfeit_allowed(
+    is_no_show_cancel: bool,
+    dependency_parent_completed: bool,
+    dispute_filed: bool,
+    within_release_grace: bool,
+) -> bool {
+    worker_bond_forfeit_allowed(
+        is_no_show_cancel,
+        dependency_parent_completed,
+        dispute_filed,
+    ) && !within_release_grace
+}
+
 /// Classify the optional canonical parent prefix used by cancellation. Legacy
 /// in-flight children may predate assignment-time dependency gating, so the
 /// parent account is optional on this EXIT path: omitted, absent, or not yet
@@ -734,18 +752,22 @@ fn process_cancel_task_impl<'info>(
         // its deadline with no live delivery), so a non-contest claim's deposit
         // goes to the creator (`authority`), not back with the claim rent. A
         // delivered claim already had its deposit back at submit. Bid claims
-        // carry a bid bond instead (settled above). Review R1-1: once a dispute
-        // was filed on the task (it blocked every worker), the deposit goes back
-        // to the worker instead. Review R1-5: so does a claim still inside its
-        // release grace, as `release_claim` would refund it. Full surface only.
+        // carry a bid bond instead (settled above). The deposit goes back to the
+        // worker instead once a dispute was filed on the task (review R1-1: it
+        // blocked every worker), while the claim is inside its release grace
+        // (R1-5: `release_claim` would refund it), or when the parent does not
+        // prove Completed (R1-6 part 2: the worker bond rule). Full surface only.
         #[cfg(not(feature = "mainnet-canary"))]
         if !is_contest_configured_task(task) && task.task_type != TaskType::BidExclusive {
-            if dispute_filed
-                || crate::instructions::claim_deposit_helpers::release_refunds_deposit(
+            if !drain_deposit_forfeit_allowed(
+                is_no_show_cancel,
+                dependency_parent_completed,
+                dispute_filed,
+                crate::instructions::claim_deposit_helpers::release_refunds_deposit(
                     claim.claimed_at,
                     clock.unix_timestamp,
-                )
-            {
+                ),
+            ) {
                 crate::instructions::claim_deposit_helpers::refund_claim_deposit(
                     claim_info,
                     rent_recipient_info,
@@ -1019,6 +1041,18 @@ mod tests {
         for (no_show, parent) in [(true, true), (true, false), (false, true)] {
             assert!(!worker_bond_forfeit_allowed(no_show, parent, true));
         }
+    }
+
+    // Review R1-6 part 2 (with R1-1 and R1-5): the drain's deposit forfeit needs
+    // the worker bond's evidence and a claim past its release grace.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn the_drain_deposit_forfeit_follows_the_worker_bond_rule_and_the_grace() {
+        assert!(drain_deposit_forfeit_allowed(true, true, false, false));
+        assert!(!drain_deposit_forfeit_allowed(true, false, false, false));
+        assert!(!drain_deposit_forfeit_allowed(true, true, true, false));
+        assert!(!drain_deposit_forfeit_allowed(true, true, false, true));
+        assert!(!drain_deposit_forfeit_allowed(false, true, false, false));
     }
 
     #[cfg(not(feature = "mainnet-canary"))]
