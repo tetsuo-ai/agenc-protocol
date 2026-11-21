@@ -17,6 +17,7 @@ import {
   getHireRecordEncoder,
   getTaskEncoder,
   getTaskJobSpecEncoder,
+  getTaskMarkerEncoder,
   getTaskSubmissionEncoder,
   SubmissionStatus,
   TASK_DISCRIMINATOR,
@@ -2243,6 +2244,75 @@ describe("settlement evidence coherence", () => {
     expect(await checkSettlements(ctx, agent)).toEqual([]);
     expect(loadState(stateDir).submissions[0]?.settled).toBe(false);
     expect(loadState(stateDir).totalEarnedBaseline).toBe("50");
+  });
+
+  it("reads a compacted task (revision 9 TaskMarker) instead of failing to decode it", async () => {
+    const marker = (status: TaskStatus) =>
+      new Uint8Array(
+        getTaskMarkerEncoder().encode({
+          creator: CREATOR,
+          status,
+          flags: 0b11,
+          closedAt: 1_800_000_000n,
+          reserved: new Uint8Array(6),
+        }),
+      );
+    // A paid job the buyer tidied: the accept closed the claim and the
+    // submission, close_task left a Completed marker, and the agent's total
+    // moved. The job counts as paid.
+    const paidDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-marker-paid-"),
+    );
+    pendingState(paidDir, "2000-01-01T00:00:00.000Z");
+    const paid = context(
+      paidDir,
+      new Map<Address, Uint8Array>([
+        [TASK, marker(TaskStatus.Completed)],
+        [WORKER, agentRegistrationData(150n)],
+      ]),
+      {},
+      [],
+    );
+    const reports = await checkSettlements(paid, agent);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ outcome: "accepted" });
+    expect(loadState(paidDir).submissions[0]?.settled).toBe(true);
+
+    // Without a move in the agent's total there is no second piece of
+    // evidence, so nothing is called paid yet.
+    const waitingDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-marker-waiting-"),
+    );
+    pendingState(waitingDir, "2000-01-01T00:00:00.000Z");
+    const waiting = context(
+      waitingDir,
+      new Map<Address, Uint8Array>([
+        [TASK, marker(TaskStatus.Completed)],
+        [WORKER, agentRegistrationData(50n)],
+      ]),
+      {},
+      [],
+    );
+    expect(await checkSettlements(waiting, agent)).toEqual([]);
+    expect(loadState(waitingDir).submissions[0]?.settled).toBe(false);
+
+    // A Cancelled marker is a job that was not paid.
+    const cancelledDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-settlement-marker-cancelled-"),
+    );
+    pendingState(cancelledDir, "2000-01-01T00:00:00.000Z");
+    const cancelled = context(
+      cancelledDir,
+      new Map<Address, Uint8Array>([[TASK, marker(TaskStatus.Cancelled)]]),
+      {},
+      [],
+    );
+    const cancelledReports = await checkSettlements(cancelled, agent);
+    expect(cancelledReports).toHaveLength(1);
+    expect(cancelledReports[0]).toMatchObject({
+      outcome: "cancelled",
+      earnedLamports: 0n,
+    });
   });
 
   it("does not call a transient Open task rejected while its canonical submission is Submitted", async () => {

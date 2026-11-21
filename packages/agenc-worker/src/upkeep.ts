@@ -29,7 +29,6 @@ import {
   findWorkerCompletionBondPda,
   getProtocolConfigDecoder,
   getTaskClaimDecoder,
-  getTaskDecoder,
   getTaskSubmissionDecoder,
   getTaskValidationConfigDecoder,
   SubmissionStatus,
@@ -96,9 +95,29 @@ export type UpkeepReport = {
  */
 export type UpkeepMemory = Map<string, number>;
 
-async function readTask(ctx: WorkerContext, task: Address): Promise<Task | null> {
+/**
+ * What a task's address holds. Revision 9: `close_task` compacts a finished
+ * task into a 56-byte TaskMarker, which reads as `closed` instead of
+ * failing to decode as a Task.
+ */
+export async function readTaskAccount(
+  ctx: WorkerContext,
+  task: Address,
+): Promise<facade.TaskAccountRead> {
+  // A task lives at a program-derived address, so bytes there can only have
+  // been written by the program: read the bytes, as the worker always did.
   const data = await ctx.readAccount(task);
-  return data === null ? null : getTaskDecoder().decode(data);
+  return facade.decodeTaskAccount(
+    data === null || data.byteLength === 0
+      ? null
+      : { owner: AGENC_COORDINATION_PROGRAM_ADDRESS, data },
+  );
+}
+
+/** The Task, or null when it is gone or closed (nothing left to upkeep). */
+async function readTask(ctx: WorkerContext, task: Address): Promise<Task | null> {
+  const read = await readTaskAccount(ctx, task);
+  return read.kind === "task" ? read.task : null;
 }
 
 async function readClaim(

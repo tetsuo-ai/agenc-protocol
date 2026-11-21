@@ -16,6 +16,7 @@ import {
   getProtocolConfigEncoder,
   getTaskClaimEncoder,
   getTaskEncoder,
+  getTaskMarkerEncoder,
   getTaskSubmissionEncoder,
   DISPUTE_REJECTION_DISCRIMINATOR,
   EXPIRE_REJECT_FROZEN_DISCRIMINATOR,
@@ -294,6 +295,62 @@ describe("releasing a given-up job's claim", () => {
     await releaseOwnClaims(w.ctx, agent, memory);
     expect(send).toHaveBeenCalledTimes(2);
     expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).toBe(false);
+  });
+});
+
+describe("a compacted task (revision 9)", () => {
+  it("is skipped by every upkeep step instead of failing to decode", async () => {
+    const send = vi.fn(async () => ({ signature: "never" }));
+    const autoAcceptTaskResult = vi.fn(async () => ({ signature: "never" }));
+    const w = await setup({ send, autoAcceptTaskResult });
+    const state = emptyState();
+    state.submissions.push({
+      task: TASK,
+      submissionSignature: "submit-sig",
+      resultUri: "agenc://result/sha256/x",
+      resultHashHex: "ab".repeat(32),
+      rewardAmount: "1000000",
+      submittedAt: "2026-11-19T00:00:00.000Z",
+      settled: false,
+    });
+    state.failedJobs.push({
+      task: TASK,
+      claimedAt: "2026-11-19T00:00:00.000Z",
+      failedAt: "2026-11-19T00:10:00.000Z",
+      cause: "attempts",
+      reason: "executor exited with code 3",
+      attempts: 3,
+      claimReleased: false,
+    });
+    saveState(w.stateDir, state);
+    w.accounts.set(
+      TASK,
+      new Uint8Array(
+        getTaskMarkerEncoder().encode({
+          creator: CREATOR,
+          status: TaskStatus.Completed,
+          flags: 0,
+          closedAt: BigInt(NOW),
+          reserved: new Uint8Array(6),
+        }),
+      ),
+    );
+
+    expect(await collectOverdueReviews(w.ctx, agent)).toEqual([]);
+    // Compaction needs every claim gone, so a given-up claim there is over.
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([
+      { task: TASK, how: "closed" },
+    ]);
+    // Even with a claim account left, the closed task is skipped.
+    w.accounts.set(w.claim, claimData(BigInt(NOW + 3_600)));
+    const later = emptyState();
+    later.failedJobs.push({ ...state.failedJobs[0]!, claimReleased: false });
+    later.submissions.push(state.submissions[0]!);
+    saveState(w.stateDir, later);
+    expect(await releaseOwnClaims(w.ctx, agent)).toEqual([]);
+    expect(await collectTurnDowns(w.ctx, agent)).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+    expect(autoAcceptTaskResult).not.toHaveBeenCalled();
   });
 });
 

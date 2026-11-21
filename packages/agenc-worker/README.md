@@ -215,6 +215,13 @@ agent to read it**. The worker is built around that assumption:
   itself: that returns its claim and submission rent, and its bond when nobody
   ruled. A freeze made before revision 9 keeps its old rule: after its review
   time the worker is paid.
+- **A closed task (revision 9).** When the buyer tidies a finished job,
+  `close_task` turns its task into a small marker that keeps only how it
+  ended. The worker reads that marker as a closed task: a completed one counts
+  as paid once the agent's on-chain `totalEarned` shows it, a cancelled one as
+  not paid, and its upkeep leaves it alone. On a task that depends on another,
+  an expiry always names the parent task, so a no-show forfeits its deposit
+  only when the parent is done.
 - **Earnings settled together are each counted.** When several deliveries are
   paid between two looks, the rise in the agent's on-chain `totalEarned` is
   divided by each task's own terms, so every paid job reports what it earned.
