@@ -146,7 +146,10 @@ import { scanGovernanceProposals } from "./preflight-governance-scan.mjs";
 import { scanTaskChildren } from "./preflight-task-children-scan.mjs";
 import { scanTokenRewardTasks } from "./preflight-token-task-scan.mjs";
 import { scanPrivateTaskCutover } from "./preflight-private-task-scan.mjs";
-import { scanHireProviderBindings } from "./preflight-hire-provider-scan.mjs";
+import {
+  inventoryListingSelfModeration,
+  scanHireProviderBindings,
+} from "./preflight-hire-provider-scan.mjs";
 import { scanActiveJobSpecBlocks } from "./preflight-active-job-spec-block-scan.mjs";
 import { scanTaskDependencies } from "./preflight-task-dependency-scan.mjs";
 import { scanRejectFrozenFees } from "./preflight-reject-frozen-fee-scan.mjs";
@@ -3145,6 +3148,16 @@ export async function verifyRevision5CutoverState(
           `committed=${hireProviders.committedCount}, ` +
           `blockers=${hireProviders.blockers.length}`,
       );
+      // Item 39, report only (never a gate): live ListingModeration records whose
+      // moderator is the listing's own provider wallet. Revision 9 refuses new
+      // ones; the count decides the revision 10 hire-gate check.
+      const listingModeration = await inventoryListingSelfModeration(connection);
+      info(
+        `${stage}: ListingModeration=${listingModeration.recordCount}, ` +
+          `listing_self_moderated=${listingModeration.selfModeratedCount} (report only), ` +
+          `listing_missing=${listingModeration.listingMissingCount}, ` +
+          `unreadable=${listingModeration.unreadableCount}`,
+      );
       const jobSpecBlocks = await scanActiveJobSpecBlocks(connection);
       info(
         `${stage}: active_job_specs=${jobSpecBlocks.canonicalJobSpecCount}, ` +
@@ -3255,6 +3268,7 @@ export async function verifyRevision5CutoverState(
         tokenTasks,
         privateTasks,
         hireProviders,
+        listingModeration,
         jobSpecBlocks,
         dependencies,
         rejectFrozen,

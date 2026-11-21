@@ -25,6 +25,7 @@ const { Connection, PublicKey } = require("@solana/web3.js");
 
 const HIRE_RECORD_SIZE = 173;
 const SERVICE_LISTING_SIZE = 697;
+const LISTING_MODERATION_SIZE = 234;
 const MAX_OPERATOR_FEE_BPS = 2_000;
 const MAX_REFERRER_FEE_BPS = 2_000;
 const TERMINAL_STATUSES = new Set([3, 4]);
@@ -34,6 +35,10 @@ const HIRE_DISCRIMINATOR = createHash("sha256")
   .subarray(0, 8);
 const LISTING_DISCRIMINATOR = createHash("sha256")
   .update("account:ServiceListing")
+  .digest()
+  .subarray(0, 8);
+const LISTING_MODERATION_DISCRIMINATOR = createHash("sha256")
+  .update("account:ListingModeration")
   .digest()
   .subarray(0, 8);
 
@@ -152,6 +157,8 @@ export function decodeServiceListingProvider(dataLike) {
   );
   return {
     providerAgent: new PublicKey(data.subarray(8, 40)),
+    // The provider's wallet: the listing authority.
+    authority: new PublicKey(data.subarray(40, 72)),
     listingId: Buffer.from(data.subarray(72, 104)),
     bump: data[priceMintEnd + 99],
     state,
@@ -162,6 +169,112 @@ export function decodeServiceListingProvider(dataLike) {
     openJobs: data.readUInt16LE(priceMintEnd + 53),
     totalHires: data.readBigUInt64LE(priceMintEnd + 55),
   };
+}
+
+/// Decode the fields of a ListingModeration record the self-moderation count
+/// reads (exact 234-byte layout).
+export function decodeListingModeration(dataLike) {
+  const data = exact(
+    dataLike,
+    LISTING_MODERATION_SIZE,
+    LISTING_MODERATION_DISCRIMINATOR,
+    "ListingModeration",
+  );
+  return {
+    listing: new PublicKey(data.subarray(8, 40)),
+    providerAgent: new PublicKey(data.subarray(40, 72)),
+    jobSpecHash: Buffer.from(data.subarray(72, 104)),
+    status: data[104],
+    moderator: new PublicKey(data.subarray(194, 226)),
+    bump: data[226],
+  };
+}
+
+/// Item 39 (report only, never a gate): which ListingModeration records name the
+/// listing's own provider wallet (`ServiceListing.authority`) as moderator.
+/// Revision 9 refuses such a record at `record_listing_moderation` but not at
+/// the hire gate, so live ones keep working; this count decides whether
+/// revision 10 adds the hire-gate check. `records` are `{ address, data }`
+/// account images; `listingAccounts` maps a listing address to its account (or
+/// null when it is gone).
+export function countListingSelfModeration(records, listingAccounts) {
+  const selfModerated = [];
+  let decodedCount = 0;
+  let unreadableCount = 0;
+  let listingMissingCount = 0;
+  for (const { address, data } of records) {
+    let record;
+    try {
+      record = decodeListingModeration(data);
+    } catch {
+      unreadableCount++;
+      continue;
+    }
+    decodedCount++;
+    const account = listingAccounts.get(record.listing.toBase58()) ?? null;
+    if (isMissing(account) || !account.owner.equals(PROGRAM_ID)) {
+      listingMissingCount++;
+      continue;
+    }
+    let listing;
+    try {
+      listing = decodeServiceListingProvider(account.data);
+    } catch {
+      unreadableCount++;
+      continue;
+    }
+    if (record.moderator.equals(listing.authority)) {
+      selfModerated.push({
+        moderation: address,
+        listing: record.listing,
+        providerWallet: listing.authority,
+        status: record.status,
+      });
+    }
+  }
+  return {
+    recordCount: records.length,
+    decodedCount,
+    unreadableCount,
+    listingMissingCount,
+    selfModeratedCount: selfModerated.length,
+    selfModerated,
+  };
+}
+
+/// Read every ListingModeration record and its listing, and count the
+/// self-moderated ones (`countListingSelfModeration`). Report only.
+export async function inventoryListingSelfModeration(connection) {
+  const genesis = await connection.getGenesisHash();
+  if (genesis !== MAINNET_GENESIS) {
+    throw new Error(
+      `wrong cluster genesis ${genesis}; expected mainnet-beta ${MAINNET_GENESIS}`,
+    );
+  }
+  const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
+    filters: [
+      {
+        memcmp: {
+          offset: 0,
+          bytes: LISTING_MODERATION_DISCRIMINATOR.toString("base64"),
+          encoding: "base64",
+        },
+      },
+    ],
+  });
+  const records = accounts
+    .filter(({ account }) => account.owner.equals(PROGRAM_ID))
+    .map(({ pubkey, account }) => ({ address: pubkey, data: account.data }));
+  const listings = [];
+  for (const { data } of records) {
+    try {
+      listings.push(decodeListingModeration(data).listing);
+    } catch {
+      // Counted as unreadable by countListingSelfModeration.
+    }
+  }
+  const listingAccounts = await fetchAccountMap(connection, listings);
+  return countListingSelfModeration(records, listingAccounts);
 }
 
 function blocker(kind, hireRecord, detail, extra = {}) {
@@ -582,8 +695,13 @@ async function main() {
   console.log(
     `Scanning mainnet HireRecord provider bindings via <redacted-rpc> (program ${PROGRAM_ID.toBase58()})`,
   );
-  const result = await scanHireProviderBindings(
-    new Connection(rpcUrl, "confirmed"),
+  const connection = new Connection(rpcUrl, "confirmed");
+  const result = await scanHireProviderBindings(connection);
+  const moderation = await inventoryListingSelfModeration(connection);
+  console.log(
+    `ListingModeration (report only): records=${moderation.recordCount} ` +
+      `self_moderated=${moderation.selfModeratedCount} ` +
+      `listing_missing=${moderation.listingMissingCount} unreadable=${moderation.unreadableCount}`,
   );
   console.log(
     `HireRecord: accounts=${result.accountCount} bound=${result.boundCount} ` +
