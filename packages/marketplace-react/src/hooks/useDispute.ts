@@ -7,6 +7,14 @@
  * the write client (`client.initiateDispute`). Typed `AgencError`s surface
  * UNTOUCHED.
  *
+ * Revision 9: opening a dispute posts a bond (10% of the price, or of the
+ * defendant's share on a Collaborative task, at least 0.01 SOL); the SDK
+ * derives the bond account. The filer gets it back when a ruling goes its way
+ * or nobody rules; it goes to the other side when the ruling goes against the
+ * filer or the filer cancels. Single-worker review tasks take no task dispute
+ * (6425): there the buyer turns work down (`useSubmissionReview().turnDown`)
+ * and the worker disputes that turn-down with `facade.disputeRejection`.
+ *
  * @module hooks/useDispute
  */
 import { useMutation, useQuery } from "@tanstack/react-query";

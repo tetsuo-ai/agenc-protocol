@@ -25,6 +25,8 @@ import {
   AgencError,
   HireAndActivateError,
   TaskStatus,
+  REJECT_AND_FREEZE_DISCRIMINATOR,
+  findWorkerStatsPda,
   findTaskPda,
   type Dispute,
   type IndexerAgentTrackRecord,
@@ -1557,6 +1559,33 @@ describe("useSubmissionReview", () => {
     expect(sig).toBe("sig-send");
     expect(client.send).toHaveBeenCalledTimes(1);
   });
+
+  it("turnDown freezes the delivery with the worker's record (revision 9)", async () => {
+    const client = stubClient();
+    const { result } = renderHook(() => useSubmissionReview(TASK), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    const sig = await actAsync(() =>
+      result.current.turnDown({
+        worker: PROVIDER_AGENT,
+        rejectionHash: new Uint8Array(32).fill(4),
+      } as never),
+    );
+    expect(sig).toBe("sig-send");
+    const [instructions] = (client.send as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    const ix = (instructions as { data: Uint8Array; accounts: { address: string }[] }[])[0]!;
+    expect(Array.from(ix.data.slice(0, 8))).toEqual(
+      Array.from(REJECT_AND_FREEZE_DISCRIMINATOR),
+    );
+    const [workerRecord] = await findWorkerStatsPda({ worker: PROVIDER_AGENT });
+    expect(ix.accounts[6]?.address).toBe(workerRecord);
+    expect(result.current.status).toBe("success");
+  });
 });
 
 // ----------------------------------------------------------------------------
@@ -1640,6 +1669,35 @@ describe("useTaskStatus", () => {
     expect(Array.from(result.current.submission!)).toEqual(
       Array.from(resultBytes),
     );
+  });
+
+  it("keeps polling a turned-down task, which still moves (revision 9)", async () => {
+    let status = TaskStatus.RejectFrozen;
+    const reader = vi.fn(
+      async () => ({ status, result: new Uint8Array(0) }) as unknown as Task,
+    );
+    const { result } = renderHook(
+      () =>
+        useTaskStatus(PROVIDER_AGENT, { taskReader: reader, pollIntervalMs: 10 }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await waitFor(() =>
+      expect(result.current.status).toBe(TaskStatus.RejectFrozen),
+    );
+    // The turn-down is settled later (here: a refund), and the hook sees it.
+    status = TaskStatus.Cancelled;
+    await waitFor(() =>
+      expect(result.current.status).toBe(TaskStatus.Cancelled),
+    );
+    const reads = reader.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // Cancelled is terminal: polling stopped.
+    expect(reader.mock.calls.length).toBe(reads);
   });
 
   it("stays idle without a reader", () => {

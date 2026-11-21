@@ -77,16 +77,19 @@ export const EN_COMPONENT_STRINGS = {
   "components.taskTimeline.status.Completed": "Completed",
   "components.taskTimeline.status.Cancelled": "Cancelled",
   "components.taskTimeline.status.Disputed": "Disputed",
-  "components.taskTimeline.status.RejectFrozen": "Rejected (frozen)",
+  "components.taskTimeline.status.RejectFrozen": "Turned down (on hold)",
 
   // ReviewPanel.
   "components.review.title": "Review submission",
   "components.review.noSubmission": "Awaiting the worker's submission.",
   "components.review.accept": "Accept and release escrow",
   "components.review.reject": "Reject",
+  "components.review.turnDown": "Turn down",
   "components.review.requestChanges": "Request changes",
   "components.review.accepted": "Result accepted. Escrow released.",
   "components.review.rejected": "Result rejected.",
+  "components.review.turnedDown":
+    "Turned down. The price stays held. The worker has 72 hours to dispute this. If it does not, the price comes back.",
   "components.review.changesRequested": "Changes requested.",
   "components.review.pending": "Submitting…",
   "components.review.errorTitle": "Review action failed",
@@ -95,6 +98,8 @@ export const EN_COMPONENT_STRINGS = {
   "components.dispute.title": "This task is in dispute.",
   "components.dispute.body":
     "A dispute has been opened. A protocol resolver decides the outcome; funds stay in escrow until then.",
+  "components.dispute.bond":
+    "Opening a dispute posts a bond of 10% of the price, at least 0.01 SOL. You get it back unless the ruling goes against you.",
   "components.dispute.initiate": "Open a dispute",
   "components.dispute.pending": "Opening dispute…",
   "components.dispute.opened": "Dispute opened.",

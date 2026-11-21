@@ -44,7 +44,10 @@ const HAPPY_PATH: ReadonlyArray<{ status: TaskStatus; stringId: string }> = [
   },
 ];
 
-/** Off-path terminal statuses + their tone class suffix. */
+/**
+ * Off-path statuses + their tone class suffix. A turned-down task
+ * (RejectFrozen) still moves: it ends Completed or Cancelled.
+ */
 const OFF_PATH: Partial<Record<TaskStatus, { stringId: string; tone: string }>> =
   {
     [TaskStatus.Cancelled]: {

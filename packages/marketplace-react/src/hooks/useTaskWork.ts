@@ -13,6 +13,13 @@ import {
   type MutationStatus,
 } from "./internal.js";
 
+/**
+ * Input to `claim(...)`. Revision 9: a non-contest claim puts down a deposit
+ * from the worker wallet (10% of the worker's share, at least 0.005 SOL). It
+ * comes back on the first delivery and goes to the buyer when the claim ends
+ * without one after its expiry. The first claim also starts the worker's
+ * record, paid by the worker.
+ */
 export type ClaimTaskInput = Omit<
   Parameters<typeof facadeNs.claimTaskWithJobSpec>[0],
   "task"
