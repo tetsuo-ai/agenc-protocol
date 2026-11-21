@@ -53,6 +53,7 @@ const KEYS_DIR = path.join(STATE_DIR, "keys");
 const ENV_FILE = path.join(STATE_DIR, "env.json");
 const PID_FILE = path.join(STATE_DIR, "validator-mac.json");
 const COMPACT_LOCK = path.join(STATE_DIR, "compact.lock");
+const COMPACT_HOLD = path.join(STATE_DIR, "compact.hold");
 const FIXTURE = path.join(STATE_DIR, "protocol-config.mac.fixture.json");
 const IDL_PATH = path.join(ROOT, "artifacts/anchor/idl/agenc_coordination.json");
 const SDK_DIST = path.join(ROOT, "packages/sdk-ts/dist/index.js");
@@ -418,6 +419,12 @@ async function compact(args) {
 }
 
 async function compactUnlocked(args) {
+  // A run that has several suites on one validator holds compaction while any
+  // of them is still sending (.localnet/compact.hold); the waits retry.
+  if ((await stat(COMPACT_HOLD).catch(() => null)) !== null) {
+    console.log("localnet-mac: compaction is held; no restart");
+    return;
+  }
   const { kit } = await sdkModules();
   const env = JSON.parse(await readFile(ENV_FILE, "utf8"));
   const record = JSON.parse(await readFile(PID_FILE, "utf8"));
