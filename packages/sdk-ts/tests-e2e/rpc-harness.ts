@@ -31,6 +31,9 @@ export const ROOT = resolve(
 );
 export const id32 = () => new Uint8Array(randomBytes(32));
 
+// One ledger compaction at a time in this process (see waitForClock).
+let compacting: Promise<void> | null = null;
+
 export async function localRpcHarness(label: string) {
   const env = JSON.parse(
     readFileSync(resolve(ROOT, ".localnet/env.json"), "utf8"),
@@ -47,11 +50,14 @@ export async function localRpcHarness(label: string) {
   }
   // Binds the running ProgramData bytes to the local build, rather than trusting
   // a port number or merely checking that some program exists at the address.
-  execFileSync(
-    process.execPath,
-    [resolve(ROOT, "scripts/localnet-status.mjs")],
-    { cwd: ROOT, stdio: "pipe" },
-  );
+  // The Linux rail proves the validator's identity through procfs; on macOS
+  // the disposable validator comes from scripts/localnet-mac.mjs, whose own
+  // status check pins the PID, the genesis hash and the deployed bytes.
+  const statusScript =
+    env.launcher === "localnet-mac"
+      ? [resolve(ROOT, "scripts/localnet-mac.mjs"), "status"]
+      : [resolve(ROOT, "scripts/localnet-status.mjs")];
+  execFileSync(process.execPath, statusScript, { cwd: ROOT, stdio: "pipe" });
   // The cluster brand enables the faucet RPC type. The URL remains loopback.
   const rpc = createSolanaRpc(devnet(env.rpcUrl));
   // Broadcast even expected failures, so rejection/rollback is demonstrated by
@@ -94,16 +100,22 @@ export async function localRpcHarness(label: string) {
         cwd: ROOT,
         encoding: "utf8",
       }).trim().length > 0,
-    programSha256: createHash("sha256")
-      .update(
-        readFileSync(
-          resolve(
-            ROOT,
-            "programs/agenc-coordination/target/deploy/agenc_coordination.so",
-          ),
-        ),
-      )
-      .digest("hex"),
+    // The deployed binary, as the launcher recorded and its status check
+    // verified; the local build only when the launcher recorded none.
+    programSha256:
+      typeof env.programSha256 === "string"
+        ? env.programSha256
+        : createHash("sha256")
+            .update(
+              readFileSync(
+                resolve(
+                  ROOT,
+                  "programs/agenc-coordination/target/deploy/agenc_coordination.so",
+                ),
+              ),
+            )
+            .digest("hex"),
+    programProfile: env.programProfile ?? null,
     idlSha256: createHash("sha256")
       .update(
         readFileSync(
@@ -240,6 +252,58 @@ export async function localRpcHarness(label: string) {
     );
     return Buffer.from(account!.data[0], "base64").readBigInt64LE(32);
   };
+  /**
+   * Wait until the cluster clock passes `target`, riding out a short RPC
+   * outage. On the macOS launcher a long wait also keeps the ledger inside the
+   * disk budget: while the target is minutes away it asks the launcher to
+   * compact (a restart on the same ledger) once the write-ahead log is large.
+   * Nothing else in the suite may be sending while it waits.
+   */
+  async function waitForClock(target: bigint, label: string, watchdogMs: number) {
+    const watchdog = Date.now() + watchdogMs;
+    let lastNotice = 0;
+    let lastCompactCheck = Date.now();
+    let outageSince: number | null = null;
+    for (;;) {
+      let now: bigint;
+      try {
+        now = await clock();
+        outageSince = null;
+      } catch (error) {
+        outageSince ??= Date.now();
+        if (Date.now() - outageSince > 180_000) throw error;
+        await delay(1_000);
+        continue;
+      }
+      if (now > target) return now;
+      if (Date.now() > watchdog)
+        throw new Error(`${label}: the validator clock did not pass ${target}`);
+      if (Date.now() - lastNotice >= 60_000) {
+        console.log(`${label}: waiting for validator clock ${target}; now ${now}`);
+        lastNotice = Date.now();
+      }
+      if (
+        env.launcher === "localnet-mac" &&
+        target - now > 180n &&
+        Date.now() - lastCompactCheck >= 60_000
+      ) {
+        lastCompactCheck = Date.now();
+        compacting ??= Promise.resolve()
+          .then(() => {
+            execFileSync(
+              process.execPath,
+              [resolve(ROOT, "scripts/localnet-mac.mjs"), "compact", "--if-wal-over", "600"],
+              { cwd: ROOT, stdio: "pipe" },
+            );
+          })
+          .finally(() => {
+            compacting = null;
+          });
+        await compacting;
+      }
+      await delay(1_000);
+    }
+  }
   const config = await read(protocol, sdk.getProtocolConfigDecoder());
   evidence.disputeTimingSeconds = {
     votingPeriod: config.votingPeriod,
@@ -252,6 +316,7 @@ export async function localRpcHarness(label: string) {
   save();
   return {
     rpc,
+    programProfile: (env.programProfile ?? null) as string | null,
     admin,
     moderator,
     protocol,
@@ -262,6 +327,7 @@ export async function localRpcHarness(label: string) {
     info,
     balance,
     clock,
+    waitForClock,
     fundedSigner,
     evidence,
     finish() {

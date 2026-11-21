@@ -153,21 +153,11 @@ describe.skipIf(!RPC_ENABLED)(
             await h.read(firstClaim, sdk.getTaskClaimDecoder())
           ).expiresAt;
           h.evidence.expiresAt = firstExpiry;
-          const expiryWatchdog = Date.now() + 3_900_000;
-          let lastNotice = 0;
-          while ((await h.clock()) <= firstExpiry) {
-            if (Date.now() > expiryWatchdog)
-              throw new Error(
-                "validator did not reach production claim expiry",
-              );
-            if (Date.now() - lastNotice >= 60_000) {
-              console.log(
-                `#82 ${manual ? "manual" : "auto"}: waiting for actual validator claim expiry ${firstExpiry}; now ${await h.clock()}`,
-              );
-              lastNotice = Date.now();
-            }
-            await delay(1000);
-          }
+          await h.waitForClock(
+            firstExpiry,
+            `#82 ${manual ? "manual" : "auto"}: actual validator claim expiry`,
+            3_900_000,
+          );
 
           // Exercise the real SDK polling subscriber against the real RPC. Two
           // watched addresses see each transaction; deduplication must yield once.
@@ -278,10 +268,24 @@ describe.skipIf(!RPC_ENABLED)(
               await delay(1200);
               expect(seen).toHaveLength(index);
 
-              const claimRent = (await h.info(claim))!.lamports;
+              // Revision 9 (E): the claim holds its rent plus the deposit, and
+              // a no-show forfeits exactly that deposit to the creator, even
+              // when the worker expires its own claim; the rent goes back to
+              // the worker.
+              const claimLamports = (await h.info(claim))!.lamports;
+              const claimRent = await h.rpc
+                .getMinimumBalanceForRentExemption(BigInt(sdk.getTaskClaimSize()))
+                .send();
+              const deposit = claimLamports - claimRent;
+              expect(deposit).toBe(
+                sdk.values.claimDepositForTask(
+                  await h.read(task, sdk.getTaskDecoder()),
+                ),
+              );
               const statsBefore = (await h.info(stats))?.lamports ?? 0n;
               const callerBefore = await h.balance(caller.address);
               const workerBefore = await h.balance(worker.signer.address);
+              const creatorBefore = await h.balance(creator.signer.address);
               const escrowBefore = await h.info(escrow);
               const completed = await h.send("expire once", caller, [ix]);
               const decoded = events(completed.meta!.logMessages ?? []);
@@ -320,6 +324,9 @@ describe.skipIf(!RPC_ENABLED)(
                   workerBefore + claimRent,
                 );
               }
+              expect(await h.balance(creator.signer.address)).toBe(
+                creatorBefore + deposit,
+              );
               expect((await h.info(escrow))!.lamports).toBe(
                 escrowBefore!.lamports - event.cleanupReward,
               );
