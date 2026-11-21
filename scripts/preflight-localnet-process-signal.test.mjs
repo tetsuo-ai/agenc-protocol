@@ -148,6 +148,13 @@ test("short dispute windows are restricted to fresh disposable dev genesis", () 
   assert.throws(() => parseLocalnetUpArgs(["--short-disputes", "--dev-ready", "--keep-ledger"]), /fresh disposable genesis/);
 });
 
+test("the validation-timings label is explicit and restricted to disposable dev genesis", () => {
+  assert.equal(parseLocalnetUpArgs([]).validationTimings, false);
+  assert.equal(parseLocalnetUpArgs(["--dev-ready", "--validation-timings"]).validationTimings, true);
+  assert.throws(() => parseLocalnetUpArgs(["--validation-timings"]), /requires --dev-ready/);
+  assert.throws(() => parseLocalnetUpArgs(["--validation-timings", "--dev-ready", "--keep-ledger"]), /fresh disposable genesis/);
+});
+
 test("legacy loader drill is explicit and restricted to disposable dev genesis", () => {
   assert.equal(parseLocalnetUpArgs([]).legacyLoaderDrill, false);
   assert.equal(parseLocalnetUpArgs(["--dev-ready", "--legacy-loader-drill"]).legacyLoaderDrill, true);
