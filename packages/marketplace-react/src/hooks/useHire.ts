@@ -35,11 +35,14 @@ import {
 } from "./moderation-attestor.js";
 
 /**
- * Input to a standard `hire(...)` — a buyer that has a registered marketplace
- * agent (`creatorAgent`). This task settles on the HIRE COMPLETION path (the
- * worker calls `complete_task`). This is the SDK `facade.hireFromListing` input
- * MINUS the fee-payer signers, which default to the provider's write-client
- * signer (authority == creator == buyer). Pass them only to override.
+ * Input to a standard `hire(...)`: a buyer that has a registered marketplace
+ * agent (`creatorAgent`). Revision 9: this hire is a CreatorReview task like
+ * the humanless one. The provider submits, and the buyer accepts, asks for
+ * changes or turns the delivery down (`useSubmissionReview`) within
+ * `reviewWindowSecs` (1 second to 7 days); `complete_task` refuses it. This
+ * is the SDK `facade.hireFromListing` input MINUS the fee-payer signers, which
+ * default to the provider's write-client signer (authority == creator ==
+ * buyer). Pass them only to override.
  *
  * NOTE: deliberately NO referrer field — the referrer is provider-level config
  * and is injected only when `resolveReferrerCapability()` is live.

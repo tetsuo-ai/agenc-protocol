@@ -133,6 +133,7 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
       taskId,
       expectedPrice: price,
       expectedVersion: 1n,
+      reviewWindowSecs: 3_600n,
       listingSpecHash,
       taskJobSpecHash: jobSpecHash,
       // P1.2: the hire gate consumes the named moderator's record.
@@ -167,22 +168,29 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
       TaskStatus.InProgress,
     );
 
-    // 7) provider settles on the direct-pay path (no completion bonds: the
-    //    listing did not require them). The sandbox admin is the treasury.
+    // 7) revision 9: an agent hire is a review task. The provider delivers
+    //    and the embedded buyer accepts, which settles the escrow (no
+    //    completion bonds: the listing did not require them). The sandbox
+    //    admin is the treasury.
     const workerBalBefore = market.svm.getBalance(provider.address) ?? 0n;
     const [hireRecord] = await findHireRecordPda({ task });
     await providerClient.send([
-      await facade.completeTask({
+      await facade.submitTaskResult({
         task,
-        creator: buyerAddress,
         worker: providerAgent,
-        treasury: market.admin.address,
         authority: provider,
-        hireRecord,
         proofHash: new Uint8Array(32).fill(66),
         resultData: null,
       }),
     ]);
+    await buyerClient.acceptTaskResult({
+      task,
+      worker: providerAgent,
+      creator: buyerSigner,
+      treasury: market.admin.address,
+      workerAuthority: provider.address,
+      hireRecord,
+    });
 
     // ---- REAL on-chain assertions: the walletless buyer's hire settled ----
     expect(getTaskDecoder().decode(accountData(market, task)!).status).toBe(

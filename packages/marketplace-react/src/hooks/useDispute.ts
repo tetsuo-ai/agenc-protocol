@@ -13,7 +13,9 @@
  * or nobody rules; it goes to the other side when the ruling goes against the
  * filer or the filer cancels. Single-worker review tasks take no task dispute
  * (6425): there the buyer turns work down (`useSubmissionReview().turnDown`)
- * and the worker disputes that turn-down with `facade.disputeRejection`.
+ * and the worker disputes that turn-down with `facade.disputeRejection`. Once a
+ * dispute was filed on a task, its creator cannot file again against a claim
+ * that lapsed after that filing (`ClaimExpired`).
  *
  * @module hooks/useDispute
  */
