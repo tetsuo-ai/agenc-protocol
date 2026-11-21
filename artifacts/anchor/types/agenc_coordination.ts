@@ -31213,7 +31213,11 @@ export type AgencCoordination = {
               "1 = peer claims are reserved for settle_dispute_claim).",
               "* `_reserved[12]` = `rating_fee_qualified` (canonical boolean), recorded",
               "only by successful SOL completion with the minimum protocol fee.",
-              "Bytes `[13..16]` MUST stay zeroed (validate_reserved_fields)."
+              "* `_reserved[13]` = `dispute_filed` (canonical boolean, revision 9),",
+              "set by any `initiate_dispute`. While set, no claim deposit and no",
+              "completion bond on the task is forfeited by the cancel drain,",
+              "`expire_claim`, a late `release_claim` or `reclaim_terminal_claim`.",
+              "Bytes `[14..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [

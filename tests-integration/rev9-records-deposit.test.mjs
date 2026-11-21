@@ -724,13 +724,17 @@ test("rev9 deposit: reclaim_terminal_claim gives a stranded claim's deposit to t
 // expire_dispute with no-show evidence (design 5.3): the deposit goes to the
 // creator and its record counts it. fed99ab: the worker keeps it.
 // ---------------------------------------------------------------------------
-test("rev9 deposit: expire_dispute with no-show evidence gives the deposit to the creator and counts deposits_received (fed99ab: worker keeps it)", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
-  // An Auto-mode task: the creator may dispute the no-show there.
-  const pt = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 3600 });
+// Review R1-1: the no-show penalty on an unruled dispute needs a claim that had
+// already lapsed when the dispute was filed. A dispute filed against a live
+// claim stops the worker from delivering, so it can never make the deposit
+// forfeitable; the D16 case (filed after the claim lapsed) still forfeits.
+async function disputeAndExpire(w, { fileAfterLapse }) {
+  const pt = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 30 * 86_400 });
   const { task, escrow, hireRecord } = pt;
   const { ix: cix, claim } = await claimIx(w, pt);
   expectOk(send(w.svm, cix, [w.provider]), "claim");
+  const claimExpiresAt = Number(decode(w.svm, "TaskClaim", claim).expires_at.toString());
+  if (fileAfterLapse) warpTo(w, claimExpiresAt + 1);
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
@@ -738,15 +742,15 @@ test("rev9 deposit: expire_dispute with no-show evidence gives the deposit to th
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), 0, "no-show")
     .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0],
       protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null,
-      authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.buyer]), "creator disputes the no-show");
+      authority: w.buyer.publicKey, systemProgram: SystemProgram.programId, disputeBond: disputeBondPda(dispute) })
+    .instruction(), [w.buyer]), "creator disputes the claim");
   const d = decode(w.svm, "Dispute", dispute);
-  warpTo(w, Math.max(Number(d.voting_deadline.toString()) + 120, Number(decode(w.svm, "TaskClaim", claim).expires_at.toString()) + 1));
+  warpTo(w, Math.max(Number(d.voting_deadline.toString()) + 120, Number(d.expires_at.toString()), claimExpiresAt) + 1);
   const deposit = surplusOf(w, claim);
   const rentBack = claimRentOf(w, claim);
   const caller = crank(w);
   const before = { worker: bal(w, w.provider.publicKey) };
-  expectOk(send(w.svm, await makeProgram(caller).methods
+  const res = expectOk(send(w.svm, await makeProgram(caller).methods
     .expireDispute()
     .accounts({ dispute, task, escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, authority: caller.publicKey,
       workerClaim: claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord, disputeOperator: null,
@@ -755,9 +759,23 @@ test("rev9 deposit: expire_dispute with no-show evidence gives the deposit to th
       taskSubmission: pda([enc("task_submission"), claim.toBuffer()])[0], taskValidationConfig: null,
       disputeBond: disputeBondPda(dispute), workerStats: agentStatsPda(w.providerAgent), creatorStats: creatorStatsPda(w.buyer.publicKey),
       systemProgram: SystemProgram.programId })
-    .instruction(), [caller]), "expire the no-show dispute");
-  assert.equal(deposit, 20_000_000n, "the no-show's deposit");
-  assert.equal(bal(w, w.provider.publicKey) - before.worker, rentBack, "worker: claim rent only");
+    .instruction(), [caller]), "expire the unruled dispute");
+  assert.equal(deposit, 20_000_000n, "the claim's deposit");
+  return { res, deposit, rentBack, workerGain: bal(w, w.provider.publicKey) - before.worker };
+}
+
+test("rev9 deposit: an unruled dispute filed against a live claim returns the deposit to the worker (review R1-1; f8c8782: to the creator)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const { deposit, rentBack, workerGain } = await disputeAndExpire(w, { fileAfterLapse: false });
+  assert.equal(workerGain, rentBack + deposit, "worker: claim rent and its deposit");
+  const record = readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey));
+  assert.equal(record?.depositsReceived ?? 0n, 0n, "no deposit received");
+});
+
+test("rev9 deposit: an unruled dispute filed after the claim lapsed still forfeits the deposit to the creator (review R1-1, D16; holds before and after)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const { workerGain, rentBack } = await disputeAndExpire(w, { fileAfterLapse: true });
+  assert.equal(workerGain, rentBack, "worker: claim rent only");
   assert.equal(readCreatorStats(w.svm, creatorStatsPda(w.buyer.publicKey)).depositsReceived, 1n, "deposits_received == 1");
 });
 

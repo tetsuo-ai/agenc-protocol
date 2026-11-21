@@ -69,7 +69,9 @@ for (const [price, expectedFee, eligible] of [
 }
 
 test("#276: expensive legacy and malformed completed tasks cannot create ratings", async () => {
-  for (const reserved of [[12, 0], [12, 2], [13, 1]]) {
+  // Byte 13 is the revision 9 dispute flag (a canonical boolean); a value of 2
+  // there, or any byte from 14 on, is still malformed.
+  for (const reserved of [[12, 0], [12, 2], [13, 2], [14, 1]]) {
     const w = await freshWorld({ moderationEnabled: true, price: 10_000_000 });
     const h = await hireToCompleted(w);
     await h.complete();

@@ -178,9 +178,20 @@ pub fn handler(ctx: Context<ReleaseClaim>) -> Result<()> {
     };
 
     // 1. The deposit: back to the worker within the grace, else to the buyer
-    // (and the worker's record counts an expired claim).
-    let deposit_refunded = release_refunds_deposit(ctx.accounts.claim.claimed_at, now);
+    // (and the worker's record counts an expired claim). Review R1-1: after a
+    // dispute was filed on the task a late release still refunds it (the
+    // record still counts the late release).
+    let late = !release_refunds_deposit(ctx.accounts.claim.claimed_at, now);
+    let deposit_refunded = !late || ctx.accounts.task.dispute_filed();
     let claim_info = ctx.accounts.claim.to_account_info();
+    if late {
+        count_agent_stats(
+            &ctx.accounts.worker_stats.to_account_info(),
+            worker_key,
+            Counter::ClaimsExpired,
+            now,
+        )?;
+    }
     if deposit_refunded {
         settle_claim_deposit(
             &claim_info,
@@ -197,12 +208,6 @@ pub fn handler(ctx: Context<ReleaseClaim>) -> Result<()> {
             task_key,
             worker_key,
             true,
-            now,
-        )?;
-        count_agent_stats(
-            &ctx.accounts.worker_stats.to_account_info(),
-            worker_key,
-            Counter::ClaimsExpired,
             now,
         )?;
     }

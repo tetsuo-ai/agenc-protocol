@@ -420,6 +420,11 @@ pub fn handler<'info>(
 
     // Mark task as disputed
     task.status = TaskStatus::Disputed;
+    // Review R1-1: a filing blocks every worker from delivering or leaving, so
+    // from now on no deposit or completion bond on this task can be forfeited
+    // by the cancel drain, expire_claim, a late release_claim or
+    // reclaim_terminal_claim.
+    task.set_dispute_filed();
 
     // Increment disputes_as_defendant for the bound defendant (fix #544, #842)
     // This is now deterministic and no longer caller-controlled via remaining_accounts.

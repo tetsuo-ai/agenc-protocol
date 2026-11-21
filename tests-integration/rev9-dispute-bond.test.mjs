@@ -18,7 +18,7 @@ import {
   freshWorld, seatTestAuthorityResolver, mutateTask,
   taskModV2Pda, moderationBlockPda,
   agentStatsPda, creatorStatsPda, readCreatorStats, creatorStatsCreationCost,
-  disputeBondPda, disputeRespondent, findEvents, coder,
+  disputeBondPda, disputeRespondent, findEvents, coder, sendMany,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 
@@ -28,6 +28,11 @@ const BOND_SIZE = 186;
 const rent = (w, size) => BigInt(w.svm.minimumBalanceForRentExemption(BigInt(size)));
 const bal = (w, key) => BigInt(w.svm.getBalance(key) ?? 0n);
 const completionBond = (task, wallet) => pda([enc("completion_bond"), task.toBuffer(), wallet.toBuffer()])[0];
+// Lamports a payer spends right now to create a record (0 when it exists).
+const recordCost = (w, address, size) => {
+  const acct = w.svm.getAccount(address);
+  return acct && acct.data.length > 0 ? 0n : rent(w, size) - BigInt(acct?.lamports ?? 0);
+};
 const status = (w, address, name) => Object.keys(decode(w.svm, name, address).status)[0];
 
 function warpTo(w, unixTimestamp) {
@@ -365,12 +370,13 @@ for (const { filer, ending, principalTo } of endings) {
         assert.equal(d.worker, bondWorker, "worker: the bond principal");
         assert.equal(status(w, t.task, "Task"), "InProgress", "task restored");
       } else if (ending === "expire") {
-        // The unruled expiry refunds the whole escrow; the no-show evidence (the
-        // claim expired without a delivery) also forfeits the claim deposit.
+        // The unruled expiry refunds the whole escrow. The dispute was filed while
+        // the claim was live, so it never makes the deposit forfeitable (review
+        // R1-1): the claim closes to the worker with its deposit.
         const claimDeposit = before.claim - before.claimRent;
         assert.equal(claimDeposit, 20_000_000n, "the claim held a deposit of 10% of 0.2 SOL");
-        assert.equal(d.creator, before.escrow + bondCreator + claimDeposit, "creator: whole escrow, its bond share and the no-show's deposit");
-        assert.equal(d.worker, before.claimRent + bondWorker, "worker: claim rent only plus its bond share");
+        assert.equal(d.creator, before.escrow + bondCreator, "creator: whole escrow and its bond share");
+        assert.equal(d.worker, before.claim + bondWorker, "worker: claim rent and deposit plus its bond share");
       } else {
         // A Refund ruling (approved or rejected) refunds the whole escrow to the
         // creator, as today.
@@ -529,4 +535,98 @@ test("rev9 dispute bond: the refusal follows the manual sentinel, not the mode n
   await mutateTask(w, t.task, (task) => { task.constraint_hash = Array.from(sentinel); });
   const { ix } = await creatorFilesIx(w, t, 0);
   expectFail(send(w.svm, ix, [w.buyer]), "DisputeRefusedOnReviewTask", "a manual single-worker task refuses task disputes");
+});
+
+// ---------------------------------------------------------------------------
+// Review R1-1: a dispute must never make a deposit forfeitable. While a task is
+// Disputed no worker can deliver or leave, so the creator could file against one
+// claim before the deadline, then cancel its own dispute and the task in one
+// transaction after it and collect every drained deposit. Any filing now marks
+// the task, and the drain returns each deposit to its worker.
+// ---------------------------------------------------------------------------
+async function registerWorker(w) {
+  const kp = Keypair.generate();
+  w.svm.airdrop(kp.publicKey, 100_000_000_000n);
+  const prog = makeProgram(kp);
+  const agentId = id32();
+  const [agent] = pda([enc("agent"), agentId]);
+  expectOk(send(w.svm, await prog.methods
+    .registerAgent(arr(agentId), new BN(1), "http://second-worker.test", null, new BN(0))
+    .accounts({ agent, protocolConfig: w.protocolPda, authority: kp.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [kp]), "db:register a second worker");
+  return { kp, prog, agent };
+}
+
+test("rev9 dispute bond: a creator's dispute then [cancel_dispute, cancel_task] returns every drained deposit to its worker (review R1-1; f8c8782: the creator takes both)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const t = { task, escrow: pda([enc("escrow"), task.toBuffer()])[0], hireRecord: pda([enc("hire"), task.toBuffer()])[0], validation: null };
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  const deadline = Number(w.svm.getClock().unixTimestamp) + 4 * 3600;
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(1_000_000_000), 2, new BN(deadline), 1, null, 0, null, null, 0)
+    .accounts({ task, escrow: t.escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
+      authorityRateLimit: pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0],
+      authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+      rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "db:create a Collaborative Auto task");
+  Object.assign(t, await publish(w, task));
+  await claim(w, t); // worker A (the provider)
+  const b = await registerWorker(w);
+  const claimB = pda([enc("claim"), task.toBuffer(), b.agent.toBuffer()])[0];
+  expectOk(send(w.svm, await b.prog.methods
+    .claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: t.jobSpec, hireRecord: t.hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(t.jobHash)[0], claim: claimB, protocolConfig: w.protocolPda,
+      worker: b.agent, authority: b.kp.publicKey, systemProgram: SystemProgram.programId,
+      workerStats: agentStatsPda(b.agent) })
+    .instruction(), [b.kp]), "db:worker B claims");
+  const claimRent = (claim) => BigInt(w.svm.minimumBalanceForRentExemption(BigInt(w.svm.getAccount(claim).data.length)));
+  const depositA = bal(w, t.claim) - claimRent(t.claim);
+  const depositB = bal(w, claimB) - claimRent(claimB);
+  assert.equal(depositA, 50_000_000n, "10% of a 0.5 SOL share");
+  assert.equal(depositB, 50_000_000n);
+
+  // The creator files against A half an hour before the deadline.
+  warpTo(w, deadline - 1_800);
+  const { ix: fileIx, dispute } = await creatorFilesIx(w, t, 0);
+  expectOk(send(w.svm, fileIx, [w.buyer]), "db:creator files against A");
+  const bondPrincipal = BigInt(decode(w.svm, "DisputeBond", disputeBondPda(dispute)).amount.toString());
+  const bondRent = rent(w, BOND_SIZE);
+
+  // One transaction after the deadline: cancel its own dispute, then the task.
+  warpTo(w, deadline + 1);
+  const cancelDispute = await cancelIx(w, t, dispute, w.buyer);
+  const cancelTask = await w.buyerProg.methods
+    .cancelTask()
+    .accounts({ task, escrow: t.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: completionBond(task, w.buyer.publicKey), workerCompletionBond: completionBond(task, w.provider.publicKey),
+      workerBondAuthority: w.provider.publicKey, creatorAgent: null, agentStats: null, treasury: null,
+      creatorStats: creatorStatsPda(w.buyer.publicKey) })
+    .remainingAccounts([
+      { pubkey: t.claim, isSigner: false, isWritable: true },
+      { pubkey: w.providerAgent, isSigner: false, isWritable: true },
+      { pubkey: w.provider.publicKey, isSigner: false, isWritable: true },
+      { pubkey: claimB, isSigner: false, isWritable: true },
+      { pubkey: b.agent, isSigner: false, isWritable: true },
+      { pubkey: b.kp.publicKey, isSigner: false, isWritable: true },
+    ])
+    .instruction();
+  const rentA = claimRent(t.claim);
+  const rentB = claimRent(claimB);
+  const escrowBefore = bal(w, t.escrow);
+  const records = recordCost(w, creatorStatsPda(w.buyer.publicKey), 129) + recordCost(w, agentStatsPda(w.providerAgent), 121);
+  const before = { creator: bal(w, w.buyer.publicKey), a: bal(w, w.provider.publicKey), b: bal(w, b.kp.publicKey) };
+  const res = expectOk(sendMany(w.svm, [cancelDispute, cancelTask], [w.buyer]), "db:cancel the dispute and the task together");
+
+  assert.equal(bal(w, b.kp.publicKey) - before.b, rentB + depositB, "B: its claim rent and its deposit");
+  assert.equal(bal(w, w.provider.publicKey) - before.a, rentA + depositA + bondPrincipal, "A: its claim rent, its deposit and the bond principal");
+  assert.equal(bal(w, w.buyer.publicKey) - before.creator, escrowBefore + bondRent - TX_FEE - records,
+    "the creator: the escrow refund and the bond rent, no deposit");
+  for (const settled of findEvents(res, "ClaimDepositSettled")) {
+    assert.equal(settled.forfeited, false, "every deposit went back");
+  }
 });

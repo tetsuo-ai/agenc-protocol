@@ -71,7 +71,16 @@ async function setupCreatorNoShowDispute(w) {
     .instruction(), [w.provider]), "worker posts completion bond");
 
   // A worker may dispute only after submitting work. For a true no-show, the
-  // creator opens the dispute and binds the defendant's live claim instead.
+  // creator opens the dispute and binds the defendant's claim instead. Review
+  // R1-1: the expiry penalizes only a claim that had already lapsed when the
+  // dispute was filed (the D16 shape), so the creator files after the claim's
+  // expiry.
+  {
+    const lapse = w.svm.getClock();
+    lapse.unixTimestamp = BigInt(decode(w.svm, "TaskClaim", claim).expires_at.toString()) + 1n;
+    w.svm.setClock(lapse);
+    w.svm.expireBlockhash();
+  }
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);

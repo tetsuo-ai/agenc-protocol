@@ -1325,7 +1325,11 @@ pub struct Task {
     ///     1 = peer claims are reserved for settle_dispute_claim).
     ///   * `_reserved[12]` = `rating_fee_qualified` (canonical boolean), recorded
     ///     only by successful SOL completion with the minimum protocol fee.
-    /// Bytes `[13..16]` MUST stay zeroed (validate_reserved_fields).
+    ///   * `_reserved[13]` = `dispute_filed` (canonical boolean, revision 9),
+    ///     set by any `initiate_dispute`. While set, no claim deposit and no
+    ///     completion bond on the task is forfeited by the cancel drain,
+    ///     `expire_claim`, a late `release_claim` or `reclaim_terminal_claim`.
+    /// Bytes `[14..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
@@ -1506,16 +1510,31 @@ impl Task {
         self._reserved[12] == 1 && self.validate_reserved_fields()
     }
 
+    /// Revision 9 (review R1-1): a dispute was filed on this task. While a task is
+    /// Disputed no worker can deliver or leave, so a dispute must never make a
+    /// deposit or a completion bond forfeitable; this durable byte keeps every
+    /// later forfeit path from taking one. Legacy tasks read `false`.
+    pub fn dispute_filed(&self) -> bool {
+        self._reserved[13] != 0
+    }
+
+    /// Mark the task as disputed at least once. Never cleared.
+    pub fn set_dispute_filed(&mut self) {
+        self._reserved[13] = 1;
+    }
+
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
-    /// Batch 3, deferred-dispute guards, and claim-generation tracking carve
-    /// `_reserved[0..13]`. Pending and fee bytes are canonical booleans, the
-    /// generation is an unconstrained `u64`, and the tail must stay zeroed.
+    /// Batch 3, deferred-dispute guards, claim-generation tracking and the
+    /// revision 9 dispute flag carve `_reserved[0..14]`. Pending, fee and dispute
+    /// bytes are canonical booleans, the generation is an unconstrained `u64`,
+    /// and the tail must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
         self._reserved[2] <= 1
             && self._reserved[11] <= 1
             && self._reserved[12] <= 1
-            && self._reserved[13..] == [0u8; 3]
+            && self._reserved[13] <= 1
+            && self._reserved[14..] == [0u8; 2]
     }
 }
 
@@ -4423,6 +4442,16 @@ mod tests {
         let mut tail = Task::default();
         tail._reserved[15] = 1;
         assert!(!tail.validate_reserved_fields());
+        // Revision 9: the dispute flag is a canonical boolean.
+        let mut disputed = Task::default();
+        assert!(!disputed.dispute_filed());
+        disputed.set_dispute_filed();
+        assert!(disputed.dispute_filed() && disputed.validate_reserved_fields());
+        disputed._reserved[13] = 2;
+        assert!(!disputed.validate_reserved_fields());
+        let mut tail14 = Task::default();
+        tail14._reserved[14] = 1;
+        assert!(!tail14.validate_reserved_fields());
     }
 
     #[test]
@@ -4450,6 +4479,7 @@ mod tests {
             assert_eq!(restored.rating_fee_qualified(), qualifies);
             assert_eq!(&restored._reserved[..12], &prior[..12]);
             assert_eq!(&restored._reserved[13..], &[0; 3]);
+            assert!(!restored.dispute_filed());
             assert_eq!(Task::SIZE, 466);
             task.record_rating_fee(0, false);
             assert_eq!(task.rating_fee_qualified(), qualifies);
