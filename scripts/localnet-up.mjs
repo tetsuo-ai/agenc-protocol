@@ -55,6 +55,7 @@ import {
   signalProcessIfIdentityMatches,
 } from "./localnet-process-signal.mjs";
 import { startGuardedProcess } from "./localnet-guarded-spawn.mjs";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 import { withLocalnetLifecycleLock } from "./localnet-lifecycle-lock.mjs";
 import {
   LOCALNET_BID_MARKETPLACE_PARAMS,
@@ -620,9 +621,9 @@ async function ensureKeypair(keyPath, label) {
   return true;
 }
 
-async function loadSigner(kit, keyPath) {
-  const bytes = Uint8Array.from(JSON.parse(await readFile(keyPath, "utf8")));
-  return kit.createKeyPairSignerFromBytes(bytes);
+// Review S-19: a parse error names the key file, never its content.
+export async function loadSigner(kit, keyPath) {
+  return kit.createKeyPairSignerFromBytes(readPlainKeypairFile(keyPath));
 }
 
 function describeDiffs(diffs) {

@@ -43,6 +43,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readPlainKeypairFile } from "./keypair-file.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const kit = await import("@solana/kit");
@@ -96,8 +97,8 @@ const id32 = () => new Uint8Array(randomBytes(32));
 const SOL = 1_000_000_000n;
 const CLOCK = kit.address("SysvarC1ock11111111111111111111111111111111");
 
-const key = (file) =>
-  kit.createKeyPairSignerFromBytes(Uint8Array.from(JSON.parse(readFileSync(file, "utf8"))));
+// Review S-19: a parse error names the key file, never its content.
+const key = (file) => kit.createKeyPairSignerFromBytes(readPlainKeypairFile(file));
 const owner = {
   a: await key(env.keypairs.authority),
   b: await key(env.keypairs.moderator),
