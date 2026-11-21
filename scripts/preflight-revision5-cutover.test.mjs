@@ -11,7 +11,10 @@ import {
   assertProgramSurfaceReleasePolicy,
   assertRevision5CutoverResults,
   REVIEWED_REVISION5_PAYLOAD_SHA256,
+  REVIEWED_REVISION8_ELF,
+  REVIEWED_REVISION8_PAYLOAD_SHA256,
   isBondEntryPauseGatedForPayload,
+  isZeroPaddedReviewedElf,
   bondEntryPauseGatedForSnapshot,
   readApprovedCutoverBinary,
   loadDisputeCounterRepairRecord,
@@ -31,15 +34,17 @@ import {
   parseSelectedSteps,
   rentLamports,
   scanStableRevision5CompletionBondCutover,
+  verifyRevision5CutoverState,
   withPinnedRevision5CutoverContext,
 } from "./mainnet-upgrade.mjs";
+import { MAINNET_GENESIS } from "./preflight-dispute-scan.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync, mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../tests-integration/package.json", import.meta.url),
 );
-const { PublicKey } = require("@solana/web3.js");
+const { PublicKey, SystemProgram } = require("@solana/web3.js");
 
 const PROGRAM_ID = new PublicKey(
   "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
@@ -1519,6 +1524,10 @@ for (const [label, pauseGated] of [
     "reviewed revision-5 payload",
     isBondEntryPauseGatedForPayload(REVIEWED_REVISION5_PAYLOAD_SHA256),
   ],
+  [
+    "reviewed revision-8 payload",
+    isBondEntryPauseGatedForPayload(REVIEWED_REVISION8_PAYLOAD_SHA256),
+  ],
   ["approved binary", isBondEntryPauseGatedForPayload("0".repeat(64), true)],
 ]) {
   test(`${label}: both cutover paths apply the correct bond-entry gate`, async () => {
@@ -1733,4 +1742,373 @@ test("item 29: the upgrade publishes the committed IDL by default and refuses on
     check < preflight.indexOf("pf.reviewedIdl = idl;"),
     "before the IDL is accepted for publication",
   );
+});
+
+// Revision 8 bond entry. The live program is revision 8, and its
+// post_completion_bond refuses while ProtocolConfig is paused, the same as
+// revision 5.
+const sha256Hex = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+test("revision 8 bond entry: the pins are the reviewed revision 8 record", async () => {
+  const release = await import("./explorer-metadata.mjs");
+  const record = JSON.parse(
+    readFileSync(
+      new URL(
+        "../artifacts/explorer-metadata/2026-10-28-revision-8.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.equal(record.loader.programId, PROGRAM_ID.toBase58());
+  assert.equal(record.loader.programDataSlot, "462468899");
+  assert.equal(record.loader.programDataSlot, release.RELEASE_SLOT);
+  assert.equal(record.reproduction.commit, release.RELEASE_COMMIT);
+  for (const pinned of [
+    release.RELEASE_PAYLOAD_SHA256,
+    record.loader.rawPayloadSha256,
+    record.reproduction.payloadSha256,
+  ]) {
+    assert.equal(REVIEWED_REVISION8_PAYLOAD_SHA256, pinned);
+  }
+  assert.equal(REVIEWED_REVISION8_ELF.sha256, release.RELEASE_ARTIFACT_SHA256);
+  assert.equal(REVIEWED_REVISION8_ELF.sha256, record.reproduction.elfSha256);
+  assert.equal(REVIEWED_REVISION8_ELF.bytes, record.reproduction.elfBytes);
+  assert.equal(REVIEWED_REVISION8_ELF.payloadBytes, record.loader.payloadBytes);
+  assert.equal(record.reproduction.livePayloadIsElfPlusZeroPadding, true);
+  assert.ok(Object.isFrozen(REVIEWED_REVISION8_ELF));
+
+  assert.equal(
+    isBondEntryPauseGatedForPayload(REVIEWED_REVISION8_PAYLOAD_SHA256),
+    true,
+  );
+  assert.equal(
+    isBondEntryPauseGatedForPayload(REVIEWED_REVISION5_PAYLOAD_SHA256),
+    true,
+  );
+  for (const other of [
+    REVIEWED_REVISION8_ELF.sha256,
+    REVIEWED_REVISION8_PAYLOAD_SHA256.toUpperCase(),
+    REVIEWED_REVISION8_PAYLOAD_SHA256.slice(0, 63),
+    "0".repeat(64),
+    undefined,
+  ]) {
+    assert.equal(isBondEntryPauseGatedForPayload(other), false);
+  }
+});
+
+test("revision 8 bond entry: after ExtendProgram only the exact reviewed ELF followed by zeros counts", () => {
+  const elfBytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 9, 8]);
+  const elf = { sha256: sha256Hex(elfBytes), bytes: elfBytes.length, payloadBytes: 16 };
+  const live = Buffer.concat([elfBytes, Buffer.alloc(6)]);
+  const extended = Buffer.concat([live, Buffer.alloc(10_240)]);
+  // The loader snapshot is a view into ProgramData after its 45-byte header.
+  const view = Buffer.concat([Buffer.alloc(45, 0xaa), extended]).subarray(45);
+  for (const payload of [live, extended, view, new Uint8Array(extended)]) {
+    assert.equal(isZeroPaddedReviewedElf(payload, elf), true);
+  }
+  const flipped = Buffer.from(extended);
+  flipped[3] ^= 1;
+  const dirtyTail = Buffer.from(extended);
+  dirtyTail[dirtyTail.length - 1] = 1;
+  for (const payload of [
+    flipped,
+    dirtyTail,
+    live.subarray(0, elf.payloadBytes - 1),
+    elfBytes,
+    Buffer.alloc(elf.payloadBytes),
+    Buffer.alloc(0),
+    [...extended],
+    extended.toString("hex"),
+    undefined,
+    null,
+  ]) {
+    assert.equal(isZeroPaddedReviewedElf(payload, elf), false);
+  }
+  // The default pins are the reviewed revision 8 ELF.
+  assert.equal(isZeroPaddedReviewedElf(extended), false);
+  assert.equal(
+    isZeroPaddedReviewedElf(Buffer.alloc(REVIEWED_REVISION8_ELF.payloadBytes)),
+    false,
+  );
+});
+
+test("revision 8 bond entry: a loader snapshot is classified with the reviewed pins and no bypass", () => {
+  const approvedBytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 9, 9, 9, 9]);
+  const approved = { soBytes: approvedBytes, soSha: sha256Hex(approvedBytes) };
+  for (const payload of [
+    Buffer.alloc(32),
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3]),
+  ]) {
+    assert.equal(bondEntryPauseGatedForSnapshot({ payload }, approved), false);
+  }
+  assert.equal(
+    bondEntryPauseGatedForSnapshot(
+      { payload: Buffer.concat([approvedBytes, Buffer.alloc(8)]) },
+      approved,
+    ),
+    true,
+  );
+  const source = readFileSync(
+    new URL("./mainnet-upgrade.mjs", import.meta.url),
+    "utf8",
+  );
+  const gate = source.slice(
+    source.indexOf("export const REVIEWED_REVISION5_PAYLOAD_SHA256"),
+    source.indexOf("export function readApprovedCutoverBinary("),
+  );
+  assert.ok(gate.length > 0);
+  assert.doesNotMatch(gate, /process\.env|\benv\b/);
+  // One definition and one call, which uses the default reviewed pins.
+  assert.equal(source.match(/isZeroPaddedReviewedElf\(/g).length, 2);
+  assert.match(gate, /\|\| isZeroPaddedReviewedElf\(snapshot\.payload\)\s*\);/);
+});
+
+// A fixture RPC for the whole predeploy cutover (verifyRevision5CutoverState).
+// It serves only the accounts the cutover scanners read, answers at or above
+// each requested context floor, and fails on a filter it does not model.
+function cutoverFixtureRpc(accounts) {
+  let slot = 1_000;
+  const next = (config) => {
+    const floor =
+      config !== null && typeof config === "object"
+        ? config.minContextSlot ?? 0
+        : 0;
+    slot = Math.max(slot + 1, floor);
+    return slot;
+  };
+  const matches = (data, filters = []) =>
+    filters.every((filter) => {
+      if (filter.dataSize !== undefined) return data.length === filter.dataSize;
+      if (filter.memcmp?.encoding === "base64") {
+        const bytes = Buffer.from(filter.memcmp.bytes, "base64");
+        const { offset } = filter.memcmp;
+        return data.subarray(offset, offset + bytes.length).equals(bytes);
+      }
+      throw new Error(`fixture RPC: unmodeled filter ${JSON.stringify(filter)}`);
+    });
+  return {
+    async getGenesisHash() {
+      return MAINNET_GENESIS;
+    },
+    async getAccountInfoAndContext(key, config) {
+      return {
+        context: { slot: next(config) },
+        value: accounts.get(key.toBase58()) ?? null,
+      };
+    },
+    async getMultipleAccountsInfoAndContext(keys, config) {
+      return {
+        context: { slot: next(config) },
+        value: keys.map((key) => accounts.get(key.toBase58()) ?? null),
+      };
+    },
+    async getProgramAccounts(program, config) {
+      const value = [...accounts]
+        .filter(
+          ([, account]) =>
+            account.owner.equals(program) &&
+            matches(account.data, config?.filters),
+        )
+        .map(([pubkey, account]) => ({ pubkey: new PublicKey(pubkey), account }));
+      return { context: { slot: next(config) }, value };
+    },
+    async getLatestBlockhashAndContext(config) {
+      return {
+        context: { slot: next(config) },
+        value: { blockhash: "unused", lastValidBlockHeight: 1 },
+      };
+    },
+    async getSlot(config) {
+      return next(config);
+    },
+    async getBlockTime() {
+      return 1_800_000_000;
+    },
+    async getMinimumBalanceForRentExemption(dataLength) {
+      return (dataLength + 128) * 6_960;
+    },
+  };
+}
+
+function accountDiscriminator(name) {
+  return createHash("sha256").update(`account:${name}`).digest().subarray(0, 8);
+}
+
+function programOwned(data, lamports = 2_000_000) {
+  return { data, executable: false, lamports, owner: PROGRAM_ID, rentEpoch: 0 };
+}
+
+// Revision 8 live for the cutover: ProtocolConfig at surface revision 8, its
+// treasury, a reachable GovernanceConfig with three voters, and the given
+// number of Open Exclusive SOL tasks that the revision 4 entry rule counts.
+function liveRevision8CutoverAccounts({ eligibleTasks, paused = true }) {
+  const accounts = new Map();
+  const [protocolPda, protocolBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from("protocol")],
+    PROGRAM_ID,
+  );
+  const config = protocolConfigAccount({ paused });
+  const configData = Buffer.from(config.data);
+  configData.writeBigUInt64LE(10_000_000n, 75); // min_arbiter_stake
+  configData.writeBigUInt64LE(10_000_000n, 83); // min_agent_stake
+  configData.writeBigUInt64LE(3n, 107); // total_agents
+  configData[139] = protocolBump;
+  configData.writeUInt16LE(8, 8 + 341); // surface_revision
+  accounts.set(protocolPda.toBase58(), { ...config, data: configData });
+  // protocolConfigAccount() names TEST_ADDRESS as authority and treasury.
+  accounts.set(TEST_ADDRESS.toBase58(), {
+    data: Buffer.alloc(0),
+    executable: false,
+    lamports: 1_000_000_000,
+    owner: SystemProgram.programId,
+    rentEpoch: 0,
+  });
+
+  const [governance, governanceBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from("governance")],
+    PROGRAM_ID,
+  );
+  const governanceData = Buffer.alloc(141);
+  accountDiscriminator("GovernanceConfig").copy(governanceData);
+  TEST_ADDRESS.toBuffer().copy(governanceData, 8);
+  governanceData.writeBigUInt64LE(10_000_000n, 40); // min_proposal_stake
+  governanceData.writeBigInt64LE(100n, 48); // voting_period
+  governanceData.writeBigInt64LE(50n, 56); // execution_delay
+  governanceData.writeUInt16LE(300, 64); // quorum_bps
+  governanceData.writeUInt16LE(5_000, 66); // approval_threshold_bps
+  governanceData[76] = governanceBump;
+  accounts.set(governance.toBase58(), programOwned(governanceData));
+  for (const marker of [101, 103, 105]) {
+    const agentId = Buffer.alloc(32, marker);
+    const [agent, bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("agent"), agentId],
+      PROGRAM_ID,
+    );
+    const agentData = Buffer.alloc(566);
+    accountDiscriminator("AgentRegistration").copy(agentData);
+    agentId.copy(agentData, 8);
+    Buffer.alloc(32, marker + 1).copy(agentData, 40); // authority
+    agentData[80] = 1; // Active, empty endpoint and metadata
+    agentData.writeBigInt64LE(50n, 89); // registered_at
+    agentData.writeUInt16LE(10_000, 121); // reputation
+    agentData.writeBigUInt64LE(100_000_000n, 125); // stake
+    agentData[133] = bump;
+    accounts.set(agent.toBase58(), programOwned(agentData, 5_000_000));
+  }
+
+  for (let index = 0; index < eligibleTasks; index += 1) {
+    const taskId = Buffer.alloc(32);
+    taskId.writeUInt32LE(index + 1, 0);
+    const creator = new PublicKey(Buffer.alloc(32, 32 + (index % 7)));
+    const [task, bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("task"), creator.toBuffer(), taskId],
+      PROGRAM_ID,
+    );
+    const [escrow] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), task.toBuffer()],
+      PROGRAM_ID,
+    );
+    const taskData = Buffer.alloc(466);
+    accountDiscriminator("Task").copy(taskData);
+    taskId.copy(taskData, 8);
+    creator.toBuffer().copy(taskData, 40);
+    taskData.writeBigUInt64LE(10_000_000n, 176); // reward_amount
+    taskData[184] = 1; // required_completions
+    taskData[186] = 0; // Open
+    taskData[187] = 0; // Exclusive
+    escrow.toBuffer().copy(taskData, 212);
+    taskData[309] = 1; // max_workers
+    taskData[310] = bump;
+    taskData.writeUInt16LE(100, 311); // protocol_fee_bps
+    // reward_mint None (SOL) and a zero constraint hash (automatic completion).
+    accounts.set(task.toBase58(), programOwned(taskData, 5_000_000));
+  }
+  return { protocolPda, accounts };
+}
+
+test("revision 8 bond entry: the full predeploy cutover passes with revision 8 live, paused, and 61 eligible tasks", async () => {
+  const savedRace = process.env.AGENC_ACCEPT_BOND_RACE;
+  delete process.env.AGENC_ACCEPT_BOND_RACE;
+  const originalLog = console.log;
+  const logged = [];
+  console.log = (line) => logged.push(String(line));
+  const predeploy = (fixture, livePayloadSha256, bondEntryPauseGated) =>
+    verifyRevision5CutoverState(
+      cutoverFixtureRpc(fixture.accounts),
+      fixture.protocolPda,
+      "Predeploy cutover snapshot",
+      {
+        minContextSlot: 900,
+        bondEntryPauseGated,
+        repairAllowance: createDisputeCounterRepairAllowance({
+          livePayloadSha256,
+        }),
+      },
+    );
+  try {
+    const live = liveRevision8CutoverAccounts({ eligibleTasks: 61 });
+    const passed = await predeploy(
+      live,
+      REVIEWED_REVISION8_PAYLOAD_SHA256,
+      isBondEntryPauseGatedForPayload(REVIEWED_REVISION8_PAYLOAD_SHA256),
+    );
+    assert.equal(passed.cfg.protocolPaused, true);
+    assert.equal(passed.taskSettlement.revision4BondPostEligibleTaskCount, 61);
+    assert.equal(passed.taskChildren.liveCompletionBondCount, 0);
+    assert.equal(passed.taskChildren.liveCompletionBondPrincipal, 0n);
+    assert.ok(passed.contextSlot >= 900);
+    // Both gate sites, the stable bond scan and the aggregate, took the
+    // pause-gated path.
+    assert.equal(
+      logged.filter((line) =>
+        /skipping revision-4 bond-entry eligibility gate.*61 revision-4-eligible/.test(line),
+      ).length,
+      2,
+    );
+
+    // The revision 5 case is unchanged.
+    const revision5 = await predeploy(
+      live,
+      REVIEWED_REVISION5_PAYLOAD_SHA256,
+      isBondEntryPauseGatedForPayload(REVIEWED_REVISION5_PAYLOAD_SHA256),
+    );
+    assert.equal(revision5.taskSettlement.revision4BondPostEligibleTaskCount, 61);
+
+    // An unknown payload keeps the revision 4 gate and stops on the same state.
+    const approvedBytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 9, 9, 9, 9]);
+    const approved = { soBytes: approvedBytes, soSha: sha256Hex(approvedBytes) };
+    const unknownPayload = Buffer.concat([
+      Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1]),
+      Buffer.alloc(64),
+    ]);
+    const unknownGate = bondEntryPauseGatedForSnapshot(
+      { payload: unknownPayload },
+      approved,
+    );
+    assert.equal(unknownGate, false);
+    await assert.rejects(
+      predeploy(live, sha256Hex(unknownPayload), unknownGate),
+      /zero Tasks eligible for deployed revision-4 post_completion_bond; found count=61/,
+    );
+    // The same fixture with the tasks settled passes the revision 4 gate, so
+    // the stop above is the eligibility count and nothing else.
+    const settled = liveRevision8CutoverAccounts({ eligibleTasks: 0 });
+    const cleared = await predeploy(settled, sha256Hex(unknownPayload), unknownGate);
+    assert.equal(cleared.taskSettlement.revision4BondPostEligibleTaskCount, 0);
+
+    // The pause-gated path still needs the pause.
+    const unpaused = liveRevision8CutoverAccounts({
+      eligibleTasks: 61,
+      paused: false,
+    });
+    await assert.rejects(
+      predeploy(unpaused, REVIEWED_REVISION8_PAYLOAD_SHA256, true),
+      /finalized pause proof: live ProtocolConfig\.protocol_paused=false/,
+    );
+  } finally {
+    console.log = originalLog;
+    if (savedRace === undefined) delete process.env.AGENC_ACCEPT_BOND_RACE;
+    else process.env.AGENC_ACCEPT_BOND_RACE = savedRace;
+  }
 });

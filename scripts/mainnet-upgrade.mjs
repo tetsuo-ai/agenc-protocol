@@ -2621,23 +2621,56 @@ export function assertRevision5DisputeCutover(
 export const REVIEWED_REVISION5_PAYLOAD_SHA256 =
   "049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2";
 
+// Revision 8, the live program, keeps that check: post_completion_bond calls
+// check_version_compatible, which refuses while ProtocolConfig is paused
+// (release commit f39b383, post_completion_bond.rs line 112). These pins are
+// the reviewed revision 8 record: scripts/explorer-metadata.mjs and
+// artifacts/explorer-metadata/2026-10-28-revision-8.json (ProgramData slot
+// 462,468,899). The live payload is the release ELF followed only by zeros.
+export const REVIEWED_REVISION8_PAYLOAD_SHA256 =
+  "ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9";
+export const REVIEWED_REVISION8_ELF = Object.freeze({
+  sha256: "0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e",
+  bytes: 2_075_896,
+  payloadBytes: 2_303_608,
+});
+
 export function isBondEntryPauseGatedForPayload(
   livePayloadSha256,
   approvedBinaryAlreadyLive = false,
 ) {
   return (
     livePayloadSha256 === REVIEWED_REVISION5_PAYLOAD_SHA256 ||
+    livePayloadSha256 === REVIEWED_REVISION8_PAYLOAD_SHA256 ||
     approvedBinaryAlreadyLive === true
   );
+}
+
+// Revision 9 does not fit the live ProgramData, so the reviewed ExtendProgram
+// step runs before a preflight can pass block (a). The loader extends with zero
+// bytes: the live program is still revision 8, but its payload hash changes.
+// Accept exactly the reviewed ELF followed only by zeros, at no less than the
+// reviewed payload size. A size or a prefix alone is never proof.
+export function isZeroPaddedReviewedElf(payload, elf = REVIEWED_REVISION8_ELF) {
+  if (!(payload instanceof Uint8Array)) return false;
+  const bytes = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
+  if (bytes.length < elf.payloadBytes || bytes.length < elf.bytes) return false;
+  const elfSha256 = createHash("sha256")
+    .update(bytes.subarray(0, elf.bytes))
+    .digest("hex");
+  if (elfSha256 !== elf.sha256) return false;
+  return bytes.subarray(elf.bytes).every((byte) => byte === 0);
 }
 
 export function bondEntryPauseGatedForSnapshot(snapshot, approvedBinary) {
   const livePayloadSha256 = createHash("sha256")
     .update(snapshot.payload)
     .digest("hex");
-  return isBondEntryPauseGatedForPayload(
-    livePayloadSha256,
-    isProgramBinaryExactForSnapshot(snapshot, approvedBinary),
+  return (
+    isBondEntryPauseGatedForPayload(
+      livePayloadSha256,
+      isProgramBinaryExactForSnapshot(snapshot, approvedBinary),
+    ) || isZeroPaddedReviewedElf(snapshot.payload)
   );
 }
 
