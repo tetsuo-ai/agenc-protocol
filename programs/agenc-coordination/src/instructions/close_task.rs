@@ -22,7 +22,8 @@
 //! forms must belong to the signer.
 //!
 //! Escrow handling: SOL terminal paths and `expire_dispute` close the escrow PDA,
-//! so the caller normally passes `escrow = None` for a SOL task. `resolve_dispute`
+//! so the caller normally passes `escrow = None` for a SOL task. A settled escrow
+//! left out of the compacting call is closed on the marker later (review R3-1). `resolve_dispute`
 //! deliberately retains a token task's `TaskEscrow` state while token-slash
 //! settlement is being distinguished from an already-settled token outcome. Once
 //! that account is drained and marked `is_closed = true`, it is closed here. A
@@ -462,14 +463,22 @@ fn close_and_compact_task<'info>(
 }
 
 /// Marker path: the task was compacted by an earlier close. Only children are
-/// swept; the listing, hire-record and escrow branches are skipped because none
-/// of them can exist after compaction (each was closed, or proven absent, in the
-/// compacting call). A leftover job-spec pointer is still closed when passed.
+/// swept; the listing and hire-record branches are skipped because neither can
+/// exist after compaction (each was closed, or proven absent, in the compacting
+/// call). A leftover job-spec pointer is still closed when passed, and so is a
+/// settled escrow: a SOL task may be compacted without its escrow (review R3-1).
 fn sweep_marker_children<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
     let task_key = ctx.accounts.task.key();
     let authority_info = ctx.accounts.authority.to_account_info();
     if let Some(job_spec) = ctx.accounts.task_job_spec.as_ref() {
         job_spec.close(authority_info.clone())?;
+    }
+    // Review R3-1: live Completed SOL tasks can still keep a settled TaskEscrow,
+    // and compaction does not require a SOL task to pass it. The canonical
+    // address is seeds-pinned to this task; `close_settled_escrow` closes it to
+    // the creator only when it is this task's escrow and `is_closed`.
+    if let Some(escrow) = ctx.accounts.escrow.as_ref() {
+        close_settled_escrow(&escrow.to_account_info(), &task_key, &authority_info)?;
     }
     // After compaction no exit that needs the full Task can run, so the Task's
     // live-submission counter no longer guards anything; a validation config's

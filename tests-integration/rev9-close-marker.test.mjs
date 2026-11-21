@@ -719,3 +719,48 @@ test("rev9 close marker: a compacted Cancelled parent is not a completed parent 
   const late = await createAuto(w, { parent: parent.task });
   expectFail(late.createResult, "ParentTaskCancelled", "no new child of a cancelled parent");
 });
+
+// ---------------------------------------------------------------------------
+// Review R3-1: a SOL task may be compacted without its escrow (the SDK and the
+// wallet leave it out, and SOL exits normally close it). Two live Completed
+// SOL tasks still keep a settled 58-byte TaskEscrow. Compacting one of them
+// without the escrow must not strand it: close_task on the marker closes a
+// passed settled escrow to the creator.
+// ---------------------------------------------------------------------------
+test("rev9 close marker: a settled SOL escrow left out at compaction is recovered on the marker (review R3-1; da22158: it moves nothing)", async () => {
+  const w = await world();
+  const t = await completedAuto(w);
+  const [, escrowBump] = pda([enc("escrow"), t.task.toBuffer()]);
+  const data = await coder.accounts.encode("TaskEscrow", {
+    task: t.task, amount: new BN(1_000_000), distributed: new BN(1_000_000), is_closed: true, bump: escrowBump,
+  });
+  assert.equal(data.length, 58, "a 58-byte TaskEscrow");
+  const owner = w.svm.getAccount(t.task).owner;
+  const LIVE_ESCROW_LAMPORTS = 1_294_560n; // (128 + 58) x 6,960, as on mainnet
+  w.svm.setAccount(t.escrow, { lamports: Number(LIVE_ESCROW_LAMPORTS), data, owner, executable: false, rentEpoch: 0 });
+
+  // Compacted without the escrow, as the usual clients do for a SOL task.
+  expectOk(send(w.svm, await closeIx(w, t), [w.buyer]), "compact without the escrow");
+  assertMarker(w, t.task, { creator: w.buyer.publicKey, statusByte: MARKER_COMPLETED });
+  assert.equal(bal(w, t.escrow), LIVE_ESCROW_LAMPORTS, "the escrow is still there");
+
+  w.svm.expireBlockhash();
+  const before = bal(w, w.buyer.publicKey);
+  expectOk(send(w.svm, await closeIx(w, t, { escrow: t.escrow }), [w.buyer]), "close_task on the marker with the escrow");
+  assert.equal(bal(w, w.buyer.publicKey) - before, LIVE_ESCROW_LAMPORTS - TX_FEE, "the creator gets the escrow's 1,294,560 lamports");
+  assert.ok(isClosed(w.svm, t.escrow), "the escrow address is empty");
+
+  // An unsettled escrow is still refused on the marker, and an absent one is fine.
+  const other = await completedAuto(w);
+  const [, otherBump] = pda([enc("escrow"), other.task.toBuffer()]);
+  const open = await coder.accounts.encode("TaskEscrow", {
+    task: other.task, amount: new BN(1_000_000), distributed: new BN(0), is_closed: false, bump: otherBump,
+  });
+  expectOk(send(w.svm, await closeIx(w, other), [w.buyer]), "compact the other task");
+  w.svm.setAccount(other.escrow, { lamports: Number(LIVE_ESCROW_LAMPORTS), data: open, owner, executable: false, rentEpoch: 0 });
+  w.svm.expireBlockhash();
+  expectFail(send(w.svm, await closeIx(w, other, { escrow: other.escrow }), [w.buyer]), "InvalidInput", "an unsettled escrow");
+  w.svm.setAccount(other.escrow, { lamports: 0, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false, rentEpoch: 0 });
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await closeIx(w, other, { escrow: other.escrow }), [w.buyer]), "an empty escrow address on the marker");
+});
