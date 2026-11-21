@@ -139,6 +139,7 @@ pub mod rate_skill;
 pub mod reclaim_completion_bond;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_orphan_task_child;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_terminal_claim;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod record_agent_verification;
@@ -346,6 +347,7 @@ pub use reclaim_completion_bond::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use reclaim_orphan_task_child::*;
+#[cfg(not(feature = "mainnet-canary"))]
 pub use reclaim_terminal_claim::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]

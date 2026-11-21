@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Rent } from "litesvm";
 import {
   REPO, PID, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
@@ -383,6 +384,11 @@ test("rev9 records: a multisig ruling on a freeze counts won and lost on both re
 const GRACE = 3_600; // CLAIM_RELEASE_GRACE_SECS
 const CONTEST_DEPOSIT = 10_000_000n;
 const claimRentOf = (w, claim) => rent(w, w.svm.getAccount(claim).data.length);
+// What the creator spends right now to create its record (0 when it exists).
+const creatorStatsCost = (w) => {
+  const acct = w.svm.getAccount(creatorStatsPda(w.buyer.publicKey));
+  return acct && acct.data.length > 0 ? 0n : rent(w, 129) - BigInt(acct?.lamports ?? 0);
+};
 const surplusOf = (w, claim) => bal(w, claim) - claimRentOf(w, claim);
 
 async function registerWorker(w) {
@@ -805,4 +811,103 @@ test("rev9 deposit: a pre-upgrade claim (no deposit) still expires and releases 
     }
     assert.equal(bal(w, w.buyer.publicKey), before.creator, "creator: nothing");
   }
+});
+
+// ---------------------------------------------------------------------------
+// Review R1-2 / R2-3: old-rate rent is not a deposit. Both live TaskClaims were
+// funded at (128 + 203) x 6,960 = 2,303,760 lamports, 622,280 above today's
+// minimum at mainnet's 5,080 per byte. A forfeit takes exactly the deposit the
+// task requires (the `due` rule) and only when the surplus reaches it; anything
+// else closes to the worker with the rent.
+// ---------------------------------------------------------------------------
+const OLD_RATE_CLAIM = 2_303_760n;
+function makeOldRateClaim(w, claim) {
+  // Mainnet's rate from now on, and the claim as a pre-upgrade old-rate account.
+  w.svm.setRent(new Rent(2_540n, 2.0, 50));
+  const acct = w.svm.getAccount(claim);
+  w.svm.setAccount(claim, { ...acct, lamports: Number(OLD_RATE_CLAIM) });
+  assert.equal(claimRentOf(w, claim), 1_681_480n, "today's TaskClaim minimum");
+}
+
+test("rev9 deposit: a cancel_task drain of an old-rate claim returns all 2,303,760 lamports to the worker (review R2-3; e04878b: 622,280 to the creator)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 600 });
+  const { ix, claim } = await claimIx(w, t);
+  expectOk(send(w.svm, ix, [w.provider]), "claim");
+  makeOldRateClaim(w, claim);
+  warpTo(w, Number(decode(w.svm, "Task", t.task).deadline.toString()) + 1);
+  const escrowBefore = bal(w, t.escrow);
+  const recordCost = creatorStatsCost(w);
+  const before = { creator: bal(w, w.buyer.publicKey), worker: bal(w, w.provider.publicKey) };
+  const cancel = await cancelIx(w, t);
+  cancel.keys.push(
+    { pubkey: claim, isSigner: false, isWritable: true },
+    { pubkey: w.providerAgent, isSigner: false, isWritable: true },
+    { pubkey: w.provider.publicKey, isSigner: false, isWritable: true },
+  );
+  const res = expectOk(send(w.svm, cancel, [w.buyer]), "cancel drain of an old-rate claim");
+  assert.equal(bal(w, w.provider.publicKey) - before.worker, OLD_RATE_CLAIM, "worker: the whole old-rate claim");
+  assert.equal(bal(w, w.buyer.publicKey) - before.creator, escrowBefore - TX_FEE - recordCost, "creator: the escrow refund only");
+  assert.equal(findEvents(res, "ClaimDepositSettled").length, 0, "no deposit settled");
+});
+
+test("rev9 deposit: an old-rate Collaborative no-show expires without the creator account and keeps its rent (review R2-3; e04878b: 6426)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await publishedTask(w, { taskType: 1, maxWorkers: 1, review: false, deadlineSecs: 30 * 86_400 });
+  t.review = false;
+  const { ix, claim } = await claimIx(w, t);
+  expectOk(send(w.svm, ix, [w.provider]), "claim");
+  makeOldRateClaim(w, claim);
+  warpTo(w, Number(decode(w.svm, "TaskClaim", claim).expires_at.toString()) + 61);
+  const caller = crank(w);
+  const before = bal(w, w.provider.publicKey);
+  expectOk(send(w.svm, await expireClaimIx(w, t, claim, caller, { bondCreator: null, workerBond: null }), [caller]),
+    "old-rate no-show expiry with bond_creator null");
+  assert.equal(bal(w, w.provider.publicKey) - before, OLD_RATE_CLAIM, "worker: the whole old-rate claim");
+});
+
+test("rev9 deposit: an old-rate no-show expiry never pays a creator wallet that cannot hold it (review R1-2; e04878b: 622,280 go to the empty creator wallet)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await publishedTask(w, { reward: 200_000_000, review: false, deadlineSecs: 30 * 86_400 });
+  t.review = false;
+  const { ix, claim } = await claimIx(w, t);
+  expectOk(send(w.svm, ix, [w.provider]), "claim");
+  makeOldRateClaim(w, claim);
+  warpTo(w, Number(decode(w.svm, "TaskClaim", claim).expires_at.toString()) + 61);
+  // The creator's wallet is empty: 622,280 alone is below a wallet's rent minimum.
+  w.svm.setAccount(w.buyer.publicKey, { lamports: 0, data: Buffer.alloc(0), owner: SystemProgram.programId, executable: false, rentEpoch: 0 });
+  const caller = crank(w);
+  const before = bal(w, w.provider.publicKey);
+  expectOk(send(w.svm, await expireClaimIx(w, t, claim, caller), [caller]), "old-rate no-show expiry");
+  assert.equal(bal(w, w.provider.publicKey) - before, OLD_RATE_CLAIM, "worker: the whole old-rate claim");
+  assert.equal(bal(w, w.buyer.publicKey), 0n, "creator: nothing");
+});
+
+test("rev9 deposit: reclaim_terminal_claim of an old-rate stranded claim returns it all to the worker (review R2-3; e04878b: 622,280 to the creator)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const t = await publishedTask(w, { reward: 200_000_000, taskType: 2, maxWorkers: 2, review: false, deadlineSecs: 600 });
+  const second = await registerWorker(w);
+  const { claim: strandedClaim } = await claimAs(w, t, second);
+  const { ix, claim } = await claimIx(w, t);
+  expectOk(send(w.svm, ix, [w.provider]), "winner claims");
+  expectOk(send(w.svm, await w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({ task: t.task, claim, escrow: t.escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda,
+      treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null,
+      workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: t.hireRecord,
+      operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
+    .instruction(), [w.provider]), "winner completes");
+  makeOldRateClaim(w, strandedClaim);
+  warpTo(w, Number(decode(w.svm, "TaskClaim", strandedClaim).expires_at.toString()) + 1);
+  const caller = crank(w);
+  const before = { creator: bal(w, w.buyer.publicKey), worker: bal(w, second.kp.publicKey) };
+  expectOk(send(w.svm, await makeProgram(caller).methods
+    .reclaimTerminalClaim()
+    .accounts({ authority: caller.publicKey, task: t.task, claim: strandedClaim,
+      taskSubmission: pda([enc("task_submission"), strandedClaim.toBuffer()])[0], taskValidationConfig: null,
+      worker: second.agent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
+      rentRecipient: second.kp.publicKey, creator: w.buyer.publicKey })
+    .instruction(), [caller]), "reclaim the old-rate stranded claim");
+  assert.equal(bal(w, second.kp.publicKey) - before.worker, OLD_RATE_CLAIM, "worker: the whole old-rate claim");
+  assert.equal(bal(w, w.buyer.publicKey) - before.creator, 0n, "creator: nothing");
 });

@@ -25,7 +25,10 @@ use crate::instructions::bid_settlement_helpers::{
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 #[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::claim_deposit_helpers::{claim_surplus_lamports, settle_claim_deposit};
+use crate::instructions::claim_deposit_helpers::{
+    claim_surplus_lamports, forfeit_claim_deposit, forfeitable_deposit,
+    posted_claim_deposit_lamports, refund_claim_deposit, take_forfeitable_deposit,
+};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::lamport_transfer::transfer_lamports;
@@ -404,29 +407,29 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
             submission_proven_absent,
             CoordinationError::TaskSubmissionRequired
         );
+        // Review R1-2 / R2-3: exactly the entry deposit, never older rent.
         let claim_info = claim.to_account_info();
-        let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
-        let surplus = claim_info.lamports().saturating_sub(rent_min);
-        if surplus > 0 {
+        let surplus = claim_surplus_lamports(&claim_info)?;
+        if forfeitable_deposit(
+            surplus,
+            crate::instructions::constants::CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+        ) > 0
+        {
             let treasury = ctx
                 .accounts
                 .treasury
                 .as_ref()
                 .ok_or(CoordinationError::ContestForfeitTreasuryRequired)?;
-            let treasury_info = treasury.to_account_info();
-            **claim_info.try_borrow_mut_lamports()? = claim_info
-                .lamports()
-                .checked_sub(surplus)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            **treasury_info.try_borrow_mut_lamports()? = treasury_info
-                .lamports()
-                .checked_add(surplus)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            let amount = take_forfeitable_deposit(
+                &claim_info,
+                &treasury.to_account_info(),
+                crate::instructions::constants::CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+            )?;
             emit!(crate::events::ContestDepositForfeited {
                 task: task.key(),
                 claim: claim.key(),
                 worker_agent: worker.key(),
-                amount: surplus,
+                amount,
                 timestamp: clock.unix_timestamp,
             });
         }
@@ -622,12 +625,12 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         && task.task_type != TaskType::BidExclusive
         && task.dispute_filed()
     {
-        settle_claim_deposit(
+        refund_claim_deposit(
             &claim.to_account_info(),
             &ctx.accounts.rent_recipient.to_account_info(),
+            task,
             task.key(),
             worker.key(),
-            false,
             clock.unix_timestamp,
         )?;
     }
@@ -637,8 +640,15 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         && task.task_type != TaskType::BidExclusive
         && !task.dispute_filed()
     {
+        // Review R1-2 / R2-3: only a claim that holds the posted deposit forfeits
+        // it (exactly that amount); old-rate rent stays with the worker, so no
+        // creator account is needed for it.
         let claim_info = claim.to_account_info();
-        if claim_surplus_lamports(&claim_info)? > 0 {
+        if forfeitable_deposit(
+            claim_surplus_lamports(&claim_info)?,
+            posted_claim_deposit_lamports(task)?,
+        ) > 0
+        {
             let creator = ctx
                 .accounts
                 .bond_creator
@@ -648,12 +658,12 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
                 creator.key() == task.creator,
                 CoordinationError::InvalidCreator
             );
-            settle_claim_deposit(
+            forfeit_claim_deposit(
                 &claim_info,
                 &creator.to_account_info(),
+                task,
                 task.key(),
                 worker.key(),
-                true,
                 clock.unix_timestamp,
             )?;
             if let Some(record) = ctx.accounts.creator_stats.as_ref() {

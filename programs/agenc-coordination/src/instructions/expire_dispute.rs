@@ -18,7 +18,7 @@ use crate::instructions::bid_settlement_helpers::{
     accepted_bid_no_show_bond_disposition, settle_accepted_bid, AcceptedBidBookDisposition,
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
-use crate::instructions::claim_deposit_helpers::settle_claim_deposit;
+use crate::instructions::claim_deposit_helpers::forfeit_claim_deposit;
 use crate::instructions::creator_stats_helpers::CreatorCounter;
 use crate::instructions::dispute_bond_helpers::{settle_dispute_bond, BondEnding};
 use crate::instructions::dispute_helpers::{
@@ -558,13 +558,14 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     // deposit to the creator before the claim's rent closes to the worker; the
     // creator's record counts it. A delivered claim had its deposit back at
     // submit, and a bid claim carries a bid bond instead (settled above).
+    // Review R1-2 / R2-3: exactly the posted deposit, never older rent.
     let deposit_forfeited = if no_show_penalty_allowed && task.task_type != TaskType::BidExclusive {
-        settle_claim_deposit(
+        forfeit_claim_deposit(
             &claim.to_account_info(),
             &ctx.accounts.creator.to_account_info(),
+            task,
             task_key,
             defendant_worker_key,
-            true,
             clock.unix_timestamp,
         )?
     } else {

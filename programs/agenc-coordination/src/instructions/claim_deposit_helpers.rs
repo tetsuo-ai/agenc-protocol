@@ -4,7 +4,8 @@
 //! `max(10% of the worker's share, 0.005 SOL)` as surplus lamports on the claim
 //! account (the same pattern as the contest entry deposit). It comes back on the
 //! worker's first delivery and goes to the buyer when the claim ends without a
-//! delivery after its expiry. The functions here are pure.
+//! delivery after its expiry. A forfeit takes exactly the posted deposit (review
+//! R1-2 / R2-3); anything else above the rent minimum is the worker's.
 
 #![cfg(not(feature = "mainnet-canary"))]
 
@@ -59,40 +60,102 @@ pub fn release_refunds_deposit(claimed_at: i64, now: i64) -> bool {
     now <= claimed_at.saturating_add(CLAIM_RELEASE_GRACE_SECS)
 }
 
-/// Lamports on a claim above its rent-exempt minimum: its deposit. Zero for a
-/// claim made before revision 9, and once the deposit has come back.
+/// Lamports on a claim above its rent-exempt minimum. For a revision 9 claim
+/// this is its deposit; a claim funded at an older, higher rent rate also holds
+/// its own excess rent here, which is not a deposit (review R1-2 / R2-3).
 pub fn claim_surplus_lamports(claim_info: &AccountInfo) -> Result<u64> {
     let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
     Ok(claim_info.lamports().saturating_sub(rent_min))
 }
 
-/// Move a non-contest claim's deposit (its surplus) to `recipient`: the worker
-/// wallet when it comes back (`forfeited == false`), the buyer when the claim
-/// ended without a delivery (`forfeited == true`). Emits `ClaimDepositSettled`.
-/// Returns the amount moved; a claim with no surplus moves and emits nothing.
-/// Direct lamport moves: callers make every CPI first.
-pub fn settle_claim_deposit<'info>(
+/// The deposit a non-contest claim on `task` posted. The claim stores no copy,
+/// but every input is fixed once the task exists (the reward, the task type
+/// and the completion count), so it is recomputed from the task.
+pub fn posted_claim_deposit_lamports(task: &Task) -> Result<u64> {
+    claim_deposit_lamports(sol_worker_share_lamports(task)?)
+}
+
+/// Review R1-2 / R2-3: a forfeit takes exactly the posted deposit `due`, and only
+/// when the claim's surplus reaches it. A smaller surplus is old-rate rent (or
+/// rent left over after a rate cut), which is the worker's own and closes to it
+/// with the rent.
+pub fn forfeitable_deposit(surplus: u64, due: u64) -> u64 {
+    if surplus >= due {
+        due
+    } else {
+        0
+    }
+}
+
+/// Move exactly the forfeitable part of a claim's surplus to `recipient` and
+/// return it. Direct lamport move: callers make every CPI first.
+pub fn take_forfeitable_deposit<'info>(
     claim_info: &AccountInfo<'info>,
     recipient: &AccountInfo<'info>,
-    task: Pubkey,
+    due: u64,
+) -> Result<u64> {
+    let amount = forfeitable_deposit(claim_surplus_lamports(claim_info)?, due);
+    if amount > 0 {
+        transfer_lamports(claim_info, recipient, amount)?;
+    }
+    Ok(amount)
+}
+
+/// Forfeit a non-contest claim's deposit to the buyer (`recipient`): exactly the
+/// posted deposit when the surplus reaches it, else nothing. Emits
+/// `ClaimDepositSettled` (forfeited) when it moves. Returns the amount moved.
+pub fn forfeit_claim_deposit<'info>(
+    claim_info: &AccountInfo<'info>,
+    recipient: &AccountInfo<'info>,
+    task: &Task,
+    task_key: Pubkey,
     worker_agent: Pubkey,
-    forfeited: bool,
+    now: i64,
+) -> Result<u64> {
+    let amount =
+        take_forfeitable_deposit(claim_info, recipient, posted_claim_deposit_lamports(task)?)?;
+    if amount > 0 {
+        emit!(ClaimDepositSettled {
+            task: task_key,
+            claim: claim_info.key(),
+            worker_agent,
+            recipient: recipient.key(),
+            amount,
+            forfeited: true,
+            timestamp: now,
+        });
+    }
+    Ok(amount)
+}
+
+/// Return a non-contest claim's surplus to the worker wallet: the whole
+/// surplus moves, and `ClaimDepositSettled` (not forfeited) is emitted only when
+/// it holds the posted deposit (old-rate rent alone is no deposit). Returns the
+/// amount moved. Direct lamport move: callers make every CPI first.
+pub fn refund_claim_deposit<'info>(
+    claim_info: &AccountInfo<'info>,
+    worker_wallet: &AccountInfo<'info>,
+    task: &Task,
+    task_key: Pubkey,
+    worker_agent: Pubkey,
     now: i64,
 ) -> Result<u64> {
     let amount = claim_surplus_lamports(claim_info)?;
     if amount == 0 {
         return Ok(0);
     }
-    transfer_lamports(claim_info, recipient, amount)?;
-    emit!(ClaimDepositSettled {
-        task,
-        claim: claim_info.key(),
-        worker_agent,
-        recipient: recipient.key(),
-        amount,
-        forfeited,
-        timestamp: now,
-    });
+    transfer_lamports(claim_info, worker_wallet, amount)?;
+    if amount >= posted_claim_deposit_lamports(task)? {
+        emit!(ClaimDepositSettled {
+            task: task_key,
+            claim: claim_info.key(),
+            worker_agent,
+            recipient: worker_wallet.key(),
+            amount,
+            forfeited: false,
+            timestamp: now,
+        });
+    }
     Ok(amount)
 }
 
@@ -107,6 +170,20 @@ mod tests {
             required_completions: required,
             ..Task::default()
         }
+    }
+
+    // Review R1-2 / R2-3. Revert-sensitive: forfeiting the whole surplus turns
+    // the old-rate and over-deposit cases red.
+    #[test]
+    fn a_forfeit_takes_exactly_the_posted_deposit_and_only_when_present() {
+        let due = 20_000_000;
+        // The live old-rate excess: (128 + 203) x (6,960 - 5,080).
+        assert_eq!(forfeitable_deposit(622_280, due), 0);
+        assert_eq!(forfeitable_deposit(due - 1, due), 0);
+        assert_eq!(forfeitable_deposit(due, due), due);
+        // A deposit plus old-rate rent: only the deposit.
+        assert_eq!(forfeitable_deposit(due + 622_280, due), due);
+        assert_eq!(forfeitable_deposit(0, due), 0);
     }
 
     #[test]
