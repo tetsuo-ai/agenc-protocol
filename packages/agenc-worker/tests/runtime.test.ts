@@ -12,16 +12,21 @@ import {
   findAgentPda,
   findProtocolConfigPda,
   getAgentRegistrationEncoder,
+  getAgentStatsSize,
   getProtocolConfigEncoder,
   type MarketplaceClient,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   AGENT_ACCOUNT_RENT_LAMPORTS,
   AGENT_ACCOUNT_SIZE,
+  AGENT_STATS_ACCOUNT_SIZE,
+  AGENT_STATS_RENT_LAMPORTS,
   CLAIM_ACCOUNT_RENT_LAMPORTS,
+  claimDepositFor,
   claimFundingRequirement,
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   CLAIM_ACCOUNT_SIZE,
+  DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS,
   decodeTaskDescription,
   ensureRegistered,
   FEE_HEADROOM_LAMPORTS,
@@ -188,7 +193,7 @@ async function registrationHarness(options: {
   configData?: Uint8Array | null;
   balance?: bigint;
   getBalance?: false;
-  rents?: { agent: bigint; claim: bigint; submission: bigint };
+  rents?: { agent: bigint; claim: bigint; submission: bigint; agentStats?: bigint };
   dryRun?: boolean;
 }): Promise<RegistrationHarness> {
   const agentId = new Uint8Array(32).fill(42);
@@ -242,6 +247,9 @@ async function registrationHarness(options: {
             if (space === AGENT_ACCOUNT_SIZE) return rents.agent;
             if (space === CLAIM_ACCOUNT_SIZE) return rents.claim;
             if (space === SUBMISSION_ACCOUNT_SIZE) return rents.submission;
+            if (space === AGENT_STATS_ACCOUNT_SIZE) {
+              return rents.agentStats ?? AGENT_STATS_RENT_LAMPORTS;
+            }
             throw new Error(`unexpected account size ${space}`);
           },
         }),
@@ -307,6 +315,8 @@ describe("registrationFundingRequirement", () => {
         new RegExp(`assert!\\(${account}::SIZE == ${size}\\)`),
       );
     }
+    // The worker record's size, from the IDL-generated account codec.
+    expect(getAgentStatsSize()).toBe(AGENT_STATS_ACCOUNT_SIZE);
 
     const constantsSource = readFileSync(
       new URL(
@@ -324,29 +334,63 @@ describe("registrationFundingRequirement", () => {
     );
   });
 
-  it("sums stake + rents + contest deposit + fee headroom (~0.031 SOL on mainnet)", () => {
+  it("sums stake + rents + the worker record + a claim deposit + fee headroom (~0.033 SOL on mainnet)", () => {
+    // Revision 9 (deliberate change): the first claim also creates the
+    // worker's record (kept), and the deposit budget is the larger of the
+    // contest entry deposit and the 0.005 SOL claim deposit floor.
+    expect(DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS).toBe(
+      CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+    );
     const required = registrationFundingRequirement(MAINNET_MIN_STAKE);
     expect(required).toBe(
       MAINNET_MIN_STAKE +
         AGENT_ACCOUNT_RENT_LAMPORTS +
         CLAIM_ACCOUNT_RENT_LAMPORTS +
         SUBMISSION_ACCOUNT_RENT_LAMPORTS +
-        CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+        AGENT_STATS_RENT_LAMPORTS +
+        DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS +
         FEE_HEADROOM_LAMPORTS,
     );
-    expect(required).toBe(30_924_960n);
+    expect(required).toBe(32_658_000n);
   });
 
-  it("budgets every recurring claim through submission with worst-case contest and fee headroom", () => {
+  it("budgets every recurring claim through submission with a deposit and fee headroom", () => {
     expect(claimFundingRequirement()).toBe(
       CLAIM_ACCOUNT_RENT_LAMPORTS +
         SUBMISSION_ACCOUNT_RENT_LAMPORTS +
-        CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+        DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS +
         FEE_HEADROOM_LAMPORTS,
     );
     expect(claimFundingRequirement({ claim: 20n, submission: 30n })).toBe(
-      20n + 30n + CONTEST_ENTRY_DEPOSIT_LAMPORTS + FEE_HEADROOM_LAMPORTS,
+      20n + 30n + DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS + FEE_HEADROOM_LAMPORTS,
     );
+    // A known task charges its exact deposit, plus the record on a first claim.
+    expect(
+      claimFundingRequirement(
+        { claim: 20n, submission: 30n },
+        { depositLamports: 20_000_000n, recordRentLamports: 7n },
+      ),
+    ).toBe(20n + 30n + 20_000_000n + 7n + FEE_HEADROOM_LAMPORTS);
+  });
+
+  it("charges 10% of the worker's share with the 0.005 SOL floor, and the contest deposit for a contest", () => {
+    const task = (overrides: Record<string, unknown>) =>
+      ({
+        rewardAmount: 300_000_000n,
+        taskType: 0,
+        requiredCompletions: 1,
+        rewardMint: { __option: "None" },
+        reserved: new Uint8Array(16),
+        ...overrides,
+      }) as unknown as Parameters<typeof claimDepositFor>[0];
+    expect(claimDepositFor(task({}))).toBe(30_000_000n);
+    expect(claimDepositFor(task({ rewardAmount: 1_000_000n }))).toBe(5_000_000n);
+    expect(
+      claimDepositFor(task({ taskType: 1, requiredCompletions: 3 })),
+    ).toBe(10_000_000n);
+    expect(
+      claimDepositFor(task({ taskType: 2, reserved: new Uint8Array(16).fill(1, 0, 1) })),
+    ).toBe(CONTEST_ENTRY_DEPOSIT_LAMPORTS);
   });
 
   it("queries live rent for every exact worker-funded account size", async () => {
@@ -356,16 +400,20 @@ describe("registrationFundingRequirement", () => {
       return BigInt(size * 10);
     });
     expect(calls.sort((a, b) => a - b)).toEqual(
-      [AGENT_ACCOUNT_SIZE, CLAIM_ACCOUNT_SIZE, SUBMISSION_ACCOUNT_SIZE].sort(
-        (a, b) => a - b,
-      ),
+      [
+        AGENT_ACCOUNT_SIZE,
+        CLAIM_ACCOUNT_SIZE,
+        SUBMISSION_ACCOUNT_SIZE,
+        AGENT_STATS_ACCOUNT_SIZE,
+      ].sort((a, b) => a - b),
     );
     expect(registrationFundingRequirement(100n, rents)).toBe(
       100n +
         BigInt(AGENT_ACCOUNT_SIZE * 10) +
         BigInt(CLAIM_ACCOUNT_SIZE * 10) +
         BigInt(SUBMISSION_ACCOUNT_SIZE * 10) +
-        CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+        BigInt(AGENT_STATS_ACCOUNT_SIZE * 10) +
+        DEFAULT_CLAIM_DEPOSIT_BUDGET_LAMPORTS +
         FEE_HEADROOM_LAMPORTS,
     );
   });

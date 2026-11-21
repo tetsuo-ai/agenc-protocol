@@ -82,6 +82,9 @@ FLAGS (flags > AGENC_WORKER_* env > config file > defaults)
   --config <path>            config file (default ~/.config/agenc-worker/config.json)
   --creator <address>        creator allowlist (repeatable)
   --allow-any-creator        UNSAFE: explicitly disable creator allowlisting
+  --dispute-turn-downs       dispute a buyer's turn-down of a delivery, posting
+                             the bond (10% of the price, at least 0.01 SOL);
+                             off by default
   --endpoint <url>           agent endpoint recorded at registration
   --task-thread-base-url <url>
                              HTTPS content host for request_changes feedback
@@ -117,6 +120,7 @@ function flagsToConfigInput(values: {
   "state-dir"?: string;
   creator?: string[];
   "allow-any-creator"?: boolean;
+  "dispute-turn-downs"?: boolean;
   endpoint?: string;
   "task-thread-base-url"?: string;
   "poll-interval"?: string;
@@ -145,6 +149,7 @@ function flagsToConfigInput(values: {
     input.creatorAllowlist = values.creator;
   }
   if (values["allow-any-creator"] === true) input.allowAnyCreator = true;
+  if (values["dispute-turn-downs"] === true) input.disputeTurnDowns = true;
   if (values.endpoint !== undefined) input.endpoint = values.endpoint;
   if (values["task-thread-base-url"] !== undefined) {
     input.taskThreadBaseUrl = values["task-thread-base-url"];
@@ -241,6 +246,7 @@ async function main(): Promise<number> {
       config: { type: "string" },
       creator: { type: "string", multiple: true },
       "allow-any-creator": { type: "boolean" },
+      "dispute-turn-downs": { type: "boolean" },
       endpoint: { type: "string" },
       "task-thread-base-url": { type: "string" },
       "poll-interval": { type: "string" },

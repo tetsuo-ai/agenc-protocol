@@ -32,6 +32,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { AccountSnapshot } from "../src/account-reader.js";
 import {
+  AGENT_STATS_ACCOUNT_SIZE,
   CLAIM_ACCOUNT_SIZE,
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   FEE_HEADROOM_LAMPORTS,
@@ -224,6 +225,7 @@ function context(
     getMinimumBalanceForRentExemption: async (space) => {
       if (space === CLAIM_ACCOUNT_SIZE) return 2_000_000n;
       if (space === SUBMISSION_ACCOUNT_SIZE) return 3_000_000n;
+      if (space === AGENT_STATS_ACCOUNT_SIZE) return 1_500_000n;
       throw new Error(`unexpected fresh-claim account size ${space}`);
     },
   };
@@ -290,6 +292,7 @@ async function attemptFreshClaimWithHireSnapshot(
   const getMinimumBalanceForRentExemption = vi.fn(async (space: number) => {
     if (space === CLAIM_ACCOUNT_SIZE) return 2_000_000n;
     if (space === SUBMISSION_ACCOUNT_SIZE) return 3_000_000n;
+    if (space === AGENT_STATS_ACCOUNT_SIZE) return 1_500_000n;
     throw new Error(`unexpected fresh-claim account size ${space}`);
   });
   ctx.readAccountInfo = async (account) => {
@@ -898,15 +901,17 @@ describe("transaction-boundary recovery", () => {
     ctx.fetchUri = async () => body;
     const claimRent = 2_000_000n;
     const submissionRent = 3_000_000n;
+    // Revision 9: this task's claim deposit (10% of 0.0042 SOL is below the
+    // 0.005 SOL floor) and the worker record's rent, since it has none yet.
+    const deposit = 5_000_000n;
+    const recordRent = 1_500_000n;
     const required =
-      claimRent +
-      submissionRent +
-      CONTEST_ENTRY_DEPOSIT_LAMPORTS +
-      FEE_HEADROOM_LAMPORTS;
+      claimRent + submissionRent + deposit + recordRent + FEE_HEADROOM_LAMPORTS;
     const getBalance = vi.fn(async () => required - 1n);
     const getMinimumBalanceForRentExemption = vi.fn(async (space: number) => {
       if (space === CLAIM_ACCOUNT_SIZE) return claimRent;
       if (space === SUBMISSION_ACCOUNT_SIZE) return submissionRent;
+      if (space === AGENT_STATS_ACCOUNT_SIZE) return 1_500_000n;
       throw new Error(`unexpected recurring-worker account size ${space}`);
     });
     ctx.getBalance = getBalance;
@@ -922,7 +927,7 @@ describe("transaction-boundary recovery", () => {
     };
     await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow(
       new RegExp(
-        `working another task needs at least ${required} lamports.*1 more lamport`,
+        `working this task needs at least ${required} lamports.*claim deposit ${deposit}.*worker record rent ${recordRent}.*1 more lamport`,
         "s",
       ),
     );
@@ -930,6 +935,7 @@ describe("transaction-boundary recovery", () => {
     expect(getMinimumBalanceForRentExemption.mock.calls).toEqual([
       [CLAIM_ACCOUNT_SIZE],
       [SUBMISSION_ACCOUNT_SIZE],
+      [AGENT_STATS_ACCOUNT_SIZE],
     ]);
     expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(loadState(stateDir).openClaim).toBeNull();
