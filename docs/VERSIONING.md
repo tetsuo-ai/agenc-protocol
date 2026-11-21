@@ -225,6 +225,20 @@ declare compatible ranges. Revision 5 had one coordinated combination: SDK
 0.12 with the published train in §1.1.1. Revision 8 has one: SDK 0.13 with the
 revision-8 train above.
 
+### 1.1.3 Revision-9 coordinated client set (planned, not deployed)
+
+Revision 9 (106 instructions, `surface_revision = 9`) is built and reviewed
+but not deployed. Its coordinated client set is planned as protocol 0.6.0,
+SDK 0.14.0, React, tools and MCP 0.7.0, worker 0.4.0, and CLI plus its alias
+0.5.0; moderation stays 0.3.x unless its policy hash changes. The packages
+publish after the revision-9 stamp and before the unpause, because SDK 0.13
+does not speak the revision-9 wire. `agenc promote` already carries this
+matrix for surface revision 9; its reviewed-deployment identity is added
+only after the verified cutover. Revision 9 adds required worker and creator
+records, dispute bonds, claim deposits, `dispute_rejection`, `release_claim`
+and a new `resolve_reject_frozen` wire, so revision-8 writers fail against it
+and the reverse.
+
 ### 1.2 Break-event history (why this document exists)
 
 | Date            | Event                                                                                            | Program surface                                    | Gate shapes                                                                                                                                                                                        | What broke (fails closed since that date)                                                                                                  | Deprecation window given                                                                                                                                                                                                                                         |

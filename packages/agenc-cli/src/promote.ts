@@ -2,14 +2,17 @@
 // signs, never flips config, never touches money paths; it prints pass/fail
 // with the exact next action for each gap.
 //
-// The version matrix mirrors docs/VERSIONING.md §1.1 (revision-8 train) and
-// the historical revision-4 and revision-5 sets. Update both the document and
-// this constant on a lockstep publish. REVIEWED_MAINNET_RELEASES holds the
-// deployment identities observed on finalized mainnet after each upgrade.
-// Compatibility is selected by the finalized on-chain surface revision; the
-// sets must never be unioned because each cutover changed the write wire:
-// revision-5 writers fail against revision 4 and the reverse, and revision 8
-// retires the legacy feed vote and requires new demotion accounts.
+// The version matrix mirrors docs/VERSIONING.md §1.1 (revision-8 train), the
+// planned revision-9 set (§1.1.3) and the historical revision-4 and revision-5
+// sets. Update both the document and this constant on a lockstep publish.
+// REVIEWED_MAINNET_RELEASES holds the deployment identities observed on
+// finalized mainnet after each upgrade; the revision-9 identity is added only
+// after its verified cutover. Compatibility is selected by the finalized
+// on-chain surface revision; the sets must never be unioned because each
+// cutover changed the write wire: revision-5 writers fail against revision 4
+// and the reverse, revision 8 retires the legacy feed vote and requires new
+// demotion accounts, and revision 9 adds required record and bond accounts
+// and a new resolve_reject_frozen wire.
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -123,7 +126,19 @@ export const SUPPORT_MATRIX_BY_SURFACE_REVISION = {
     // entry an installed store-core fails closed instead of matching a
     // revision-5 artifact whose SDK peer range rejects SDK 0.13.
   },
-} as const satisfies Readonly<Record<4 | 5 | 8, PackageSupportMatrix>>;
+  // The planned revision-9 train (design 9.4). Moderation keeps 0.3 unless
+  // its policy hash changes. No store-core entry until a reviewed release
+  // targets revision 9.
+  9: {
+    "@tetsuo-ai/protocol": ["0.6"],
+    "@tetsuo-ai/marketplace-sdk": ["0.14"],
+    "@tetsuo-ai/agenc-worker": ["0.4"],
+    "@tetsuo-ai/marketplace-react": ["0.7"],
+    "@tetsuo-ai/marketplace-tools": ["0.7"],
+    "@tetsuo-ai/marketplace-mcp": ["0.7"],
+    "@tetsuo-ai/marketplace-moderation": ["0.3"],
+  },
+} as const satisfies Readonly<Record<4 | 5 | 8 | 9, PackageSupportMatrix>>;
 
 /**
  * Published revision-4 matrix retained for compatibility with the CLI 0.2
@@ -366,7 +381,9 @@ export function versionInMatrix(
 function matrixForRevision(
   revision: number | undefined,
 ): PackageSupportMatrix | null {
-  if (revision !== 4 && revision !== 5 && revision !== 8) return null;
+  if (revision !== 4 && revision !== 5 && revision !== 8 && revision !== 9) {
+    return null;
+  }
   return SUPPORT_MATRIX_BY_SURFACE_REVISION[revision];
 }
 
@@ -815,7 +832,7 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
   }
 
   // 4) installed package pins inside the matrix for the finalized revision.
-  // Never union revisions 4, 5 and 8: their write wires are intentionally
+  // Never union revisions 4, 5, 8 and 9: their write wires are intentionally
   // incompatible. Independent version buckets are necessary
   // but insufficient: every installed artifact's own first-party dependency
   // and peer ranges must also admit the selected installed package train.

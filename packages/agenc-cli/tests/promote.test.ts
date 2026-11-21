@@ -248,6 +248,17 @@ const REVISION_8_CLIENTS = {
   "@tetsuo-ai/marketplace-moderation": "0.3.0",
 } as const;
 
+/** The planned revision-9 train (design 9.4); not published yet. */
+const REVISION_9_CLIENTS = {
+  "@tetsuo-ai/protocol": "0.6.0",
+  "@tetsuo-ai/marketplace-sdk": "0.14.0",
+  "@tetsuo-ai/agenc-worker": "0.4.0",
+  "@tetsuo-ai/marketplace-react": "0.7.0",
+  "@tetsuo-ai/marketplace-tools": "0.7.0",
+  "@tetsuo-ai/marketplace-mcp": "0.7.0",
+  "@tetsuo-ai/marketplace-moderation": "0.3.0",
+} as const;
+
 /** Chain evidence equal to the reviewed revision-8 deployment identity. */
 function useRevision8Identity(input: PromoteInput): void {
   const reviewed = REVIEWED_MAINNET_RELEASES.find(
@@ -691,6 +702,45 @@ describe("runPromoteChecks", () => {
           "fail",
         );
       }
+    }
+  });
+
+  it("selects the planned revision-9 matrix on surface 9, and never unions it with revision 8", () => {
+    const input = readyInput();
+    useRevision8Identity(input);
+    input.chainEvidence!.surfaceRevision = 9;
+    setInstalledTrain(input, REVISION_9_CLIENTS);
+    const report = runPromoteChecks(input);
+    // Revision 9 is a surface this CLI understands...
+    expect(statusOf(report, "chain:surface")).toBe("pass");
+    for (const pkg of Object.keys(REVISION_9_CLIENTS)) {
+      expect(statusOf(report, `pin:${pkg}`), pkg).toBe("pass");
+    }
+    // ...but no revision-9 deployment identity is reviewed until the verified
+    // cutover, so promotion still fails closed on the program check.
+    expect(
+      REVIEWED_MAINNET_RELEASES.some(
+        (release) => (release.surfaceRevision as number) === 9,
+      ),
+    ).toBe(false);
+    expect(statusOf(report, "chain:program")).toBe("fail");
+
+    const old = readyInput();
+    old.chainEvidence!.surfaceRevision = 9;
+    setInstalledTrain(old, REVISION_8_CLIENTS);
+    const oldReport = runPromoteChecks(old);
+    for (const pkg of Object.keys(REVISION_8_CLIENTS)) {
+      if (pkg === "@tetsuo-ai/marketplace-moderation") continue; // 0.3 serves both
+      expect(statusOf(oldReport, `pin:${pkg}`), pkg).toBe("fail");
+    }
+
+    const early = readyInput();
+    useRevision8Identity(early);
+    setInstalledTrain(early, REVISION_9_CLIENTS);
+    const earlyReport = runPromoteChecks(early);
+    for (const pkg of Object.keys(REVISION_9_CLIENTS)) {
+      if (pkg === "@tetsuo-ai/marketplace-moderation") continue; // 0.3 serves both
+      expect(statusOf(earlyReport, `pin:${pkg}`), pkg).toBe("fail");
     }
   });
 
