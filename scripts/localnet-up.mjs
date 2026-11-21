@@ -1343,10 +1343,13 @@ async function mainLocked(args, lifecycleLock) {
   let moderation = await sdk.fetchMaybeModerationConfig(rpc, moderationPda);
   let moderationAction = "verified existing";
   if (!moderation.exists) {
+    // Revision 9 (G): configure_task_moderation needs the ProtocolConfig
+    // multisig threshold (2 of the 3 local owners), like a moderation block.
     const ix = await sdk.facade.configureTaskModeration({
       authority: signers.authority,
       moderationAuthority: signers.moderator.address,
       enabled: true,
+      multisigSigners: [signers.authority, signers.moderator],
     });
     const { signature } = await client.send([ix]);
     moderationAction = `initialized (${signature})`;
