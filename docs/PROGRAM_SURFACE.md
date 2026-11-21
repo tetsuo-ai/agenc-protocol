@@ -374,8 +374,13 @@ What the revision-9 candidate changes, in brief:
   ruling comes from a seated resolver, who must hold no stake in it, or from 2
   of the 3 owners: any wallet may propose that direct ruling, and owners who
   are the creator or the worker wallet do not count toward its threshold. The
-  initiator never rules. After a filing, the creator cannot file again against
-  a claim that has lapsed since (`ClaimExpired`).
+  initiator never rules. Once any dispute has been filed on the task, by either
+  side, the creator cannot file against any lapsed claim, whenever it lapsed
+  (`ClaimExpired`). The creator still has `cancel_task` after the deadline and
+  `expire_claim`, and both refund the deposit after a filing. When the direct
+  ruling's proposer is not an owner, list only the approving owners in
+  remaining accounts: any other signer reaches the payout parser and the
+  ruling fails closed (`DisputePeerBundlesRetired` or `InvalidInput`).
   `initiate_dispute` refuses a dispute on a single-worker review task from
   either side (`DisputeRefusedOnReviewTask`): the buyer freezes and the worker
   disputes the freeze. The program reads only the Task there (Exclusive, one
@@ -434,6 +439,9 @@ Known limits, carried to revision 10 or left to clients:
   `AgentSuspended.authority`, `AgentUnsuspended.authority`,
   `ModerationAttestorAssigned.assigned_by` and `ModerationAttestorRevoked.revoked_by`
   now hold the wallet that sent the 2-of-3 transaction, which can be any wallet.
+  So do `Dispute.resolved_by` and `DisputeResolved.resolved_by` on a direct
+  ruling; their IDL docs still say "the wallet that decided" until the next
+  IDL change.
   The approving owners appear in no event: indexers and the audit trail read
   them from the transaction's signers.
 - **Appended optional accounts need the placeholder.** On the revision 9 wire a

@@ -312,11 +312,12 @@ pub fn handler<'info>(
             w_claim.worker == worker.key(),
             CoordinationError::UnauthorizedAgent
         );
-        // Review R3-2: once a dispute was filed on the task (it kept every worker
-        // from delivering), a creator may not file again against a claim that
-        // has lapsed since: this dispute's expiry would read the lapse as a
-        // no-show. The exact complement of `expire_dispute`'s no-show test, so a
-        // first filing against a claim that lapsed on its own (D16) still works.
+        // Review R3-2: once any dispute was filed on the task, by either side (it
+        // kept every worker from delivering), the creator may not file against
+        // any lapsed claim, whenever it lapsed: this dispute's expiry would read
+        // the lapse as a no-show. The exact complement of `expire_dispute`'s
+        // no-show test, so a first filing on a task with no earlier filing,
+        // against a claim that lapsed on its own (D16), still works.
         require!(
             !(task.dispute_filed() && w_claim.expires_at < clock.unix_timestamp),
             CoordinationError::ClaimExpired
