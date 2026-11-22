@@ -5,6 +5,99 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-11-21: revision 9 deployed to mainnet
+
+- **Mainnet upgrade executed.** Program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
+  was upgraded to the revision-9 binary through Squads v4 proposal (transaction
+  index) 15 on multisig `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`. Members
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and
+  `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx` approved it, and the 2-of-3
+  upgrade-authority vault (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`)
+  executed it with tx
+  `NaSwiMaL3Uab3SyMfCg6K9taDr9YiuKbP7qh5Uo7jy33nSRTVLrxEkNocaZrfMVyhkhWRKGVssqzZLD8xgEcBjv`.
+  Deployment slot 472177819 (2026-11-21 14:47:17 UTC). Upload buffer
+  `2QdWbkiRXVHc7YzYuZWRmeVr7hLjDS9BuMGYWoKsaa9f` was consumed by the upgrade. No
+  ProgramData extension was needed.
+- **Release identity:** commit `154d286659592c799bd111bf416fdba7ccc704b4` on
+  `main` (git tree `a5618409dd63be37dfde6dd6f0c161ca0d0b7149`), the last commit
+  of PR #351, rebase-merged 2026-11-21 15:51:24 UTC. The verification record,
+  OtterSec and `agenc promote` name it. The binary was frozen and signed against
+  `e62c82bf1a12b04ef37ef1f1bb6b5ce1058c03a3` (git tree
+  `90f6018b49a1dbae04d75866c6633fc5e22baec9`, `c8005e3` on `main`), pushed only
+  after the execute. Both commits have the program tree
+  `df10b3fc66c2707b58305311da6b060c928b594f`. Release binary 2,183,448 bytes,
+  SHA-256 `fa56b36b9175f7c1424c8119385e88ee116320d9ab08dc3f590ef662580b5e35`;
+  solana-verify normalized hash
+  `baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`. Built
+  reproducibly with solana-verify 0.5.2 and the Agave 4.1.0 image
+  `solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
+- **Verified on-chain:** the 2,303,608-byte ProgramData payload (SHA-256
+  `5d1ff9c667f9825194974c3f98f5766cc39628f98b290198df634eb78321db68`) is the
+  release binary followed only by zero padding, with 120,160 bytes of headroom.
+  ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` still holds
+  11.703207480 SOL, its rent floor, so no surplus spilled; the loader returned
+  the buffer's 11.092754041 SOL to the spill account
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`. `ProtocolConfig`
+  (`DeBPkxhzE6MJr66HhEgcHBv5rBFoHWysb6uyK4skufUs`) is 351 bytes with
+  `surface_revision = 9` (SURFACE_REVISION_ACCOUNTABLE_REVIEW) and
+  `disabled_task_type_mask = 0`.
+- **Ceremony order:** pause through the ProtocolConfig multisig, then, while
+  paused: moderation heartbeat renewed on the revision-8 wire (90-day window of
+  7,776,000 s, so it lapses around 2027-02-19 unless renewed); release rail
+  preflight passed; buffer upload and hand-off to the vault; Squads upgrade
+  (proposal 15); byte check; IDL publication from the committed IDL; stamp;
+  release commit published (PR #351); verified-build record (Squads proposal 16);
+  client train published; unpause. There was no dispute counter repair, and the
+  PMP security record was not updated.
+- **IDL and stamp:** IDL account `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1`
+  holds the 106-instruction release IDL, published from the committed
+  `artifacts/anchor/idl/agenc_coordination.json` (SHA-256
+  `89ed7a9219bffc71178c7111497162efddff4e2bfc6cb2ed43a162bc64bebd8a`) and
+  verified from chain. `stamp_release_surface` set `surface_revision = 9` in tx
+  `3vndWhKJ3LsXYXh8kaSoDSTPKrXGp4jdNi2QuH9ydbzSoMCiM7KVzJ5GJF5w9KAchRfRMHq1m4Z73oPybZKozfMb`
+  at slot 472180172 (2026-11-21 14:55:39 UTC).
+- **Wire changes now live:** production instructions go from 104 to 106
+  (`dispute_rejection`, `release_claim`). New accounts `CreatorStats`,
+  `DisputeBond` and the 56-byte `TaskMarker`; 18 existing instructions take
+  appended accounts, and `hire_from_listing` (v3) and `resolve_reject_frozen`
+  (new discriminator) change their data. A single-worker review task is turned
+  down only by a freeze the worker may dispute with a bond; every dispute filing
+  posts a bond; claims carry a deposit; creator and worker records are
+  required; `close_task` compacts finished tasks; moderation controls and agent
+  suspension need 2 of the 3 owners. Revision-8 clients fail closed against
+  revision 9. Details: `docs/MAINNET_MAINLINE.md` and `docs/PROGRAM_SURFACE.md`
+  (Revision 9 notes).
+- **Verified build:** the vault's verification PDA
+  `CVV2Lu42qvCm8PrkzQYaKeHYSvAUjvRc6jBTawtuPfWQ` was updated through one Squads
+  proposal, 16 (execute tx
+  `4wAuJX7YPodyo1vGDX9TXgthcmgKFTitWDorHRo8FAv3BhHydqn5z6JQ5ob5rLokjCNA3yp3ogPYx1vme5Rd1ecd`,
+  slot 472196661), with the `--base-image` pin from the start. OtterSec job
+  `e6e4c02a-d2f6-44f8-8cb1-6be55cb61c00` reports `is_verified: true` for commit
+  `154d286…`, with `on_chain_hash` and `executable_hash` both `baf5be55…`
+  (last verified 2026-11-21T15:56:30Z).
+- **Protocol reopened.** `update_launch_controls` unpaused the protocol at
+  2026-11-21 19:19:26 UTC (tx
+  `3xaMUtbCLifFjkhjnptS4UYMELLMGb4Uijn55YnCAUQ3YwkqQD9wAKcyZoauHNjTAqsoTLfcnQScwzS8AjJpPzm6`,
+  slot 472253687). It had been paused since 14:19:54 UTC (tx
+  `35eGLdGNSSdRpjHEtg7PofDkZ4jbpWpHmtJvTQZXuVx8t817gfjDVi4a9abuh3edHrwGgH3Pf8jVL5hUt646jhJL`).
+- **Client release train:** protocol 0.6.0, marketplace-sdk 0.14.0,
+  marketplace-react, marketplace-tools and marketplace-mcp 0.7.0, agenc-worker
+  0.4.0 and agenc-cli 0.5.0, published before the unpause through the
+  tag-driven release workflow (`.github/workflows/release.yml`) with npm trusted
+  publishing and provenance. Each npm integrity equals its pin in
+  `release-train.json`. marketplace-moderation stays 0.3.0, unchanged. The
+  unscoped `agenc-cli` alias 0.5.0 is not published yet; it waits for npm
+  trusted publishing on that package (npm still has 0.2.0). The revision-8
+  packages are superseded: SDK 0.13 treats revision 9 as an unknown surface and
+  fails closed.
+- **Explorer security metadata:** deferred. The canonical PMP `security` record
+  `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw` still holds the revision-8
+  `security.json` (SHA-256
+  `e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9`, commit
+  `f39b383…`). Updating it needs a new reviewed PMP update path, and
+  `scripts/explorer-metadata.mjs` is still bound to revision 8. See
+  `docs/EXPLORER_METADATA.md`.
+
 ## 2026-10-28: revision 8 deployed to mainnet
 
 - **Mainnet upgrade executed.** Program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
