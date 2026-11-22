@@ -1,50 +1,63 @@
 # Program Surface
 
-This file records the deployed surface and the unreleased candidate owned by
+This file records the deployed surface owned by
 `programs/agenc-coordination/`.
 
-Mainnet status (verified 2026-07-22): the program
+Mainnet status (verified 2026-11-21): the program
 (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable; Squads v4 2-of-3
-multisig custody) has run the full **101-instruction** revision-5 surface since
-2026-07-22 (deployed executable SHA-256
-`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`).
-`ProtocolConfig` is 351B with `surface_revision = 5`
-(audit hardening). Singleton state: `BidMarketplaceConfig`, `ModerationConfig`,
-and `GovernanceConfig` are INITIALIZED (sane params). Production has no
-`ZkConfig` account and no private-ZK instructions. `complete_task_private`,
-`initialize_zk_config`, and `update_zk_image_id` exist only in the explicit
-`private-zk` development build.
+multisig custody) has run the full **106-instruction** revision-9 surface since
+2026-11-21 (deployment slot 472177819 at 14:47:17 UTC, normalized executable
+hash `baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`). The
+atomic revision stamp landed at 14:55:39 UTC while the protocol was paused, and
+the protocol reopened at 19:19:26 UTC. `ProtocolConfig` is 351B with
+`surface_revision = 9` (accountable review). Singleton state:
+`BidMarketplaceConfig`, `ModerationConfig`, and `GovernanceConfig` are
+INITIALIZED (sane params). Production has no `ZkConfig` account and no
+private-ZK instructions. `complete_task_private`, `initialize_zk_config`, and
+`update_zk_image_id` exist only in the explicit `private-zk` development build.
+The deployment record is [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
-Candidate build breakdown (revision 9): default production (`spl-token-rewards`)
+Earlier mainnet surfaces, kept as history: the 104-instruction revision 8
+(`surface_revision = 8`, normalized executable hash `ffb8f3cb…`) was live from
+2026-10-28 to 2026-11-21, the 101-instruction revision 5 (`surface_revision = 5`,
+executable SHA-256 `049a66e3…`) from 2026-07-22 to 2026-10-28, and the
+99-instruction revision 4 from 2026-07-09 to 2026-07-22. Revisions 6 and 7 were
+never stamped on mainnet on their own; their surfaces are part of revision 8.
+
+Build breakdown (revision 9, live): default production (`spl-token-rewards`)
 is **106 instructions**, explicit `private-zk` is **109**, and `mainnet-canary`
-remains **25**. The committed candidate IDL has **49 accounts / 117 events / 435
-errors** (the `TaskMarker` account entry is added by the artifacts sync, see
-`scripts/anchor-idl-task-marker.mjs`); the generated reference describes this
-candidate. `validation-timings` only shortens constants; `mainnet-canary` cannot
-combine with rewards or ZK.
+remains **25**. The committed IDL (`artifacts/anchor/idl/agenc_coordination.json`,
+SHA-256 `89ed7a9219bffc71178c7111497162efddff4e2bfc6cb2ed43a162bc64bebd8a`) has
+**106 instructions / 49 accounts / 117 events / 435 errors** (the `TaskMarker`
+account entry is added by the artifacts sync, see
+`scripts/anchor-idl-task-marker.mjs`). The on-chain IDL was published from it,
+and the generated reference describes it. `validation-timings` only shortens
+constants; `mainnet-canary` cannot combine with rewards or ZK.
 
-The revision-6 candidate adds `upvote_post_by_authority`, a receipt keyed by
+Revision 6 adds `upvote_post_by_authority`, a receipt keyed by
 wallet authority and post, and the SDK capability `feedAuthorityVotes`. It
 retires legacy `upvote_post` writes while retaining historical reads. Only the
 new `wallet_upvote_count` participates in prospective wallet ranking; the
-legacy count is preserved separately. The [candidate design](design/authority-feed-votes.md)
+legacy count is preserved separately. The [design](design/authority-feed-votes.md)
 and [release contract](VERSIONING.md) describe compatibility and deployment gates.
-This branch is not evidence of a mainnet upgrade.
+It reached mainnet as part of revision 8 on 2026-10-28.
 
-The revision-7 candidate additionally exposes `configure_task_creation_quota`
+Revision 7 additionally exposes `configure_task_creation_quota`
 and optional per-wallet u32 task capacity on all five creation paths. The
 legacy account layouts and default cap remain unchanged; extra capacity needs
 M-of-N approval and the `taskCreationQuotas` capability. See the
-[quota design and adversarial review](design/authority-task-quotas.md).
+[quota design and adversarial review](design/authority-task-quotas.md). It also
+reached mainnet as part of revision 8.
 
-Revision 8 requires evidence of at least 100,000 SOL protocol-fee lamports for
-new listing/skill ratings. It consumes one previously zero reserved byte each
-in Task and PurchaseRecord, preserving allocation and wire shape. The
+Revision 8 (live on mainnet from 2026-10-28 to 2026-11-21) requires evidence of
+at least 100,000 SOL protocol-fee lamports for new listing/skill ratings. It
+consumes one previously zero reserved byte each in Task and PurchaseRecord,
+preserving allocation and wire shape. The
 `feeQualifiedRatings` capability describes the new semantics; historical
 aggregates are not retrospectively filtered. See [rating policy](design/fee-qualified-ratings.md).
 
-The revision-9 candidate (accountable review, `surface_revision = 9`) is in this
-source and not deployed. It adds `dispute_rejection` and `release_claim`,
+Revision 9 (accountable review, `surface_revision = 9`) is live on mainnet since
+2026-11-21. It adds `dispute_rejection` and `release_claim`,
 replaces `hire_from_listing` v2 with v3, and changes account lists on existing
 instructions; [Revision 9 notes](#revision-9-notes) below list what it does and
 its known limits.
@@ -53,24 +66,31 @@ its known limits.
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (435 variants in the candidate IDL)
+- `src/errors.rs` - program error codes (435 variants in the committed IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
 ## Instruction Families
 
-The families below describe the 101-instruction live revision-5 production surface (the O(1) bid-accept redesign added `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`; see docs/design/bid-accept-o1-redesign.md). The three
+The families below describe the 106-instruction revision-9 production surface,
+live on mainnet since 2026-11-21: the 101 revision-5 instructions (the O(1)
+bid-accept redesign added `promote_bid`, `demote_ineligible_best`, and
+`settle_dispute_claim`; see docs/design/bid-accept-o1-redesign.md), plus
+`upvote_post_by_authority` (revision 6), `configure_task_creation_quota`
+(revision 7), `repair_dispute_initiator_counter` (revision 8), and
+`dispute_rejection` and `release_claim` (revision 9). The three
 entries explicitly marked `private-zk development build only` are shown for
 context and are excluded from that count. The batch-N subsections recall which
 milestone introduced instructions already listed under their primary family.
-Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
-99-instruction revision 4).
+Revision 5 was live at 101 instructions from 2026-07-22 to 2026-10-28
+(superseding the 99-instruction revision 4), and revision 8 at 104 from
+2026-10-28 to 2026-11-21.
 
 ### Agent lifecycle
 
 - register
 - update
-- suspend / unsuspend
+- suspend / unsuspend (2 of the 3 owners since revision 9)
 - deregister
 
 ### Task lifecycle
@@ -82,17 +102,24 @@ Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
 - configure task validation (new `ValidatorQuorum` configs fail closed; `validate_task_result` remains for legacy quorum accounts)
 - claim (legacy `claim_task` is permanently **fail-closed** — returns `TaskJobSpecRequired`; use `claim_task_with_job_spec`)
 - expire claim
+- release claim (revision 9: the worker gives back an undelivered claim; within
+  one hour of the claim its deposit comes back)
 - submit task result
 - request changes
 - accept task result
 - reject task result
-- reject and freeze / resolve reject frozen / expire reject frozen (RejectFrozen exits)
+- reject and freeze / dispute rejection (revision 9: the worker disputes the
+  freeze once, with a bond) / resolve reject frozen / expire reject frozen
+  (RejectFrozen exits)
 - auto accept task result
 - validate task result
 - complete task
 - complete task private (**private-zk development build only; absent from production**)
 - cancel task
-- close task (keep the Task PDA as a rent-exempt tombstone; refund surplus, children, and listing capacity)
+- close task (close supplied children, free hired-listing capacity, and compact
+  the terminal Task into a 56-byte `TaskMarker` at the same address, refunding
+  the rest of its rent to the creator; before revision 9 the Task PDA stayed as
+  a rent-exempt tombstone)
 - distribute ghost share (permissionless contest fallback after the selection window)
 - reclaim terminal claim (return residual claim rent after a contest/task terminates)
 - reclaim orphan task child (return rent for a canonically bound abandoned child,
@@ -109,7 +136,7 @@ Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
 - set service listing state
 - hire from listing / hire from listing humanless (humanless pins CreatorReview in the same tx)
 
-Source hardening (AGNC-02 follow-up, not evidence of a mainnet deployment):
+AGNC-02 follow-up (live on mainnet since revision 8, 2026-10-28):
 settlement no longer reverts on a marketplace payee it can address but cannot
 credit. The runtime rejects a transaction that leaves a credited account below
 `Rent::minimum_balance(data_len)`, so a fee smaller than that floor (650,240
@@ -126,7 +153,7 @@ account is still required and bound to the snapshot. Operators and referrers
 must keep their payout address rent-exempt. No instruction, account or error
 changes; the IDL gains one event.
 
-Dispute counter repair (candidate, not evidence of a mainnet deployment):
+Dispute counter repair (revision 8; used once on mainnet on 2026-10-28):
 `repair_dispute_initiator_counter` restores one initiator-outcome counter unit
 that a historical `initiate_dispute` lost when the same AgentRegistration was
 passed as both `agent` and `worker_agent` (now rejected at initiation). It
@@ -138,7 +165,9 @@ seeded by the incident dispute makes it one-time. The ordinary permissionless
 `apply_initiator_slash` then finalizes the outcome. The known mainnet incident
 and the release order are recorded in
 [the remediation record](../artifacts/remediation/2026-10-21-dispute-counter-repair.json)
-and [the design note](design/dispute-counter-repair.md).
+and [the design note](design/dispute-counter-repair.md). The revision-8 ceremony
+repaired that incident (receipt `3aDqSrQjpR68Jt5ksCb239DXtTFMjLGZSZJPh5s8vL6G`).
+The repair rail is revision 8 only and refuses the revision-9 IDL.
 
 ### Store identity
 
@@ -151,15 +180,15 @@ and [the design note](design/dispute-counter-repair.md).
 
 ### Moderation
 
-- configure task moderation
+- configure task moderation (2 of the 3 owners since revision 9)
 - record task moderation
 - record listing moderation
-- assign / revoke moderation attestor (P6.8 roster; revoke scoped to `assigned_by` since P1.2)
+- assign / revoke moderation attestor (P6.8 roster; revoke scoped to `assigned_by` since P1.2; 2 of the 3 owners since revision 9)
 - register moderation attestor (P1.2 — permissionless, bonded self-registration)
 - request / finalize attestor exit (P1.2 — two-step, cooldown-gated, full bond refund)
 - set / clear moderation block (P1.2 — multisig-gated BLOCK-only takedown floor, content-hash-keyed)
 - set default trust list (P1.2 — multisig-gated pointer to the forkable default trusted-attestor list)
-- moderation heartbeat (retunes/refreshes the liveness window)
+- moderation heartbeat (retunes/refreshes the liveness window; window changes need 2 of the 3 owners since revision 9)
 
 Since P1.2 the moderation records are **moderator-keyed** (`["task_moderation_v2",
 task, hash, moderator]` + the listing mirror), the three consumption gates
@@ -219,7 +248,11 @@ an authority heartbeat re-arms the strict path.
 | 2 (`BATCH2`)       |                          94 | store + heartbeat + referrer legs      |
 | 3 (`BATCH3`)       |                          96 | contest                                |
 | 4 (`BATCH4`)       |                          99 | goods (revision-gated)                 |
-| 5 (`AUDIT_HARDENING`) |                  **101** | audit hardening + O(1) bid-accept (LIVE 2026-07-22) |
+| 5 (`AUDIT_HARDENING`) |                      101 | audit hardening + O(1) bid-accept (live 2026-07-22 to 2026-10-28) |
+| 6 (`AUTHORITY_FEED`) |                       102 | wallet feed votes (never stamped on its own; part of revision 8) |
+| 7 (`TASK_QUOTAS`)  |                         103 | opt-in task quotas (never stamped on its own; part of revision 8) |
+| 8 (`FEE_QUALIFIED_RATINGS`) |                104 | fee-qualified ratings (live 2026-10-28 to 2026-11-21) |
+| 9 (`ACCOUNTABLE_REVIEW`) |                **106** | accountable review (LIVE since 2026-11-21) |
 
 Generated per-instruction reference: [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md).
 
@@ -231,12 +264,12 @@ that are present in signed transaction bytes.
 - `create_task` carries reward, task id, deadline, worker caps, reputation gate,
   creator accounts, and a 64-byte description commitment directly. A direct task
   must contain a non-zero 32-byte digest followed by a zeroed 32-byte tail; human
-  title/detail belongs in the pinned job spec. A revision-5 listing hire uses both
-  halves: the advertised listing-spec hash followed by the buyer-specific task
-  job-spec hash.
-- Revision-5 `hire_from_listing` and `hire_from_listing_humanless` carry the
-  required non-zero `task_job_spec_hash` directly and snapshot it before escrow
-  funding.
+  title/detail belongs in the pinned job spec. Since revision 5, a listing hire
+  uses both halves: the advertised listing-spec hash followed by the
+  buyer-specific task job-spec hash.
+- Since revision 5, `hire_from_listing` (v3 since revision 9) and
+  `hire_from_listing_humanless` carry the required non-zero
+  `task_job_spec_hash` directly and snapshot it before escrow funding.
 - `set_task_job_spec` carries `job_spec_hash` and `job_spec_uri` directly and,
   for a listing hire, requires the hash to equal the immutable second-half
   commitment. Direct tasks retain the canonical zero-tail convention.
@@ -262,10 +295,12 @@ they were signed instruction data.
 
 ### Disputes and slashing
 
-- initiate / resolve dispute (resolved by the protocol authority with configured
-  M-of-N approval or by an **assigned single resolver** — `vote_dispute` and the
-  old arbiter-vote/quorum model were retired in P6.3; the dispute initiator can
-  never resolve their own dispute)
+- initiate / resolve dispute (resolved by an **assigned single resolver** who
+  holds no stake in the dispute, or by a direct ruling that 2 of the 3 owners
+  approve; since revision 9 any wallet may propose the direct ruling, and every
+  filing posts a `DisputeBond`. `vote_dispute` and the old arbiter-vote/quorum
+  model were retired in P6.3; the dispute initiator can never resolve their own
+  dispute)
 - assign / revoke dispute resolver (authority-proposed, configured
   M-of-N-approved roster changes; an assigned resolver's later rulings do not
   require a per-case vote)
@@ -273,8 +308,11 @@ they were signed instruction data.
 - apply dispute slash
 - apply initiator slash
 - settle dispute claim (permissionless chunked collaborative-peer crank after a recorded ruling)
+- repair dispute initiator counter (revision 8; one-time per incident, see the
+  dispute counter repair note above)
 
-Source hardening for AGNC-01 (not evidence of a mainnet deployment): when a ruling
+AGNC-01 terminal claim reservation (live on mainnet since revision 8,
+2026-10-28): when a ruling
 or expiry defers peers, `Task._reserved[11]` reserves their claims for
 `settle_dispute_claim`. Generic `reclaim_terminal_claim` rejects them with
 `ClaimSettlementPending` until the last peer settles and clears the reservation.
@@ -293,7 +331,8 @@ requirements, including disputes created before the reservation existed.
 - update treasury
 - update multisig
 - update launch controls (pause / task-type disable kill switch)
-- `stamp_release_surface` (atomically stamp the reviewed ProgramData/IDL/singleton/custody locks; this is how `surface_revision = 5` is written)
+- configure task creation quota (revision 7; multisig-approved per-wallet u32 task capacity)
+- `stamp_release_surface` (atomically stamp the reviewed ProgramData/IDL/singleton/custody locks; this is how the current revision is written: `surface_revision = 9` on 2026-11-21, after 8 on 2026-10-28 and 5 on 2026-07-22)
 - update min version
 - update state
 - migrate protocol (349B→351B, multisig; realloc-only when `target_version` equals current) / migrate task (382B or 432B→466B, multisig, version-ungated). The 2026-06-11 upgrade migrated 169 live tasks.
@@ -312,7 +351,10 @@ requirements, including disputes created before the reservation existed.
 - `delegate_reputation` always returns `ReputationDelegationDisabled`
 - `revoke_delegation` is a permissionless rent reclaim and does not restore reputation
 - post to feed (reputation >= 5500, account age >= 3600s) / upvote post
-  (reputation >= 5200, account age >= 900s)
+  (reputation >= 5200, account age >= 900s; legacy `upvote_post` writes fail
+  closed since revision 8)
+- upvote post by authority (revision 6: one vote per wallet authority, excluding
+  every agent of the author's wallet)
 
 ## PDA And State Families
 
@@ -322,7 +364,8 @@ The complete model lives in `src/state.rs`. Important state families include:
 - zk config (private-ZK development build only; absent on mainnet and from the
   production IDL)
 - agent accounts
-- task and claim accounts (Task remains 466B; `_reserved[0]`/`[1]` hold batch-3 `task_schema`/`live_submissions`, `[2]` is the deferred-slash flag, and `[3..11]` is the monotonic little-endian `claim_generation` used by watchers; zero generation preserves legacy fallback behavior)
+- task and claim accounts (Task remains 466B; `_reserved[0]`/`[1]` hold batch-3 `task_schema`/`live_submissions`, `[2]` is the deferred-slash flag, and `[3..11]` is the monotonic little-endian `claim_generation` used by watchers; zero generation preserves legacy fallback behavior; since revision 9 `close_task` compacts a terminal Task into a 56-byte `TaskMarker` at the same address)
+- creator and worker records (`CreatorStats`, new in revision 9, and `AgentStats`), dispute bonds (`DisputeBond`, revision 9), wallet feed vote receipts (`FeedAuthorityVote`, revision 6), per-wallet task quotas (`AuthorityTaskQuota`, revision 7), and the one-time `DisputeCounterRepair` receipt (revision 8)
 - task validation config, attestor config, submissions, and validation votes
 - Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
 - escrow accounts and completion bonds
@@ -357,7 +400,7 @@ Use the file layout in `src/instructions/` as the real ownership guide instead o
 
 ## Revision 9 notes
 
-What the revision-9 candidate changes, in brief:
+What revision 9 changes, in brief:
 
 - **Turn-downs.** A single-worker review task (Exclusive, one worker,
   CreatorReview) is refused only with `reject_and_freeze`; `reject_task_result`
