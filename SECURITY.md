@@ -42,10 +42,10 @@ active policy.
 Severity and reward priority follow the **money-path-first** ordering in
 `docs/BUG_BOUNTY.md` (draft rubric; paid bounty is not live).
 
-Mainnet runs revision 5 (101 instructions, `surface_revision = 5`), deployed
-2026-07-22 through the Squads v4 2-of-3 vault (deployed executable SHA-256
-`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`). The explicit
-104-instruction `private-zk` build is development-only and is rejected by the
+Mainnet runs revision 9 (106 instructions, `surface_revision = 9`), deployed
+2026-11-21 through the Squads v4 2-of-3 vault (normalized executable hash
+`baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`). The explicit
+109-instruction `private-zk` build is development-only and is rejected by the
 production deployment rail.
 
 ### In scope — TIER 1: program money paths (highest priority)
@@ -55,7 +55,7 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 
 - **Escrow custody and settlement** — `create_task`, `cancel_task`,
   `accept_task_result` / `auto_accept_task_result`, `reject_task_result`,
-  `complete_task`, and the dispute settlement paths. Deployed revision 5 excludes
+  `complete_task`, and the dispute settlement paths. Deployed revision 9 excludes
   the `complete_task_private` ABI entirely. Private-ZK is not a dormant live
   instruction waiting on `ZkConfig`.
   Any way to drain, double-spend, mis-route, or **permanently lock** escrowed
@@ -201,7 +201,7 @@ but this inventory is not a claim of formal verification:
 
 **Exit paths present in the 25-instruction canary build (allowlist —
 `scripts/check-canary-idl.mjs`) and live on the full mainnet surface
-(the live full surface is revision 5 at 101 instructions; the first
+(the live full surface is revision 9 at 106 instructions; the first
 84-instruction full build went live on 2026-06-11):**
 
 - **`cancel_task`** — creator refund. Refunds `escrow.amount - escrow.distributed`
@@ -294,14 +294,15 @@ write is [`docs/EXPLORER_METADATA.md`](docs/EXPLORER_METADATA.md).
 
 A reproducible / verifiable build (`solana-verify`, on-chain verification PDA
 via osec.io) proves the deployed bytecode matches the source **at a public tag**.
-**This repository is public.** Revision 8 is the deployed program (release
-commit `f39b383e416ec5bc511b0ffb781481a658d137d8`, normalized executable hash
-`ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`, deployed
-2026-10-28). The OtterSec badge
+**This repository is public.** Revision 9 is the deployed program (release
+commit `154d286659592c799bd111bf416fdba7ccc704b4`, normalized executable hash
+`baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`, deployed
+2026-11-21). The OtterSec badge
 ([verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK))
-reports `is_verified: true` for that commit (verified 2026-10-28). Revision 5
-(live 2026-07-22 to 2026-10-28) was never re-attested; until then the badge
-named revision 4 at commit `097ded1`.
+reports `is_verified: true` for that commit (verified 2026-11-21). Revision 8
+(live 2026-10-28 to 2026-11-21) was attested at commit `f39b383`. Revision 5
+(live 2026-07-22 to 2026-10-28) was never re-attested; until revision 8 the
+badge named revision 4 at commit `097ded1`.
 Every `protocol-v*` release also records a reproducible SHA-256 of the program
 built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
 with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.

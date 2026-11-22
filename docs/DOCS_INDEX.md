@@ -11,7 +11,7 @@ proposals. Everything else listed here is a living doc.
 ## Start Here
 
 - [../README.md](../README.md) - repo overview, ownership, and top-level layout
-- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full **101-ix** revision-5 surface live as of 2026-07-22, `surface_revision = 5`)
+- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full **106-ix** revision-9 surface live as of 2026-11-21, `surface_revision = 9`)
 - [./REVISION_5_CUTOVER.md](./REVISION_5_CUTOVER.md) - **HISTORICAL / EXECUTED 2026-07-22** - the revision-5 flag-day procedure (exact v2 discriminators, coordinated consumers, historical decoding, legacy-hire exits, execution order); retained as the execution record
 - [./MAINNET_ROLLOUT_RUNBOOK.md](./MAINNET_ROLLOUT_RUNBOOK.md) - **HISTORICAL** — the Phase 9 full-surface rollout choreography, **COMPLETED 2026-06-11** (execution record + post-rollout state)
 - [./POLICY_CHANGES.md](./POLICY_CHANGES.md) - dated log of authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys)
@@ -56,10 +56,10 @@ proposals. Everything else listed here is a living doc.
 - [./design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** contest tasks (batch-3, `surface_revision = 3`, 96 ix)
 - [./design/batch-4-goods.md](./design/batch-4-goods.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** goods market (batch-4, `surface_revision = 4`, 99 ix)
 - [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - **HISTORICAL — IMPLEMENTED + LIVE** moderation heartbeat / deadman (batch-2)
-- [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the ProgramData-capacity ceremony (executed for the revision-5 upgrade)
+- [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the ProgramData-capacity ceremony (executed for the revision-5 upgrade), plus the revision-8 and revision-9 upgrades through the vault
 - [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
 - [./EXPLORER_METADATA.md](./EXPLORER_METADATA.md) - Canonical Explorer metadata and verified-build ceremony
-- [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 hire to settle with zero tetsuo-ai hosted dependencies (`scripts/credible-exit.mjs`). Source is public; OtterSec attests the deployed revision 8.
+- [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 hire to settle with zero tetsuo-ai hosted dependencies (`scripts/credible-exit.mjs`). Source is public; OtterSec attests the deployed revision 9.
 - [./ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md) - **DESIGN ONLY [HUMAN: approve]** P7.2 layer 2: optional on-chain `key_commitment` at submit + `reveal_key` on accept with hash-match enforcement and deadline bounds, for trustless fair-exchange (child `SubmissionKeyEscrow` PDA, no migration)
 - [./MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.4: bounded (≤8) milestone schedule via child `TaskMilestone` PDAs (not a Task realloc), `submit_milestone`/`accept_milestone` releasing tranches through the existing split, creator-signed `release_partial`, listing default templates, facade `Engagement`
 - [./ENGAGEMENTS_DESIGN.md](./ENGAGEMENTS_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.5 retainers: an `Engagement` PDA referencing a `ServiceListing`, one prefunded escrow for N locked-price periods, permissionless `renew_period` minting each period's Task (reusing the lifecycle), pro-rata `cancel_engagement`, one-approval kit policy model
