@@ -54,15 +54,15 @@ The protocol covers that lifecycle plus advanced primitives:
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
   governance (multisig), and a social feed** round out the surface. The live
-  default production surface and committed IDL contain **104 instructions**;
-  the restricted canary remains 25 and explicit private-ZK development is 107.
+  default production surface and committed IDL contain **106 instructions**;
+  the restricted canary remains 25 and explicit private-ZK development is 109.
 
-> **Build surfaces.** `lib.rs` has a default production module (104 instructions in
-> live revision 8) and a conservative **mainnet-canary** module (the
+> **Build surfaces.** `lib.rs` has a default production module (106 instructions in
+> live revision 9) and a conservative **mainnet-canary** module (the
 > frozen 25-instruction build). Enabling `private-zk` adds three quarantined
-> development instructions to production, yielding 107; deployment rails reject
-> that feature for a production release. Mainnet runs the 104-instruction
-> revision-8 binary as of 2026-10-28.
+> development instructions to production, yielding 109; deployment rails reject
+> that feature for a production release. Mainnet runs the 106-instruction
+> revision-9 binary as of 2026-11-21.
 
 ## Mainnet source of truth
 
@@ -71,20 +71,22 @@ currently deployed AgenC mainnet program. The authoritative deployed commit and 
 record are maintained in:
 [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md).
 
-> **As of 2026-10-28 the full 104-instruction revision-8 surface is live on mainnet**
-> (`surface_revision = 8` / `SURFACE_REVISION_FEE_QUALIFIED_RATINGS`, release commit
-> `f39b383e416ec5bc511b0ffb781481a658d137d8`, normalized executable hash
-> `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`, all task
+> **As of 2026-11-21 the full 106-instruction revision-9 surface is live on mainnet**
+> (`surface_revision = 9` / `SURFACE_REVISION_ACCOUNTABLE_REVIEW`, release commit
+> `154d286659592c799bd111bf416fdba7ccc704b4`, normalized executable hash
+> `baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`, all task
 > types enabled, bid marketplace live, store + contest + goods live. Private-ZK
 > instructions are absent from the production ABI). Growth path: 25-ix canary → 84-ix full surface
 > (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4
 > → 101-ix revision 5 (2026-07-22, O(1) bid-accept redesign) → 104-ix revision 8
-> (2026-10-28: wallet feed votes, opt-in task quotas, fee-qualified ratings).
+> (2026-10-28: wallet feed votes, opt-in task quotas, fee-qualified ratings) →
+> 106-ix revision 9 (2026-11-21: disputable turn-downs, dispute bonds, claim
+> deposits, creator records).
 > Any `Task` / `ProtocolConfig` layout change remains a real, irreversible migration.
 
-- The deployed mainnet binary is revision 8 (release ELF SHA-256
-  `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`, deployment
-  slot 462468899, deployed 2026-10-28 via the Squads v4 2-of-3 vault). Earlier
+- The deployed mainnet binary is revision 9 (release ELF SHA-256
+  `fa56b36b9175f7c1424c8119385e88ee116320d9ab08dc3f590ef662580b5e35`, deployment
+  slot 472177819, deployed 2026-11-21 via the Squads v4 2-of-3 vault). Earlier
   working-tree candidate hashes in dated evidence snapshots below predate this
   deployed build.
 - See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md),
@@ -130,8 +132,8 @@ surface.
 
 | Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.6.0** | Committed 106-instruction revision 9 IDL + TS types + manifest, derived from `artifacts/anchor/*`. On npm, 0.5.2 is the 104-instruction revision-8 IDL. |
-| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.14.0** | Codama-generated `@solana/kit` client for the **106-instruction revision 9 surface** + ergonomic facade. On npm, 0.13.0 is the revision-8 client. |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | **0.6.0** | Committed 106-instruction revision 9 IDL + TS types + manifest, derived from `artifacts/anchor/*`. 0.5.2 is the superseded 104-instruction revision-8 IDL. |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | **0.14.0** | Codama-generated `@solana/kit` client for the **106-instruction revision 9 surface** + ergonomic facade. 0.13.0 is the superseded revision-8 client. |
 | `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | **0.7.0** | React hooks/components for embeddable marketplace UIs; requires the revision 9 SDK (`^0.14.0`) and buyer job-spec commitment. |
 | `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | **0.7.0** | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
 | `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | **0.7.0** | MCP server exposing marketplace tools. |
@@ -140,7 +142,7 @@ surface.
 | `agenc-cli`                         | `packages/agenc-cli-alias`        | **0.5.0** | Thin unscoped alias for the scoped CLI. |
 | `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | **0.4.0** | Worker claim/submit runtime loop. |
 
-These versions form the coordinated revision 9 train. They publish through the tag-driven release workflow after mainnet is stamped 9 ([docs/VERSIONING.md](docs/VERSIONING.md) §1.1.3). Until then npm serves the revision-8 train for the program deployed on 2026-10-28: protocol 0.5.2, SDK 0.13.0, React and tools 0.6.0, MCP 0.6.1, moderation and worker 0.3.0, and CLI 0.4.0 (the unscoped alias stayed at 0.2.0). Moderation stays 0.3.0 for revision 9.
+These versions form the coordinated revision 9 train, published to npm on 2026-11-21 through the tag-driven release workflow, before the unpause ([docs/VERSIONING.md](docs/VERSIONING.md) §1.1.3). Moderation stays 0.3.0 for revision 9. The unscoped `agenc-cli` alias 0.5.0 is not published yet; npm still serves 0.2.0. The revision-8 train (protocol 0.5.2, SDK 0.13.0, React and tools 0.6.0, MCP 0.6.1, worker 0.3.0, CLI 0.4.0) is superseded: SDK 0.13 treats revision 9 as an unknown surface and fails closed.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
@@ -152,7 +154,7 @@ also gated at the advertised Node 22.23.1 floor. Run `npm ci` and
 `npm ci --prefix tests-integration` for the independent deployment/preflight
 dependency tree.
 
-The revision-5 and revision-8 packages do not support Node 20: upstream marks that line EOL,
+The revision-5, revision-8 and revision-9 packages do not support Node 20: upstream marks that line EOL,
 and production deployments should use an Active or Maintenance LTS release.
 
 ```bash
@@ -196,9 +198,9 @@ implemented and gated ([enterprise remediation record](docs/audit/ENTERPRISE_REM
 criteria); accepted trade-offs are recorded in
 [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md).
 
-That 2026-07-19 snapshot is historical. The live revision-8 binary (deployed
-2026-10-28) is 2,075,896 bytes, SHA-256
-`0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`. Dated later
+That 2026-07-19 snapshot is historical. The live revision-9 binary (deployed
+2026-11-21) is 2,183,448 bytes, SHA-256
+`fa56b36b9175f7c1424c8119385e88ee116320d9ab08dc3f590ef662580b5e35`. Dated later
 gate tables, including the 2026-07-21 candidate run, live in
 [docs/VALIDATION.md](docs/VALIDATION.md). Re-run those commands before claiming
 a current local total. The `5112216b…` / 2,285,640-byte identity was a
@@ -266,8 +268,8 @@ artifacts (PLAN.md Phase 8):
 - **Verifiable builds** — the deployed program is built reproducibly from this
   public repo. The OtterSec badge
   ([verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK))
-  reports `is_verified: true` for the deployed revision 8 at commit `f39b383`
-  (normalized executable hash `ffb8f3cb…`, verified 2026-10-28). Every
+  reports `is_verified: true` for the deployed revision 9 at commit `154d286`
+  (normalized executable hash `baf5be55…`, verified 2026-11-21). Every
   `protocol-v*` release requires a successful
   reusable verifiable build and records reproducible SHA-256 hashes of the program
   built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
@@ -287,7 +289,7 @@ artifacts (PLAN.md Phase 8):
   tetsuo-ai hosted dependencies** (own RPC, gPA reads, own moderation key,
   self-chosen artifact storage, on-chain settlement). The runtime independence
   is proven, and the once-deferred pillars have shipped: public source,
-  the OtterSec-attested revision 8, Squads
+  the OtterSec-attested revision 9, Squads
   multisig custody, permissionless moderation (bonded self-registration on
   the attestor roster). See
   [docs/CREDIBLE_EXIT.md](docs/CREDIBLE_EXIT.md) (run it:
@@ -316,7 +318,7 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)                                         | Accepted design decisions (do not re-file) with rationale                                       |
 | [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md)                                   | SDK build/automation plan + status                                                              |
 | [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md)                                         | Deployed source-of-truth + branch policy                                                        |
-| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge attests the deployed revision 8) |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                                       | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge attests the deployed revision 9) |
 | [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md)                                       | How `anchor build` output becomes published artifacts                                           |
 | [docs/VALIDATION.md](docs/VALIDATION.md)                                                     | Local toolchain + CI-equivalent commands                                                        |
 | [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                                     | Reviewed-completion validation model                                                            |

@@ -133,7 +133,7 @@ Out of scope (no reward):
   in `docs/audit/` or in published audit findings.
 - Claims that "the repo is private / publicly verifiable builds are
   unavailable". The repository is public. OtterSec attests the deployed
-  revision 8 at commit `f39b383` (`SECURITY.md` §6,
+  revision 9 at commit `154d286` (`SECURITY.md` §6,
   `docs/VERIFIABLE_BUILDS.md`). Report real verification failures against
   the live badge or a tagged release instead.
 
