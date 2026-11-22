@@ -4,22 +4,25 @@ How to prove that the on-chain `agenc-coordination` program deployed at
 `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` was built from this source.
 
 > **Operator (Explorer security.txt):** merging docs is not enough. Explorers
-> read two on-chain records the Squads vault must sign. Both exist for
-> revision 8: the verification PDA is updated and attested (see below), and
-> Squads proposal 14 created the canonical PMP security record
-> `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw` from the reviewed revision-8
-> `security.json`. See [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md).
+> read two on-chain records the Squads vault must sign. For revision 9 the
+> verification PDA is updated and attested (Squads proposal 16, see below). The
+> canonical PMP security record
+> `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw` still holds the reviewed
+> revision-8 `security.json` from Squads proposal 14; its revision-9 update is
+> deferred. See [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md).
 
-> This is PLAN.md **P8.3 (SHIPPED)**. The repo is **public**. Revision 8 is the
+> This is PLAN.md **P8.3 (SHIPPED)**. The repo is **public**. Revision 9 is the
 > currently deployed program (release commit
-> `f39b383e416ec5bc511b0ffb781481a658d137d8`, normalized executable hash
-> `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`, deployed
-> 2026-10-28). The OtterSec verified-build registration
+> `154d286659592c799bd111bf416fdba7ccc704b4`, program tree
+> `df10b3fc66c2707b58305311da6b060c928b594f`, normalized executable hash
+> `baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`, deployed
+> 2026-11-21). The OtterSec verified-build registration
 > (<https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>)
 > reports `is_verified: true` for that commit (last verified
-> 2026-10-28T12:27:32Z). Revision 5 (live 2026-07-22 to 2026-10-28) was never
-> re-attested; on 2026-10-19 the registry still named the revision-4 commit
-> (`097ded1`) with `is_verified: false`. The program custodies escrow,
+> 2026-11-21T15:56:30Z). Revision 8 (live 2026-10-28 to 2026-11-21) was
+> attested at commit `f39b383` on 2026-10-28. Revision 5 (live 2026-07-22 to
+> 2026-10-28) was never re-attested; on 2026-10-19 the registry still named the
+> revision-4 commit (`097ded1`) with `is_verified: false`. The program custodies escrow,
 > completion bonds, and agent stakes; the reproducible, hash-pinned build is the
 > supply-chain control on the money path. **Keeping the badge across upgrades is
 > a deploy invariant** — see
@@ -36,11 +39,11 @@ How to prove that the on-chain `agenc-coordination` program deployed at
 | Every release **records a hash** of the built program (`verifiable-build-hashes.txt`) | ✅ Works (`.github/workflows/verify.yml`) | — |
 | Anyone can confirm the **deployed** program hash matches the **locally built** hash (`get-program-hash` vs `get-executable-hash`) | ✅ Works | — |
 | A **third party** can independently verify the deployed program against the source (`solana-verify verify-from-repo`) | ✅ **Works — repo public** | executed 2026-07-03 |
-| An **on-chain verification PDA** + OtterSec (osec.io) public registration | ✅ **Works, revision 8 attested** | PDA `CVV2Lu42…` written by the Squads upgrade-authority vault (proposals 12 and 13, runbook §2.5); OtterSec job `237eab0c` verified commit `f39b383` on 2026-10-28; revision 5 was never re-attested |
+| An **on-chain verification PDA** + OtterSec (osec.io) public registration | ✅ **Works, revision 9 attested** | PDA `CVV2Lu42…` written by the Squads upgrade-authority vault (proposal 16, runbook §2.5); OtterSec job `e6e4c02a` verified commit `154d286` on 2026-11-21; revision 8 was attested by job `237eab0c` (proposals 12 and 13); revision 5 was never re-attested |
 | npm **publish provenance** (`--provenance`) | ✅ Enabled | tag-triggered publishes use GitHub OIDC |
 
-The honest one-line summary: the deployed program is revision 8 (commit
-`f39b383`, normalized hash `ffb8f3cb…`, deployed 2026-10-28), and the OtterSec
+The honest one-line summary: the deployed program is revision 9 (commit
+`154d286`, normalized hash `baf5be55…`, deployed 2026-11-21), and the OtterSec
 registry reports `is_verified: true` for that commit after reproducing it
 independently.
 
@@ -74,17 +77,20 @@ bytecode and different hashes**:
 
 | Surface | Cargo build args | What it is |
 |---------|------------------|------------|
-| **production / default** (**104** instructions) | *(default features)* | The live revision-8 production surface (deployed 2026-10-28 from commit `f39b383`, normalized hash `ffb8f3cb…`). |
-| **private-ZK development** (**107** instructions) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
+| **production / default** (**106** instructions) | *(default features)* | The live revision-9 production surface (deployed 2026-11-21 from commit `154d286`, normalized hash `baf5be55…`). |
+| **private-ZK development** (**109** instructions) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
+| **deployed revision 8** (**104** instructions at `f39b383`) | *(default features at the deployed commit)* | The **superseded** build that was live at `HJsZ…` from 2026-10-28 to 2026-11-21 (`surface_revision = 8`, slot **462468899**, normalized hash `ffb8f3cb…`). It reproduces with the same verifier 0.5.2 and Agave 4.1.0 image as revision 9. |
 | **deployed revision 5** (**101** instructions at `08a3c87`) | *(default features at the deployed commit)* | The **superseded** build that was live at `HJsZ…` from 2026-07-22 to 2026-10-28 (`surface_revision = 5`, slot **434489452**, executable SHA-256 `049a66…`). It reproduces with its historical Agave 3.0.13 image; see [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md). |
 | **deployed revision 4** (**99** instructions at `097ded1`) | *(default features at the deployed commit)* | The **superseded** prior build that was live at `HJsZ…` (`surface_revision = 4`, slot **431918664**, 2026-07-09 → 2026-07-22). |
 | **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative restricted BUILD. Still in source, but **no longer live on mainnet** (it was the surface live before 2026-06-11). |
 
 > **Critical:** the mainnet program runs a **full / default** surface, but
 > feature names do not identify a source revision. To match the *currently
-> deployed* program (revision 8, normalized hash `ffb8f3cb…`) you MUST build
-> default features at release commit `f39b383` with the pinned verifier and
-> image below; the revision-5 commit `08a3c87` and the revision-4 commit
+> deployed* program (revision 9, normalized hash `baf5be55…`) you MUST build
+> default features at release commit `154d286` (or any commit whose
+> `programs/agenc-coordination` tree is `df10b3fc…`, such as the frozen
+> `e62c82b`) with the pinned verifier and image below; the revision-8 commit
+> `f39b383`, the revision-5 commit `08a3c87` and the revision-4 commit
 > `097ded1` reproduce superseded bytecode. Building `private-zk`
 > or `mainnet-canary` also produces different bytecode and a non-matching hash;
 > `private-zk` must never be substituted for a production artifact.
@@ -139,9 +145,9 @@ before execution. Verifier 0.5.2 selects the official build image by digest
 `sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
 See the [tagged verifier release](https://github.com/solana-foundation/solana-verifiable-build/releases/tag/v0.5.2)
 and its [image map](https://github.com/solana-foundation/solana-verifiable-build/blob/v0.5.2/src/image_config.rs).
-These pins built the deployed revision-8 binary. Historical deployed hashes
-still require their original toolchain, and each new deployment needs a new
-independent attestation.
+These pins built the deployed revision-9 binary, as they did for revision 8.
+Historical deployed hashes still require their original toolchain, and each new
+deployment needs a new independent attestation.
 
 The build root is `programs/agenc-coordination/` (this crate is a single-member
 Cargo workspace; there is no parent Cargo workspace). That path is the
@@ -159,7 +165,7 @@ Requires Docker and Rust. Targets **solana-verify v0.5.x**
 cargo install solana-verify --version 0.5.2 --locked
 
 # 2. Build the production/default surface deterministically from the program
-#    crate directory. At release commit f39b383 this is the live revision-8
+#    crate directory. At release commit 154d286 this is the live revision-9
 #    surface.
 cd programs/agenc-coordination
 solana-verify build --library-name agenc_coordination
@@ -180,10 +186,13 @@ solana-verify get-executable-hash target/deploy/agenc_coordination.so
 
 The hash from step 3 must equal the corresponding entry in the release's
 `verifiable-build-hashes.txt`. To reproduce the binary live today, build release
-commit `f39b383e416ec5bc511b0ffb781481a658d137d8`; step 3 must print
-`ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`. The
-revision-5 commit `08a3c87` and the revision-4 commit `097ded1` reproduce
-superseded bytecode.
+commit `154d286659592c799bd111bf416fdba7ccc704b4`; step 3 must print
+`baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`. The built
+`agenc_coordination.so` is 2,183,448 bytes with SHA-256
+`fa56b36b9175f7c1424c8119385e88ee116320d9ab08dc3f590ef662580b5e35`. The
+revision-8 commit `f39b383` (normalized hash `ffb8f3cb…`), the revision-5
+commit `08a3c87` and the revision-4 commit `097ded1` reproduce superseded
+bytecode.
 
 ---
 
@@ -201,23 +210,44 @@ solana-verify get-program-hash \
 
 If the deployed-program hash equals your locally reproduced **default-feature**
 hash, you have proven the live program matches that source. The live program is
-revision 8 as of 2026-10-28; OtterSec recorded its `on_chain_hash` as
-`ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`.
+revision 9 as of 2026-11-21; OtterSec recorded its `on_chain_hash` as
+`baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`.
 
 ---
 
-## Full third-party verification: EXECUTED for revision 8 (2026-10-28)
+## Full third-party verification: EXECUTED for revision 9 (2026-11-21)
 
 The repo is public, so all of the below works for anyone. It was last executed on
-2026-10-28 for revision 8: the verification PDA is written by the
+2026-11-21 for revision 9: the verification PDA is written by the
 Squads upgrade-authority vault and the OtterSec registry reports
-`is_verified: true`. The previous execution was 2026-07-10 for revision 4.
-Revision 5 (live 2026-07-22 to 2026-10-28) was never re-attested. One
+`is_verified: true`. The previous executions were 2026-10-28 for revision 8 and
+2026-07-10 for revision 4. Revision 5 (live 2026-07-22 to 2026-10-28) was never
+re-attested. One
 wrinkle vs. the vanilla flow: since the upgrade
 authority is a Squads vault, the PDA transaction is routed through a vault
 transaction rather than `--keypair` — the as-executed procedure is in
 [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.5 and MUST be
 repeated after every future deploy or the badge silently flips back.
+
+Revision-9 record (2026-11-21): the vault's verification PDA
+`CVV2Lu42qvCm8PrkzQYaKeHYSvAUjvRc6jBTawtuPfWQ` (uploader: the vault) was updated
+through one Squads proposal, 16, executed in tx
+`4wAuJX7YPodyo1vGDX9TXgthcmgKFTitWDorHRo8FAv3BhHydqn5z6JQ5ob5rLokjCNA3yp3ogPYx1vme5Rd1ecd`
+at slot 472196661 (15:54:48 UTC). The record stays 404 bytes and names verifier
+0.5.2, repository `https://github.com/tetsuo-ai/agenc-protocol`, commit
+`154d286659592c799bd111bf416fdba7ccc704b4`, deployed slot 472177819 and build
+arguments `--mount-path programs/agenc-coordination --library-name
+agenc_coordination --base-image
+solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
+The export carried the `--base-image` pin from the start, so one proposal was
+enough. The commit is the `main` commit of the rebase merge (PR #351); its
+`programs/agenc-coordination` tree equals that of the frozen release commit
+`e62c82b`. OtterSec job `e6e4c02a-d2f6-44f8-8cb1-6be55cb61c00` verified the
+record: <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>
+reports `is_verified: true`, commit `154d286…`, and `on_chain_hash` and
+`executable_hash` both
+`baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`
+(`last_verified_at` 2026-11-21T15:56:30Z).
 
 Revision-8 record (2026-10-28): the vault's verification PDA
 `CVV2Lu42qvCm8PrkzQYaKeHYSvAUjvRc6jBTawtuPfWQ` (uploader: the vault) was updated
@@ -253,12 +283,12 @@ solana-verify verify-from-repo \
 verify default features at the deployed commit — drop the `--no-default-features
 --features mainnet-canary` args that were required when mainnet ran the canary.
 Use the deployed commit for `--commit-hash`; the OtterSec registry entry for the
-program currently names `f39b383`. Add the `--base-image` digest from the
-revision-8 record above.)
+program currently names `154d286`. Add the `--base-image` digest from the
+revision-9 record above.)
 
 PLAN.md P8.3 done-criterion: **this command passes against the deployed
-program**: satisfied for revision 8 since 2026-10-28 (revision 4 on 2026-07-10;
-revision 5 was never re-attested).
+program**: satisfied for revision 9 since 2026-11-21 (revision 8 on 2026-10-28,
+revision 4 on 2026-07-10; revision 5 was never re-attested).
 
 ### 2. On-chain verification PDA
 
@@ -295,8 +325,9 @@ solana-verify remote get-job --job-id <JOB_ID>
 
 After this, `HJsZ…` shows a green "verified" badge in explorers that read the
 OtterSec registry — the third-party verification property in P8.3 is live.
-Last executed 2026-10-28 for revision 8 (job `237eab0c`); the previous run was
-2026-07-10 for revision 4. Note that because the upgrade
+Last executed 2026-11-21 for revision 9 (job `e6e4c02a`); the previous runs were
+2026-10-28 for revision 8 (job `237eab0c`) and 2026-07-10 for revision 4. Note
+that because the upgrade
 authority is the Squads vault, the export-pda-tx transaction needs the
 ComputeBudget instruction dropped and must be wrapped as a Squads vault
 transaction — the exact as-executed steps are in
@@ -339,12 +370,13 @@ leave a public protocol release that lacks its build evidence.
 
 The `verify-from-repo` / OtterSec submission step is still present in
 `verify.yml` **commented out**; the 2026-07-10 verification was executed
-manually (the Squads vault path in the runbook §2.5), and so was the 2026-10-28
-revision-8 verification. Activating the CI step is an open item below.
+manually (the Squads vault path in the runbook §2.5), and so were the 2026-10-28
+revision-8 and 2026-11-21 revision-9 verifications. Activating the CI step is an
+open item below.
 
 ---
 
-## Activation checklist (P0.6 shipped, status as of 2026-10-28)
+## Activation checklist (P0.6 shipped, status as of 2026-11-21)
 
 - [ ] Uncomment the `verify-from-repo` step in `.github/workflows/verify.yml`
       (and wire `MAINNET_RPC_URL`). *(Still commented out; the manual runbook
@@ -358,12 +390,13 @@ revision-8 verification. Activating the CI step is an open item below.
       2026-07-19 verified bypass-free tag rules for every release-train family and
       immutable releases enabled; the readiness gate continuously detects drift.
 - [x] Run `verify-from-repo` against mainnet for the live tag; create the PDA
-      (export-and-multisig-sign via the Squads vault). The revision-8 record
-      `CVV2Lu42…` was updated through Squads proposals 12 and 13 on
-      2026-10-28. The revision-4 record was verified 2026-07-10; revision 5 was
-      never re-attested.
+      (export-and-multisig-sign via the Squads vault). The record `CVV2Lu42…`
+      was updated for revision 9 through Squads proposal 16 on 2026-11-21, and
+      for revision 8 through proposals 12 and 13 on 2026-10-28. The revision-4
+      record was verified 2026-07-10; revision 5 was never re-attested.
 - [x] Submit the OtterSec remote job; confirm the verified badge
-      (`is_verified: true` for revision 8, job `237eab0c`, 2026-10-28).
+      (`is_verified: true` for revision 9, job `e6e4c02a`, 2026-11-21; for
+      revision 8, job `237eab0c`, 2026-10-28).
 - [x] Update this doc's TL;DR table to mark the third-party rows ✅.
 - [x] Reference the verified badge from the README security section.
 

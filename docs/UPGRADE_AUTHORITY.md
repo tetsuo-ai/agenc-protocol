@@ -18,13 +18,16 @@ HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` → `Authority:` = the vault above
 > **Residual (tracked):** all three member keys are files on one host — replace
 > one with a Ledger (Squads config tx, no re-transfer) for true distributed custody.
 >
-> **Re-verified 2026-10-28, after the revision-8 upgrade:** the upgrade authority
+> **Re-verified 2026-11-21, after the revision-9 upgrade:** the upgrade authority
 > is unchanged (vault index 0, `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`).
 > The multisig is still 2-of-3 with time lock 0 and members
 > `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx`,
 > `6CpyZBmBDymdp56dg1KsNnK1vYqWwz2vemdp9m7a6ufw` and
 > `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`. Its transaction index is now
-> 14. It has no rent collector, so proposal rent is not reclaimable. See §8.
+> 16. It has no rent collector, so proposal rent is not reclaimable. See §9.
+>
+> **Re-verified 2026-10-28, after the revision-8 upgrade:** the same authority,
+> threshold, time lock and members; transaction index 14 then. See §8.
 >
 > **⚠️ Earlier "2026-06-11 done" note was WRONG and is struck** — it conflated the
 > `ProtocolConfig` on-chain config multisig (`Hcecp…/BXDan…/4QcKB…`, 2-of-3, which
@@ -380,7 +383,8 @@ to executable SHA-256
 The authority migration is complete: `solana program show` reports the Squads
 vault as the mainnet upgrade authority and the custody docs match. The
 revision-5 capacity ceremony in §6 executed on 2026-07-22. The revision-8
-upgrade in §8 executed through the same vault on 2026-10-28.
+upgrade in §8 executed through the same vault on 2026-10-28, and the revision-9
+upgrade in §9 on 2026-11-21.
 
 ---
 
@@ -410,11 +414,55 @@ bytes of headroom, so the §6 extension rail was not used.
   [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md)), and proposal 14 created the
   canonical PMP security record (see
   [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md)), so the multisig transaction
-  index is now 14.
-- The authority, threshold, time lock and members are unchanged (see the
+  index was 14 after that ceremony.
+- The authority, threshold, time lock and members were unchanged (see the
   banner). The multisig has no rent collector, so proposal rent is not
   reclaimable.
 
 The protocol pause, dispute counter repair, IDL publication and revision stamp
 of the same ceremony are recorded in
 [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
+
+---
+
+## 9. Revision-9 upgrade through the vault (EXECUTED 2026-11-21)
+
+The revision-9 upgrade needed no ProgramData extension either. The
+2,183,448-byte release binary fits the unchanged 2,303,608-byte payload capacity
+with 120,160 bytes of headroom, so the §6 extension rail was not used.
+
+- Upload buffer `2QdWbkiRXVHc7YzYuZWRmeVr7hLjDS9BuMGYWoKsaa9f`, written by
+  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`, handed to the vault before the
+  proposal and consumed by the upgrade.
+- Squads v4 proposal (transaction index) 15 on multisig
+  `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`: created in tx
+  `29Ds1rcipZohUatRtE1JCRAsE2zFUCteNkRgStst1jnNJRFH8bATQD3frwXSjTXtWmQorPEuzMVXKagmNDJDDUxC`,
+  approved by `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` (tx
+  `3rGAuDpTZ5KA3zdYe4SiZ3FVBnToQz4etZJcQ3vAdbdmYa7Z6BCy2gHZLaz562m2DkyYFdLDszXNeDk83qbXV8aJ`)
+  and `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx` (tx
+  `Zu4vmduBokaH8u2wSCyCrBDMXnY7xC4tGpJ8jrBX7RgCsqTNmsg9oZWqYUjYRkUhwdRPjTJEumqMPhc78x6pRkb`),
+  and executed with signature
+  `NaSwiMaL3Uab3SyMfCg6K9taDr9YiuKbP7qh5Uo7jy33nSRTVLrxEkNocaZrfMVyhkhWRKGVssqzZLD8xgEcBjv`.
+  Its one inner instruction is the loader `Upgrade` (data `03000000`) with the
+  vault as the only signer. The stored 277-byte message has SHA-256
+  `e2db925de2532451c05e74cd98a7486b78888d77a0e02aadd8d92aa8f431958c`; it was
+  read back and compared before each vote and before the execute. The new
+  deployment slot is 472177819 (2026-11-21 14:47:17 UTC).
+- The ProgramData payload (SHA-256
+  `5d1ff9c667f9825194974c3f98f5766cc39628f98b290198df634eb78321db68`) is the
+  release binary (SHA-256
+  `fa56b36b9175f7c1424c8119385e88ee116320d9ab08dc3f590ef662580b5e35`) followed
+  only by zero padding.
+- ProgramData still holds 11.703207480 SOL, its rent floor, so no surplus
+  spilled. The loader returned the buffer's 11.092754041 SOL to the spill
+  account `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`.
+- Squads proposal 16 then updated the vault's verification PDA (see
+  [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md)), so the multisig transaction
+  index is now 16. No proposal touched the PMP security record; its revision-9
+  update is deferred (see [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md)).
+- The authority, threshold, time lock and members are unchanged (see the
+  banner). The multisig has no rent collector, so proposal rent is not
+  reclaimable.
+
+The protocol pause, IDL publication, revision stamp and unpause of the same
+ceremony are recorded in [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).

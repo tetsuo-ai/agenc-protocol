@@ -14,82 +14,196 @@ window or before the deploy is announced publicly.
 
 ## Current Mainnet Deployment
 
-> **As of 2026-10-28 the revision-8 surface is LIVE on mainnet**
-> (`surface_revision = 8` / `SURFACE_REVISION_FEE_QUALIFIED_RATINGS`). The
-> upgrade was Squads v4 proposal (transaction index) 11 on multisig
+> **As of 2026-11-21 the revision-9 surface is LIVE on mainnet**
+> (`surface_revision = 9` / `SURFACE_REVISION_ACCOUNTABLE_REVIEW`). The
+> upgrade was Squads v4 proposal (transaction index) 15 on multisig
 > `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`, approved by
 > `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and
 > `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx`, and executed through the
 > 2-of-3 upgrade-authority vault (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`,
 > execute tx
-> `48YNRN5P4mN8jPAMaoicza86JjYDE3DcyRtMmQp9MdEGo1i11DZ6ACrs1XEVPF3cdedMxcMr2Hg8hZeWN9YTCQVz`).
-> No ProgramData extension was needed. The 104-instruction release IDL was
+> `NaSwiMaL3Uab3SyMfCg6K9taDr9YiuKbP7qh5Uo7jy33nSRTVLrxEkNocaZrfMVyhkhWRKGVssqzZLD8xgEcBjv`).
+> No ProgramData extension was needed. The 106-instruction release IDL was
 > published and `stamp_release_surface` atomically stamped the revision while
-> the protocol was paused. `update_launch_controls` reopened it at 2026-10-28
-> 13:08:08 UTC (tx
-> `42P6rd4EFovhfjVPMjm8kpKjNd6oM2yergFAgK7wL8LfQSvJE64su1dUUbFBLrKaD29tksmLRzj3RWAfPC1mwcmm`,
-> slot 462487575).
+> the protocol was paused. `update_launch_controls` reopened it at 2026-11-21
+> 19:19:26 UTC (tx
+> `3xaMUtbCLifFjkhjnptS4UYMELLMGb4Uijn55YnCAUQ3YwkqQD9wAKcyZoauHNjTAqsoTLfcnQScwzS8AjJpPzm6`,
+> slot 472253687).
 >
-> Prior state (superseded): from 2026-07-22 the 101-instruction revision-5
-> surface (`surface_revision = 5` / AUDIT_HARDENING, slot 434489452, executable
-> SHA-256 `049a66e3…`) was live. Before it, from 2026-07-09, the 99-instruction
-> revision-4 surface (`surface_revision = 4` / BATCH4, slot 431918664) was live.
-> Growth path: 25-ix canary, 84-ix full surface (2026-06-11), 90-ix P1.2 open
-> roster (2026-07-03), additive batches 2 to 4, revision 5 (2026-07-22), then
-> revision 8 (this deploy).
+> Prior state (superseded): from 2026-10-28 the 104-instruction revision-8
+> surface (`surface_revision = 8` / FEE_QUALIFIED_RATINGS, slot 462468899,
+> normalized executable hash `ffb8f3cb…`) was live. Before it, from 2026-07-22,
+> the 101-instruction revision-5 surface (`surface_revision = 5` /
+> AUDIT_HARDENING, slot 434489452, executable SHA-256 `049a66e3…`) was live, and
+> from 2026-07-09 the 99-instruction revision-4 surface (`surface_revision = 4` /
+> BATCH4, slot 431918664). Growth path: 25-ix canary, 84-ix full surface
+> (2026-06-11), 90-ix P1.2 open roster (2026-07-03), additive batches 2 to 4,
+> revision 5 (2026-07-22), revision 8 (2026-10-28), then revision 9 (this
+> deploy).
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
 - `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
-- Live surface: 104-instruction revision-8 surface (default features),
-  `surface_revision = 8` (FEE_QUALIFIED_RATINGS)
-- Release commit: `f39b383e416ec5bc511b0ffb781481a658d137d8` on `main` (PR #308,
-  rebase-merged 2026-10-21 19:23 UTC), git tree
-  `18f60dac82f2a4ae8856e9ba55ba2d06d5d16884`.
-- Release binary: 2,075,896 bytes, SHA-256
-  `0b450dab8096b10c79bf5b8d8cf4a4a837cd8df69ea4cfaa09d68d9d2f16a44e`. The
+- Live surface: 106-instruction revision-9 surface (default features),
+  `surface_revision = 9` (ACCOUNTABLE_REVIEW)
+- Release commit: `154d286659592c799bd111bf416fdba7ccc704b4` on `main` (git
+  tree `a5618409dd63be37dfde6dd6f0c161ca0d0b7149`). The verification record,
+  OtterSec and `agenc promote` name this commit. It is the last commit of PR
+  #351, which rebase-merged `release/rev9` into `main` on 2026-11-21 at
+  15:51:24 UTC. The binary was frozen and signed against
+  `e62c82bf1a12b04ef37ef1f1bb6b5ce1058c03a3` (git tree
+  `90f6018b49a1dbae04d75866c6633fc5e22baec9`), which was pushed to
+  `release/rev9` only after the execute. On `main` that commit is `c8005e3`,
+  with the same tree; the three CI fixes after it, up to `154d286`, change
+  nothing under `programs/`. Both commits have the program tree
+  `df10b3fc66c2707b58305311da6b060c928b594f` (`programs/agenc-coordination`).
+- Release binary: 2,183,448 bytes, SHA-256
+  `fa56b36b9175f7c1424c8119385e88ee116320d9ab08dc3f590ef662580b5e35`. The
   solana-verify normalized hash (trailing zeros removed) is
-  `ffb8f3cb4c7abd3ee92e9e2839cf0f6cf0bc6129addf00fb529c8ec4d3995b38`. Built
+  `baf5be55c86f0a5c79eb52229a3412121a1a3c5f2a5699f4b24d75c7e8dc3608`. Built
   reproducibly with solana-verify 0.5.2 and the Agave 4.1.0 image
-  `solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`.
+  `solanafoundation/solana-verifiable-build@sha256:6468b89ae21d87b8eb002f894ac3f3442dbd8bcf5ea93414051e96e00d03b5ab`,
+  on a macOS and a Linux machine with the same bytes. OtterSec reproduced it
+  independently.
 - ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`: capacity unchanged
   at 2,303,653 account-data bytes. The 2,303,608-byte payload has SHA-256
-  `ed0e0f11239671b301813a06071c07791453d54f3c0969359a986a481cc505f9`; it is the
-  release binary followed only by zero padding (227,712 bytes of headroom).
-  ProgramData holds 11.703207480 SOL, its rent floor. The loader returned the
-  4.331108280 SOL surplus to the spill account
-  `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`.
-- Deployment slot: 462468899 (block time 2026-10-28 12:01:55 UTC). The upload
-  buffer `BvLYRwrim58xJqfug7oSAycdwBzYUdneswWbS1jnZ4QF` was consumed by the
+  `5d1ff9c667f9825194974c3f98f5766cc39628f98b290198df634eb78321db68`; it is the
+  release binary followed only by zero padding (120,160 bytes of headroom).
+  ProgramData still holds 11.703207480 SOL, its rent floor, so nothing spilled
+  from it. The loader closed the upload buffer and returned its 11.092754041 SOL
+  to the spill account `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`.
+- Deployment slot: 472177819 (block time 2026-11-21 14:47:17 UTC). The upload
+  buffer `2QdWbkiRXVHc7YzYuZWRmeVr7hLjDS9BuMGYWoKsaa9f` was consumed by the
   upgrade.
 - On-chain IDL: `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1` holds the
-  104-instruction release IDL. The committed
-  `artifacts/anchor/idl/agenc_coordination.json` has SHA-256
-  `cab00d4029420c91028914cee46bc78c5b4c026b55d0e4561af9531cc8cdec59`.
-- Revision stamp: `stamp_release_surface` set `surface_revision = 8` in tx
-  `5ndbVifEMn7nXWTZXxYSkDR21PrTiGdxuJSQ27ounN99TBWSRoG9Pge7tasZApmLwk6vVQFPiMaVnPjRP68xDMQM`
-  at slot 462470117 (2026-10-28 12:06:15 UTC).
+  106-instruction release IDL. The rail published it from the committed
+  `artifacts/anchor/idl/agenc_coordination.json` (SHA-256
+  `89ed7a9219bffc71178c7111497162efddff4e2bfc6cb2ed43a162bc64bebd8a`, with the
+  `TaskMarker` account) and verified it from chain (canonical digest
+  `fd49d117121f903d398152bd58aaa907055e04f91c2dafda0c4fcfe59779ce8f`).
+- Revision stamp: `stamp_release_surface` set `surface_revision = 9` in tx
+  `3vndWhKJ3LsXYXh8kaSoDSTPKrXGp4jdNi2QuH9ydbzSoMCiM7KVzJ5GJF5w9KAchRfRMHq1m4Z73oPybZKozfMb`
+  at slot 472180172 (2026-11-21 14:55:39 UTC).
 - `ProtocolConfig` `DeBPkxhzE6MJr66HhEgcHBv5rBFoHWysb6uyK4skufUs`: 351 bytes
-  (layout unchanged), `surface_revision = 8`, `disabled_task_type_mask = 0`.
-  `protocol_paused` was true from 11:31:18 UTC until the 13:08:08 UTC unpause.
-- Verified build: OtterSec reports `is_verified: true` for commit `f39b383…`,
-  with `on_chain_hash` and `executable_hash` both `ffb8f3cb…` (last verified
-  2026-10-28T12:27:32Z). See [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md).
+  (layout unchanged), `surface_revision = 9`, `disabled_task_type_mask = 0`.
+  `protocol_paused` was true from 14:19:54 UTC until the 19:19:26 UTC unpause.
+- Verified build: OtterSec reports `is_verified: true` for commit `154d286…`,
+  with `on_chain_hash` and `executable_hash` both `baf5be55…` (last verified
+  2026-11-21T15:56:30Z). See [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md).
 - Upgrade authority: unchanged, the Squads vault above. See
   [`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md).
-- Explorer security metadata: Squads proposal 14 created the canonical PMP
-  `security` record `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw` (execute tx
-  `b4sj2V78ddEfN1V6EM9K3krs3LfgTkgSNZxiPT93hbZjZiXgmiKWKa14e9hJgbnZTZBum4rB1PeAkHymVdcrpEZ`,
-  slot 462483846). Its content is the 841-byte
-  `programs/agenc-coordination/security.json` (SHA-256
-  `e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9`).
-  See [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md).
+- Explorer security metadata: not updated for revision 9. The canonical PMP
+  `security` record `HBXBGVW5tv59KdM5wLC7ZtTanHts3RP33WZvmj9BW8uw` still holds
+  the 841-byte revision-8 `programs/agenc-coordination/security.json` (SHA-256
+  `e729a01fe966ded0c7e632d80756a5de8f720f70c74f7e902e75b4f2e7f987e9`), which
+  names commit `f39b383…`. The revision-9 update is deferred. See
+  [`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md).
 
-## Revision 8 (deployed 2026-10-28)
+## Revision 9 (deployed 2026-11-21)
 
-The production/default `#[program]` surface contains 104 Rust entrypoints. That
+The production/default `#[program]` surface contains 106 Rust entrypoints. That
 number is derived from the cfg-gated source at the release commit, not this
 document:
+
+- production defaults: 106 (`spl-token-rewards`; `private-zk` off);
+- explicit development `private-zk`: 109;
+- restricted `mainnet-canary`: 25;
+- raw `pub fn` declarations across the mutually exclusive full/canary modules:
+  134, representing 109 unique names because the canary's 25 names are repeated.
+
+`scripts/mainnet-upgrade.mjs` enforces the exact 106/109/25 sets and refuses
+stale artifacts. The three private-proof entrypoints stay quarantined.
+
+Revision 9 (accountable review) changes the wire of existing instructions, so
+revision-8 clients cannot speak it and revision-9 clients refuse a revision-8
+program. The wire changes now live are:
+
+- two new instructions: `dispute_rejection` and `release_claim`;
+- three new account types: `CreatorStats`, `DisputeBond` and the 56-byte
+  `TaskMarker`;
+- 18 existing instructions take appended accounts. Two of them also change
+  their data: `hire_from_listing` v3 and a new `resolve_reject_frozen`
+  discriminator;
+- turn-downs: a single-worker review task is turned down only with
+  `reject_and_freeze`, which opens a fixed 72-hour dispute window. The worker
+  may dispute once with `dispute_rejection`, posting a bond of max(10% of the
+  price, 0.01 SOL), and 2 of the 3 owners then have 72 hours to rule;
+- task disputes: every filing posts a `DisputeBond`. A ruling comes from a
+  seated resolver with no stake in it or from 2 of the 3 owners;
+- records: each creator wallet has a `CreatorStats` record and each worker an
+  `AgentStats` record;
+- claim deposits: a non-contest, non-bid claim posts max(10% of the worker
+  share, 0.005 SOL). It comes back at the first delivery, or with
+  `release_claim` within one hour of the claim;
+- agent-door hires through `hire_from_listing` v3 get creator review;
+- `close_task` compacts a finished task into a `TaskMarker` at the same address
+  and refunds the rest of its rent to the creator;
+- turning moderation on or off, choosing the moderator, suspending an agent and
+  changing the moderation attestor roster need 2 of the 3 owners. A creator
+  cannot moderate its own task, and a provider cannot moderate its own listing;
+- new tasks can no longer use ExternalAttestation validation, or CreatorReview
+  on token-reward and bid tasks.
+
+The details and the known limits are in
+[Revision 9 notes](./PROGRAM_SURFACE.md#revision-9-notes). Revision 9 has no
+dispute counter repair: the repair rail is revision 8 only and refuses the
+revision-9 IDL ([design](./design/dispute-counter-repair.md)).
+
+### Revision-9 ceremony (2026-11-21)
+
+Every step after the pause ran while the protocol was paused. Times are UTC
+block times.
+
+1. Pause through the ProtocolConfig multisig (14:19:54, tx
+   `35eGLdGNSSdRpjHEtg7PofDkZ4jbpWpHmtJvTQZXuVx8t817gfjDVi4a9abuh3edHrwGgH3Pf8jVL5hUt646jhJL`).
+2. Renew the moderation heartbeat on the revision-8 wire (14:20:57, tx
+   `M98DrmpwmjXx7CfjtFowqZgsTR3u7shSaByydpCNdT93GZcfg9Ai5KKeisn3Du3FwkN8CEeAZm2ht6bB7dLhdsm`).
+   It is valid for 90 days (window 7,776,000 s), so it lapses around 2027-02-19
+   unless renewed.
+3. Run the release rail preflight. It passed with zero cutover blockers.
+4. Upload buffer `2QdWbkiRXVHc7YzYuZWRmeVr7hLjDS9BuMGYWoKsaa9f` and hand its
+   authority to the vault. RPC rate limits stopped the upload three times; each
+   rerun resumed the same buffer, which then held exactly the release binary.
+5. Create Squads proposal 15 (14:43:52) and approve it with
+   `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` and
+   `3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx`.
+6. Execute the Squads upgrade (proposal 15, 14:47:17).
+7. Check the bytes: the ProgramData payload is the release binary followed only
+   by zero padding.
+8. Publish the release IDL to `GGj5xvRY6vuvWt3NkNhdtntDipBnAXEDaVVUcyqL7mJ1`
+   from the committed IDL and verify it from chain.
+9. Stamp revision 9 with `stamp_release_surface` (14:55:39).
+10. Publish the release commit: push `e62c82b` to `release/rev9`, open PR
+    #351, fix three CI failures outside `programs/`, and rebase-merge it once
+    the required checks pass (15:51:24). `main` then ends at `154d286` with the
+    same program tree.
+11. Update the verified-build record through Squads proposal 16 (15:54:48).
+    OtterSec verified it at 15:56:30.
+12. Publish the revision-9 client train (18:05 to 19:18).
+13. Unpause with `update_launch_controls` (19:19:26, tx
+    `3xaMUtbCLifFjkhjnptS4UYMELLMGb4Uijn55YnCAUQ3YwkqQD9wAKcyZoauHNjTAqsoTLfcnQScwzS8AjJpPzm6`).
+
+Unlike revision 8, the ceremony had no dispute counter repair, and no Squads
+proposal touched the PMP security record (deferred, see
+[`EXPLORER_METADATA.md`](./EXPLORER_METADATA.md)).
+
+The coordinated revision-9 client release train is `@tetsuo-ai/protocol` 0.6.0,
+`@tetsuo-ai/marketplace-sdk` 0.14.0, `@tetsuo-ai/marketplace-react`,
+`@tetsuo-ai/marketplace-tools` and `@tetsuo-ai/marketplace-mcp` 0.7.0,
+`@tetsuo-ai/agenc-worker` 0.4.0 and `@tetsuo-ai/agenc-cli` 0.5.0.
+`@tetsuo-ai/marketplace-moderation` stays 0.3.0, unchanged. The seven packages
+were published on 2026-11-21, before the unpause, through the tag-driven release
+workflow with npm trusted publishing and provenance. Each npm integrity equals
+its pin in `release-train.json`. The unscoped `agenc-cli` alias 0.5.0 is not
+published yet: it waits for npm trusted publishing on that package, and npm
+still has 0.2.0. See [`VERSIONING.md`](./VERSIONING.md).
+
+## Revision 8 (deployed 2026-10-28, superseded 2026-11-21)
+
+Revision 8 was live on mainnet from 2026-10-28 until the 2026-11-21 revision-9
+upgrade. Its production/default `#[program]` surface contained 104 Rust
+entrypoints. That number was derived from the cfg-gated source at the release
+commit, not this document:
 
 - production defaults: 104 (`spl-token-rewards`; `private-zk` off);
 - explicit development `private-zk`: 107;
@@ -97,13 +211,13 @@ document:
 - raw `pub fn` declarations across the mutually exclusive full/canary modules:
   132, representing 107 unique names because the canary's 25 names are repeated.
 
-`scripts/mainnet-upgrade.mjs` enforces the exact 104/107/25 sets and refuses
-stale artifacts. The three private-proof entrypoints stay quarantined, as in
-revision 5.
+For revision 8, `scripts/mainnet-upgrade.mjs` enforced the exact 104/107/25
+sets and refused stale artifacts. The three private-proof entrypoints stayed
+quarantined, as in revision 5.
 
 Mainnet moved from revision 5 straight to revision 8. Revisions 6 and 7 were
 never stamped on mainnet on their own; their surfaces are part of revision 8.
-The wire changes now live are:
+The wire changes it brought live were:
 
 - revision-6 wallet feed votes: `upvote_post_by_authority` and the
   `FeedAuthorityVote` account family. Legacy `upvote_post` writes fail closed;
@@ -228,7 +342,7 @@ legacy-hire exits are in [`REVISION_5_CUTOVER.md`](./REVISION_5_CUTOVER.md).
 The deployment rail is deliberately fail-closed:
 
 - it requires a fresh production binary and matching production IDL (101
-  instructions for revision 5, 104 for revision 8);
+  instructions for revision 5, 104 for revision 8, 106 for revision 9);
 - it verifies the canonical ProgramData and Squads v4 2-of-3 vault/controller
   policy instead of inferring an EOA from account shape;
 - it proves the approved binary fits the live ProgramData allocation and forces
@@ -405,12 +519,14 @@ remains the only branch downstream integrators should treat as canonical.
 
 Historical branches may remain in the repo for auditability, but they are not
 the branch of record once `main` matches the deployed tree. The deployed
-revision-8 program was built from `main` commit
-`f39b383e416ec5bc511b0ffb781481a658d137d8`. As of 2026-10-28 the revision-8
-client train is released from `main` through the tag-driven release workflow.
-The published revision-5 set (protocol 0.4.0, SDK 0.12.0 and the rest) is the
-superseded wire for flows that changed; for example, legacy `upvote_post`
-writes fail closed.
+revision-9 program was built from the program tree
+`df10b3fc66c2707b58305311da6b060c928b594f`, which `main` has carried since
+commit `154d286659592c799bd111bf416fdba7ccc704b4` (PR #351). As of 2026-11-21
+the revision-9 client train is released from `main` through the tag-driven
+release workflow. The published revision-8 set (protocol 0.5.2, SDK 0.13.0 and
+the rest) and the older revision-5 set are superseded: SDK 0.13 treats revision
+9 as an unknown surface and fails closed. The revision-8 program was built from
+`main` commit `f39b383e416ec5bc511b0ffb781481a658d137d8`.
 
 ## Release Discipline
 
@@ -458,7 +574,7 @@ Before or during any future mainnet upgrade:
    `surface_revision`, instruction count, upgrade authority).
 7. Keep committed artifacts and downstream protocol consumers aligned.
 8. Before the final surface stamp, publish/upgrade and fetch-verify the **on-chain
-   IDL per cluster**. The revision 9 publish uses the committed
+   IDL per cluster**. The revision 9 publish (2026-11-21) used the committed
    `artifacts/anchor/idl/agenc_coordination.json`, which is the rail's default IDL
    path. Never publish `target/idl/agenc_coordination.json`: the raw Anchor output
    has no `TaskMarker` account, so clients built from it cannot decode a task that
