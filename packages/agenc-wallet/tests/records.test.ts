@@ -24,6 +24,7 @@ import {
   type RecordRow,
   type RecordSource,
 } from "../src/records.js";
+import type { SettlementFacts } from "../src/settlement.js";
 import { NO_FIRST_PARTY, type FirstParty } from "../src/trust.js";
 
 const PROGRAM = AGENC_COORDINATION_PROGRAM_ADDRESS;
@@ -196,6 +197,8 @@ async function world(setup: {
   ratings?: Uint8Array[];
   finished?: Record<string, string[] | Error>;
   settled?: Record<string, Address | null | Error>;
+  /** Historical hire events keyed by task, including those whose hire account has closed. */
+  hires?: Array<[task: Address, listing: Address, provider?: Address]>;
 }) {
   const accounts = new Map<string, RawAccount>(
     setup.accounts.map(([address, data, owner]) => [address, { data, owner: owner ?? PROGRAM, lamports: 1n }]),
@@ -207,8 +210,13 @@ async function world(setup: {
       ? data.length === filter.dataSize
       : filter.memcmp.bytes.every((byte, index) => data[filter.memcmp.offset + index] === byte);
   const settled = setup.settled;
+  const hireEvents = new Map(setup.hires?.map(([task, listing, worker = PROVIDER]) => [task, {
+    listing, worker, priceLamports: PRICE, feeLamports: PRICE / 20n,
+  }]));
+  const settledFacts = new Map<string, SettlementFacts | null>();
   const chain = {
     network: "mainnet",
+    findSettlement: async (task: Address) => hireEvents.get(task) ?? null,
     readRawAccounts: async (list: readonly Address[]) => list.map((address) => accounts.get(address) ?? null),
     gpa: {
       getProgramAccounts: async ({ filters }: { filters: readonly GpaFilter[] }) =>
@@ -244,7 +252,7 @@ async function world(setup: {
     looked,
     source,
     read: (rows: RecordRow[], firstParty: FirstParty = NO_FIRST_PARTY, settledBy?: Map<string, string | null>) =>
-      readMarketRecord({ ...source(firstParty), ...(settledBy === undefined ? {} : { settledBy }) }, rows),
+      readMarketRecord({ ...source(firstParty), ...(settledBy === undefined ? {} : { settledBy, settledFacts }) }, rows),
   };
 }
 
@@ -268,6 +276,7 @@ describe("reading a service's record", () => {
         [foreign, taskData({}), SYSTEM],
       ],
       finished: { [PROVIDER]: [done, running, inToken, missing, foreign] },
+      hires: [[done, LISTING]],
     });
     const record = await read([ROW]);
     expect(record.listings.get(LISTING)).toMatchObject({ jobs: 1, paidLamports: PRICE, feeLamports: PRICE / 20n, buyers: 1 });
@@ -283,6 +292,7 @@ describe("reading a service's record", () => {
         [second, taskData({ creator: at(31), bps: 250 })],
       ],
       finished: { [PROVIDER]: [first, second] },
+      hires: [[first, LISTING], [second, LISTING]],
     });
     const record = (await read([ROW])).listings.get(LISTING)!;
     expect(record.buyers).toBe(2);
@@ -291,15 +301,16 @@ describe("reading a service's record", () => {
     expect(record.feeLamports).toBe((4n * PRICE) / 20n + PRICE / 40n);
   });
 
-  it("ties a job to the one service whose description it names", async () => {
+  it("credits only the job whose hire names the listing, even when both descriptions match", async () => {
     const [named, unknown] = [at(27), at(28)];
     const { read } = await world({
       accounts: [
         [PROVIDER, agentData(OWNER)],
         [named, taskData({ spec: SPEC })],
-        [unknown, taskData({ spec: "ef".repeat(32) })],
+        [unknown, taskData({ spec: SPEC })],
       ],
       finished: { [PROVIDER]: [named, unknown] },
+      hires: [[named, LISTING]],
     });
     const record = await read([ROW]);
     // Both are the agent's; only one can be told to be this service's.
@@ -362,6 +373,7 @@ describe("reading a service's record", () => {
         [at(37), taskData({ spec: OTHER_SPEC })],
       ],
       finished: { [PROVIDER]: new Error("busy"), [OTHER_PROVIDER]: [at(37)] },
+      hires: [[at(37), OTHER_LISTING, OTHER_PROVIDER]],
     });
     const record = await read([ROW, OTHER_ROW]);
     expect([...record.unread]).toEqual([PROVIDER]);
@@ -433,6 +445,7 @@ describe("jobs the marketplace's list forgot", () => {
         [task, taskData({})],
       ],
       settled: { [task]: PROVIDER },
+      hires: [[task, LISTING]],
     });
     const record = await read([ROW]);
     expect(record.listings.get(LISTING)).toMatchObject({ jobs: 1, ratings: 0, paidLamports: PRICE, buyers: 1 });
@@ -451,6 +464,7 @@ describe("jobs the marketplace's list forgot", () => {
         [paidToStranger, taskData({})],
       ],
       settled: { [paidToProvider]: PROVIDER, [paidToStranger]: at(43) },
+      hires: [[paidToProvider, LISTING]],
     });
     // Another agent's service carries the same description.
     const copy: RecordRow = { listing: OTHER_LISTING, providerAgent: OTHER_PROVIDER, specHashHex: SPEC };
@@ -471,6 +485,7 @@ describe("jobs the marketplace's list forgot", () => {
       ratings: [ratingData(rated, LISTING, 5)],
       finished: { [PROVIDER]: [listed] },
       settled: { [listed]: PROVIDER, [rated]: PROVIDER },
+      hires: [[listed, LISTING]],
     });
     expect((await read([ROW])).listings.get(LISTING)).toMatchObject({ jobs: 2, ratings: 1 });
     expect(looked).toEqual([]);
@@ -485,6 +500,7 @@ describe("jobs the marketplace's list forgot", () => {
         [done, taskData({})],
       ],
       settled: { [running]: PROVIDER, [done]: PROVIDER },
+      hires: [[done, LISTING]],
     });
     expect((await read([ROW])).listings.get(LISTING)).toMatchObject({ jobs: 1 });
     expect(looked).toEqual([done]);
@@ -516,6 +532,7 @@ describe("jobs the marketplace's list forgot", () => {
         ...tasks.map((task): [Address, Uint8Array] => [task, taskData({})]),
       ],
       settled: Object.fromEntries(tasks.map((task) => [task, PROVIDER])),
+      hires: tasks.map((task) => [task, LISTING]),
     });
     const settledBy = new Map<string, string | null>();
     const first = await read([ROW], NO_FIRST_PARTY, settledBy);
@@ -537,6 +554,7 @@ describe("jobs the marketplace's list forgot", () => {
         ...tasks.map((task): [Address, Uint8Array] => [task, taskData({})]),
       ],
       settled: Object.fromEntries(tasks.map((task) => [task, PROVIDER])),
+      hires: tasks.map((task) => [task, LISTING]),
     });
     const keeper = createRecordKeeper(source(), () => 0);
     const first = await keeper.read([ROW], 5_000);

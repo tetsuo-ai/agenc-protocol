@@ -30,7 +30,7 @@ export type DetailsState = "ready" | "loading" | "unavailable";
 export interface CatalogRow {
   listing: Address;
   state?: ServiceState;
-  /** Provider siblings are still loading for record attribution on a cold ID lookup. */
+  /** The provider profile is waiting for sibling listings on a cold ID lookup. */
   recordPending?: boolean;
   providerAgent: Address;
   name: string;

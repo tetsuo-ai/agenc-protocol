@@ -257,8 +257,7 @@ export function hostedDiscovery(options: HostedServicesOptions, read: ReadJson, 
     }
     const other = siblings.cached();
     if (other) return [row, ...other.filter((entry) => entry.base.listing !== id)];
-    // A hash shared by two listings cannot identify the job's listing. Wait for the
-    // provider's index in the background before reporting any trust based on it.
+    // The provider profile also lists its other offers. Load them off the cold ID path.
     void Promise.resolve(siblings.load()).catch(() => {});
     row.base.recordPending = true;
     return [row];
@@ -304,7 +303,7 @@ export function hostedDiscovery(options: HostedServicesOptions, read: ReadJson, 
         indexes.set(state, index);
       }
       const listed = index.cached() ?? (filters?.listing ? await exactListing(filters.listing, state) : await index.load());
-      // Record attribution needs the catalog, even on a narrow search. Fetch provider-hosted
+      // Provider profiles use the catalog, even on a narrow search. Fetch provider-hosted
       // descriptions only for candidates that could reach the result page.
       const describeMatch = (entry: ListedService): CatalogRow => {
         if ((filters?.listing !== undefined && entry.base.listing !== filters.listing)

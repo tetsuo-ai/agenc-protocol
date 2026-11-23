@@ -43,6 +43,30 @@ async function paidJob(world: World, agentId: string, listing: Address, score?: 
 }
 
 describe("a service's record", () => {
+  it("credits an unrated hire only to its source listing across state filters", async () => {
+    const sibling = getAddressDecoder().decode(new Uint8Array(32).fill(115));
+    world = await startWorld({ services: (local) => {
+      const hosted = createHostedServices({ fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/api/listings");
+        const [row] = await local.listServices();
+        const active = { pda: row!.listing, state: 0, providerAgent: row!.providerAgent, specHash: row!.specHashHex,
+          name: row!.name, priceLamports: row!.priceLamports.toString() };
+        const items = url.searchParams.has("hireable") ? [active] : [active, { ...active, state: 1, pda: sibling }];
+        return Response.json({ total: items.length, items });
+      } });
+      return { ...local, listServices: hosted.listServices };
+    } });
+    const { wallet, listing } = world;
+    const agent = await spender(world, 300);
+    await paidJob(world, agent.id, listing);
+    expect((await wallet.find({ state: "active", minPaidJobs: 1 })).services).toMatchObject([{ listing, jobsDone: 1 }]);
+    expect((await wallet.find({ state: "paused", minPaidJobs: 1 })).services).toEqual([]);
+    expect((await wallet.find({ state: "paused" })).services).toMatchObject([
+      { listing: sibling, jobsDone: 0, offeredBy: { jobsDone: 1 } },
+    ]);
+  });
+
   it("shows who offers it and what buyers really paid it", async () => {
     world = await startWorld();
     const { wallet, listing } = world;
