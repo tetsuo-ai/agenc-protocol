@@ -1,3 +1,4 @@
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { createHash } from "node:crypto";
 import { getAddressEncoder, type Address, type Instruction, type TransactionSigner } from "@solana/kit";
 import {
@@ -6,8 +7,8 @@ import {
   getAgentRegistrationDecoder, getTaskDecoder, getTaskEncoder, getTaskSubmissionDecoder, getTaskEscrowDecoder, getTaskMarkerSize,
   getTaskMarkerDiscriminatorBytes, getCreatorStatsSize, getAgentStatsSize,
   TaskStatus, SubmissionStatus, values,
+  lighthouse,
 } from "@tetsuo-ai/marketplace-sdk";
-import { assertContestBalance, assertContestBytes, assertContestData, assertContestDeadline, RENT } from "./contest-assertions.js";
 import { SYSTEM_PROGRAM_ADDRESS, type Chain } from "./chain.js";
 import { contestClaims, contestUnavailable } from "./contest.js";
 import { submissionId } from "./contest-history.js";
@@ -57,11 +58,11 @@ export async function contestPlan(chain: Chain, job: JobRecord, creator: Transac
   // change on every marketplace settlement. Recipient wallet balances are also unrelated.
   const excluded = new Set<Address>([program, SYSTEM_PROGRAM_ADDRESS, config, creator.address, treasury, ...claims.map(c => c.workerAuthority)]);
   const keys = [...new Set(ix.accounts!.map(a => a.address).filter(address => !excluded.has(address)))];
-  keys.push(RENT);
+  keys.push(lighthouse.RENT);
   const raw = await chain.readRawAccounts(keys);
   if (raw.length !== keys.length) return contestUnavailable("The marketplace accounts could not be read.");
   const byKey = new Map(keys.map((key, i) => [key, raw[i]]));
-  if (!byKey.get(RENT)?.data.length) return contestUnavailable("Current rent could not be verified. Refresh the quote.");
+  if (!byKey.get(lighthouse.RENT)?.data.length) return contestUnavailable("Current rent could not be verified. Refresh the quote.");
   const needsRecord = (key: Address) => {
     const existing = byKey.get(key);
     if (existing && existing.owner !== program) return contestUnavailable("The marketplace record has an unexpected balance. Refresh the quote.");
@@ -182,16 +183,16 @@ export async function contestPlan(chain: Chain, job: JobRecord, creator: Transac
     entryRefund: amounts(refund), networkFee: amounts(chain.transferFeeLamports), recordCost: amounts(recordCost), expiresAt };
   // Revision 9 validates PDA seeds and authorities itself. Bind the mutable values
   // it reads for this decision in the same transaction, including unsolicited rent top-ups.
-  const guardedData = new Set<Address>([task, RENT]);
+  const guardedData = new Set<Address>([task, lighthouse.RENT]);
   if (escrow) guardedData.add(escrowKey);
   if (entry && selected) {
     guardedData.add(selected.workerAgent);
     guardedData.add((await findTaskSubmissionPda({ claim: selected.claim }))[0]);
   }
-  const instructions: Instruction[] = [assertContestDeadline(chainExpiry)];
+  const instructions: Instruction[] = [lighthouse.assertClockBefore(chainExpiry)];
   for (const [key, item] of byKey) {
-    if (key === RENT && item) {
-      instructions.push(assertContestBytes(RENT, 0, item.data));
+    if (key === lighthouse.RENT && item) {
+      instructions.push(lighthouse.assertBytes(lighthouse.RENT, 0, item.data));
       continue;
     }
     if (input.action === "cancel") {
@@ -201,15 +202,15 @@ export async function contestPlan(chain: Chain, job: JobRecord, creator: Transac
       if (key === task) {
         const encoded = getTaskEncoder().encode(account!);
         const generation = encoded.length - 32 - 2 - 16 + 3; // referrer, bps, reserved[3..11]
-        instructions.push(assertContestBytes(key, generation, bytes(key).slice(generation, generation + 8)));
+        instructions.push(lighthouse.assertBytes(key, generation, bytes(key).slice(generation, generation + 8)));
         continue;
       }
       if (bonds.some(([bond]) => bond === key)) continue;
-      if (key === escrowKey) instructions.push(assertContestBytes(key, 40, bytes(key).slice(40, 56))); // amount and distributed
+      if (key === escrowKey) instructions.push(lighthouse.assertBytes(key, 40, bytes(key).slice(40, 56))); // amount and distributed
     } else if (guardedData.has(key) && item) {
-      instructions.push(assertContestData(key, item.data));
+      instructions.push(lighthouse.assertDataHash(key, keccak_256(item.data), item.data.length));
     }
-    if (!claims.some(c => c.workerAgent === key)) instructions.push(assertContestBalance(key, item?.lamports ?? 0n));
+    if (!claims.some(c => c.workerAgent === key)) instructions.push(lighthouse.assertLamports(key, item?.lamports ?? 0n));
   }
   instructions.push(ix);
   return { quote, instructions };

@@ -14,7 +14,6 @@ import { reviewAnchor, type ReviewAnchor } from "./review-history.js";
 import { mkdtempSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import lighthouseFixture from "../testing-assets/lighthouse.so.json";
-import { LIGHTHOUSE } from "./contest-assertions.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -62,6 +61,7 @@ import {
   type GpaFilter,
   type ProgramAccountsTransport,
   type Transport,
+  lighthouse,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { LocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";
 import {
@@ -307,7 +307,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     unixTimestamp: BigInt(Math.floor(Date.now() / 1000)),
   });
   const svm = market.svm;
-  svm.addProgram(LIGHTHOUSE, gunzipSync(Buffer.from(lighthouseFixture.gzipBase64, "base64")));
+  svm.addProgram(lighthouse.LIGHTHOUSE, gunzipSync(Buffer.from(lighthouseFixture.gzipBase64, "base64")));
   // litesvm keeps one blockhash and refuses a byte-identical repeat, so the
   // second "give $5" would be dropped as a duplicate. Expiring the blockhash
   // after each send would fix that but break any sender who had already
@@ -562,9 +562,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
     listingSendSettled: async () => true,
     workOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : failedWorkSends.has(signature) ? "failed" : inFlight.has(signature) ? "pending" : "expired",
-    async simulateWork(payer, ix) {
+    async simulateWork(payer, ix, guards) {
       syncClock();
-      const { tx, accounts } = workSimulationMessage(payer, ix, svm.latestBlockhash());
+      const { tx, accounts } = workSimulationMessage(payer, ix, svm.latestBlockhash(), undefined, undefined, guards);
       // No await while the practice VM accepts unsigned simulation messages.
       svm.withSigverify(false);
       try {

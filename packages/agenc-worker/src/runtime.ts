@@ -193,7 +193,7 @@ export type WorkerContext = {
   /** Optional host controls, installed only inside the live worker lock. */
   onWorkerReady?: (dispatch: WorkerDispatch | null, read?: WorkerDispatch) => void;
   withChosenRoom?: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
-  simulateWork?: (instruction: import("@solana/kit").Instruction) => Promise<WorkSimulation | null>;
+  simulateWork?: (instruction: import("@solana/kit").Instruction, guards?: readonly import("@solana/kit").Instruction[]) => Promise<WorkSimulation | null>;
   chosenOutcome?: (receipt: { signature: string; lastValidBlockHeight: string }) => Promise<"pending" | "landed" | "failed" | "expired">;
   chooseOpenJobs?: () => boolean;
   checkChosenRoom?: (signal?: AbortSignal) => Promise<void>;

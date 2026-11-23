@@ -1,7 +1,7 @@
-// Lighthouse's public Borsh ABI. Each instruction receives only the account it checks.
+// Lighthouse's public Borsh ABI. Each builder declares one read-only target.
+// Solana resolves effective top-level privileges across all sibling instructions.
 // https://github.com/Jac0xb/lighthouse/tree/4c579479c98635e419b1b167f08be02a71604a71/programs/lighthouse
 import { AccountRole, type Address, type Instruction } from "@solana/kit";
-import { keccak_256 } from "@noble/hashes/sha3.js";
 
 export const LIGHTHOUSE = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95" as Address;
 export const RENT = "SysvarRent111111111111111111111111111111111" as Address;
@@ -13,21 +13,24 @@ function instruction(target: Address, encoded: number[]): Instruction {
 }
 
 function le64(value: bigint) {
-  const bytes = Buffer.alloc(8);
-  bytes.writeBigUInt64LE(value);
+  if (value < 0n || value > 0xffffffffffffffffn) throw new RangeError("Value outside u64.");
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, value, true);
   return bytes;
 }
 
-export function assertContestDeadline(seconds: number) {
-  // Clock::unix_timestamp is an i64 at byte 32. Both offset and value are positive.
+export function assertClockBefore(seconds: number) {
+  // Clock::unix_timestamp is an i64 at byte 32. Marketplace deadlines are positive.
+  if (!Number.isSafeInteger(seconds) || seconds < 0) throw new RangeError("Invalid clock deadline.");
   return instruction(CLOCK, [assertData, silent, 32, 8, ...le64(BigInt(seconds)), lessThan]);
 }
 
-export function assertContestBalance(key: Address, lamports: bigint) {
+export function assertLamports(key: Address, lamports: bigint) {
   return instruction(key, [assertInfo, silent, 0, ...le64(lamports), equal]);
 }
 
 function compact(n: number) {
+  if (!Number.isSafeInteger(n) || n < 0) throw new RangeError("Invalid data offset or length.");
   const size: number[] = [];
   while (n >= 128) {
     size.push(128 + n % 128);
@@ -37,11 +40,12 @@ function compact(n: number) {
   return size;
 }
 
-export function assertContestData(key: Address, bytes: Uint8Array) {
-  return instruction(key, [assertInfo, silent, 8, ...keccak_256(bytes), 0, ...compact(bytes.length)]);
+export function assertDataHash(key: Address, digest: Uint8Array, length: number) {
+  if (digest.length !== 32) throw new RangeError("Expected a 32-byte Keccak digest.");
+  return instruction(key, [assertInfo, silent, 8, ...digest, 0, ...compact(length)]);
 }
 
-export function assertContestBytes(key: Address, offset: number, bytes: Uint8Array) {
+export function assertBytes(key: Address, offset: number, bytes: Uint8Array) {
   // DataValueAssertion::Bytes, with compact offset and byte count.
   return instruction(key, [assertData, silent, ...compact(offset), 11, ...compact(bytes.length), ...bytes, equal]);
 }

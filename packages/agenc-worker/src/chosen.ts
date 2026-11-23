@@ -1,7 +1,7 @@
 // The picker and the executor use the same verified spec, policy filters and claim instruction.
 import { unwrapOption, type Address } from "@solana/kit";
 import {
-  facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
+  lighthouse, facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
   getTaskClaimDecoder, getTaskSubmissionDecoder, getTaskValidationConfigDecoder,
   listDirectClaimableTasks, SubmissionStatus, TaskStatus, TaskType, ValidationMode, values, type Task,
@@ -161,6 +161,10 @@ function releaseInstruction(ctx: WorkerContext, agent: WorkerAgent, terms: Terms
     ...(terms.direct && { taskValidationConfig: null }) });
 }
 
+function releaseGuards(window: ReturnType<typeof chosenReleaseWindow> | null) {
+  return window?.phase === "early" ? [lighthouse.assertClockBefore(window.resumeAt)] : [];
+}
+
 export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   const marker = loadState(ctx.stateDir).openClaim;
   if (!marker?.chosen || !ctx.simulateWork) return null;
@@ -203,10 +207,10 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   const idle = noPendingSend && (marker.phase === "claimed" || marker.phase === "executed");
   const canDeliver = !cleanup && idle && marker.execution && (terms.deadline === 0 || now <= terms.deadline);
   const room = ctx.checkChosenRoom !== undefined;
-  const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt && window.phase !== "paused";
+  const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt;
   const [release, submit] = await Promise.all([
     noPendingSend && cleanup && (live || terminal) ? ctx.simulateWork(await cleanupClaimInstruction(ctx, agent, task, read.task, terms.treasury, terminal)) :
-      idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms)) : null,
+      idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms), releaseGuards(window)) : null,
     canDeliver && room ? ctx.simulateWork(await deliveryInstruction(ctx, agent, terms, read.task, marker.execution!.resultHashHex)) : null,
   ]);
   // Expiry can return the deposit to the worker (for example after a dispute),
@@ -252,6 +256,7 @@ export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, s
       : await releaseInstruction(ctx, agent, held);
   }
   signal.throwIfAborted();
-  await ctx.client.send([ix], { maxRetries: 0 });
+  const guards = action === "release" ? releaseGuards(held.releaseWindow) : [];
+  await ctx.client.send([...guards, ix], { maxRetries: 0 });
   await resumeOpenClaim(ctx, agent);
 }

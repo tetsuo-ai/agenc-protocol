@@ -1026,7 +1026,7 @@ export class EarnHost {
       readAccount: (account: Address) => this.#chain.readAccount(account),
       readAccountInfo: this.#chain.readAccountInfo,
       stateDir,
-      ...(this.#chain.simulateWork && { simulateWork: ix => this.#chain.simulateWork!(agent.signer.address, ix) }),
+      ...(this.#chain.simulateWork && { simulateWork: (ix, guards) => this.#chain.simulateWork!(agent.signer.address, ix, guards) }),
       ...(this.#chain.workOutcome && { chosenOutcome: receipt => this.#chain.workOutcome!(receipt) }),
       getBalance: (account) => this.#chain.getBalance(account),
       getMinimumBalanceForRentExemption: (space) =>

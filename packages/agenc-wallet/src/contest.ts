@@ -6,8 +6,8 @@ import {
   getTaskAttestorConfigSize, getAgentStatsSize, getTaskClaimDecoder, getTaskClaimDiscriminatorBytes, getTaskClaimSize,
   getTaskSubmissionDecoder, getTaskSubmissionSize,
   getTaskSubmissionDiscriminatorBytes, resolveProgramAccountsTransport, SubmissionStatus, values,
+  lighthouse,
 } from "@tetsuo-ai/marketplace-sdk";
-import { assertContestDeadline } from "./contest-assertions.js";
 import type { Chain } from "./chain.js";
 import type { ContestEntry } from "./client/types.js";
 import { submissionId } from "./contest-history.js";
@@ -70,7 +70,7 @@ export async function sendContest(chain: Chain, creator: KeyPairSigner, intent: 
   const register = registration.rent === "0" ? [] : [await facade.registerAgent({
     authority: creator, agentId, endpoint: "https://agenc.ag", metadataUri: null, capabilities: 1n, stakeAmount: BigInt(registration.stake),
   })];
-  return (await chain.clientFor(creator).send([assertContestDeadline(expiresAt), ...register, ...instructions])).signature;
+  return (await chain.clientFor(creator).send([lighthouse.assertClockBefore(expiresAt), ...register, ...instructions])).signature;
 }
 
 export async function liveContestEntries(chain: Chain, task: Address, minSlot?: number) {

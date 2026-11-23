@@ -5,8 +5,8 @@ import {
 } from "@solana/kit";
 import { DEFAULT_COMPUTE_UNIT_LIMIT, getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } from "@tetsuo-ai/marketplace-sdk";
 
-export function workSimulationMessage(payer: Address, ix: Instruction, blockhash: Blockhash, limit = DEFAULT_COMPUTE_UNIT_LIMIT, price?: bigint) {
-  const instructions = [getSetComputeUnitLimitInstruction(limit), ...(price === undefined ? [] : [getSetComputeUnitPriceInstruction(price)]), ix];
+export function workSimulationMessage(payer: Address, ix: Instruction, blockhash: Blockhash, limit = DEFAULT_COMPUTE_UNIT_LIMIT, price?: bigint, guards: readonly Instruction[] = []) {
+  const instructions = [getSetComputeUnitLimitInstruction(limit), ...(price === undefined ? [] : [getSetComputeUnitPriceInstruction(price)]), ...guards, ix];
   const tx = compileTransaction(pipe(createTransactionMessage({ version: 0 }),
     msg => setTransactionMessageFeePayer(payer, msg),
     msg => setTransactionMessageLifetimeUsingBlockhash({ blockhash, lastValidBlockHeight: 0n }, msg),

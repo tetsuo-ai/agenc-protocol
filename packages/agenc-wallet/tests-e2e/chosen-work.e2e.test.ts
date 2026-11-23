@@ -3,9 +3,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { address } from "@solana/kit";
+import { address, getCompiledTransactionMessageDecoder } from "@solana/kit";
 import { loadState, saveState } from "@tetsuo-ai/agenc-worker";
-import { findAgentPda, findClaimPda, findTaskSubmissionPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, getTaskSubmissionDecoder, SubmissionStatus, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
+import { lighthouse, findAgentPda, findClaimPda, findTaskSubmissionPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, getTaskSubmissionDecoder, SubmissionStatus, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
 import type { WorkerQuote } from "../src/client/types.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
 import { CENT, eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
@@ -130,19 +130,12 @@ describe("chosen open work", () => {
     await eventually(async () => (await restarted.openWork(id).catch(() => null))?.held?.canSubmit);
     expect(restarted.pendingWork()).toEqual([]);
     expect(sandbox.deliveries.size).toBe(0);
-    sandbox.advanceClock(2999);
+    sandbox.advanceClock(3600);
     const early = await restarted.quoteWork(id, task, "release");
     expect(early.expiresAt).toBe(world!.clock.now + 1000);
-    const resume = new Date((early.job.releaseBy! + 1) * 1000).toISOString();
+    expect(early.job.depositReturns).toBe(true);
     sandbox.advanceClock(1);
-    await expect(restarted.decideWork(early.id, true)).rejects.toThrow(resume);
-    for (const elapsed of [0, 599, 1]) {
-      sandbox.advanceClock(elapsed);
-      expect((await restarted.openWork(id)).held).toMatchObject({ canRelease: false, canSubmit: true,
-        releaseWindow: { phase: "paused", notice: expect.stringContaining(resume) } });
-      await expect(restarted.quoteWork(id, task, "release")).rejects.toThrow(resume);
-    }
-    sandbox.advanceClock(1);
+    await expect(restarted.decideWork(early.id, true)).rejects.toThrow(/window|quote/);
     const late = await restarted.quoteWork(id, task, "release");
     expect(late.job).toMatchObject({ canRelease: true, depositReturns: false });
     expect(late.job.releaseWindow?.notice).toContain(`buyer (${late.job.buyer}) gets the deposit`);
@@ -180,37 +173,61 @@ describe("chosen open work", () => {
 
 it.each([3600, 3601])("discloses both recipients and reconciles a release landing %i seconds after claim", async delay => {
   let approved = false;
+  let verifiedClock = false;
   const { wallet, id, task } = await setup(undefined, undefined, undefined, {
     transport: base => ({ ...base, async sendAndConfirm(tx) {
-      if (approved) world!.sandbox.advanceClock(delay);
+      if (approved) {
+        const message = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+        if (message.version !== 0) throw new Error("Expected a version 0 release transaction.");
+        const guards = message.instructions.filter(ix => message.staticAccounts[ix.programAddressIndex] === lighthouse.LIGHTHOUSE);
+        expect(guards).toHaveLength(1);
+        const indices = guards[0]!.accountIndices!;
+        expect(indices).toHaveLength(1);
+        expect(message.staticAccounts[indices[0]!]).toBe("SysvarC1ock11111111111111111111111111111111");
+        expect(indices[0]!).toBeGreaterThanOrEqual(message.staticAccounts.length - message.header.numReadonlyNonSignerAccounts);
+        verifiedClock = true;
+        world!.sandbox.advanceClock(delay);
+      }
       return base.sendAndConfirm(tx);
     } }),
   });
   await completedRoom(id, task);
   const quote = await wallet.quoteWork(id, task, "release");
   const { worker, buyer, deposit, releaseWindow, releaseBy } = quote.job;
-  expect(quote.job.depositReturns).toBeNull();
+  expect(quote.job.depositReturns).toBe(true);
   expect(releaseWindow!.notice).toContain(`at or before ${new Date(releaseBy! * 1000).toISOString()}, the worker (${worker}) gets the deposit`);
-  expect(releaseWindow!.notice).toContain(`If it lands later, the buyer (${buyer}) gets it`);
-  const later = quote.afterWindow!;
+  expect(releaseWindow!.notice).toContain(`A fresh late release pays the buyer (${buyer})`);
   expect(quote.flows).toContainEqual(expect.objectContaining({ to: worker, amount: deposit }));
-  expect(later.flows).toContainEqual(expect.objectContaining({ to: buyer, amount: deposit }));
-  expect(later.balances).toContainEqual(expect.objectContaining({ account: worker, net: expect.objectContaining({ lamports: "2298760" }) }));
-  expect(later.balances).toContainEqual({ account: buyer, net: deposit });
-  expect(quote.charge.lamports).toBe("5000");
-  expect(wallet.pendingWork()).toEqual([quote]);
-  const buyerBefore = await world!.balance(buyer);
+  expect(quote.afterWindow).toBeUndefined();
+  const before = await world!.balance(buyer);
   approved = true;
-  await assertBalances(quote, delay > 3600 ? later : quote);
-  expect(await world!.balance(buyer) - buyerBefore).toBe(delay > 3600 ? BigInt(deposit.lamports) : 0n);
-  expect(journal(id).failedJobs.find(row => row.task === task)?.claimReleased).toBe(true);
+  if (delay === 3600) {
+    await assertBalances(quote);
+    expect(journal(id).failedJobs.find(row => row.task === task)?.claimReleased).toBe(true);
+  } else {
+    const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+    const held = await world!.balance(claim);
+    await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+    expect(await world!.balance(claim)).toBe(held);
+    expect(journal(id).openClaim?.task).toBe(task);
+  }
+  expect(verifiedClock).toBe(true);
+  expect(await world!.balance(buyer)).toBe(before);
+  if (delay > 3600) {
+    approved = false;
+    await eventually(async () => (await wallet.openWork(id)).held?.canRelease);
+    const fresh = await wallet.quoteWork(id, task, "release");
+    expect(fresh.job.depositReturns).toBe(false);
+    await assertBalances(fresh);
+    expect(await world!.balance(buyer) - before).toBe(BigInt(deposit.lamports));
+  }
 });
 
-it("refuses an approved release that enters the pause while signing, before reserving or sending", async () => {
+it("refuses an approved release that crosses the boundary while signing, before reserving or sending", async () => {
   let delay = false, broadcasts = 0;
   const { wallet, id, task } = await setup(undefined, undefined, undefined, {
     transport: base => ({ ...base, async getLatestBlockhash() {
-      if (delay) world!.sandbox.advanceClock(3000);
+      if (delay) world!.sandbox.advanceClock(3601);
       return base.getLatestBlockhash();
     }, async sendAndConfirm(tx) {
       if (delay) broadcasts++;
@@ -220,7 +237,7 @@ it("refuses an approved release that enters the pause while signing, before rese
   const hash = await completedRoom(id, task);
   const quote = await wallet.quoteWork(id, task, "release");
   delay = true;
-  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow("Check again at");
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/return window changed/);
   delay = false;
   expect(broadcasts).toBe(0);
   const submit = await wallet.quoteWork(id, task, "submit");
@@ -239,7 +256,7 @@ it("quotes the worker on both sides of the window for a claim protected by a pri
   reserved[13] = 1;
   svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, reserved })) } as never);
   const early = await wallet.quoteWork(id, task, "release");
-  expect(early.job.releaseWindow?.notice).toContain(`If it lands later, the worker (${early.job.worker}) gets it`);
+  expect(early.job.releaseWindow?.notice).toContain(`A fresh late release pays the worker (${early.job.worker})`);
   expect(early.afterWindow).toBeUndefined();
   sandbox.advanceClock(3601);
   const late = await wallet.quoteWork(id, task, "release");

@@ -63,7 +63,7 @@ export interface RawAccount {
 export interface Chain {
   contestHistory?(task: Address, since: string | null, checkpoint?: import("./contest-history.js").ContestCheckpoint): Promise<import("./contest-history.js").ContestHistory>;
   readonly network: WalletNetwork;
-  simulateWork?(payer: Address, ix: Instruction): Promise<WorkSimulation | null>;
+  simulateWork?(payer: Address, ix: Instruction, guards?: readonly Instruction[]): Promise<WorkSimulation | null>;
   workOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired">;
   /**
    * A client that signs and pays fees with `signer`. On a real network it
@@ -422,9 +422,9 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       return { fee: tx.meta.fee, debit: debit > 0n ? debit : 0n };
     },
     workOutcome: reviewSendOutcome,
-    async simulateWork(payer, ix) {
+    async simulateWork(payer, ix, guards) {
       const { blockhash } = await transport.getLatestBlockhash();
-      const { tx, accounts } = workSimulationMessage(payer, ix, blockhash, options.computeUnitPrice === undefined ? undefined : PRICED_COMPUTE_UNIT_LIMIT, options.computeUnitPrice);
+      const { tx, accounts } = workSimulationMessage(payer, ix, blockhash, options.computeUnitPrice === undefined ? undefined : PRICED_COMPUTE_UNIT_LIMIT, options.computeUnitPrice, guards);
       const { value } = await rpc.simulateTransaction(getBase64EncodedWireTransaction(tx), {
         encoding: "base64", commitment: "confirmed", sigVerify: false, replaceRecentBlockhash: true,
       }).send();
