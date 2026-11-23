@@ -7,7 +7,7 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import { WalletError } from "../src/errors.js";
-import { ceilingLamports } from "../src/job-money.js";
+import { ceilingLamports, fractionalQuoteUsd } from "../src/job-money.js";
 import { readListing } from "../src/market.js";
 import type { WalletState } from "../src/store.js";
 import { CENT, SOL, startWorld, type World } from "./harness.js";
@@ -239,4 +239,6 @@ it("rounds fractional price ceilings down to lamports, including exact decimal b
   expect(ceilingLamports(19.9, 100)).toBe(1_990_000n);
   expect(ceilingLamports(19.999999, 100)).toBe(1_999_999n);
   expect(ceilingLamports(5002, 50.02)).toBe(SOL);
+  expect(fractionalQuoteUsd(1_990_000n, 100)).toBe("0.199");
+  expect(fractionalQuoteUsd(1n, 71.64297517)).toBe("0.00000007164297517");
 });

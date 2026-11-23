@@ -15,6 +15,8 @@ export type Lamports = string;
  * SOL price is available; show the SOL figure then.
  */
 export interface Money {
+  /** Exact dollars at the saved quote rate when the amount includes a fraction of a cent. */
+  quotedUsd?: string;
   lamports: Lamports;
   usdCents: number | null;
 }

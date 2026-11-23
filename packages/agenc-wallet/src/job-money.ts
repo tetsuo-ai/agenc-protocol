@@ -19,6 +19,16 @@ function ratio(value: number): [bigint, bigint] {
   return [BigInt(whole + fraction) * 10n ** BigInt(Math.max(0, -scale)), 10n ** BigInt(Math.max(0, scale))];
 }
 
+/** The exact decimal when the usual cent display would hide part of a quote. */
+export function fractionalQuoteUsd(lamports: bigint, usdPerSol: number): string | undefined {
+  const [rate, scale] = ratio(usdPerSol);
+  const numerator = lamports * rate;
+  const denominator = 1_000_000_000n * scale;
+  if ((numerator * 100n) % denominator === 0n) return undefined;
+  const fraction = (numerator % denominator).toString().padStart(denominator.toString().length - 1, "0").replace(/0+$/, "");
+  return (numerator / denominator).toString() + "." + fraction;
+}
+
 export function ceilingLamports(cents: number, usdPerSol: number): bigint {
   const [cap, capScale] = ratio(cents);
   const [rate, rateScale] = ratio(usdPerSol);
