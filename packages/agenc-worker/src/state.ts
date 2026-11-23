@@ -79,6 +79,10 @@ export type ModelBudget = { totalCents: number; remainingCents: number };
 
 /** A claim/execution/submission transaction that still needs reconciliation. */
 export type OpenClaim = {
+  /** An owner release was sent or may have been sent. Hold work until reconciled. */
+  releaseRequestedAt?: string;
+  /** A selected claim holds the room output for owner approval. */
+  chosen?: true;
   jobEvidence?: JobEvidence;
   jobEvidenceRef?: string;
   modelBudget?: ModelBudget;
@@ -147,7 +151,7 @@ export type FailedJob = {
    * "attempts": every allowed attempt failed. "expired": the time to deliver
    * ran out first. "cancelled": the task ended before anything was delivered.
    */
-  cause: "attempts" | "expired" | "cancelled";
+  cause: "attempts" | "expired" | "cancelled" | "released";
   /** Why, in the worker's words (redacted, one line). */
   reason: string;
   /** Attempts that failed. */
@@ -170,6 +174,7 @@ export type WorkerPause = {
 
 /** One submitted result awaiting (or past) settlement. */
 export type SubmissionRecord = {
+  chosen?: true;
   jobEvidence?: JobEvidence;
   jobEvidenceRef?: string;
   modelBudget?: ModelBudget;
@@ -429,6 +434,8 @@ function openClaim(value: unknown, label: string): OpenClaim {
     label,
     ["task", "claimedAt", "phase"],
     [
+      "releaseRequestedAt",
+      "chosen",
       "jobEvidence",
       "jobEvidenceRef",
       "modelBudget",
@@ -489,6 +496,8 @@ function openClaim(value: unknown, label: string): OpenClaim {
   return {
     task: taskAddress(parsed.task, `${label}.task`),
     claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
+    ...(parsed.releaseRequestedAt !== undefined ? { releaseRequestedAt: iso(parsed.releaseRequestedAt, `${label}.releaseRequestedAt`) } : {}),
+    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, `${label}.chosen`) } : {}),
     phase,
     ...(claimTransactionSignature !== undefined
       ? { claimTransactionSignature }
@@ -557,7 +566,7 @@ function failedJob(value: unknown, label: string): FailedJob {
     ["rewardAmount", "title", "listing"],
   );
   const cause = parsed.cause;
-  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled") {
+  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled" && cause !== "released") {
     fail(`${label}.cause is unsupported`);
   }
   if (typeof parsed.claimReleased !== "boolean") {
@@ -603,6 +612,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       "settled",
     ],
     [
+      "chosen",
       "jobEvidence",
       "jobEvidenceRef",
       "modelBudget",
@@ -685,6 +695,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
   }
   return {
     task: taskAddress(parsed.task, `${label}.task`),
+    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, `${label}.chosen`) } : {}),
     submissionSignature:
       parsed.submissionSignature === null
         ? null

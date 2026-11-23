@@ -184,6 +184,10 @@ export const FETCH_RESUME_GAP_MS = 2 * MAX_RETRY_DELAY_MS;
 /** Everything the worker loop needs, injected (see cli.ts for the RPC wiring). */
 export type WorkerContext = {
   config: WorkerRuntimeConfig;
+  /** Optional host controls, installed only inside the live worker lock. */
+  onWorkerReady?: (dispatch: WorkerDispatch | null) => void;
+  chooseOpenJobs?: () => boolean;
+  checkChosenRoom?: () => Promise<void>;
   /** Signing + sending (the hot wallet is this client's signer/fee payer). */
   client: MarketplaceClient;
   /** The hot-wallet signer (identical to `client.signer`). */
@@ -262,6 +266,15 @@ export type WorkerContext = {
    */
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal }) => Promise<void>;
 };
+
+/** Owner operations run on the watcher's serialized lane, with its real context. */
+export type WorkerDispatch = <T>(operation: (ctx: WorkerContext, agent: WorkerAgent, signal: AbortSignal) => Promise<T>) => Promise<T>;
+
+export interface VerifiedCandidate {
+  task: Task;
+  spec: VerifiedJobSpec;
+  isHire: boolean;
+}
 
 /** The worker's on-chain identity. */
 export type WorkerAgent = {
@@ -800,6 +813,7 @@ export async function listClaimCandidates(
 /** Outcome of attempting one candidate. */
 export type ProcessOutcome =
   | { status: "submitted"; task: Address; record: SubmissionRecord }
+  | { status: "held"; task: Address }
   | { status: "dry-run"; task: Address }
   | { status: "skipped"; task: Address; reason: string; retryable?: boolean }
   | { status: "claim-failed"; task: Address; reason: string }
@@ -1031,6 +1045,7 @@ function keptMarkerFields(
   marker: OpenClaim,
 ): Pick<
   OpenClaim,
+  | "chosen"
   | "jobEvidence"
   | "jobEvidenceRef"
   | "modelBudget"
@@ -1043,6 +1058,7 @@ function keptMarkerFields(
   | "lastFailure"
 > {
   return {
+    ...(marker.chosen ? { chosen: true } : {}),
     ...(marker.jobEvidenceRef !== undefined ? { jobEvidenceRef: marker.jobEvidenceRef } : {}),
     ...(marker.modelBudget !== undefined ? { modelBudget: marker.modelBudget } : {}),
     ...(marker.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
@@ -1084,7 +1100,7 @@ function retryDelayMs(ctx: WorkerContext, failures: number): number {
  * Move the in-flight job into the given-up ledger and free the worker for
  * other work. The claim itself stays on the chain until it can be released.
  */
-function giveUpJob(
+export function giveUpJob(
   ctx: WorkerContext,
   state: WorkerState,
   marker: OpenClaim,
@@ -1123,7 +1139,7 @@ function giveUpJob(
   // when any of its tries ran its work, whatever its last failure was.
   const ranWork =
     marker.ranWork === true || marker.execution !== undefined || marker.submission !== undefined;
-  if (details.cause !== "cancelled" && ranWork) {
+  if (details.cause !== "cancelled" && details.cause !== "released" && ranWork) {
     state.consecutiveFailures += 1;
     const limit = Math.max(
       1,
@@ -1269,7 +1285,7 @@ function noteJobWait(
 }
 
 /** Seconds left for a release to land before the claim's release grace ends. */
-const RELEASE_LANDING_MARGIN_SECS = 120;
+export const RELEASE_LANDING_MARGIN_SECS = 120;
 /** In the last this-many seconds of the release grace, an unfetchable spec releases the claim. */
 const RELEASE_DECISION_WINDOW_SECS = 600;
 
@@ -1542,6 +1558,7 @@ function restoreRevisionRound(
     task: task as string,
     claimedAt: claimTimestamp(claim, fallbackClaimedAt),
     phase: "claimed",
+    ...(priorMarker?.chosen || priorRecord?.chosen ? { chosen: true } : {}),
     ...(priorMarker?.claimTransactionSignature !== undefined
       ? { claimTransactionSignature: priorMarker.claimTransactionSignature }
       : {}),
@@ -1600,6 +1617,7 @@ function commitSubmission(
     rewardAmount: intent.rewardAmount,
     submittedAt: options.submittedAt ?? new Date().toISOString(),
     settled: false,
+    ...(marker?.chosen && { chosen: true }),
     ...(marker?.jobEvidenceRef !== undefined ? { jobEvidenceRef: marker.jobEvidenceRef } : {}),
     ...(marker?.modelBudget !== undefined ? { modelBudget: marker.modelBudget } : {}),
     ...(marker?.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
@@ -1871,6 +1889,7 @@ async function executeAndSubmit(
     execution,
   };
   saveState(ctx.stateDir, executedState);
+  if (marker.chosen) return { status: "held", task };
   return continueExecutedResult(ctx, agent, task, execution);
 }
 
@@ -1917,7 +1936,11 @@ export async function processCandidate(
   ctx: WorkerContext,
   agent: WorkerAgent,
   candidate: ClaimCandidate,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    inspect?: (facts: VerifiedCandidate) => void;
+    authorizeChosen?: (facts: VerifiedCandidate, budget: number | undefined) => Promise<void>;
+  } = {},
 ): Promise<ProcessOutcome> {
   const task = candidate.task;
   const state = loadState(ctx.stateDir);
@@ -2027,6 +2050,12 @@ export async function processCandidate(
     return { status: "skipped", task, reason };
   }
 
+  const facts = { task: decodedTask, spec: verified, isHire: hireBinding.isHire };
+  options.inspect?.(facts);
+  if (!ctx.dryRun && !hireBinding.isHire && !options.authorizeChosen && ctx.chooseOpenJobs?.()) {
+    return { status: "skipped", task, reason: "waiting-for-owner-choice" };
+  }
+
   if (ctx.dryRun) {
     ctx.log({
       event: "task.would-claim",
@@ -2072,6 +2101,15 @@ export async function processCandidate(
     return { status: "skipped", task, reason: "worker-stopping" };
   }
 
+  if (options.authorizeChosen) {
+    if (!ctx.checkExecutionReady || !ctx.checkChosenRoom || ctx.config.executorMode !== "sandboxed") throw new Error("The job room is unavailable.");
+    await options.authorizeChosen(facts, budget);
+  } else if (!hireBinding.isHire && ctx.chooseOpenJobs?.()) {
+    return { status: "skipped", task, reason: "waiting-for-owner-choice" };
+  }
+  options.signal?.throwIfAborted();
+  ctx.signal?.throwIfAborted();
+
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
   // reconciles the canonical claim PDA before considering another task.
@@ -2085,6 +2123,7 @@ export async function processCandidate(
     task: task as string,
     claimedAt: claimStartedAt,
     phase: "claiming",
+    ...(options.authorizeChosen ? { chosen: true } : {}),
     ...(budget !== undefined ? { modelBudget: { totalCents: budget, remainingCents: budget } } : {}),
     ...labels,
   };
@@ -2190,6 +2229,7 @@ export async function processCandidate(
     }
   }
 
+  if (options.authorizeChosen) return { status: "held", task };
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
 }
 
@@ -2465,6 +2505,11 @@ export async function resumeOpenClaim(
     return { status: "execution-failed", task, reason };
   }
 
+  if (marker.chosen) {
+    if (marker.releaseRequestedAt || marker.phase === "executed" || !ctx.checkChosenRoom) return { status: "held", task };
+    if (marker.phase === "uploading" || marker.phase === "submitting") await ctx.checkChosenRoom();
+  }
+
   if (marker.phase === "submitting" && marker.submission !== undefined) {
     ctx.log({ event: "task.resuming-submission", task });
     return submitPreparedResult(ctx, agent, task, marker.submission);
@@ -2554,6 +2599,7 @@ export async function resumeOpenClaim(
     });
     return { status: "execution-failed", task, reason };
   }
+  if (marker.chosen) await ctx.checkChosenRoom!();
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
 }
 
@@ -2722,6 +2768,7 @@ export async function checkSettlements(
           task: record.task,
           claimedAt: claimTimestamp(claim, record.submittedAt),
           phase: "claimed",
+          ...(record.chosen && { chosen: true }),
           ...(record.modelBudget !== undefined ? { modelBudget: record.modelBudget } : {}),
           ...(record.jobEvidenceRef !== undefined ? { jobEvidenceRef: record.jobEvidenceRef } : {}),
           revisionSubmissionCount: submission.account.submissionCount,
@@ -3253,7 +3300,20 @@ async function runUpLocked(
     ...(signal !== undefined ? { signal } : {}),
   });
 
+  const stopped = new AbortController();
+  const lifetime = signal ? AbortSignal.any([signal, stopped.signal]) : stopped.signal;
   try {
+    ctx.onWorkerReady?.((operation) => new Promise((resolve, reject) => {
+      if (lifetime.aborted) { reject(new Error("The worker stopped.")); return; }
+      void enqueue(async () => {
+        try {
+          lifetime.throwIfAborted();
+          resolve(await operation(ctx, agent, lifetime));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }));
     ctx.log({ event: "watch.started" });
     for await (const claimable of watch) {
       if (signal?.aborted) break;
@@ -3288,6 +3348,8 @@ async function runUpLocked(
       });
     }
   } finally {
+    stopped.abort();
+    ctx.onWorkerReady?.(null);
     clearInterval(settleTimer);
     await watch.stop();
     await chain;

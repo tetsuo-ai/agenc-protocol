@@ -106,6 +106,8 @@ export {
   couldBeWaitingPay,
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   workerStatus,
+  type WorkerDispatch,
+  type VerifiedCandidate,
   type ClaimCandidate,
   type ClaimAccountRentMinimums,
   type ClaimFundingExtras,
@@ -168,3 +170,5 @@ export {
   parseSolanaKeypairJson,
   WalletFileError,
 } from "./wallet.js";
+
+export * from "./chosen.js";
