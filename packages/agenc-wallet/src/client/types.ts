@@ -1,3 +1,4 @@
+import { DISCOVERY_CAPABILITY, type ServiceState } from "./discovery.js";
 // The wire contract between the wallet service and anything that talks to it
 // (a desktop panel, an agent host, a CLI). Everything here is plain JSON:
 // lamport amounts travel as decimal strings, times as unix milliseconds.
@@ -185,7 +186,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", DISCOVERY_CAPABILITY] as const);
 
 export interface WalletOverview {
   /**
@@ -243,6 +244,7 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  state?: ServiceState;
   /** Canonical listing page for a service on the public marketplace. */
   listingUrl?: string;
   /** The listing address. Pass it back to hire. */

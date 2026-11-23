@@ -560,27 +560,28 @@ export function createRecordKeeper(source: RecordSource, now: () => number = Dat
     settledBy: source.settledBy ?? new Map(),
     settledFacts: source.settledFacts ?? new Map(),
   };
-  let known: { at: number; record: MarketRecord } | null = null;
+  let known: { at: number; record: MarketRecord; coverage: string } | null = null;
   let reading: Promise<void> | null = null;
   let failedAt: number | null = null;
   let stale = false;
 
-  function due(rows: readonly RecordRow[]): boolean {
+  function due(coverage: string): boolean {
     if (stale) return true;
     if (failedAt !== null && now() - failedAt < RECORD_RETRY_MS) return false;
     if (known === null || now() - known.at >= RECORD_TTL_MS) return true;
-    const facts = known.record.facts;
-    return rows.some((row) => !facts.has(row.providerAgent));
+    return coverage !== known.coverage;
   }
 
   return {
     async read(rows, waitMs) {
-      if (reading === null && due(rows)) {
+      // Attribution by description hash depends on the complete set of sibling listings.
+      const coverage = rows.map((row) => `${row.providerAgent}:${row.listing}:${row.specHashHex}`).sort().join(",");
+      if (reading === null && due(coverage)) {
         stale = false;
         const asked = [...rows];
         reading = readMarketRecord(reader, asked).then(
           (record) => {
-            known = { at: now(), record };
+            known = { at: now(), record, coverage };
             failedAt = null;
             // Jobs still to look up: the next read goes on with them.
             if (record.pending > 0) stale = true;
@@ -605,7 +606,8 @@ export function createRecordKeeper(source: RecordSource, now: () => number = Dat
         ]);
         clearTimeout(timer);
       }
-      return { record: known?.record ?? null, reading: reading !== null };
+      const covered = known?.coverage === coverage;
+      return { record: covered ? known!.record : null, reading: reading !== null || (!covered && failedAt === null) };
     },
     invalidate() {
       stale = true;

@@ -1,3 +1,4 @@
+import type { DiscoveryQuery, DiscoveryPage } from "./discovery.js";
 // The request/response table of the wallet service. One entry per method;
 // the server and the client are both typed from it, so they cannot drift.
 import type { DeliveryFile } from "./delivery-files.js";
@@ -10,7 +11,6 @@ import type {
   JobView,
   JobResult,
   Money,
-  ServiceView,
   WalletOverview,
 } from "./types.js";
 
@@ -63,34 +63,7 @@ export interface WalletMethods {
    */
   "agents.retire": { params: { agentId: string }; result: AgentView };
 
-  "market.find": {
-    /** `limit` is at most 50 a page; `offset` skips that many of the best matches. */
-    params: {
-      /** Search words or an exact service ID. */
-      query?: string;
-      maxPriceCents?: number;
-      provider?: string;
-      /** Minimum fee-weighted buyer rating (1 to 5) and number of verified paid jobs. */
-      minRating?: number;
-      minPaidJobs?: number;
-      limit?: number;
-      offset?: number;
-    };
-    /**
-     * `total` is how many services match in all, of which `services` is one
-     * page. `networkFee` is what every job costs on top of its price and is
-     * not returned, even when the job is cancelled.
-     */
-    result: {
-      services: ServiceView[];
-      total: number;
-      networkFee: Money;
-      /** More matches may appear when descriptions or verified records finish loading. */
-      pending?: boolean;
-      /** A trust filter excluded services whose record could not be read. */
-      recordsUnavailable?: boolean;
-    };
-  };
+  "market.find": { params: DiscoveryQuery; result: DiscoveryPage };
   "market.hire": {
     params: {
       agentId: string;
@@ -99,6 +72,8 @@ export interface WalletMethods {
       request: string;
       /** Refuse if the service costs more than this. */
       maxPriceCents?: number;
+      /** Existing panel guard when the explicit buyer ceiling is higher than the displayed-price limit. */
+      displayedLimitCents?: number;
       /** Checks the delivery must pass, written for the provider to read. */
       acceptance?: string[];
       /** Makes a retried call return the same job instead of hiring twice. */
