@@ -162,6 +162,8 @@ export type ChainTaskStatus =
   | "reject_frozen";
 
 export interface JobRecord {
+  revisionDeadlines?: Record<string, number>;
+  reviewDraft?: import("./client/reviews.js").ReviewDraft;
   id: string;
   role: "buying" | "working";
   /**
@@ -363,6 +365,8 @@ export interface WalletState {
   jobs: Record<string, JobRecord>;
   /** Seller delivery cache and durable review-change timestamps. */
   workRecords?: Record<string, {
+    revisionDeadlines?: Record<string, number>;
+    reviewDraft?: import("./client/reviews.js").ReviewDraft;
     result?: JobResult;
     request?: string;
     acceptance?: string[];

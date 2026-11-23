@@ -40,6 +40,7 @@ import {
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
+import { readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
 import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
@@ -104,6 +105,8 @@ export interface Chain {
   readonly transferFeeLamports: bigint;
   /** Most recent verified settlement transaction for a task, when known. */
   findSettlementSignature?(task: Address): Promise<string | null>;
+  /** Confirmed review instructions and costs from the claim history. */
+  reviewHistory?(task: Address, claim: Address): Promise<ReviewHistory>;
   /** Delivery commitment from a settled task's authenticated transaction history. */
   findSettledDelivery?(task: Address, creator: Address): Promise<SettledDelivery | null>;
   /**
@@ -378,6 +381,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     const last = await status();
     return first == null && last == null ? "failed" : outcome(last);
   }
+  const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
   return usesScopedRequests<Chain>({
     listingSendOutcome,
     listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
@@ -481,6 +485,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
+    reviewHistory: (task, claim) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions)),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>

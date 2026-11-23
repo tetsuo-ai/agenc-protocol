@@ -213,9 +213,22 @@ export interface MarketServices {
    * when the network has no message host, and asking for changes is then
    * unavailable.
    */
-  postChangeRequest?(envelope: taskThread.TaskThreadEnvelope): Promise<void>;
+  postChangeRequest?(envelope: taskThread.TaskThreadEnvelope, signer: KeyPairSigner): Promise<void>;
   /** The message host the earn side reads change requests from. */
   taskThreadTransport?: ReturnType<typeof taskThread.createContentTransport>;
+}
+
+/** Check the public read path before committing a fingerprint or referencing a file. */
+export async function publishReviewBytes(services: MarketServices, signer: KeyPairSigner, bytes: Uint8Array): Promise<string> {
+  const uploader = services.resultUploader(signer);
+  if (!uploader) throw new WalletError("NOT_AVAILABLE", "This network has nowhere to publish evidence.");
+  const hash = sha256Hex(bytes);
+  const response = await uploader.fetch(uploader.url, { method: "POST", body: Uint8Array.from(bytes) });
+  const published = response.ok ? await services.fetchFile(hash) : null;
+  if (!published || sha256Hex(published) !== hash) {
+    throw new WalletError("NETWORK", "The published evidence could not be read back. Try again.");
+  }
+  return hash;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -814,6 +827,13 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       finishedTurn = turn;
       return turn;
     },
+
+    ...(artifactBaseUrl !== null && artifactUploadUrl !== null ? {
+      async postChangeRequest(this: MarketServices, envelope: taskThread.TaskThreadEnvelope, signer: KeyPairSigner) {
+        const data = new TextEncoder().encode(taskThread.canonicalEnvelopeJson(taskThread.assertTaskThreadEnvelope(envelope)));
+        await publishReviewBytes(this, signer, data);
+      },
+    } : {}),
 
     async listServices() {
       if (catalog === null || now() - catalog.at >= CATALOG_TTL_MS) {

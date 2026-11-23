@@ -177,6 +177,13 @@ function handlers(wallet: AgencWallet): Handlers {
         scope(session),
       ),
     }),
+    "jobs.reviewRecord": (params, session) => wallet.reviewRecord(text(params.jobId, "job"), scope(session)),
+    "jobs.draftReview": async (params, session) => ({
+      draft: await wallet.draftReview(text(params.jobId, "job"), params.action, params.note, params.attachments, scope(session)),
+    }),
+    "jobs.confirmReview": async (params, session) => ({
+      job: await wallet.confirmReview(text(params.jobId, "job"), params.review, owner(session)),
+    }),
     "jobs.askChanges": async (params, session) => ({
       job: await wallet.askChanges(
         text(params.jobId, "job"),

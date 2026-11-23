@@ -26,7 +26,8 @@ describe("asking for changes", () => {
     expect(delivered.status).toBe("delivered");
     expect(delivered.canAskChanges).toBe(true);
 
-    const sentBack = await wallet.askChanges(job.id, "Make it about the sea.", false, agent.id);
+    await expect(wallet.askChanges(job.id, "Make it about the sea.", false, agent.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    const sentBack = await wallet.askChanges(job.id, "Make it about the sea.", true);
     expect(sentBack.status).toBe("changes_requested");
     expect(sentBack.canApprove).toBe(false);
 

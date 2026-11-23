@@ -165,6 +165,15 @@ export interface WalletMethods {
     params: { jobId: string; rating?: number };
     result: { job: JobView };
   };
+  "jobs.reviewRecord": { params: { jobId: string }; result: import("./reviews.js").ReviewRecord };
+  "jobs.draftReview": {
+    params: { jobId: string; action: import("./reviews.js").ReviewAction; note: string; attachments?: import("./reviews.js").ReviewAttachment[] };
+    result: { draft: import("./reviews.js").ReviewDraft };
+  };
+  "jobs.confirmReview": {
+    params: { jobId: string; review: import("./reviews.js").ReviewConfirmation };
+    result: { job: JobView };
+  };
   "jobs.askChanges": {
     params: { jobId: string; note: string };
     result: { job: JobView };
@@ -262,7 +271,8 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "jobs.delivery",
   "jobs.wait",
   "jobs.approve",
-  "jobs.askChanges",
+  "jobs.reviewRecord",
+  "jobs.draftReview",
   "jobs.refund",
   "jobs.rate",
 ];

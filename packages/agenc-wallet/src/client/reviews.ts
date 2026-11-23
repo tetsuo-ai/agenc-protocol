@@ -1,0 +1,47 @@
+import type { Money } from "./types.js";
+
+export type ReviewAction = "change" | "reject" | "dispute";
+export interface ReviewAttachment { uri: string; hash: string }
+export interface ReviewDraft {
+  action: ReviewAction;
+  note: string;
+  attachments: ReviewAttachment[];
+  quoteId: string;
+}
+export interface ReviewConfirmation extends ReviewDraft {
+  files?: { name: string; base64: string }[];
+}
+export interface ReviewQuote {
+  id: string;
+  actions: ReviewAction[];
+  fee: Money;
+  rejectionTotal: Money;
+  disputeTotal: Money;
+  rejectionRent: Money;
+  disputeRent: Money;
+  bond: Money;
+  deliveryHash: string;
+  reviewEndsAt: number;
+  reviewWindowSeconds: number;
+  estimatedResubmitBy: number | null;
+}
+export interface ReviewEntry {
+  action: ReviewAction;
+  signature: string;
+  fee: Money | null;
+  rent: Money | null;
+  bond: Money | null;
+  hash: string;
+  at: number;
+  deadline: number | null;
+  note: string | null;
+  attachments: ReviewAttachment[];
+}
+export interface ReviewRecord {
+  entries: ReviewEntry[];
+  historyAvailable: boolean;
+  termsAvailable: boolean;
+  resubmitBy: number | null;
+  quote: ReviewQuote | null;
+  draft: ReviewDraft | null;
+}

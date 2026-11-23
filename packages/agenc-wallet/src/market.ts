@@ -113,7 +113,7 @@ function startsWith(data: Uint8Array, prefix: ArrayLike<number>): boolean {
  * Read and decode one program account. Returns null when the account is
  * absent, owned by another program, closed (tombstoned) or of another type.
  */
-async function readProgramAccount<T>(
+export async function readProgramAccount<T>(
   chain: Chain,
   account: Address,
   discriminator: ArrayLike<number>,
@@ -507,7 +507,7 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
 }
 
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
-function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
+export function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
   return async (account) => {
     const info = await chain.readAccountInfo(account);
     return info === null ? null : { owner: info.owner, data: info.data };
@@ -845,7 +845,7 @@ export async function readTurnDownOnChain(
   };
 }
 
-async function readSubmission(
+export async function readSubmission(
   chain: Chain,
   task: Address,
   providerAgent: Address,
@@ -1163,6 +1163,7 @@ export async function sendDisputeTurnDown(
   task: Address,
   providerAgent: Address,
   words: AmountWords = SOL_AMOUNT_WORDS,
+  evidence?: { hash: Uint8Array; uri: string },
 ): Promise<{ signature: string; bondLamports: bigint }> {
   await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
@@ -1203,8 +1204,8 @@ export async function sendDisputeTurnDown(
       worker: providerAgent,
       creator: account.creator,
       authority: provider,
-      evidenceHash: new Uint8Array(submission.account.proofHash),
-      evidenceUri: "",
+      evidenceHash: evidence?.hash ?? new Uint8Array(submission.account.proofHash),
+      evidenceUri: evidence?.uri ?? "",
     }),
   ]);
   return { signature: result.signature, bondLamports: turnDown.bondLamports };

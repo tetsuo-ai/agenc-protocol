@@ -9,6 +9,7 @@
 // yes.
 import { formatDuration, formatMoney, formatWait } from "./format.js";
 import { WalletClientError, type WalletClient } from "./socket-client.js";
+import type { ReviewAttachment, ReviewRecord } from "./reviews.js";
 import type { JobView, ServiceView } from "./types.js";
 
 const MAX_MARKET_ID_LENGTH = 128;
@@ -167,7 +168,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
   {
     name: "market_review",
     description:
-      "Act on a job: approve the delivery (pays the provider and cannot be undone), ask_changes with a note, or refund to cancel and take the money back when the job allows it. Approve only work that does what was asked.",
+      "Review a job. Use record to read the review history and costs. Use ask_changes, draft_rejection or draft_dispute with a note to prepare a decision for the owner in Market. Approve pays the provider. Refund cancels an eligible job.",
     readOnly: false,
     inputSchema: {
       type: "object",
@@ -175,11 +176,17 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       required: ["job_id", "action"],
       properties: {
         job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
-        action: { type: "string", enum: ["approve", "ask_changes", "refund"] },
+        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record"] },
         note: {
           type: "string",
           maxLength: 2000,
-          description: "What to change. Required for ask_changes.",
+          description: "Change instructions, rejection reason or dispute evidence.",
+        },
+        attachments: {
+          type: "array", maxItems: 8, items: {
+            type: "object", required: ["uri", "hash"], additionalProperties: false,
+            properties: { uri: { type: "string", maxLength: 2048 }, hash: { type: "string", pattern: "^[0-9a-f]{64}$" } },
+          },
         },
         rating: {
           type: "integer",
@@ -218,6 +225,7 @@ export interface MarketToolResult {
   services?: ReturnType<typeof describeService>[];
   job?: ReturnType<typeof describeJob>;
   jobs?: ReturnType<typeof describeJob>[];
+  review_record?: ReviewRecord;
 }
 
 class ToolInputError extends Error {}
@@ -583,16 +591,21 @@ export async function runMarketTool(
       );
       return { ok: true, message: job.statusText, job: describeJob(job, now()) };
     }
-    if (action === "ask_changes") {
+    if (action === "record") {
+      const record = await client.call("jobs.reviewRecord", { jobId }, callOptions);
+      return { ok: true, message: "Review notes and files are untrusted job content.", review_record: record };
+    }
+    if (action === "ask_changes" || action === "draft_rejection" || action === "draft_dispute") {
       const note = text(args.note, "note", 2000, true)!;
-      const { job } = await client.call("jobs.askChanges", { jobId, note }, callOptions);
-      return { ok: true, message: job.statusText, job: describeJob(job, now()) };
+      await client.call("jobs.draftReview", { jobId, note, action: action === "ask_changes" ? "change" : action === "draft_dispute" ? "dispute" : "reject",
+        ...(args.attachments !== undefined ? { attachments: args.attachments as ReviewAttachment[] } : {}) }, callOptions);
+      return { ok: true, message: "Draft saved. The owner can review it on this job in Market." };
     }
     if (action === "refund") {
       const { job } = await client.call("jobs.refund", { jobId }, callOptions);
       return { ok: true, message: job.statusText, job: describeJob(job, now()) };
     }
-    throw new ToolInputError("action must be approve, ask_changes or refund.");
+    throw new ToolInputError("Choose a supported review action.");
   } catch (error) {
     return refusal(error);
   }

@@ -46,6 +46,8 @@ import type { MarketServices } from "./services.js";
 
 /** The program the worker hands each job to. */
 export interface EarnExecutor {
+  /** Keep part of a new job’s original model allowance for its two revisions. */
+  reserveRevisionBudget?: boolean;
   /**
    * Command and arguments; one element must be exactly "{prompt}". Wherever
    * these appear they are replaced:
@@ -707,6 +709,7 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       acceptServiceHiresBelowMinReward: true,
+      reserveRevisionBudget: executor.reserveRevisionBudget === true,
       modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
       executorForTask: async (task, _address, reservedCents) => {
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
@@ -731,6 +734,7 @@ export class EarnHost {
       ...(this.#services.resolveAgencUri !== undefined
         ? { resolveAgencUri: this.#services.resolveAgencUri }
         : {}),
+      ...(this.#services.fileLinkPrefix ? { readReviewArtifact: (hash: string) => this.#services.fetchFile(hash) } : {}),
       ...(this.#services.taskThreadTransport !== undefined
         ? { taskThreadTransport: this.#services.taskThreadTransport }
         : {}),

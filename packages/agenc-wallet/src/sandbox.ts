@@ -5,6 +5,7 @@
 //
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
+import { reviewAnchor, type ReviewAnchor } from "./review-history.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -381,6 +382,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
   // The agent each settled job paid, and the log of the transaction that
   // settled it: the history the live network keeps and litesvm does not.
+  const reviewEntries = new Map<Address, ReviewAnchor[]>();
   const settledBy = new Map<Address, Address>();
   const settledLogs = new Map<Address, readonly string[]>();
   // The log of the transaction that hired each job, which names its service.
@@ -410,10 +412,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const signal = transportSignal();
       signal?.throwIfAborted();
       syncClock();
+      const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
+      const balances = new Map(message.staticAccounts.map(address => [address, BigInt(svm.getBalance(address) ?? 0)]));
       const result = await base.sendAndConfirm(signedTx);
       if (signal) landedListingSends.add(result.signature);
       try {
-        const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
         for (const account of message.staticAccounts) {
           known.add(account);
           rememberHire(account);
@@ -423,6 +426,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           if (programAddress === undefined) continue;
           const accounts = (instruction.accountIndices ?? []).map((index: number) => message.staticAccounts[index]);
           if (accounts.some((account: Address | undefined) => account === undefined)) continue;
+          const subject = accounts[0];
+          const anchor = reviewAnchor({ programAddress, accounts: accounts as Address[], data: Uint8Array.from(instruction.data ?? []) }, result.logs, result.signature, {
+            fee: BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length),
+            balanceChange: address => BigInt(svm.getBalance(address) ?? 0) - balances.get(address)!,
+          });
+          if (anchor && subject) reviewEntries.set(subject, [...(reviewEntries.get(subject) ?? []), anchor]);
           const settled = settlementOf({
             programAddress,
             accounts: accounts as Address[],
@@ -489,6 +498,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     gpa,
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
+    reviewHistory: async task => ({ entries: reviewEntries.get(task) ?? [], complete: true }),
     findSettledDelivery: async (task, creator) => {
       const worker = settledBy.get(task);
       const logs = settledLogs.get(task);
@@ -761,6 +771,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     resolveAgencUri,
     async postChangeRequest(envelope) {
+      const bytes = new TextEncoder().encode(taskThread.canonicalEnvelopeJson(envelope));
+      deliveries.set(sha256Hex(bytes), bytes);
       const list = threads.get(envelope.taskPda) ?? [];
       list.push(envelope);
       threads.set(envelope.taskPda, list);

@@ -8,7 +8,7 @@
 // the agent says it for good: it names the job and the agent, the program
 // checked both before it paid, and the events the program logged in it say
 // how much the job paid and what fee the marketplace took.
-import { AccountRole, getBase58Encoder, type Address } from "@solana/kit";
+import { AccountRole, getBase58Encoder, type Address, type Signature } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencCoordinationInstruction,
@@ -68,7 +68,7 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 /** An instruction as JSON-RPC sends one it cannot read itself: addresses and base58 bytes. */
-function sentInstruction(value: unknown): SentInstruction | null {
+export function sentInstruction(value: unknown): SentInstruction | null {
   const entry = record(value);
   if (entry === null || typeof entry.programId !== "string" || typeof entry.data !== "string") return null;
   const accounts = entry.accounts;
@@ -225,7 +225,7 @@ export const SETTLEMENT_HISTORY_LIMIT = 20;
 export interface SettlementHistoryRpc {
   getSignaturesForAddress(
     address: Address,
-    config: { limit: number; commitment: "confirmed" },
+    config: { limit: number; commitment: "confirmed"; before?: Signature },
   ): { send(): Promise<readonly { signature?: unknown; err?: unknown }[]> };
   getTransaction(
     signature: string,

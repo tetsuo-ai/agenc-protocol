@@ -70,14 +70,14 @@ describe("market tool IDs", () => {
     const jobId = "earn_agent_qkhtzxfpd_gf_2PuKGjGNyhUyaGoF98LUsW5JGjqRayXGyCfVQnSajAt3";
     expect(jobId).toHaveLength(68);
     const answer = { job: job({ id: jobId, role: "working" }) };
-    const { client, calls } = wallet({ "jobs.get": answer, "jobs.askChanges": answer });
+    const { client, calls } = wallet({ "jobs.get": answer, "jobs.draftReview": { draft: {} } });
     await runMarketTool(client, "agent_qkhtzxfpd_gf", "market_status", { job_id: jobId });
     await runMarketTool(client, "agent_qkhtzxfpd_gf", "market_review", {
       job_id: jobId, action: "ask_changes", note: "Use two lines.",
     });
     expect(calls).toEqual([
       ["jobs.get", { jobId }],
-      ["jobs.askChanges", { jobId, note: "Use two lines." }],
+      ["jobs.draftReview", { jobId, action: "change", note: "Use two lines." }],
     ]);
   });
 
