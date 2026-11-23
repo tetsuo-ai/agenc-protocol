@@ -185,7 +185,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes"] as const);
 
 export interface WalletOverview {
   /**
@@ -193,6 +193,7 @@ export interface WalletOverview {
    * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
    *   the agent takes no new job. While its job is still in progress,
    *   `earn.state` is "finishing", never "off".
+   * - "job-spend-quotes": durable call outcomes, paged approvals and all-in daily limits.
    * - "job-terms": panel quotes and approvals bind the payer, costs and brief.
    * Clients may ignore this field and any capability they do not recognize.
    */
@@ -244,6 +245,8 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  maxPriceCents?: number;
+  specHashHex?: string;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;
@@ -494,6 +497,9 @@ export interface JobTerms {
 }
 
 export interface ApprovalView {
+  networkFees?: Money;
+  retainedRent?: Money;
+  cancellationRent?: Money;
   /** Maximum marketplace share at settlement, included in the price. */
   marketFee?: { bps: number; amount: Money };
   refundableDeposit?: Money;

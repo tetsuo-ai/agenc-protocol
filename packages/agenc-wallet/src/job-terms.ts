@@ -3,6 +3,23 @@ import type { AmountInput } from "./client/protocol.js";
 import type { JobTerms } from "./client/types.js";
 import { WalletError } from "./errors.js";
 
+import { tidyText } from "./services.js";
+
+/** Checks a delivery has to pass, as a buyer wrote them: at most 8 lines of 300 characters. */
+export function checkedAcceptance(list: readonly string[] | undefined): string[] {
+  if (list !== undefined && !Array.isArray(list)) throw new WalletError("BAD_REQUEST", "Provide the checks as a list.");
+  const acceptance = (list ?? []).map((item) => {
+    if (typeof item !== "string" || item.trim().length > 300) throw new WalletError("BAD_REQUEST", "Use up to 300 characters per check.");
+    const line = tidyText(item, 300);
+    if (line === null) throw new WalletError("BAD_REQUEST", "A check cannot be empty.");
+    return line;
+  });
+  if (acceptance.length > 8) {
+    throw new WalletError("BAD_REQUEST", "Use at most 8 checks.");
+  }
+  return acceptance;
+}
+
 export interface TermsInput {
   deadline?: number;
   deadlineDays?: number;
@@ -43,7 +60,7 @@ export function resolveJobTerms(input: TermsInput, clock: number, defaultReview:
 }
 
 /** Use the caller's amount and clock choice so a retry survives rate and clock changes. */
-export function jobIdentity(input: TermsInput & { request: string; acceptance?: string[]; listing?: string; reward?: AmountInput; maxPriceCents?: number }, quoteOnly: boolean): string {
+export function jobIdentity(input: TermsInput & { request: string; acceptance?: string[]; listing?: string; expectedPriceLamports?: string; expectedSpecHash?: string; reward?: AmountInput; maxPriceCents?: number }, quoteOnly: boolean): string {
   if (typeof input.request !== "string") throw new WalletError("BAD_REQUEST", "Describe the work.");
   const reward = input.reward;
   if (reward !== undefined && (typeof reward !== "object" || reward === null || ("usdCents" in reward && "lamports" in reward))) {
@@ -51,8 +68,9 @@ export function jobIdentity(input: TermsInput & { request: string; acceptance?: 
   }
   const amount = reward && ("usdCents" in reward ? ["usdCents", reward.usdCents] : ["lamports", reward.lamports]);
   return createHash("sha256").update(JSON.stringify([
-    quoteOnly, input.request.trim(), input.acceptance ?? [], input.listing, amount, input.maxPriceCents,
+    quoteOnly, input.request.trim(), checkedAcceptance(input.acceptance), input.listing, amount, input.maxPriceCents,
     input.deadline, input.deadline === undefined && !input.listing ? input.deadlineDays ?? 7 : input.deadlineDays,
     input.reviewWindowSecs, input.minReputation ?? 0, input.requiredCapabilities ?? "1",
+    ...(input.expectedPriceLamports || input.expectedSpecHash ? [input.expectedPriceLamports, input.expectedSpecHash] : []),
   ])).digest("hex");
 }

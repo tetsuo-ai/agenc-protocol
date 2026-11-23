@@ -99,6 +99,7 @@ export interface AgentRecord {
   earnedLamports: string;
   /** Automatic top-ups in the last day, for the per-day rule. */
   refills: AllowanceCharge[];
+  jobSpends?: { id: string; at: number; microcents: string | null }[];
   earn: {
     enabled: boolean;
     minPayCents: number;
@@ -167,7 +168,9 @@ export interface JobRecord {
   inputFingerprint?: string;
   maxPriceCents?: number;
   /** Costs and expiry of the exact quote authorized for this job. */
-  approvedCosts?: { total: string; kept: string; protocolFeeBps: number; expiresAt: number };
+  ownerApproved?: boolean;
+  approvalId?: string;
+  approvedCosts?: { networkFees?: string; cancellationRent?: string; total: string; kept: string; protocolFeeBps: number; expiresAt: number };
   id: string;
   role: "buying" | "working";
   /**
@@ -333,6 +336,9 @@ export interface JobRecord {
 }
 
 export interface ApprovalRecord {
+  networkFees?: string;
+  retainedRent?: string;
+  cancellationRent?: string;
   protocolFeeBps?: number;
   terms?: JobTerms;
   acceptance?: string[];
@@ -378,11 +384,14 @@ export interface WalletState {
     result?: JobResult;
     request?: string;
     acceptance?: string[];
+    terms?: JobTerms;
     updatedAt?: number;
     reviewDeadlineAt?: number;
     turnDown?: JobRecord["turnDown"];
   }>;
 
+  /** Final keyed outcomes outlive the activity feed and finished-job list. */
+  callReceipts?: Record<string, JobRecord>;
   approvals: Record<string, ApprovalRecord>;
   activity: ActivityRecord[];
   /** Last known dollars-per-SOL, kept so an offline start can still estimate. */
@@ -456,6 +465,12 @@ function prune(state: WalletState): void {
     .filter(isFinished)
     .sort((a, b) => a.updatedAt - b.updatedAt);
   for (const job of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED_JOBS))) {
+    if (job.idempotencyKey) {
+      const key = JSON.stringify([job.agentId, job.kind ?? "hire", job.idempotencyKey]);
+      (state.callReceipts ??= {})[key] = {
+        ...job, jobSpec: {}, result: null, changes: [], request: "", acceptance: [],
+      };
+    }
     delete state.jobs[job.id];
   }
   const liveJobs = new Set(Object.keys(state.jobs));
@@ -568,6 +583,15 @@ export class StateStore {
     // An agent from a journal written before several services keeps its one
     // service as the first of its list.
     for (const agent of Object.values(parsed.agents)) {
+      if (agent.jobSpends === undefined) {
+        // Older journals did not record the dollar rate at signing. Keep
+        // those jobs in the window and leave new spending to the owner.
+        agent.jobSpends = Object.values(parsed.jobs).flatMap(job => {
+          const at = job.hireAttemptAt ?? job.hiredAt;
+          return job.agentId === agent.id && job.role === "buying" && job.payer === "agent" &&
+            at != null && at > now - 86_400_000 ? [{ id: job.id, at, microcents: null }] : [];
+        });
+      }
       if (agent.earn.offers === undefined) {
         agent.earn.offers = agentOffers(agent);
         delete agent.earn.offer;
