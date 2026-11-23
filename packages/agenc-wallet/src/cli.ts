@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { watch } from "node:fs";
 /**
  * `agenc-wallet <init|serve|status>` — run the wallet as a small local service.
  *
@@ -216,7 +217,13 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
       ? {}
       : { maxRewardLamports: maxReward === null ? null : BigInt(maxReward) }),
     ...(typeof chosenRoomSetting === "string" && path.isAbsolute(chosenRoomSetting)
-      ? { chosenRoomEnabled: () => {
+      ? { watchChosenRoom: (revoke: () => void) => {
+        const watcher = watch(path.dirname(chosenRoomSetting), (_event, file) => {
+          if (!file || file === path.basename(chosenRoomSetting)) revoke();
+        });
+        watcher.on("error", revoke);
+        return () => watcher.close();
+      }, chosenRoomEnabled: () => {
         try {
           return JSON.parse(readFileSync(chosenRoomSetting, "utf8"))?.takeJobsFromOthers === true;
         } catch { return false; }

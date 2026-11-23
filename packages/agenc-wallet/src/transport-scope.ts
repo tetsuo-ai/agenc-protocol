@@ -10,6 +10,7 @@ export interface AllowanceCharge {
   usdCents?: number | null;
   id?: string;
   signature?: string;
+  work?: { lastValidBlockHeight: string; fee: string; rate: number };
 }
 
 export type ListingOperation =

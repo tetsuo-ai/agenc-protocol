@@ -95,6 +95,7 @@ export interface OfferView {
 export interface EarnView {
   /** Present only when the host offers an isolated room for chosen jobs. */
   chooseOpenJobs?: boolean;
+  heldChosenJob?: boolean;
   /** The person switched earning on for this agent. */
   enabled: boolean;
   state: EarnState;
@@ -187,7 +188,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "chosen-work"] as const);
 
 export interface WalletOverview {
   /**
@@ -195,6 +196,7 @@ export interface WalletOverview {
    * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
    *   the agent takes no new job. While its job is still in progress,
    *   `earn.state` is "finishing", never "off".
+   * - "chosen-work": a verified picker and per-action owner quotes with itemized transfers.
    * Clients may ignore this field and any capability they do not recognize.
    */
   capabilities: string[];
@@ -562,6 +564,13 @@ export interface WalletErrorShape {
 export type WorkAction = "claim" | "submit" | "release";
 
 export interface WorkerJobView {
+  brief: string;
+  direct: boolean;
+  selectionDeadline: number | null;
+  buyer: string;
+  worker: string;
+  treasury: string;
+  futureRent: Money;
   task: string;
   title: string;
   request: string;
@@ -588,6 +597,8 @@ export interface WorkerJobView {
 }
 
 export interface WorkerQuote {
+  flows: { label: string; from: string; to: string; amount: Money }[];
+  balances: { account: string; net: Money }[];
   id: string;
   agentId: string;
   action: WorkAction;
