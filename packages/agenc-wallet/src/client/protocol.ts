@@ -8,6 +8,7 @@ import type {
   ApprovalView,
   JobStatus,
   JobView,
+  JobResult,
   Money,
   ServiceView,
   WalletOverview,
@@ -134,10 +135,12 @@ export interface WalletMethods {
   };
 
   "jobs.list": {
-    params: { role?: "buying" | "working"; agentId?: string; limit?: number };
+    params: { role?: "buying" | "working"; agentId?: string; limit?: number; before?: string };
     result: { jobs: JobView[] };
   };
   "jobs.get": { params: { jobId: string }; result: { job: JobView } };
+  /** Complete verified delivery, including text beyond the list preview. */
+  "jobs.delivery": { params: { jobId: string }; result: { result: JobResult } };
   /**
    * One file of a job's delivery, fetched from the delivery store by its
    * fingerprint and checked against it. Owner only: a file's bytes are for a
@@ -241,6 +244,7 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "approvals.wait",
   "jobs.list",
   "jobs.get",
+  "jobs.delivery",
   "jobs.wait",
   "jobs.approve",
   "jobs.askChanges",

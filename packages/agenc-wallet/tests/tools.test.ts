@@ -18,6 +18,7 @@ function job(patch: Partial<JobView> = {}): JobView {
     kind: "request",
     agentId: "agent_1",
     title: "A haiku about rain",
+    acceptance: [],
     request: "A haiku about rain.",
     price: usd(30),
     status: "waiting",

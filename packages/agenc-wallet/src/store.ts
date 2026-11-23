@@ -97,6 +97,8 @@ export interface AgentRecord {
     enabled: boolean;
     minPayCents: number;
     jobsDone: number;
+    /** Idempotency receipts for replayed worker settlements. */
+    creditedTasks?: Record<string, true>;
     lastError: string | null;
     /**
      * The services this agent offers, oldest first. A journal from before an
@@ -229,6 +231,9 @@ export interface JobRecord {
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
+  /** Durable download pointer, retained even when a fetch fails or the job is paid. */
+  deliveryPointer?: { hash: string; dataBase64: string };
+
   /**
    * Whether the provider has a marketplace record of turn-downs, read while
    * the job is delivered until it has one (a record is never removed). Since
@@ -343,6 +348,16 @@ export interface WalletState {
   createdAt: number;
   agents: Record<string, AgentRecord>;
   jobs: Record<string, JobRecord>;
+  /** Seller delivery cache and durable review-change timestamps. */
+  workRecords?: Record<string, {
+    result?: JobResult;
+    request?: string;
+    acceptance?: string[];
+    updatedAt?: number;
+    reviewDeadlineAt?: number;
+    turnDown?: JobRecord["turnDown"];
+  }>;
+
   approvals: Record<string, ApprovalRecord>;
   activity: ActivityRecord[];
   /** Last known dollars-per-SOL, kept so an offline start can still estimate. */

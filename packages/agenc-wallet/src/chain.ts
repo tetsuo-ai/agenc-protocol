@@ -31,6 +31,7 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
+import { readSettledDelivery, type SettledDelivery } from "./delivery-history.js";
 import { assertSigningRevision, revisionGatedClient } from "./revision.js";
 import {
   readSettlementFacts,
@@ -96,6 +97,8 @@ export interface Chain {
   readonly transferFeeLamports: bigint;
   /** Most recent verified settlement transaction for a task, when known. */
   findSettlementSignature?(task: Address): Promise<string | null>;
+  /** Delivery commitment from a settled task's authenticated transaction history. */
+  findSettledDelivery?(task: Address, creator: Address): Promise<SettledDelivery | null>;
   /**
    * The agent the transaction that settled a finished task paid, read from
    * the task's history on the chain; null when none of it settles the task.
@@ -440,6 +443,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
+    findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>
       network(() => readSettlementFacts(rpc, task, creator, options)),

@@ -131,6 +131,10 @@ export interface EarnedJob {
   earnedLamports: bigint | null;
   at: number;
   resultHashHex: string | null;
+  resultUri: string | null;
+  request: string;
+  acceptance: string[];
+  createdAt: number;
   settlementSignature: string | null;
   /** What the job is called in its job spec: the buyer's words. */
   title: string | null;
@@ -307,9 +311,8 @@ export class EarnHost {
    * work: record what was paid since its loop last ran, have a delivery whose
    * buyer let the review time pass paid, and give back the hold on a job it
    * gave up once that job's time is over. Its loop must not be running: this
-   * is for an agent that takes no jobs (earning switched off), before it
-   * stops for good. Failures are logged; the chain stays the judge of what
-   * is still open.
+   * also runs during wallet housekeeping while earning is switched off.
+   * Failures are logged; the chain stays the judge of what is still open.
    */
   async tidyUp(agent: EarnAgent): Promise<void> {
     if (this.#running.has(agent.agentId)) return;
@@ -360,6 +363,10 @@ export class EarnHost {
         earnedLamports: null,
         at: Date.parse(claim.claimedAt) || 0,
         resultHashHex: null,
+        resultUri: null,
+        request: claim.jobEvidence?.request ?? "",
+        acceptance: claim.jobEvidence?.acceptance ?? [],
+        createdAt: Date.parse(claim.claimedAt) || 0,
         settlementSignature: null,
         title: claim.title ?? null,
         listing: claim.listing ?? null,
@@ -374,10 +381,18 @@ export class EarnHost {
       jobs.push({
         task: record.task,
         rewardLamports: BigInt(record.rewardAmount),
-        state: !record.settled ? "delivered" : record.outcome === "accepted" ? "paid" : "not_paid",
+        state: !record.settled
+          ? "delivered"
+          : record.outcome === "accepted" || (record.outcome === "closed" && earned !== null && earned > 0n)
+            ? "paid"
+            : "not_paid",
         earnedLamports: earned,
         at: Date.parse(record.settledAt ?? record.submittedAt) || 0,
         resultHashHex: record.resultHashHex,
+        resultUri: record.resultUri,
+        request: record.jobEvidence?.request ?? "",
+        acceptance: record.jobEvidence?.acceptance ?? [],
+        createdAt: Date.parse(record.submittedAt) || 0,
         settlementSignature: record.settlementSignature ?? null,
         title: record.title ?? null,
         listing: record.listing ?? null,
@@ -392,6 +407,10 @@ export class EarnHost {
         earnedLamports: null,
         at: Date.parse(job.failedAt) || 0,
         resultHashHex: null,
+        resultUri: null,
+        request: "",
+        acceptance: [],
+        createdAt: Date.parse(job.claimedAt) || 0,
         settlementSignature: null,
         title: job.title ?? null,
         listing: job.listing ?? null,
@@ -716,7 +735,7 @@ export class EarnHost {
       case "settlement.observed": {
         const earned =
           typeof event.earnedLamports === "string" ? BigInt(event.earnedLamports) : 0n;
-        if (event.outcome === "accepted" && earned > 0n && typeof event.task === "string") {
+        if ((event.outcome === "accepted" || event.outcome === "closed") && earned > 0n && typeof event.task === "string") {
           this.#notify(agentId, {
             type: "paid",
             task: event.task,
