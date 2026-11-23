@@ -17,6 +17,16 @@ import type {
 /** An amount a caller names either in US cents or in lamports. */
 export type AmountInput = { usdCents: number } | { lamports: string };
 
+/** The program accepts listing deadlines up to one year. */
+export const MAX_LISTING_DELIVERY_SECS = 31_536_000;
+
+export interface ServiceOfferInput {
+  name: string;
+  summary: string;
+  price: AmountInput;
+  deliverySecs?: number;
+}
+
 export interface WalletMethods {
   /**
    * Balances, agents, counts and service `capabilities` on every response.
@@ -217,7 +227,7 @@ export interface WalletMethods {
   };
   /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
   "earn.quote": {
-    params: { agentId: string; offerId?: string; offer?: { name: string; summary: string; price: AmountInput } };
+    params: { agentId: string; offerId?: string; offer?: ServiceOfferInput };
     result: import("./types.js").EarnFundingQuote;
   };
   /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
@@ -237,7 +247,7 @@ export interface WalletMethods {
     params: {
       agentId: string;
       offerId?: string;
-      offer: { name: string; summary: string; price: AmountInput } | null;
+      offer: ServiceOfferInput | null;
     };
     result: AgentView;
   };

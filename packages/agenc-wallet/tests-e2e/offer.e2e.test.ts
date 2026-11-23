@@ -5,6 +5,7 @@ import { setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Address } from "@solana/kit";
+import { getServiceListingEncoder } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentView } from "../src/client/types.js";
 import { WalletError } from "../src/errors.js";
@@ -575,3 +576,38 @@ describe("offering a service", () => {
     });
   }, 120_000);
 });
+
+it("lets the seller repair an unset delivery period on the existing listing", async () => {
+  const { current, worker } = await startOffering();
+  const { wallet, sandbox } = current;
+  const offer = worker.earn.offer!;
+  const listing = offer.listing as Address;
+  const account = (await readListing(sandbox.chain, listing))!;
+  const raw = sandbox.market.svm.getAccount(listing);
+  sandbox.market.svm.setAccount({ ...raw, data: new Uint8Array(getServiceListingEncoder().encode({
+    ...account, defaultDeadlineSecs: 0n,
+  })) } as never);
+  await wallet.tick();
+  const missing = (await agentView(current, worker.id)).earn.offer!;
+  expect(missing.deliverySecs).toBeNull();
+  expect(missing.statusText).toContain("Set a delivery period");
+  const buyer = await wallet.createAgent("Buyer");
+  const input = { agentId: buyer.id, listing, request: "Write a line." };
+  await expect(wallet.hire(input)).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+  for (const deliverySecs of [0, 1.5, 31_536_001]) {
+    await expect(wallet.quoteEarn(worker.id, { ...LINE_WRITER, deliverySecs }, offer.id)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(wallet.setOffer(worker.id, { ...LINE_WRITER, deliverySecs }, offer.id)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  }
+  const edit = { ...LINE_WRITER, deliverySecs: 1800 };
+  const cost = await wallet.quoteEarn(worker.id, edit, offer.id);
+  expect(BigInt(cost.listings.lamports)).toBeGreaterThan(0n);
+  if (cost.requiresApproval) await wallet.approveEarnFunding(cost.quoteId);
+  await wallet.setOffer(worker.id, edit, offer.id);
+  expect((await readListing(sandbox.chain, listing))!.defaultDeadlineSecs).toBe(1800n);
+  const repaired = (await agentView(current, worker.id)).earn.offers;
+  expect(repaired).toHaveLength(1);
+  expect(repaired[0]).toMatchObject({ id: offer.id, listing, deliverySecs: 1800 });
+  const { approval } = await wallet.hire(input);
+  expect(approval!.terms!.listingDurationSecs).toBe(1800);
+  expect((await wallet.decideApproval(approval!.id, true)).status).toBe("waiting");
+}, 60_000);

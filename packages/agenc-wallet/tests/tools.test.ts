@@ -296,3 +296,9 @@ describe("a service as an agent reads it", () => {
     expect(said.record).toMatch(/could not be read/);
   });
 });
+
+it("tells a buyer why chat cannot hire a listing without a delivery period", async () => {
+  expect(await described({ ...SERVICE, deliverySecs: null })).toMatchObject({
+    delivery: "The seller must set a delivery period before you can hire this service.",
+  });
+});

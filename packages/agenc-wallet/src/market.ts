@@ -1547,6 +1547,7 @@ export async function sendUpdateListing(
     providerAgent: Address;
     priceLamports: bigint;
     spec: { hash: Uint8Array; uri: string } | null;
+    deliverySecs?: number | undefined;
   },
 ): Promise<string> {
   return withListingOperation({ kind: "update", listings: [input.listing], lamports: "0" }, async () => {
@@ -1561,7 +1562,7 @@ export async function sendUpdateListing(
           : { specHash: input.spec.hash, specUri: input.spec.uri }),
         tags: null,
         requiredCapabilities: null,
-        defaultDeadlineSecs: null,
+        defaultDeadlineSecs: input.deliverySecs === undefined ? null : BigInt(input.deliverySecs),
         maxOpenJobs: 1,
         operator: null,
         operatorFeeBps: null,

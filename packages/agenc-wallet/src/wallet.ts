@@ -23,7 +23,7 @@ import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
-import type { AmountInput, WalletEvent } from "./client/protocol.js";
+import { MAX_LISTING_DELIVERY_SECS, type AmountInput, type ServiceOfferInput, type WalletEvent } from "./client/protocol.js";
 import { ceilingLamports, jobNetworkFees, microcents, remainingJobMicrocents, reserveJobSpend, type JobDeposits } from "./job-money.js";
 import { checkedAcceptance, jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
 import { legacyRefreshLimit, buildJobQuote, checkPriceLimit, jobCosts } from "./job-quote.js";
@@ -252,6 +252,12 @@ const FEE_RATE_RETRY_MS = 60_000;
 const MIN_OFFER_PRICE_LAMPORTS = 1_000n;
 /** How long an agent gets to deliver a job hired from its own service. */
 const OFFER_DELIVERY_SECS = 60 * 60;
+
+function checkOfferDelivery(seconds: number | undefined): void {
+  if (seconds !== undefined && (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_LISTING_DELIVERY_SECS)) {
+    throw new WalletError("BAD_REQUEST", "Set a delivery period from 1 second to 365 days.");
+  }
+}
 /** The marketplace's safety check is asked at most this often per service. */
 const OFFER_CHECK_RETRY_MS = 60_000;
 /** Steps one housekeeping pass may take for one offer (create, update, switch, check). */
@@ -980,7 +986,10 @@ export class AgencWallet {
       summary: offer.summary,
       price: money(offer.priceLamports, rate),
       status,
-      statusText: statusText[status],
+      deliverySecs: offer.deliverySecs > 0 ? offer.deliverySecs : null,
+      statusText: offer.listed && !offer.deliverySecs
+        ? (status === "live" ? "" : statusText[status] + " ") + "Set a delivery period so buyers can hire this service."
+        : statusText[status],
       listed: offer.listed,
       wanted: offer.wanted,
     };
@@ -1790,7 +1799,7 @@ export class AgencWallet {
           rating: null,
           ratingCount: 0,
           jobsDone: 0,
-          deliverySecs: offer.deliverySecs,
+          deliverySecs: offer.deliverySecs > 0 ? offer.deliverySecs : null,
           specHashHex: offer.specHashHex,
         });
       }
@@ -2329,7 +2338,10 @@ export class AgencWallet {
         ? legacyRefreshLimit(old)
         : old.buyerMaxPriceCents ?? undefined;
       checkPriceLimit(BigInt(old.priceLamports), cap, rate);
-      const result = await this.#queueJob({ ...old, maxPriceCents: cap }, old.payer, entry.service, rate, false, id);
+      const replacement = { ...old };
+      if (cap === undefined) delete replacement.maxPriceCents;
+      else replacement.maxPriceCents = cap;
+      const result = await this.#queueJob(replacement, old.payer, entry.service, rate, false, id);
       return { approval: result.approval! };
     });
   }
@@ -4252,6 +4264,7 @@ export class AgencWallet {
           (await this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)) + FEE_HEADROOM_LAMPORTS;
       } else if (
         account.price !== BigInt(offer.priceLamports) ||
+        (offer.pendingDeliverySecs !== undefined && account.defaultDeadlineSecs !== BigInt(offer.pendingDeliverySecs)) ||
         values.bytesToHex(new Uint8Array(account.specHash)) !== offer.specHashHex ||
         account.specUri !== offer.specUri ||
         Number(account.state) === LISTING_STATE_PAUSED
@@ -4296,7 +4309,7 @@ export class AgencWallet {
 
   async quoteEarn(
     agentId: string,
-    input?: { name: string; summary: string; price: AmountInput },
+    input?: ServiceOfferInput,
     offerId?: string,
   ): Promise<EarnFundingQuote> {
     const agent = this.#agentRecord(agentId);
@@ -4307,6 +4320,7 @@ export class AgencWallet {
       if (input === null || typeof input !== "object") {
         throw new WalletError("BAD_REQUEST", "That service is not valid.");
       }
+      checkOfferDelivery(input.deliverySecs);
       const name = tidyText(input.name, 60);
       const summary = tidyText(input.summary, 280);
       if (name === null || summary === null || Buffer.byteLength(name, "utf8") > LISTING_NAME_MAX_BYTES) {
@@ -4335,7 +4349,8 @@ export class AgencWallet {
         summary,
         category: "other",
         priceLamports: price.toString(),
-        deliverySecs: OFFER_DELIVERY_SECS,
+        deliverySecs: previous?.deliverySecs ?? OFFER_DELIVERY_SECS,
+        pendingDeliverySecs: input.deliverySecs ?? previous?.pendingDeliverySecs,
         spec,
         specHashHex: hash.hex,
         specUri: previous?.specHashHex === hash.hex ? (previous.specUri ?? null) : null,
@@ -4770,7 +4785,7 @@ export class AgencWallet {
    */
   async setOffer(
     agentId: string,
-    input: { name: string; summary: string; price: AmountInput } | null,
+    input: ServiceOfferInput | null,
     offerId?: string,
   ): Promise<AgentView> {
     const agent = this.#agentRecord(agentId);
@@ -4808,6 +4823,7 @@ export class AgencWallet {
     if (!this.#earn.available) {
       throw new WalletError("NOT_AVAILABLE", "This computer is not set up to do jobs yet.");
     }
+    checkOfferDelivery(input.deliverySecs);
     const name = tidyText(input.name, 60);
     if (name === null) throw new WalletError("BAD_REQUEST", "Give the service a name.");
     if (Buffer.byteLength(name, "utf8") > LISTING_NAME_MAX_BYTES) {
@@ -4855,7 +4871,8 @@ export class AgencWallet {
       const list = agentOffers(entry);
       const previous = list.find((offer) => offer.id === id) ?? null;
       const sameWords = previous !== null && previous.specHashHex === hash.hex;
-      if (previous?.status === "awaiting_approval" && sameWords && previous.priceLamports === price) return;
+      const samePeriod = input.deliverySecs === undefined || input.deliverySecs === (previous?.pendingDeliverySecs ?? previous?.deliverySecs);
+      if (previous?.status === "awaiting_approval" && sameWords && samePeriod && previous.priceLamports === price) return;
       const next: OfferRecord = {
         id,
         listingIdHex: previous?.listingIdHex ?? values.bytesToHex(values.randomId32()),
@@ -4866,12 +4883,13 @@ export class AgencWallet {
         category,
         priceLamports: price,
         deliverySecs: previous?.deliverySecs ?? OFFER_DELIVERY_SECS,
+        pendingDeliverySecs: input.deliverySecs ?? previous?.pendingDeliverySecs,
         spec,
         specHashHex: hash.hex,
         specUri: sameWords ? (previous.specUri ?? null) : null,
         wanted: true,
         status:
-          previous !== null && previous.status === "live" && previous.wanted && sameWords && previous.priceLamports === price
+          previous !== null && previous.status === "live" && previous.wanted && sameWords && samePeriod && previous.priceLamports === price
             ? "live"
             : "getting_ready",
         error: null,
@@ -4986,7 +5004,8 @@ export class AgencWallet {
               if (!again) {
                 this.#patchOffer(agentId, offer.id, (entry) => {
                   if (entry.wanted === offer.wanted && entry.priceLamports === offer.priceLamports &&
-                      entry.specHashHex === offer.specHashHex) entry.reconciledForLive = wantLive;
+                      entry.specHashHex === offer.specHashHex &&
+                      (entry.pendingDeliverySecs === undefined || entry.pendingDeliverySecs === offer.pendingDeliverySecs)) entry.reconciledForLive = wantLive;
                 });
               }
             } catch (error) {
@@ -5033,7 +5052,8 @@ export class AgencWallet {
         // The owner may have edited or withdrawn the offer while funding was being checked.
         if (
           !this.#agentRecord(agentId).earn.enabled || !offer.wanted ||
-          offer.specHashHex !== attempted.specHashHex || offer.priceLamports !== attempted.priceLamports
+          offer.specHashHex !== attempted.specHashHex || offer.priceLamports !== attempted.priceLamports ||
+          offer.pendingDeliverySecs !== attempted.pendingDeliverySecs
         ) return;
         offer.status = "awaiting_approval";
         offer.lastCheckAt = null;
@@ -5096,6 +5116,7 @@ export class AgencWallet {
         // Back exactly as it was: same price, same words, where they are.
         account.maxOpenJobs === 1 &&
         account.price === BigInt(offer.priceLamports) &&
+        (offer.pendingDeliverySecs === undefined || account.defaultDeadlineSecs === BigInt(offer.pendingDeliverySecs)) &&
         values.bytesToHex(new Uint8Array(account.specHash)) === offer.specHashHex &&
         (offer.specUri ?? null) !== null &&
         account.specUri === offer.specUri
@@ -5178,7 +5199,7 @@ export class AgencWallet {
         async () => sendCreateListing(this.#chain, await this.#vault.signer(agent.keyId), {
           providerAgent, listingId, name: offer.name, category: offer.category,
           specHash: values.hexToBytes(offer.specHashHex), specUri,
-          priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.deliverySecs,
+          priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.pendingDeliverySecs ?? offer.deliverySecs,
         }));
       this.#dropBalances();
       this.#emit({ type: "overview" });
@@ -5191,6 +5212,14 @@ export class AgencWallet {
         entry.listing = listing;
         entry.listed = true;
       });
+    }
+    const landedPeriod = Number(account.defaultDeadlineSecs);
+    if (offer.deliverySecs !== landedPeriod || offer.pendingDeliverySecs === landedPeriod) {
+      this.#patchOffer(agentId, offerId, entry => {
+        entry.deliverySecs = landedPeriod;
+        if (entry.pendingDeliverySecs === landedPeriod) delete entry.pendingDeliverySecs;
+      });
+      this.#emit({ type: "overview" });
     }
     const state = Number(account.state);
     if (state !== LISTING_STATE_ACTIVE && state !== LISTING_STATE_PAUSED) {
@@ -5243,7 +5272,8 @@ export class AgencWallet {
       return settle("problem", "This network has nowhere to publish a service's description yet.");
     }
     const movedDescription = account.specUri !== specUri;
-    if (priceChanged || wordsChanged || movedDescription || account.maxOpenJobs !== 1) {
+    const deliveryChanged = offer.pendingDeliverySecs !== undefined && offer.pendingDeliverySecs !== landedPeriod;
+    if (priceChanged || wordsChanged || movedDescription || deliveryChanged || account.maxOpenJobs !== 1) {
       await this.#fundEarning(agent);
       const spec =
         wordsChanged || movedDescription
@@ -5252,7 +5282,7 @@ export class AgencWallet {
       await sendUpdateListing(
         this.#chain,
         await this.#vault.signer(agent.keyId),
-        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec },
+        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec, deliverySecs: offer.pendingDeliverySecs },
       );
       this.#dropBalances();
       return true;

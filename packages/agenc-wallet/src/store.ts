@@ -51,6 +51,8 @@ export interface OfferRecord {
   priceLamports: string;
   /** Seconds the agent gets to deliver a hired job. */
   deliverySecs: number;
+  /** An explicit seller edit, retained until the same listing confirms it. */
+  pendingDeliverySecs?: number | undefined;
   /** The advertised description, and the hash of it the listing commits to. */
   spec: Record<string, unknown>;
   specHashHex: string;

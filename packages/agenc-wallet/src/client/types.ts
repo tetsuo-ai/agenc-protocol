@@ -76,6 +76,8 @@ export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" 
 
 /** A service this agent offers for others to hire. */
 export interface OfferView {
+  /** Null for an unset period. Older wallet services omit this field. */
+  deliverySecs?: number | null;
   /** Names this service in `earn.offer`; it stays the same for as long as the service is kept. */
   id: string;
   /** The listing address once it exists. */
