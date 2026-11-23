@@ -168,3 +168,5 @@ export {
   parseSolanaKeypairJson,
   WalletFileError,
 } from "./wallet.js";
+
+export { readReviewEnvelope } from "./review-artifact.js";

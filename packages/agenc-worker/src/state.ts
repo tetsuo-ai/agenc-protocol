@@ -75,7 +75,7 @@ export type SubmissionIntent = {
 export type JobEvidence = { request: string; acceptance: string[] };
 
 /** A durable authorization ledger. Unknown spend consumes the reservation. */
-export type ModelBudget = { totalCents: number; remainingCents: number };
+export type ModelBudget = { totalCents: number; remainingCents: number; revisionRound?: number };
 
 /** A claim/execution/submission transaction that still needs reconciliation. */
 export type OpenClaim = {
@@ -409,11 +409,13 @@ function evidenceAndBudget(parsed: Record<string, unknown>, label: string) {
   let modelBudget: ModelBudget | undefined;
   if (parsed.modelBudget !== undefined) {
     const budget = record(parsed.modelBudget, `${label}.modelBudget`);
-    exactKeys(budget, `${label}.modelBudget`, ["totalCents", "remainingCents"]);
+    exactKeys(budget, `${label}.modelBudget`, ["totalCents", "remainingCents"], ["revisionRound"]);
     const totalCents = count(budget.totalCents, `${label}.modelBudget.totalCents`, 0);
     const remainingCents = count(budget.remainingCents, `${label}.modelBudget.remainingCents`, 0);
     if (remainingCents > totalCents) fail(`${label}.modelBudget exceeds its total`);
-    modelBudget = { totalCents, remainingCents };
+    const round = budget.revisionRound === undefined ? undefined : count(budget.revisionRound, `${label}.modelBudget.revisionRound`, 0);
+    if (round !== undefined && round > 2) fail(`${label}.modelBudget has an invalid revision round`);
+    modelBudget = { totalCents, remainingCents, ...(round !== undefined && { revisionRound: round }) };
   }
   return {
     ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
