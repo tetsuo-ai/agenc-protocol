@@ -12,7 +12,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Address, KeyPairSigner } from "@solana/kit";
-import { findAgentPda, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
+import { findAgentPda, values, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
   acquireStateLock,
   AGENT_STATS_ACCOUNT_SIZE,
@@ -53,9 +53,8 @@ export interface EarnExecutor {
    *   network cannot keep files: the delivery is then text only.
    * - "{files}": what a file's sha-256 is added to, to make its address in
    *   the delivery store. Empty with "{outbox}".
-   * - "{pay}": the least a job this agent takes pays, in US cents, so the
-   *   command can keep what it spends on a job under what the job earns.
-   *   Empty when the going rate is not known.
+   * - "{pay}": this job's reward in whole US cents, rounded down. A missing
+   *   or invalid rate stops the job before claiming or running the command.
    */
   argv: string[];
   /**
@@ -108,8 +107,8 @@ export interface EarnAgent {
   signer: KeyPairSigner;
   /** Skip jobs that pay less than this. */
   minRewardLamports: bigint;
-  /** The same floor in US cents, or null when the going rate is not known. */
-  minPayCents?: number | null;
+  /** Fresh dollars per SOL. Required before a job can be claimed or executed. */
+  solUsd?: () => Promise<number | null>;
   /** Hires it owes, by task, with what each pays: taken whatever the floor. */
   owed?: ReadonlyMap<string, bigint>;
 }
@@ -146,6 +145,21 @@ export type EarnNotice =
   | { type: "failed"; task: string; failure: EarnFailure };
 
 const DEFAULT_MAX_REWARD_LAMPORTS = 1_000_000_000n;
+/** Never advertise more than this worker can accept. */
+export function maximumOfferPrice(options: EarnOptions): bigint {
+  const configured = options.maxRewardLamports;
+  return configured != null && configured < DEFAULT_MAX_REWARD_LAMPORTS
+    ? configured : DEFAULT_MAX_REWARD_LAMPORTS;
+}
+
+/** A zero/empty budget is unsafe for hosts that interpret it as unlimited. */
+export function jobPayCents(reward: bigint, rate: number | null): number {
+  const cents = rate === null ? NaN : Math.floor(Number(reward) * rate / 10_000_000);
+  if (rate === null || !Number.isFinite(rate) || rate <= 0 || !Number.isSafeInteger(cents) || cents <= 0) {
+    throw new Error("A current dollar price is needed to set this job's spending limit.");
+  }
+  return cents;
+}
 const RESTART_DELAY_MS = 20_000;
 const DEFAULT_SERVICE_REFRESH_MS = 60_000;
 
@@ -246,11 +260,15 @@ export class EarnHost {
    * deposit (10% of its price); the worker checks that job's exact amount
    * right before it claims.
    */
-  async jobReserve(): Promise<bigint> {
+  async jobReserve(priceLamports?: bigint): Promise<bigint> {
     return claimFundingRequirement(
       await readClaimAccountRentMinimums((space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),
       ),
+      {
+        ...(priceLamports === undefined ? {} : { depositLamports: values.claimDepositLamports(priceLamports) }),
+        recordRentLamports: await this.#chain.getMinimumBalanceForRentExemption(AGENT_STATS_ACCOUNT_SIZE),
+      },
     );
   }
 
@@ -479,13 +497,11 @@ export class EarnHost {
     const fileLinkPrefix = uploader === null ? null : this.#services.fileLinkPrefix;
     const outboxDir = path.join(stateDir, "outbox");
     if (fileLinkPrefix !== null) prepareOutbox(outboxDir);
-    const pay = agent.minPayCents ?? null;
     const fill = (part: string): string =>
       part
         .replaceAll("{agent}", agent.agentId)
         .replaceAll("{outbox}", fileLinkPrefix === null ? "" : outboxDir)
-        .replaceAll("{files}", fileLinkPrefix ?? "")
-        .replaceAll("{pay}", pay === null ? "" : String(Math.max(0, Math.trunc(pay))));
+        .replaceAll("{files}", fileLinkPrefix ?? "");
     const setState = (wanted: EarnState, wantedError: string | null = null): void => {
       // A stopped agent stays shown as stopped, whatever the loop does.
       const state: EarnState = entry.paused !== null ? "error" : wanted;
@@ -563,6 +579,11 @@ export class EarnHost {
 
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      acceptServiceHiresBelowMinReward: true,
+      executorForTask: async (task) => {
+        const pay = jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
+        return executor.argv.map((part) => fill(part).replaceAll("{pay}", String(pay)));
+      },
       ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),
       config: {
         ...this.#config(agent, executor.argv.map(fill)),

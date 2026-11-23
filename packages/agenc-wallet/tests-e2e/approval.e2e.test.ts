@@ -138,7 +138,7 @@ describe("approvals", () => {
     await wallet.tick();
     // "Take it all back" leaves nothing behind in an agent with nothing to pay for.
     const afterSecond = BigInt((await wallet.overview()).agents[0]!.balance.lamports);
-    expect(afterSecond).toBe(100n * CENT);
+    expect(afterSecond).toBe(100n * CENT - 2n * world.sandbox.chain.transferFeeLamports);
     await wallet.reclaimFromAgent(agent.id, "all");
     await wallet.tick();
     expect(BigInt((await wallet.overview()).agents[0]!.balance.lamports)).toBe(0n);

@@ -1,3 +1,4 @@
+import { setEarnWithApproval } from "./harness.js";
 // Files with a delivery, end to end against the real program: a provider
 // leaves a picture in its outbox, the delivery lists it, and the buyer's
 // wallet reads the list, fetches the file by its fingerprint and checks it.
@@ -128,7 +129,7 @@ describe("an agent that delivers files", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     await sandbox.postOpenJob({ title: "A table", instructions: "Send a small table.", rewardLamports: 50n * CENT });
     // The file and the delivery that lists it are both in the store.
     await eventually(async () => sandbox.deliveries.size === 2, 30_000);
@@ -138,8 +139,8 @@ describe("an agent that delivers files", () => {
     expect(path.basename(started.outbox!)).toBe("outbox");
     expect(started.outbox).toContain(world.dataDir);
     expect(started.prefix).toBe("agenc://artifact/sha256/");
-    // The least a job this agent takes pays: ten cents.
-    expect(started.pay).toBe("10");
+    // This job pays fifty cents, even though the minimum is ten.
+    expect(started.pay).toBe("50");
 
     const bodies = [...sandbox.deliveries.values()].map((bytes) => new TextDecoder().decode(bytes));
     const delivery = bodies.find((body) => body.startsWith("The table you asked for."))!;

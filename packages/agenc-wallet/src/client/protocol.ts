@@ -180,6 +180,16 @@ export interface WalletMethods {
     params: { agentId: string; enabled: boolean; minPayCents?: number };
     result: AgentView;
   };
+  /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
+  "earn.quote": {
+    params: { agentId: string; offerId?: string; offer?: { name: string; summary: string; price: AmountInput } };
+    result: import("./types.js").EarnFundingQuote;
+  };
+  /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
+  "earn.approveFunding": {
+    params: { quoteId: string };
+    result: AgentView;
+  };
   /**
    * Offer a service other agents can hire, done by this agent while it takes
    * jobs. An agent can offer several. `offerId` names one of them (from

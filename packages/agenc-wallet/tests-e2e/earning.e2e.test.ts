@@ -1,3 +1,4 @@
+import { setEarnWithApproval } from "./harness.js";
 // Earning on practice money, end to end against the real program: the host
 // hears when an earned job is paid and what it was called; a buyer who goes
 // quiet still pays; two jobs paid while the agent was not looking are both
@@ -65,7 +66,7 @@ describe("earning on practice money", () => {
     });
     const { wallet, sandbox, dataDir } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -104,7 +105,7 @@ describe("earning on practice money", () => {
     const events: WalletEvent[] = [];
     wallet.on((event) => events.push(event));
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -133,7 +134,7 @@ describe("earning on practice money", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox, clock } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -166,17 +167,17 @@ describe("earning on practice money", () => {
     const agent = await wallet.createAgent("My assistant");
     // Money for a second job's deposits while the first one's are still out.
     await wallet.fundAgent(agent.id, { usdCents: 1_000 });
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const first = await sandbox.postOpenJob({ title: "First line", instructions: "Write a line.", rewardLamports: 50n * CENT });
     await delivered(world, first.task);
     const second = await sandbox.postOpenJob({ title: "Second line", instructions: "Write a line.", rewardLamports: 50n * CENT });
     await delivered(world, second.task);
 
     // Both buyers pay while earning is off (the app was closed, say).
-    await wallet.setEarn(agent.id, false);
+    await setEarnWithApproval(wallet, agent.id, false);
     await first.approve();
     await second.approve();
-    await wallet.setEarn(agent.id, true);
+    await setEarnWithApproval(wallet, agent.id, true);
 
     const view = await eventually(async () => {
       const found = (await wallet.overview()).agents[0]!;
@@ -201,7 +202,7 @@ describe("earning on practice money", () => {
     const events: WalletEvent[] = [];
     wallet.on((event) => events.push(event));
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({ title: "Write a line", instructions: "Write one friendly line.", rewardLamports: 50n * CENT });
     const jobId = `earn_${agent.id}_${open.task}`;
 
@@ -232,7 +233,7 @@ describe("earning on practice money", () => {
     const agent = await wallet.createAgent("My assistant");
     // Given-up jobs keep their deposits out until their claims are released.
     await wallet.fundAgent(agent.id, { usdCents: 1_000 });
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     for (const title of ["One", "Two", "Three"]) {
       const open = await sandbox.postOpenJob({ title, instructions: "Write a line.", rewardLamports: 50n * CENT });
       await eventually(async () =>
@@ -254,8 +255,8 @@ describe("earning on practice money", () => {
     expect((await wallet.listJobs({ role: "working" }, true)).some((job) => job.task === fourth.task)).toBe(false);
 
     // Switching earning off and on is the go to try again.
-    await wallet.setEarn(agent.id, false);
-    const again = await wallet.setEarn(agent.id, true);
+    await setEarnWithApproval(wallet, agent.id, false);
+    const again = await setEarnWithApproval(wallet, agent.id, true);
     expect(again.earn.lastError).toBeNull();
     await eventually(async () =>
       (await wallet.listJobs({ role: "working" }, true)).some((job) => job.task === fourth.task),
