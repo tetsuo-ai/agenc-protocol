@@ -26,6 +26,7 @@ function releaseWindowView(job: HeldWork) {
 
 /** Read the chain clock again after quoting and immediately before broadcast. */
 export function releaseQuoteLifetime(job: WorkerJobView, now: number) {
+  if (job.cleanup && job.expiresAt !== null && Number.isSafeInteger(now) && now > job.expiresAt) return Infinity;
   if (!job.releaseWindow || job.releaseBy === null) throw new WalletError("NOT_ALLOWED", "This claim cannot be released.");
   const current = chosenReleaseWindow(job.releaseBy, now);
   if (current.phase === "paused") throw new WalletError("NOT_ALLOWED", releasePauseNotice(current.resumeAt));
@@ -41,6 +42,8 @@ export function workerJob(job: OpenWork | HeldWork, rate: number, defaultFee: bi
   const fixedRecipient = releaseWindow && job.deposit !== "0" &&
     (releaseWindow.phase === "late" || releaseWindow.lateRecipient === job.worker);
   return {
+    ...(!open && job.ownerDecision && { ownerDecision: true }),
+    ...(!open && job.cleanup && { cleanup: true, cleanupRecipient: job.cleanupRecipient }),
     task: job.task, title: job.title, reward: money(job.reward, rate), payout: money(job.payout, rate),
     deposit: money(job.deposit, rate), deadline: job.deadline, reviewSeconds: job.reviewSeconds,
     request: open ? job.request : "", criteria: open ? job.criteria : [], brief: open ? job.brief : "",
@@ -79,7 +82,10 @@ export function quoteTransfers(job: OpenWork | HeldWork, action: WorkAction, rat
     transfer("Claim deposit", job.worker, job.claimAccount, BigInt(job.deposit));
     transfer("Claim rent", job.worker, job.claimAccount, change(job.claimAccount));
   } else {
-    const recipient = action === "release" && "depositReturns" in job && !job.depositReturns ? job.buyer : job.worker;
+    const recipient = action === "release" && "depositReturns" in job
+      ? job.cleanupRecipient ?? (job.depositReturns ? job.worker : job.buyer) : job.worker;
+    if (action === "release" && "cleanup" in job && job.cleanup)
+      transfer("Cleanup reward", job.escrowAccount, job.worker, -change(job.escrowAccount));
     const leaving = -change(job.claimAccount);
     const deposit = leaving < BigInt(job.deposit) ? leaving : BigInt(job.deposit);
     depositFlow = transfer("Claim deposit returned or paid", job.claimAccount, recipient, deposit);

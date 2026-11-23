@@ -82,7 +82,7 @@ export type OpenClaim = {
   /** An owner release was sent or may have been sent. Hold work until reconciled. */
   releaseRequestedAt?: string;
   ownerDecision?: true;
-  chosenAttempt?: { signature: string; lastValidBlockHeight: string; delivery?: SubmissionIntent };
+  chosenAttempt?: { signature: string; lastValidBlockHeight: string; cleanup?: true; delivery?: SubmissionIntent };
   /** A selected claim holds the room output for owner approval. */
   chosen?: true;
   jobEvidence?: JobEvidence;
@@ -462,8 +462,9 @@ function openClaim(value: unknown, label: string): OpenClaim {
   let chosenAttempt: OpenClaim["chosenAttempt"];
   if (parsed.chosenAttempt !== undefined) {
     const attempt = record(parsed.chosenAttempt, label);
-    exactKeys(attempt, label, ["signature", "lastValidBlockHeight"], ["delivery"]);
+    exactKeys(attempt, label, ["signature", "lastValidBlockHeight"], ["delivery", "cleanup"]);
     chosenAttempt = { signature: nonempty(attempt.signature, label), lastValidBlockHeight: decimal(attempt.lastValidBlockHeight, label),
+      ...(attempt.cleanup !== undefined && { cleanup: onlyTrue(attempt.cleanup, label) }),
       ...(attempt.delivery !== undefined && { delivery: submissionIntent(attempt.delivery, label) }) };
   }
   const phase = parsed.phase;

@@ -323,6 +323,19 @@ function markReleased(ctx: WorkerContext, task: Address): void {
   saveState(ctx.stateDir, state);
 }
 
+/** The same revision 9 cleanup instruction for automatic and owner-approved work. */
+export async function cleanupClaimInstruction(
+  ctx: WorkerContext, agent: WorkerAgent, task: Address, data: Task, treasury: Address, terminal: boolean,
+) {
+  const accounts = { authority: ctx.signer, task, worker: agent.agentPda, treasury,
+    rentRecipient: ctx.signer.address, creator: data.creator,
+    ...(data.constraintHash.every(byte => byte === 0) && { taskValidationConfig: AGENC_COORDINATION_PROGRAM_ADDRESS }) };
+  if (terminal) return facade.reclaimTerminalClaim(accounts);
+  const parent = unwrapOption(data.dependsOn);
+  const [workerCompletionBond] = await findWorkerCompletionBondPda({ task, workerAuthority: ctx.signer.address });
+  return facade.expireClaim({ ...accounts, workerCompletionBond, ...(parent && { dependencyParent: parent }) });
+}
+
 /**
  * Release the claims of jobs this worker gave up. An ended task's claim is
  * reclaimed straight away. A live, undelivered claim is given back at once
@@ -392,34 +405,7 @@ export async function releaseOwnClaims(
         continue;
       }
       treasury ??= await readTreasury(ctx);
-      const parent = unwrapOption(decoded.dependsOn);
-      const instruction = ended
-        ? await facade.reclaimTerminalClaim({
-            authority: ctx.signer,
-            task,
-            worker: agent.agentPda,
-            treasury,
-            rentRecipient: ctx.signer.address,
-            // A stranded deposit goes to the creator after the claim's expiry.
-            creator: decoded.creator,
-          })
-        : await facade.expireClaim({
-            authority: ctx.signer,
-            task,
-            worker: agent.agentPda,
-            rentRecipient: ctx.signer.address,
-            treasury,
-            // An exclusive no-show must show its (possibly absent) bond.
-            workerCompletionBond: (
-              await findWorkerCompletionBondPda({
-                task,
-                workerAuthority: ctx.signer.address,
-              })
-            )[0],
-            // A no-show's deposit goes to the creator.
-            creator: decoded.creator,
-            ...(parent !== null ? { dependencyParent: parent } : {}),
-          });
+      const instruction = await cleanupClaimInstruction(ctx, agent, task, decoded, treasury, ended);
       const { signature } = await ctx.client.send([instruction], { maxRetries: 0 });
       markReleased(ctx, task);
       const how = ended ? "reclaimed" : "expired";

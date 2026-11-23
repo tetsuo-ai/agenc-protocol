@@ -11,7 +11,7 @@ import {
   readClaimAccountRentMinimums, workerRecordShortfall, resumeOpenClaim, RELEASE_LANDING_MARGIN_SECS,
   type VerifiedCandidate, type WorkerAgent, type WorkerContext, type WorkSimulation,
 } from "./runtime.js";
-import { readTaskAccount } from "./upkeep.js";
+import { cleanupClaimInstruction, readTaskAccount } from "./upkeep.js";
 import { bytesToHex, hexToBytes, loadState, type SubmissionIntent } from "./state.js";
 import { decodeHostedBrief } from "./hosted-brief.js";
 import { chosenReleaseWindow } from "./chosen-release.js";
@@ -171,19 +171,24 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
     readTaskAccount(ctx, task), ctx.readAccount(claimPda), ctx.readAccount(submissionPda), ctx.clusterTime?.(),
   ]);
   if (now === undefined || !Number.isSafeInteger(now)) throw new Error("The marketplace clock is unavailable.");
-  if (read.kind !== "task" || !data || ![TaskStatus.InProgress, TaskStatus.PendingValidation].includes(read.task.status)) return null;
+  if (read.kind !== "task" || !data?.length) return null;
   const claim = getTaskClaimDecoder().decode(data);
-  if (claim.worker !== agent.agentPda || claim.task !== task || claim.isCompleted || Number(claim.expiresAt) <= now) return null;
+  if (claim.worker !== agent.agentPda || claim.task !== task || claim.isCompleted) return null;
+  const expiresAt = Number(claim.expiresAt);
+  const cleanup = expiresAt > 0 && now > expiresAt;
+  const live = read.task.status === TaskStatus.InProgress || read.task.status === TaskStatus.PendingValidation;
+  const terminal = read.task.status === TaskStatus.Completed || read.task.status === TaskStatus.Cancelled;
+  if (!live && !cleanup) return null;
   if (submitted?.length) {
     const prior = getTaskSubmissionDecoder().decode(submitted);
     if (prior.task !== task || prior.claim !== claimPda || prior.worker !== agent.agentPda ||
-      prior.status !== SubmissionStatus.Rejected || marker.revisionSubmissionCount !== prior.submissionCount) return null;
+      prior.status !== SubmissionStatus.Rejected || (!cleanup && marker.revisionSubmissionCount !== prior.submissionCount)) return null;
   }
   const terms = await taskTerms(ctx, agent, task, read.task, true);
   if (!terms) return null;
   // Revision 9 can forfeit the posted deposit only if the claim still holds
   // that much above rent. A prior delivery normally returned it already.
-  if (!terms.contest) {
+  if (!terms.contest || cleanup) {
     const [balance, rent] = await Promise.all([
       ctx.getBalance!(claimPda), ctx.getMinimumBalanceForRentExemption!(data.length),
     ]);
@@ -194,18 +199,25 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   // A prior dispute permanently protects the deposit, even on a late release.
   const lateRecipient = read.task.reserved[13] ? terms.worker : terms.buyer;
   const depositReturns = now <= releaseBy || lateRecipient === terms.worker;
-  const expiresAt = Number(claim.expiresAt);
-  const idle = !marker.chosenAttempt && !marker.releaseRequestedAt && (marker.phase === "claimed" || marker.phase === "executed");
-  const canDeliver = idle && marker.execution && (terms.deadline === 0 || now <= terms.deadline);
+  const noPendingSend = !marker.chosenAttempt && !marker.releaseRequestedAt;
+  const idle = noPendingSend && (marker.phase === "claimed" || marker.phase === "executed");
+  const canDeliver = !cleanup && idle && marker.execution && (terms.deadline === 0 || now <= terms.deadline);
   const room = ctx.checkChosenRoom !== undefined;
   const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt && window.phase !== "paused";
   const [release, submit] = await Promise.all([
-    idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms)) : null,
+    noPendingSend && cleanup && (live || terminal) ? ctx.simulateWork(await cleanupClaimInstruction(ctx, agent, task, read.task, terms.treasury, terminal)) :
+      idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms)) : null,
     canDeliver && room ? ctx.simulateWork(await deliveryInstruction(ctx, agent, terms, read.task, marker.execution!.resultHashHex)) : null,
   ]);
-  return { ...terms, title: marker.title ?? "Chosen job",
-    claimedAt: Number(claim.claimedAt), expiresAt, releaseBy: terms.contest ? null : releaseBy, depositReturns,
-    releaseWindow: terms.contest ? null : { ...window, lateRecipient },
+  // Expiry can return the deposit to the worker (for example after a dispute),
+  // or pay the buyer or contest treasury. Use the simulated movement.
+  const forfeiture = terms.contest ? terms.treasury : terms.buyer;
+  const cleanupRecipient = cleanup && release && terms.deposit !== "0"
+    ? (release.changes.some(c => c.address === forfeiture && BigInt(c.delta) > 0n) ? forfeiture : terms.worker) : null;
+  return { ...terms, cleanup, terminal, cleanupRecipient, ownerDecision: marker.ownerDecision === true,
+    title: marker.title ?? "Chosen job",
+    claimedAt: Number(claim.claimedAt), expiresAt, releaseBy: terms.contest || cleanup ? null : releaseBy, depositReturns,
+    releaseWindow: terms.contest || cleanup ? null : { ...window, lateRecipient },
     release, submit, canRelease: !!release, canSubmit: !!submit, resultHash: marker.execution?.resultHashHex ?? null,
     resultBytes: marker.execution ? Buffer.byteLength(marker.execution.resultBytesBase64, "base64") : null,
     preview: marker.execution ? Buffer.from(marker.execution.resultBytesBase64, "base64").toString("utf8").slice(0, 4000) : null };
@@ -235,7 +247,9 @@ export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, s
     ix = await deliveryInstruction(ctx, agent, held, read.task, resultHashHex);
   } else {
     prepare();
-    ix = await releaseInstruction(ctx, agent, held);
+    // Keep the simulated instruction even if a peer just made the task terminal.
+    ix = held.cleanup ? await cleanupClaimInstruction(ctx, agent, task, read.task, held.treasury, held.terminal)
+      : await releaseInstruction(ctx, agent, held);
   }
   signal.throwIfAborted();
   await ctx.client.send([ix], { maxRetries: 0 });

@@ -4135,7 +4135,7 @@ export class AgencWallet {
             state.openClaim.claimTransactionSignature = receipt.signature;
             state.openClaim.claimLastValidBlockHeight = receipt.lastValidBlockHeight;
           } else {
-            state.openClaim.chosenAttempt = { ...receipt, ...(delivery && { delivery }) };
+            state.openClaim.chosenAttempt = { ...receipt, ...(action === "release" && job.cleanup && { cleanup: true }), ...(delivery && { delivery }) };
           }
           saveWorkerState(ctx.stateDir, state);
         }

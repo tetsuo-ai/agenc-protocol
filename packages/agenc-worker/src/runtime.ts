@@ -2289,7 +2289,8 @@ export async function resumeOpenClaim(
       return null;
     }
     state.openClaim = { task: job.task, claimedAt: job.claimedAt, phase: "claimed",
-      chosen: true, ownerDecision: true, failures: job.attempts, lastFailure: job.reason,
+      chosen: true, ownerDecision: true, lastFailure: job.reason,
+      ...(job.attempts > 0 && { failures: job.attempts }),
       ...(job.title && { title: job.title }), ...(job.listing && { listing: job.listing }) };
     state.failedJobs = state.failedJobs.filter(entry => entry !== job);
     saveState(ctx.stateDir, state);
@@ -2312,9 +2313,10 @@ export async function resumeOpenClaim(
         const record = commitSubmission(ctx, task, receipt.delivery, { signature: receipt.signature });
         return { status: "submitted", task, record };
       }
-      giveUpJob(ctx, state, marker, { cause: "released", reason: "The worker gave the job back.", claimReleased: true,
+      giveUpJob(ctx, state, marker, { cause: receipt.cleanup ? "expired" : "released",
+        reason: receipt.cleanup ? "The owner closed the expired claim." : "The worker gave the job back.", claimReleased: true,
         ...(decodedTask && { rewardAmount: decodedTask.rewardAmount.toString() }) });
-      ctx.log({ event: "claim.released", task, how: "released", signature: receipt.signature });
+      ctx.log({ event: "claim.released", task, how: receipt.cleanup ? "expired" : "released", signature: receipt.signature });
       return null;
     }
     delete marker.chosenAttempt;
@@ -2550,7 +2552,7 @@ export async function resumeOpenClaim(
       (marker.phase !== "submitting" && deliverBy > 0 && now > deliverBy) ||
       (claimEnds > 0 && now > claimEnds)
     ) {
-      if (marker.chosen && now <= claimEnds) return { status: "held", task };
+      if (marker.chosen) return { status: "held", task };
       giveUpJob(ctx, loadState(ctx.stateDir), marker, {
         cause: "expired",
         reason: "the time to deliver ran out",

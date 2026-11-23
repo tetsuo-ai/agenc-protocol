@@ -564,6 +564,10 @@ export interface WalletErrorShape {
 export type WorkAction = "claim" | "submit" | "release";
 
 export interface WorkerJobView {
+  /** An expired claim uses the release action to request an owner-approved cleanup. */
+  cleanup?: boolean;
+  ownerDecision?: boolean;
+  cleanupRecipient?: string | null;
   brief: string;
   direct: boolean;
   selectionDeadline: number | null;

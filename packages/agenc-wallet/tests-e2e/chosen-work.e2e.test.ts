@@ -613,6 +613,39 @@ it.each(["still held", "already closed"] as const)("reconciles a timestamp-only 
   await assertBalances(await world!.wallet.quoteWork(id, task, "submit"));
 });
 
+it.each(["review", "contest", "auto"] as const)("quotes and closes an expired %s claim only after owner approval", async settlement => {
+  const { wallet, sandbox, id } = await setup();
+  const { task } = await sandbox.postOpenJob({ title: "Expired job", instructions: "Write one line.", rewardLamports: 50n * CENT,
+    deadlineSeconds: settlement === "review" ? 900 : 7200, ...(settlement !== "review" && { settlement }) });
+  const claimed = await wallet.quoteWork(id, task, "claim");
+  await assertBalances(claimed);
+  const held = await eventually(async () => (await wallet.openWork(id)).held);
+  const claim = claimed.flows.find(row => row.label === "Claim deposit")!.to;
+  const balance = await world!.balance(claim);
+  sandbox.advanceClock(held.expiresAt! - await sandbox.chain.clusterTime());
+  expect((await wallet.openWork(id)).held).toMatchObject({ canRelease: false });
+  sandbox.advanceClock(1);
+  await wallet.close();
+  world!.wallet = await world!.reopen();
+  const page = await eventually(async () => world!.wallet.openWork(id).catch(() => null));
+  expect(page.held).toMatchObject({ task, cleanup: true, canSubmit: false, canRelease: true });
+  await expect(world!.wallet.quoteWork(id, task, "submit")).rejects.toThrow();
+  const quote = await world!.wallet.quoteWork(id, task, "release");
+  const recipient = settlement === "contest" ? held.treasury : held.buyer;
+  expect(quote.flows).toEqual(expect.arrayContaining([
+    expect.objectContaining({ from: claim, to: recipient, amount: claimed.job.deposit }),
+    expect.objectContaining({ from: claim, to: held.worker, amount: claimed.job.rent }),
+    expect.objectContaining({ to: held.worker, amount: expect.objectContaining({ lamports: "1000" }) }),
+  ]));
+  expect(quote.job.cleanupRecipient).toBe(recipient);
+  expect(quote.charge).toEqual(quote.job.networkFee);
+  await world!.wallet.decideWork(quote.id, false);
+  expect(await world!.balance(claim)).toBe(balance);
+  await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+  expect(await world!.balance(claim)).toBe(0n);
+  expect((await world!.wallet.openWork(id)).held).toBeNull();
+});
+
 it("holds both actions while an old release can still land, then restores the saved result", async () => {
   const { wallet, id, task } = await setup();
   const hash = await completedRoom(id, task);
@@ -630,4 +663,51 @@ it("holds both actions while an old release can still land, then restores the sa
     expect((await world!.wallet.openWork(id)).held).toMatchObject({ resultHash: hash, canRelease: true });
     expect(world!.sandbox.deliveries.size).toBe(0);
   } finally { clock.mockRestore(); }
+});
+
+it("requotes an expired claim when terminal cleanup changes its simulated transfers", async () => {
+  const { wallet, sandbox, id, task } = await setup();
+  await completedRoom(id, task);
+  const held = (await wallet.openWork(id)).held!;
+  sandbox.advanceClock(held.expiresAt! - await sandbox.chain.clusterTime() + 1);
+  const live = await wallet.quoteWork(id, task, "release");
+  const raw = sandbox.market.svm.getAccount(task)!;
+  if (!raw.exists) throw new Error("Missing task");
+  const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+  const reserved = Uint8Array.from(data.reserved);
+  reserved[13] = 1; // A prior dispute protects the worker's deposit.
+  sandbox.market.svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({
+    ...data, status: TaskStatus.Completed, reserved,
+  })) } as never);
+  await expect(wallet.decideWork(live.id, true)).rejects.toThrow(/changed/);
+  const terminal = await wallet.quoteWork(id, task, "release");
+  expect(terminal.job.cleanupRecipient).toBe(held.worker);
+  expect(terminal.flows.some(row => row.label === "Cleanup reward")).toBe(false);
+  await assertBalances(terminal);
+});
+
+it("recovers a previously archived expired claim with Earns off, subject to the owner's allowance", async () => {
+  const { wallet, id, sandbox, task } = await setup();
+  await completedRoom(id, task);
+  const held = (await wallet.openWork(id)).held!;
+  await wallet.setEarn(id, false);
+  await wallet.close();
+  sandbox.advanceClock(held.expiresAt! - await sandbox.chain.clusterTime() + 1);
+  const state = journal(id);
+  const marker = state.openClaim!;
+  state.openClaim = null;
+  state.failedJobs.push({ chosen: true, task, claimedAt: marker.claimedAt, failedAt: new Date().toISOString(),
+    cause: "expired", reason: "the time to deliver ran out", attempts: 0, claimReleased: false });
+  saveState(path.join(world!.dataDir, "earn", id), state);
+  world!.wallet = await world!.reopen({ earn: { executor: null } });
+  await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held?.canRelease);
+  await world!.wallet.setBudget(id, 0);
+  const quote = await world!.wallet.quoteWork(id, task, "release");
+  const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+  const balance = await world!.balance(claim);
+  await expect(world!.wallet.decideWork(quote.id, true)).rejects.toThrow(/allowance/);
+  expect(await world!.balance(claim)).toBe(balance);
+  await world!.wallet.setBudget(id, 500);
+  await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+  expect(await world!.balance(claim)).toBe(0n);
 });
