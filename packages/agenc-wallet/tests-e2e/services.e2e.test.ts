@@ -1,4 +1,4 @@
-import { REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // An agent can offer several services, as the marketplace allows: each is
 // its own listing, hired and paid under its own name, and taken off offer on
 // its own. They are only on offer while the agent can do the work.
@@ -88,7 +88,7 @@ describe("several services for one agent", () => {
     const second = await wallet.hire({ agentId: buyer.id, listing: haiku.listing!, request: "A haiku about rain." });
     for (const { job } of [first, second]) {
       await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
-      await wallet.approveJob(job.id, undefined, true);
+      await confirmPayout(wallet, job.id);
     }
     const paid = await eventually(async () => {
       const view = await agentView(world!, worker.id);

@@ -1,7 +1,7 @@
 // Making an agent and letting it spend, the simple way: one call makes it,
 // one number says what it may spend on its own each day.
 import { afterEach, describe, expect, it } from "vitest";
-import { CENT, startWorld, type World } from "./harness.js";
+import { confirmPayout, CENT, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -94,10 +94,10 @@ describe("a daily budget", () => {
 
     // Spend most of it. Nothing more is handed over that day...
     await sandbox.workOnce();
-    await expect(wallet.approveJob(job.id, undefined, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    await expect(confirmPayout(wallet, job.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
     // The first top-up used the day’s allowance. A person grants room for the review fee.
     await wallet.setPolicy(agent.id, { ...set.policy, refill: { ...set.policy.refill, perDayCents: 501 } });
-    await wallet.approveJob(job.id, undefined, true);
+    await confirmPayout(wallet, job.id);
     await wallet.setPolicy(agent.id, set.policy);
     await wallet.reclaimFromAgent(agent.id, { usdCents: 300 });
     const low = await world.balance(agent.address);

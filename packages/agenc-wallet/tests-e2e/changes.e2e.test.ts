@@ -1,7 +1,7 @@
 // Asking for changes: the note's hash goes on-chain, the provider reads the
 // note and delivers again, and the buyer then approves.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { confirmDecision, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
+import { confirmPayout, confirmDecision, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -71,6 +71,6 @@ describe("asking for changes", () => {
       code: "APPROVAL_REQUIRED",
     });
     // Nothing was sent back: the delivery is still there to approve.
-    expect((await wallet.approveJob(job.id, undefined, true)).status).toBe("paid");
+    expect((await confirmPayout(wallet, job.id)).status).toBe("paid");
   });
 });

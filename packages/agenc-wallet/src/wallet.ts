@@ -18,6 +18,7 @@ import {
   taskThread,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { deliveryNotice } from "./review-history.js";
 import { publishReviewFiles, reviewChargeCents, quoteReview, reviewRead, reviewAttachments, reviewNote } from "./review.js";
 import type { ReviewAction, ReviewAttachment, ReviewConfirmation, ReviewDraft, ReviewQuote, ReviewRecord } from "./client/reviews.js";
 import { readReviewEnvelope, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
@@ -3622,7 +3623,9 @@ export class AgencWallet {
     quoteId?: string,
   ): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
-    if (initial.payer !== "agent" && (!isOwner || !quoteId)) throw this.#reviewRequired(isOwner);
+    if (initial.payer !== "agent" && !isOwner) throw this.#reviewRequired(false);
+    if (!quoteId) throw new WalletError(isOwner ? "APPROVAL_REQUIRED" : "NOT_ALLOWED",
+      isOwner ? "Review the current delivery and confirm payment in Market." : "Read the current delivery in chat before approving payment.");
     if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
       throw new WalletError("BAD_REQUEST", "A rating is a whole number from 1 to 5.");
     }
@@ -3635,7 +3638,9 @@ export class AgencWallet {
       }
       const provider = this.#knownProvider(job);
       const { quote } = await this.#quoteReview(job, provider, null);
-      if (!quote?.canPay || (quoteId !== undefined && quote.id !== quoteId)) throw this.#reviewRequired(isOwner);
+      if (!quote?.canPay || quote.id !== quoteId) {
+        throw new WalletError("NOT_ALLOWED", "The delivery or payment terms changed. Open the job and review it again.");
+      }
       await this.#withReviewPayment(job, quote, "approve", async payer => {
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
@@ -3713,15 +3718,20 @@ export class AgencWallet {
         (target.revisionDeadlines ??= {})[latest.hash] = revision.due;
       });
     }
-    const entries = await Promise.all((history?.entries ?? []).map(async ({ feeLamports, rentLamports, bondLamports, round, ...anchor }) => {
+    const entries = await Promise.all((history?.entries ?? []).map(async receipt => {
+      const frozen = terms?.frozenDelivery;
+      const entry = frozen && receipt.intendedDelivery && receipt.action === "reject" && receipt.hash === frozen.reason && receipt.at === frozen.at
+        ? { ...receipt, appliedDelivery: frozen.delivery } : receipt;
+      const { feeLamports, rentLamports, bondLamports, round, ...anchor } = entry;
+      const notice = deliveryNotice(entry);
       const role = anchor.action === "dispute" ? "worker" : "buyer";
-      const envelope = await reviewRead(readReviewEnvelope(hash => this.#services.fetchFile(hash), task, anchor.hash, role));
+      const envelope = anchor.action === "approve" ? null : await reviewRead(readReviewEnvelope(hash => this.#services.fetchFile(hash), task, anchor.hash, role));
       const external = anchor.evidenceUri?.startsWith("https://") && this.#services.fetchReviewEvidence
         ? await reviewRead(this.#services.fetchReviewEvidence(anchor.evidenceUri, anchor.hash)) : null;
       const deadline = anchor.action === "change"
         ? anchor.deadline ?? (revision && round === revision.round ? revision.due : saved?.revisionDeadlines?.[anchor.hash] ?? null)
         : anchor.deadline;
-      return { ...anchor, deadline, note: envelope?.body ?? null,
+      return { ...anchor, ...(notice && { deliveryNotice: notice }), deadline, note: envelope?.body ?? null,
         ...(anchor.evidenceUri && { evidenceVerified: !!external || (anchor.evidenceUri === "agenc://artifact/sha256/" + anchor.hash && !!envelope) }),
         attachments: envelope?.attachments ?? (external && anchor.evidenceUri ? [{ uri: anchor.evidenceUri, hash: anchor.hash }] : []),
         fee: feeLamports === null ? null : money(feeLamports, rate),
@@ -3734,7 +3744,8 @@ export class AgencWallet {
     }
     const intent = this.#store.state.reviewIntents?.[jobId];
     return { entries, ...(history?.continuation && { continuation: history.continuation }),
-      ...(intent && { publication: { hashes: intent.hashes, published: intent.published ?? [], confirmed: intent.confirmed, ...(intent.receipt && { signature: intent.receipt.signature }) } }),
+      ...(intent && { publication: { ...(intent.intendedDelivery && { intendedDelivery: intent.intendedDelivery }),
+        hashes: intent.hashes, published: intent.published ?? [], confirmed: intent.confirmed, ...(intent.receipt && { signature: intent.receipt.signature }) } }),
       historyIncomplete: history?.missing === true, historyAvailable: history?.complete === true, termsAvailable: terms !== null,
       resubmitBy: terms?.resubmitBy ?? null, quote: terms?.quote ?? null,
       draft: draft && draft.quoteId === terms?.quote?.id ? draft : null };
@@ -3834,6 +3845,7 @@ export class AgencWallet {
       checkRoom();
       this.#store.update(state => {
         (state.reviewIntents ??= {})[jobId] = { quoteId: quote.id, action, confirmed: false, payer: payer.address, agentId, rate,
+          ...(action !== "dispute" && { intendedDelivery: { submissionCount: quote.submissionCount, deliveryHash: quote.deliveryHash } }),
           createdAt: prior?.quoteId === quote.id ? prior.createdAt : this.#now(),
           hashes: prior && !prior.confirmed ? prior.hashes : [], published: prior && !prior.confirmed ? prior.published ?? [] : [] };
       });
@@ -3865,8 +3877,8 @@ export class AgencWallet {
         if (intent.confirmed) throw new WalletError("NETWORK", "The review was confirmed. Its final cost is awaiting reconciliation in the job record.", { cause });
         const evidence = intent.hashes.length ? " Evidence may already be public. Its fingerprints are in the job record." : "";
         if (intent.receipt) throw new WalletError("NETWORK", "Check the review transaction in the job record before retrying." + evidence, { cause });
-        if (!evidence && cause instanceof WalletError) throw cause;
-        throw new WalletError(cause instanceof WalletError ? cause.code : "NETWORK", "The review was not sent." + evidence, { cause });
+        if (cause instanceof WalletError) throw evidence ? new WalletError(cause.code, cause.message + evidence, { cause }) : cause;
+        throw new WalletError("NETWORK", "The review was not sent." + evidence, { cause });
       }
     });
   }

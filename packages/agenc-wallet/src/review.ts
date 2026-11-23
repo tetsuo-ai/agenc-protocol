@@ -7,7 +7,7 @@ import type { Chain } from "./chain.js";
 import { deliveryFileProblem, deliveryFileType, MAX_DELIVERY_FILE_BYTES } from "./client/delivery-files.js";
 import type { ReviewAction, ReviewAttachment, ReviewConfirmation, ReviewQuote } from "./client/reviews.js";
 import { WalletError } from "./errors.js";
-import { deliveryGuard, disputeDeposit, readProgramAccount, readSubmission, readTask, readTurnDownOnChain, snapshotReader } from "./market.js";
+import { disputeDeposit, readProgramAccount, readSubmission, readTask, readTurnDownOnChain, snapshotReader } from "./market.js";
 import { publishReviewBytes, type MarketServices } from "./services.js";
 import { money } from "./views.js";
 
@@ -86,6 +86,12 @@ export async function quoteReview(chain: Chain, jobId: string, task: Address, pr
   let lastRevision: { round: number; due: number } | null = null;
   let quote: ReviewQuote | null = null;
   if (!account || !submission) return { quote, resubmitBy, lastRevision };
+  const frozenDelivery = account.status === TaskStatus.RejectFrozen && submission.account.status === SubmissionStatus.Rejected &&
+    submission.account.worker === provider && submission.account.claim === claim ? {
+      reason: Buffer.from(submission.account.rejectionHash).toString("hex"),
+      at: Number(submission.account.rejectedAt) * 1000,
+      delivery: { deliveryHash: Buffer.from(submission.account.proofHash).toString("hex"), submissionCount: submission.account.submissionCount },
+    } : null;
   const held = await readProgramAccount(chain, claim, getTaskClaimDiscriminatorBytes(), data => getTaskClaimDecoder().decode(data));
   const limits = [Number(account.deadline), Number(held?.expiresAt ?? 0)].filter(n => n > 0);
   const due = limits.length ? Math.min(...limits) : null;
@@ -110,21 +116,16 @@ export async function quoteReview(chain: Chain, jobId: string, task: Address, pr
     const frozen = await readTurnDownOnChain(chain, task, provider);
     if (frozen?.disputeOpen && !frozen.providerSuspended) actions.push("dispute");
   }
-  if (!canPay && !actions.length) return { quote, resubmitBy, lastRevision };
+  if (!canPay && !actions.length) return { quote, resubmitBy, lastRevision, frozenDelivery };
   const [record, disputeRent, terms] = await Promise.all([
     facade.missingRecordCost(snapshotReader(chain), size => chain.getMinimumBalanceForRentExemption(size), { creator: account.creator, workerAgent: provider }),
     disputeDeposit(chain, task),
     readProgramAccount(chain, validation, getTaskValidationConfigDiscriminatorBytes(), data => getTaskValidationConfigDecoder().decode(data)),
   ]);
   if (!terms || terms.mode !== ValidationMode.CreatorReview || terms.task !== task ||
-      Buffer.from(account.constraintHash).toString() !== "agenc-manual-validation-v2-seed!") return { quote, resubmitBy, lastRevision };
+      Buffer.from(account.constraintHash).toString() !== "agenc-manual-validation-v2-seed!") return { quote, resubmitBy, lastRevision, frozenDelivery };
   const bond = values.disputeBondForTask(account);
   const deliveryHash = Buffer.from(submission.account.proofHash).toString("hex");
-  if (canPay && chain.checkReviewDelivery) {
-    await chain.checkReviewDelivery(account.creator, await deliveryGuard(task, provider, {
-      deliveryHash, submissionCount: submission.account.submissionCount,
-    }));
-  }
   const reviewEndsAt = Number(submission.account.reviewDeadlineAt) * 1000;
   const reviewWindowSeconds = Number(terms.reviewWindowSecs);
   const id = createHash("sha256").update(JSON.stringify([jobId, task, provider, funding, actions, deliveryHash, submission.account.submissionCount,
@@ -134,7 +135,7 @@ export async function quoteReview(chain: Chain, jobId: string, task: Address, pr
     rejectionTotal: money(chain.transferFeeLamports + record.lamports, rate),
     disputeTotal: money(chain.transferFeeLamports + bond + disputeRent, rate),
     rejectionRent: money(record.lamports, rate), disputeRent: money(disputeRent, rate) };
-  return { quote, resubmitBy, lastRevision };
+  return { quote, resubmitBy, lastRevision, frozenDelivery };
 }
 
 /** Bound a read without letting an unavailable receipt or artifact hold up a decision. */

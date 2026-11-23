@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { restoreBackup } from "../src/backup.js";
 import type { Chain } from "../src/chain.js";
 import { AgencWallet } from "../src/wallet.js";
-import { REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 let restored: AgencWallet | null = null;
@@ -113,7 +113,7 @@ describe("backing the wallet up", () => {
     // wallet can pay for it: its keys work.
     const waiting = await restored.getJob(job.id, true);
     expect(waiting.status).toBe("delivered");
-    const paid = await restored.approveJob(job.id, undefined, true);
+    const paid = await confirmPayout(restored, job.id);
     expect(paid.status).toBe("paid");
   });
 });

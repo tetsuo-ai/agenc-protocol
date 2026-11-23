@@ -1,4 +1,4 @@
-import { REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // Offering a service: an earning agent lists one thing it does, another
 // agent hires it, the stock worker loop does the job, and the pay shows up.
 // The service is only on the marketplace while someone is there to do it.
@@ -161,7 +161,7 @@ describe("offering a service", () => {
     }, 30_000);
     expect(working.status).toBe("delivered");
 
-    await wallet.approveJob(job.id, undefined, true);
+    await confirmPayout(wallet, job.id);
     const paid = await eventually(async () => {
       const view = await agentView(world!, worker.id);
       return BigInt(view.earned.lamports) > 0n ? view : null;

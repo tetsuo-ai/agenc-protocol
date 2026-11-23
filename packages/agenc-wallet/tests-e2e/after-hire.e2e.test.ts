@@ -15,7 +15,7 @@ import { reviewRpc } from "./review-rpc.js";
 let world: World | undefined;
 afterEach(async () => { vi.useRealTimers(); await world?.wallet.close(); });
 
-it("delivers a signed hosted revision and its file, then shares both parties' decisions", async () => {
+it.each(["reject", "approve", "change"] as const)("shares a confirmed %s that races a hosted revision with both parties", async action => {
   const objects = new Map<string, Uint8Array>();
   let serve = true;
   const hosted = createHostedServices({
@@ -38,7 +38,6 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   });
   const history = reviewRpc();
   let intercept = false;
-  let rejectedLogs: readonly string[] = [];
   let captured!: () => void;
   let release!: () => void;
   const capturedSend = new Promise<void>(resolve => { captured = resolve; });
@@ -52,8 +51,7 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
           intercept = false;
           captured();
           await waitForNewDelivery;
-          try { return await indexed.sendAndConfirm(signed); }
-          catch (error) { rejectedLogs = (error as { logs?: string[] }).logs ?? []; throw error; }
+          return indexed.sendAndConfirm(signed);
         }
         return indexed.sendAndConfirm(signed);
       } };
@@ -87,10 +85,15 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   const peerDir = mkdtempSync(join(tmpdir(), "review-peer-"));
   cpSync(world.dataDir, peerDir, { recursive: true });
   chmodSync(join(peerDir, "earn", seller.id), 0o700);
+  const lateDir = mkdtempSync(join(tmpdir(), "review-late-"));
+  cpSync(peerDir, lateDir, { recursive: true });
+  chmodSync(join(lateDir, "earn", seller.id), 0o700);
   const peer = await world.reopen({ dataDir: peerDir });
-  const staleDraft = await peer.draftReview(job.id, "reject", "First delivery has no heading.");
+  const firstQuote = (await peer.reviewRecord(job.id)).quote!;
+  const noteForFirst = "First delivery has no heading.";
+  const staleDraft = action === "approve" ? null : await peer.draftReview(job.id, action, noteForFirst);
   intercept = true;
-  const delayed = peer.confirmReview(job.id, staleDraft, true).then(() => null, err => err);
+  const delayed = (staleDraft ? peer.confirmReview(job.id, staleDraft, true) : peer.approveJob(job.id, undefined, true, undefined, firstQuote.id)).then(() => null, err => err);
   await capturedSend;
   const note = "Use the attached brief.";
   const draft = await wallet.draftReview(job.id, "change", note, [], buyer.id);
@@ -117,6 +120,9 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   const sellerCopy = await wallet.reviewRecord(sellerJob.id, seller.id);
   expect(revision.entries[0]).toMatchObject({ action: "change", note, attachments: [{ uri: expect.stringMatching(/#brief.txt$/) }] });
   expect(sellerCopy.entries).toEqual(revision.entries);
+  expect(revision.entries[0]!.appliedDelivery).toEqual({ deliveryHash: delivery.result!.hash, submissionCount: 1 });
+  expect(revision.entries[0]!.intendedDelivery).toEqual(revision.entries[0]!.appliedDelivery);
+  expect(revision.entries[0]!.deliveryNotice).toBeUndefined();
   expect(sellerCopy.resubmitBy).toEqual(revision.resubmitBy);
   expect(revision.resubmitBy).toBeGreaterThan(0);
   expect((await wallet.jobFile(sellerJob.id, revision.entries[0]!.attachments[0]!.hash)).base64).toBe(contents);
@@ -129,21 +135,42 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   vi.useRealTimers();
-  release();
-  expect(await delayed).toBeInstanceOf(Error);
-  expect(rejectedLogs.join("\n")).toMatch(/Instruction: AssertReviewDelivery[\s\S]+SubmissionNotPending/);
-  await peer.close();
-  expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
+  const second = await wallet.getJob(job.id, true);
   await expect(wallet.confirmReview(job.id, request, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
-  const reject = await wallet.draftReview(job.id, "reject", "The acceptance check needs a heading.", [], buyer.id);
   expect((await wallet.reviewRecord(job.id)).quote?.fee.lamports).toBe("5000");
-  expect((await wallet.reviewRecord(job.id)).draft?.note).toBe(reject.note);
-  await wallet.confirmReview(job.id, reject, true);
+  release();
+  expect(await delayed).toBeNull();
+  await peer.close();
   await wallet.tick();
+  for (const [id, agentId] of [[job.id, buyer.id], [sellerJob.id, seller.id]] as const) {
+    const record = await wallet.reviewRecord(id, agentId);
+    expect(record.entries.at(-1)).toMatchObject({ action, intendedDelivery: { submissionCount: 1, deliveryHash: delivery.result!.hash },
+      appliedDelivery: { submissionCount: 2, deliveryHash: second.result!.hash },
+      deliveryNotice: expect.stringContaining("applied to a different delivery (round 2)") });
+    const scoped = { call: async (method: string) => method === "jobs.get" ? { job: await wallet.getJob(id, false, agentId) } : record } as unknown as WalletClient;
+    expect((await runMarketTool(scoped, agentId, "market_status", { job_id: id })).message).toContain("applied to a different delivery");
+    expect((await runMarketTool(scoped, agentId, "market_review", { action: "record", job_id: id })).message).toContain("applied to a different delivery");
+  }
+  if (action !== "reject") {
+    history.pruneSubmissions();
+    const pruned = await wallet.reviewRecord(job.id);
+    expect(pruned.historyAvailable).toBe(false);
+    expect(pruned.entries.at(-1)?.appliedDelivery).toBeUndefined();
+    expect(pruned.entries.at(-1)?.deliveryNotice).toContain("applied to a different delivery");
+    return;
+  }
   const held = await wallet.reviewRecord(sellerJob.id);
-  expect(held.entries.at(-1)).toMatchObject({ fee: { lamports: "5000" }, rent: expect.objectContaining({ lamports: expect.any(String) }), action: "reject", note: reject.note, deadline: expect.any(Number) });
+  expect(held.entries.at(-1)).toMatchObject({ fee: { lamports: "5000" }, rent: expect.objectContaining({ lamports: expect.any(String) }), action: "reject", note: noteForFirst,
+    intendedDelivery: { submissionCount: 1, deliveryHash: delivery.result!.hash }, appliedDelivery: { submissionCount: 2, deliveryHash: second.result!.hash },
+    deliveryNotice: expect.stringContaining("applied to a different delivery (round 2)"), deadline: expect.any(Number) });
+  history.pruneSubmissions();
+  const frozen = await wallet.reviewRecord(sellerJob.id);
+  expect(frozen.historyAvailable).toBe(false);
+  expect(frozen.entries.at(-1)?.appliedDelivery).toEqual({ submissionCount: 2, deliveryHash: second.result!.hash });
+  history.pruneSubmissions(false);
   const scoped = { call: async (method: string) => method === "jobs.get" ? { job: await wallet.getJob(sellerJob.id, false, seller.id) } : held } as unknown as WalletClient;
   const status = await runMarketTool(scoped, seller.id, "market_status", { job_id: sellerJob.id });
+  expect(status.message).toContain("applied to a different delivery (round 2)");
   expect(status.job?.can).toEqual(["draft_dispute", "record"]);
   expect(held.quote).toMatchObject({ actions: ["dispute"], bond: { lamports: "10000000" } });
   expect(BigInt(held.quote!.disputeRent.lamports)).toBeGreaterThan(0n);
@@ -161,20 +188,29 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   const state = JSON.parse(readFileSync(join(world.dataDir, "state.json"), "utf8")) as WalletState;
   const charges = (id: string) => state.agents[id]!.refills.filter(row => row.id?.startsWith("review:")).map(row => row.lamports);
   expect(charges(seller.id)).toEqual([disputeTotal.lamports]);
-  expect(charges(buyer.id)).toEqual(["5000", String(BigInt(held.entries.at(-1)!.rent!.lamports) + 5000n)]);
+  expect(charges(buyer.id)).toEqual(["5000"]);
+  const peerState = JSON.parse(readFileSync(join(peerDir, "state.json"), "utf8")) as WalletState;
+  expect(peerState.agents[buyer.id]!.refills.filter(row => row.id?.startsWith("review:")).map(row => row.lamports))
+    .toEqual([String(BigInt(held.entries.at(-1)!.rent!.lamports) + 5000n)]);
   const due = revision.resubmitBy!;
   await world.sandbox.ruleOnTurnedDown({ task: address(job.task!), payProvider: true });
   await wallet.tick();
   // The other device took its local snapshot before any change, rejection or dispute.
   history.useLegacyReceipts();
-  const lateReader = await world.reopen({ dataDir: peerDir });
+  const lateReader = await world.reopen({ dataDir: lateDir });
   try {
     for (const id of [job.id, sellerJob.id]) {
       const late = await lateReader.reviewRecord(id);
       expect(late.entries.map(e => [e.action, e.deadline])).toEqual([
         ["change", due], ["reject", expect.any(Number)], ["dispute", expect.any(Number)],
       ]);
+      expect(late.entries.find(entry => entry.action === "reject")?.deliveryNotice).toContain("different delivery (round 2)");
       expect(late.entries.at(-1)).toMatchObject({ evidenceUri: expect.stringMatching(/^agenc:/), note: dispute.note });
     }
+    history.pruneSubmissions();
+    const unavailable = await lateReader.reviewRecord(sellerJob.id);
+    const closedRejection = unavailable.entries.find(entry => entry.action === "reject");
+    expect(closedRejection?.deliveryNotice).toContain("affected delivery could not be verified");
+    expect(closedRejection?.appliedDelivery).toBeUndefined();
   } finally { await lateReader.close(); }
 }, 60000);

@@ -1,4 +1,4 @@
-import { REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // Files with a delivery, end to end against the real program: a provider
 // leaves a picture in its outbox, the delivery lists it, and the buyer's
 // wallet reads the list, fetches the file by its fingerprint and checks it.
@@ -72,7 +72,7 @@ describe("a delivery with a picture", () => {
     await expect(wallet.jobFile("job_nope", listed.sha256)).rejects.toThrow();
 
     // Paying for it works as for any delivery.
-    const paid = await wallet.approveJob(jobId, 5, true);
+    const paid = await confirmPayout(wallet, jobId, 5);
     expect(paid.status).toBe("paid");
   }, 120_000);
 

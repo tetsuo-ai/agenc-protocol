@@ -5,6 +5,7 @@
 //
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
+import type { ReviewedDelivery } from "./client/reviews.js";
 import { reviewAnchor, type ReviewAnchor } from "./review-history.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import {
   createTransactionMessage,
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
+  getBase58Decoder,
   getTransactionEncoder,
   lamports,
   partiallySignTransactionMessageWithSigners,
@@ -383,6 +385,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
   // The agent each settled job paid, and the log of the transaction that
   // settled it: the history the live network keeps and litesvm does not.
+  const submissions = new Map<Address, ReviewedDelivery>();
   const reviewEntries = new Map<Address, ReviewAnchor[]>();
   const settledBy = new Map<Address, Address>();
   const settledLogs = new Map<Address, readonly string[]>();
@@ -438,16 +441,21 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           known.add(account);
           rememberHire(account);
         }
-        for (const instruction of "instructions" in message ? message.instructions : []) {
+        const instructions = "instructions" in message ? message.instructions : [];
+        for (const [index, instruction] of instructions.entries()) {
           const programAddress = message.staticAccounts[instruction.programAddressIndex];
           if (programAddress === undefined) continue;
           const accounts = (instruction.accountIndices ?? []).map((index: number) => message.staticAccounts[index]);
           if (accounts.some((account: Address | undefined) => account === undefined)) continue;
           const subject = accounts[0];
+          const previous = instructions[index - 1];
+          const memo = previous && { programId: message.staticAccounts[previous.programAddressIndex], accounts: [],
+            data: getBase58Decoder().decode(previous.data ?? new Uint8Array()) };
           const anchor = reviewAnchor({ programAddress, accounts: accounts as Address[], data: Uint8Array.from(instruction.data ?? []) }, result.logs, result.signature, {
             fee: BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length),
             balanceChange: address => BigInt(svm.getBalance(address) ?? 0) - balances.get(address)!,
-          });
+          }, memo);
+          if (anchor?.intendedDelivery && accounts[1]) anchor.appliedDelivery = submissions.get(accounts[1]);
           if (anchor && subject) reviewEntries.set(subject, [...(reviewEntries.get(subject) ?? []), anchor]);
           const settled = settlementOf({
             programAddress,
@@ -460,6 +468,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           }
         }
         for (const event of parseAgencCoordinationEvents(result.logs)) {
+          if (event.eventName === "TaskResultSubmitted") submissions.set(event.data.claim, {
+            submissionCount: event.data.submissionCount, deliveryHash: Buffer.from(event.data.proofHash).toString("hex"),
+          });
           if (event.eventName === "ServiceListingHired") hireLogs.set(event.data.task, result.logs);
         }
       } catch {
@@ -1040,6 +1051,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         jobSpecUri: `agenc://job-spec/sha256/${hash.hex}`,
         moderator: market.moderator.address,
       });
+      async function practiceDelivery(worker: Address): Promise<ReviewedDelivery> {
+        const { readSubmission } = await import("./market.js");
+        const submission = await readSubmission(chain, task, worker);
+        if (!submission) throw new Error("No practice delivery to review");
+        return { submissionCount: submission.account.submissionCount, deliveryHash: Buffer.from(submission.account.proofHash).toString("hex") };
+      }
       return {
         task,
         async delivered() {
@@ -1065,7 +1082,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .map((entry) => getTaskClaimDecoder().decode(entry.data))
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
-          await sendApproval(chain, buyer, task, claim.worker);
+          await sendApproval(chain, buyer, task, claim.worker, await practiceDelivery(claim.worker));
         },
         async turnDown() {
           const { sendRejectAndFreeze } = await import("./market.js");
@@ -1082,7 +1099,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
-          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
+          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason, undefined, await practiceDelivery(claim.worker));
         },
       };
     },

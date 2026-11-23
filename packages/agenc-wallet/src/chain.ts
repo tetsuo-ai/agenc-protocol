@@ -4,12 +4,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import {
   AccountRole,
-  appendTransactionMessageInstruction,
-  compileTransaction,
-  createTransactionMessage,
-  getBase64EncodedWireTransaction,
-  setTransactionMessageFeePayer,
-  setTransactionMessageLifetimeUsingBlockhash,
   address,
   createDefaultRpcTransport,
   createSolanaRpcFromTransport,
@@ -46,6 +40,7 @@ import {
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
+import { reviewBlockhash } from "./review-blockhash.js";
 import { readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
 import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
@@ -69,15 +64,13 @@ export interface Chain {
    * program unless the program is on the revision this service signs for
    * (`assertSigningRevision`).
    */
-  clientFor(signer: TransactionSigner): MarketplaceClient;
+  clientFor(signer: TransactionSigner, options?: { review: boolean }): MarketplaceClient;
   /**
    * Send a transaction that was built somewhere else, once it carries every
    * signature it needs. Returns its signature when it is confirmed. The
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
-  /** Simulate the delivery check before the buyer can publish a paid review. */
-  checkReviewDelivery?(payer: Address, guard: Instruction): Promise<void>;
   /** Distinguish a confirmed failure from a send never seen before verified expiry. */
   reviewSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired">;
   /** Actual fee and payer debit from a confirmed review receipt. */
@@ -348,8 +341,9 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   } catch {
     throw new WalletError("BAD_REQUEST", "The network address is not a valid URL.");
   }
+  const baseRpc = options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl });
   const rpc = createSolanaRpcFromTransport(
-    scopedRpcTransport(politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
+    scopedRpcTransport(politeTransport(baseRpc, {
       minGapMs: options.minRequestGapMs ?? (PUBLIC_RPC_HOSTS.has(host) ? PUBLIC_RPC_MIN_GAP_MS : 0),
     })),
   );
@@ -361,6 +355,18 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
   const transport = scopedSendTransport(createRpcTransport({ rpc }));
+  // Dispatch buyer decisions once, directly. Keep preflight enabled and poll
+  // through the normal RPC. Neither the wallet nor the RPC should rebroadcast.
+  const direct = createSolanaRpcFromTransport(scopedRpcTransport(baseRpc));
+  const reviewTransport = scopedSendTransport({
+    ...createRpcTransport({ rpc: {
+      getEpochInfo: rpc.getEpochInfo,
+      getSignatureStatuses: rpc.getSignatureStatuses,
+      getLatestBlockhash: rpc.getLatestBlockhash,
+      sendTransaction: (wire, config) => direct.sendTransaction(wire, { ...config, encoding: "base64", maxRetries: 0n }),
+    } }),
+    getLatestBlockhash: () => reviewBlockhash(rpc),
+  });
   // Read every time: the stamp changes once, at a release, and a send never
   // goes out on an old answer.
   const signingRevision = () =>
@@ -399,15 +405,6 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
   return usesScopedRequests<Chain>({
     reviewSendOutcome,
-    async checkReviewDelivery(payer, guard) {
-      const { value: lifetime } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
-      const message = setTransactionMessageFeePayer(payer, createTransactionMessage({ version: 0 }));
-      const tx = compileTransaction(appendTransactionMessageInstruction(guard, setTransactionMessageLifetimeUsingBlockhash(lifetime, message)));
-      const { value } = await rpc.simulateTransaction(getBase64EncodedWireTransaction(tx), {
-        encoding: "base64", commitment: "confirmed", sigVerify: false,
-      }).send();
-      if (value.err) throw new WalletError("NOT_AVAILABLE", "The marketplace could not verify this delivery for review.");
-    },
     async reviewDebit(signature, payer) {
       const tx = await rpc.getTransaction(signature as Signature, {
         commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0,
@@ -421,10 +418,10 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
     network: options.network,
     transferFeeLamports: BASE_FEE_LAMPORTS + priorityFee,
-    clientFor(signer) {
+    clientFor(signer, sendOptions) {
       return revisionGatedClient(
         createMarketplaceClient({
-          transport,
+          transport: sendOptions?.review ? reviewTransport : transport,
           signer,
           ...(options.computeUnitPrice !== undefined
             ? {

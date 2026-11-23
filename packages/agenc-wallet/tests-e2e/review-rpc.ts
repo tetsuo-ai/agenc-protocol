@@ -8,6 +8,7 @@ import type { SettlementHistoryRpc } from "../src/settlement.js";
 
 export function reviewRpc() {
   let legacy = false;
+  let hideDeliveries = false;
   let local: Chain | undefined;
   const rows = new Map<string, { accounts: readonly Address[]; tx: unknown }>();
   const rpc: SettlementHistoryRpc = {
@@ -18,10 +19,12 @@ export function reviewRpc() {
     } }),
     getTransaction: signature => ({ send: async () => {
       const tx = rows.get(signature)?.tx as { meta: { logMessages: string[] } } | undefined;
+      if (hideDeliveries && tx?.meta.logMessages.includes("Program log: Instruction: SubmitTaskResult")) return null;
       return tx && legacy ? { ...tx, meta: { ...tx.meta, logMessages: tx.meta.logMessages.filter(line => !line.startsWith("Program log: Revision deadline ")) } } : tx ?? null;
     } }),
   };
   return {
+    pruneSubmissions(pruned = true) { hideDeliveries = pruned; },
     useLegacyReceipts() { legacy = true; },
     chain(base: Chain): Chain {
       local = base;
@@ -34,10 +37,12 @@ export function reviewRpc() {
         const preBalances = await local?.getBalances(accounts);
         const result = await base.sendAndConfirm(signed);
         const postBalances = await local?.getBalances(accounts);
-        const instructions = ("instructions" in message ? message.instructions : []).map(ix => ({
+        const instructions = ("instructions" in message ? message.instructions : []).map(ix => accounts[ix.programAddressIndex] === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+          ? { programId: accounts[ix.programAddressIndex], program: "spl-memo", parsed: Buffer.from(ix.data ?? []).toString("utf8") }
+          : {
           programId: accounts[ix.programAddressIndex], accounts: (ix.accountIndices ?? []).map(index => accounts[index]),
           data: getBase58Decoder().decode(ix.data ?? new Uint8Array()),
-        }));
+        });
         rows.set(result.signature, { accounts, tx: {
           transaction: { signatures: [result.signature], message: { accountKeys: accounts.map(pubkey => ({ pubkey })), instructions } },
           meta: { err: null, logMessages: result.logs, fee: 5000n * BigInt(Object.keys(signed.signatures).length), preBalances, postBalances },

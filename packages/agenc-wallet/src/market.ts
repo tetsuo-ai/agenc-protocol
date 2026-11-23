@@ -7,8 +7,10 @@
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
+import { reviewMemo } from "./review-memo.js";
+import type { ReviewedDelivery } from "./client/reviews.js";
 import { withListingOperation } from "./transport-scope.js";
-import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
+import { getAddressEncoder, type Address, type Instruction, type TransactionPartialSigner, type KeyPairSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
@@ -32,7 +34,6 @@ import {
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
   findWorkerCompletionBondPda,
-  getAssertReviewDeliveryInstruction,
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
   getAgentStatsDiscriminatorBytes,
@@ -960,13 +961,32 @@ async function settlementPayees(
   };
 }
 
-export type ReviewedDelivery = { deliveryHash: string; submissionCount: number };
-
-export async function deliveryGuard(task: Address, provider: Address, expected: ReviewedDelivery) {
+async function sendBuyerDecision(
+  chain: Chain, payer: KeyPairSigner, task: Address, provider: Address,
+  action: "approve" | "change" | "reject", ix: Instruction, expected: ReviewedDelivery,
+) {
   const [claim] = await findClaimPda({ task, bidder: provider });
-  const [taskSubmission] = await findTaskSubmissionPda({ claim });
-  return getAssertReviewDeliveryInstruction({ taskSubmission, proofHash: Buffer.from(expected.deliveryHash, "hex"),
-    submissionCount: expected.submissionCount });
+  let refusal: WalletError | undefined;
+  // The SDK obtains a fresh lifetime and assembles the message before calling
+  // this signer. Keep the claim read here, after uploads, quotes and RPC setup.
+  const signer: TransactionPartialSigner = {
+    address: payer.address,
+    async signTransactions(transactions, config) {
+      const current = (await readSubmission(chain, task, provider))?.account;
+      if (!current || current.claim !== claim || current.worker !== provider || current.status !== SubmissionStatus.Submitted ||
+          current.submissionCount !== expected.submissionCount || values.bytesToHex(Uint8Array.from(current.proofHash)) !== expected.deliveryHash) {
+        refusal = new WalletError("NOT_ALLOWED", "The delivery changed before signing. Open the new delivery and review it again.");
+        throw refusal;
+      }
+      return payer.signTransactions(transactions, config);
+    },
+  };
+  try {
+    return await chain.clientFor(signer, { review: true }).send([reviewMemo(action, claim, expected), ix], { maxRetries: 0 });
+  } catch (error) {
+    // The SDK wraps errors raised by a signer.
+    throw refusal ?? error;
+  }
 }
 
 /** Accept the delivery: releases the held price to the provider. */
@@ -975,7 +995,7 @@ export async function sendApproval(
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
-  expected?: ReviewedDelivery,
+  expected: ReviewedDelivery,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -989,7 +1009,6 @@ export async function sendApproval(
     task,
     workerAuthority: payees.workerAuthority,
   });
-  const client = chain.clientFor(buyer);
   const ix = await facade.acceptTaskResult({
     task,
     worker: providerAgent,
@@ -1002,7 +1021,7 @@ export async function sendApproval(
     ...(payees.operator !== null ? { operator: payees.operator } : {}),
     ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
   });
-  const result = await client.send([...(expected ? [await deliveryGuard(task, providerAgent, expected)] : []), ix], { maxRetries: 0 });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "approve", ix, expected);
   return result.signature;
 }
 
@@ -1013,14 +1032,11 @@ export async function sendChangesRequest(
   task: Address,
   providerAgent: Address,
   changesHash: Uint8Array,
-  expected?: ReviewedDelivery,
+  expected: ReviewedDelivery,
 ): Promise<string> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
-  const client = chain.clientFor(buyer);
-  const result = await client.send([
-    ...(expected ? [await deliveryGuard(task, providerAgent, expected)] : []),
-    await facade.requestChanges({ task, claim, creator: buyer, changesHash }),
-  ], { maxRetries: 0 });
+  const ix = await facade.requestChanges({ task, claim, creator: buyer, changesHash });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "change", ix, expected);
   return result.signature;
 }
 
@@ -1099,7 +1115,7 @@ export async function sendRejectAndFreeze(
   providerAgent: Address,
   rejectionHash: Uint8Array,
   words: AmountWords = SOL_AMOUNT_WORDS,
-  expected?: ReviewedDelivery,
+  expected: ReviewedDelivery,
 ): Promise<{ signature: string; recordLamports: bigint }> {
   // The revision first, so a person on the wrong one is not asked for money.
   await chain.assertSigningRevision?.();
@@ -1109,16 +1125,8 @@ export async function sendRejectAndFreeze(
     { creator: buyer.address, workerAgent: providerAgent },
   );
   await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words, chain.transferFeeLamports);
-  const client = chain.clientFor(buyer);
-  const result = await client.send([
-    ...(expected ? [await deliveryGuard(task, providerAgent, expected)] : []),
-    await facade.rejectAndFreeze({
-      task,
-      worker: providerAgent,
-      creator: buyer,
-      rejectionHash,
-    }),
-  ], { maxRetries: 0 });
+  const ix = await facade.rejectAndFreeze({ task, worker: providerAgent, creator: buyer, rejectionHash });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "reject", ix, expected);
   return { signature: result.signature, recordLamports: cost.lamports };
 }
 

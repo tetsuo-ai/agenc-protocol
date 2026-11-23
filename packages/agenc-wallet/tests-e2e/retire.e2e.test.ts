@@ -1,4 +1,4 @@
-import { REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // "Stop earning for good": an agent that took jobs locked a deposit with the
 // marketplace when it registered. Retiring it there brings that deposit back,
 // to the lamport, once its services are off the marketplace for good. It is
@@ -186,7 +186,7 @@ describe("stopping an agent's earning for good", () => {
 
     // The buyer pays. Its loop is off, so the wallet records that pay
     // itself before it stops the agent for good.
-    await wallet.approveJob(job.id, undefined, true);
+    await confirmPayout(wallet, job.id);
     const retired = await wallet.retireAgent(worker.id);
     expect(retired.earn.retired).toBe(true);
     expect(retired.earn.jobsDone).toBe(1);
@@ -230,7 +230,7 @@ describe("stopping an agent's earning for good", () => {
     // As it says: with Earns on the hire is done and paid, and then it can stop.
     await setEarnWithApproval(wallet, worker.id, true, 10);
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
-    await wallet.approveJob(job.id, undefined, true);
+    await confirmPayout(wallet, job.id);
     await setEarnWithApproval(wallet, worker.id, false);
     const retired = await wallet.retireAgent(worker.id);
     expect(retired.earn).toMatchObject({ retired: true, jobsDone: 1 });
@@ -261,7 +261,7 @@ describe("stopping an agent's earning for good", () => {
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
     // The smallest pay still holds for every other job.
     expect(Number((await readTask(world.sandbox.chain, stranger.task))!.status)).toBe(TaskStatus.Open);
-    await wallet.approveJob(job.id, undefined, true);
+    await confirmPayout(wallet, job.id);
     await setEarnWithApproval(wallet, worker.id, false);
     expect((await wallet.retireAgent(worker.id)).earn.retired).toBe(true);
   }, 180_000);

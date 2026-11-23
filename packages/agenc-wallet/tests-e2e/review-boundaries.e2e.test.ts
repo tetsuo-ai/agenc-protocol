@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { address, some } from "@solana/kit";
 import {
-  findClaimPda, getTaskClaimDecoder, findCreatorStatsPda, getTaskDecoder, TaskStatus, getTaskEncoder, TaskType,
+  findClaimPda, findTaskSubmissionPda, getTaskSubmissionDecoder, getTaskSubmissionEncoder, getTaskClaimDecoder, findCreatorStatsPda, getTaskDecoder, TaskStatus, getTaskEncoder, TaskType,
 } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WalletState } from "../src/store.js";
@@ -136,13 +136,37 @@ it("filters contest, multi-worker and token actions using the submitted job's ch
   expect((await world.wallet.reviewRecord(job.id)).resubmitBy).toBe(Number(held.expiresAt) * 1000);
 });
 
-it("withholds buyer actions and evidence when the marketplace lacks the delivery check", async () => {
-  world = await startWorld({ chain: base => ({ ...base, checkReviewDelivery: async () => { throw new Error("Unknown instruction"); } }) });
+it.each(["approve", "reject", "change"] as const)("refuses a changed delivery at the %s signing boundary", async action => {
+  let replace: (() => void) | undefined;
+  let sends = 0;
+  world = await startWorld({ transport: base => ({ ...base,
+    async getLatestBlockhash() {
+      const latest = await base.getLatestBlockhash();
+      replace?.();
+      return latest;
+    },
+    async sendAndConfirm(tx) { sends++; return base.sendAndConfirm(tx); },
+  }) });
   const agent = await buyer();
   const job = await hire(agent.id);
   await world.sandbox.workOnce();
   await world.wallet.getJob(job.id, true);
-  expect(await world.wallet.reviewRecord(job.id)).toMatchObject({ quote: null, termsAvailable: false });
-  await expect(world.wallet.draftReview(job.id, "change", "Try again.")).rejects.toThrow();
-  expect(state().reviewIntents?.[job.id]).toBeUndefined();
+  const quote = (await world.wallet.reviewRecord(job.id)).quote!;
+  const draft = action === "approve" ? null : await world.wallet.draftReview(job.id, action, "Review this line.");
+  const [claim] = await findClaimPda({ task: address(job.task!), bidder: address(state().jobs[job.id]!.providerAgent) });
+  const [submission] = await findTaskSubmissionPda({ claim });
+  const svm = world.sandbox.market.svm;
+  const original = svm.getAccount(submission)!;
+  if (!original.exists) throw new Error("Missing submission");
+  const account = getTaskSubmissionDecoder().decode(original.data);
+  replace = () => {
+    replace = undefined;
+    const change = action === "reject" ? { proofHash: Buffer.alloc(32, 3) } : { submissionCount: account.submissionCount + 1 };
+    svm.setAccount({ ...original, data: getTaskSubmissionEncoder().encode({ ...account, ...change }) } as never);
+  };
+  const before = sends;
+  await expect(draft ? world.wallet.confirmReview(job.id, draft, true) : world.wallet.approveJob(job.id, undefined, true, undefined, quote.id))
+    .rejects.toThrow(/delivery changed before signing/i);
+  expect(sends).toBe(before);
+  expect(state().reviewIntents?.[job.id]?.receipt).toBeUndefined();
 });

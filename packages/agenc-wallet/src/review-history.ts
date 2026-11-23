@@ -3,8 +3,10 @@ import {
   AgencCoordinationInstruction as Ix, AGENC_COORDINATION_PROGRAM_ADDRESS,
   findTaskPda, TaskType, parseAgencCoordinationEvents, parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
+import { settledDeliveryFromLogs } from "./delivery-history.js";
 import { reviewRead } from "./review.js";
-import type { ReviewEntry } from "./client/reviews.js";
+import { intendedDelivery } from "./review-memo.js";
+import type { ReviewEntry, ReviewedDelivery } from "./client/reviews.js";
 import { sentInstruction, type SentInstruction, type SettlementHistoryRpc } from "./settlement.js";
 
 export interface ReviewAnchor extends Omit<ReviewEntry, "attachments" | "note" | "fee" | "rent" | "bond"> {
@@ -41,7 +43,7 @@ function revisionDeadline(logs: readonly string[], claim: Address, round: number
 }
 
 /** Only a successful marketplace instruction and its matching event establish a review. */
-export function reviewAnchor(ix: SentInstruction, logs: readonly string[], signature: string, costs: TransactionCosts): ReviewAnchor | null {
+export function reviewAnchor(ix: SentInstruction, logs: readonly string[], signature: string, costs: TransactionCosts, memo?: unknown): ReviewAnchor | null {
   if (ix.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return null;
   let parsed;
   try {
@@ -50,19 +52,25 @@ export function reviewAnchor(ix: SentInstruction, logs: readonly string[], signa
     });
   } catch { return null; }
   if (parsed.instructionType !== Ix.RequestChanges && parsed.instructionType !== Ix.RejectAndFreeze &&
-      parsed.instructionType !== Ix.DisputeRejection) return null;
+      parsed.instructionType !== Ix.DisputeRejection && parsed.instructionType !== Ix.AcceptTaskResult) return null;
   for (const event of parseAgencCoordinationEvents(logs)) {
+    if (event.eventName === "TaskResultAccepted" && parsed.instructionType === Ix.AcceptTaskResult &&
+        event.data.task === parsed.accounts.task.address && event.data.claim === parsed.accounts.claim.address) {
+      const intended = intendedDelivery(memo, event.data.claim, "approve");
+      if (intended) return { action: "approve", signature, at: Number(event.data.acceptedAt) * 1000, intendedDelivery: intended,
+        hash: intended.deliveryHash, deadline: null, feeLamports: costs.fee, rentLamports: 0n, bondLamports: 0n };
+    }
     if (event.eventName !== "TaskChangesRequested" && event.eventName !== "TaskRejectFrozen" && event.eventName !== "RejectionDisputed") continue;
     if (event.data.task !== parsed.accounts.task.address || event.data.claim !== parsed.accounts.claim.address) continue;
     const common = { signature, at: Number(event.data.timestamp) * 1000, feeLamports: costs.fee };
     if (parsed.instructionType === Ix.RequestChanges && event.eventName === "TaskChangesRequested") {
-      return { ...common, action: "change", round: event.data.round, hash: Buffer.from(parsed.data.changesHash).toString("hex"), deadline: revisionDeadline(logs, event.data.claim, event.data.round), rentLamports: 0n, bondLamports: 0n };
+      return { ...common, action: "change", intendedDelivery: intendedDelivery(memo, event.data.claim, "change"), round: event.data.round, hash: Buffer.from(parsed.data.changesHash).toString("hex"), deadline: revisionDeadline(logs, event.data.claim, event.data.round), rentLamports: 0n, bondLamports: 0n };
     }
     if (parsed.instructionType === Ix.RejectAndFreeze && event.eventName === "TaskRejectFrozen" &&
         Buffer.from(event.data.rejectionHash).equals(Buffer.from(parsed.data.rejectionHash))) {
       const creator = costs.balanceChange(parsed.accounts.creatorStats.address);
       const seller = costs.balanceChange(parsed.accounts.agentStats.address);
-      return { ...common, action: "reject", hash: Buffer.from(event.data.rejectionHash).toString("hex"),
+      return { ...common, action: "reject", intendedDelivery: intendedDelivery(memo, event.data.claim, "reject"), hash: Buffer.from(event.data.rejectionHash).toString("hex"),
         deadline: Number(event.data.reviewDeadlineAt) * 1000, bondLamports: 0n,
         rentLamports: creator !== null && seller !== null && creator >= 0n && seller >= 0n ? creator + seller : null };
     }
@@ -85,6 +93,69 @@ function lamports(value: unknown): bigint | null {
 interface HistoryTransaction {
   transaction?: { signatures?: string[]; message?: { accountKeys?: (string | { pubkey: string })[]; instructions?: unknown[] } };
   meta?: { err: unknown; fee?: unknown; preBalances?: unknown[]; postBalances?: unknown[]; logMessages?: string[]; innerInstructions?: { instructions: unknown[] }[] };
+}
+
+export function submittedDelivery(logs: readonly string[], task: Address, claim: Address): ReviewedDelivery | undefined {
+  for (const event of parseAgencCoordinationEvents(logs).reverse()) {
+    if (event.eventName === "TaskResultSubmitted" && event.data.task === task && event.data.claim === claim) {
+      return { deliveryHash: Buffer.from(event.data.proofHash).toString("hex"), submissionCount: event.data.submissionCount };
+    }
+  }
+}
+
+// A revision 9 receipt does not always carry the delivery. Read backwards
+// from this exact decision, never from the current account or the current tip.
+// A missing intervening receipt could itself be a resubmission.
+async function deliveryBeforeDecision(rpc: SettlementHistoryRpc, task: Address, claim: Address, decision: ReviewAnchor) {
+  let before = toSignature(decision.signature);
+  const until = performance.now() + 2000;
+  while (performance.now() < until) {
+    const rows = await reviewRead(rpc.getSignaturesForAddress(claim, { before, limit: 16, commitment: "confirmed" }).send(), 800);
+    if (!rows?.length) return;
+    for (const row of rows) {
+      if (typeof row.signature !== "string" || row.err === undefined || performance.now() >= until) return;
+      if (row.err !== null) continue;
+      const tx = await reviewRead(rpc.getTransaction(row.signature, {
+        encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0,
+      }).send(), 800) as HistoryTransaction | null;
+      const logs = tx?.meta?.logMessages;
+      if (!logs?.length || tx?.meta?.err !== null || tx.transaction?.signatures?.[0] !== row.signature ||
+          logs.some(line => line.startsWith("Log truncated"))) return;
+      const delivery = submittedDelivery(logs, task, claim);
+      if (delivery) return decision.round === undefined || decision.round === delivery.submissionCount ? delivery : undefined;
+    }
+    const next = rows.at(-1)?.signature;
+    if (rows.length < 16 || typeof next !== "string" || next === before) return;
+    before = toSignature(next);
+  }
+}
+
+async function identifyAppliedDelivery(rpc: SettlementHistoryRpc, task: Address, claim: Address, logs: readonly string[], anchor: ReviewAnchor) {
+  if (anchor.action === "approve") {
+    const acceptance = parseAgencCoordinationEvents(logs).find(event =>
+      event.eventName === "TaskResultAccepted" && event.data.task === task && event.data.claim === claim);
+    if (acceptance?.eventName === "TaskResultAccepted") {
+      const paid = await settledDeliveryFromLogs(logs, task, acceptance.data.acceptedBy, acceptance.data.worker);
+      if (paid) anchor.paidDeliveryHash = paid.proofHashHex;
+    }
+  }
+  anchor.appliedDelivery = await deliveryBeforeDecision(rpc, task, claim, anchor).catch(() => undefined);
+  if (anchor.paidDeliveryHash && anchor.appliedDelivery?.deliveryHash !== anchor.paidDeliveryHash) delete anchor.appliedDelivery;
+}
+
+export function deliveryNotice(entry: ReviewAnchor): string | undefined {
+  const intended = entry.intendedDelivery;
+  if (!intended) return;
+  const applied = entry.appliedDelivery;
+  const decision = entry.action === "approve" ? "payment" : entry.action === "reject" ? "rejection" : "change request";
+  if (applied && applied.deliveryHash === intended.deliveryHash && applied.submissionCount === intended.submissionCount) return;
+  const round = applied?.submissionCount ?? entry.round;
+  if (applied || (round !== undefined && round !== intended.submissionCount) ||
+      (entry.paidDeliveryHash && entry.paidDeliveryHash !== intended.deliveryHash)) {
+    const which = round === undefined ? "" : ` (round ${round})`;
+    return `The buyer reviewed delivery ${intended.submissionCount}, but the confirmed ${decision} applied to a different delivery${which}.`;
+  }
+  return `The buyer reviewed delivery ${intended.submissionCount}. The ${decision} was confirmed. Its affected delivery could not be verified.`;
 }
 
 // Before the deadline was logged, an exclusive job with a fixed deadline
@@ -180,15 +251,26 @@ export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address
         const post = lamports(meta.postBalances?.[i]);
         return pre !== null && post !== null ? post - pre : null;
       } };
-      const instructions = [...(message?.instructions ?? []), ...(meta.innerInstructions ?? []).flatMap(group => group.instructions)];
+      const outer = message?.instructions ?? [];
+      const instructions = [...outer, ...(meta.innerInstructions ?? []).flatMap(group => group.instructions)];
       const transactionEntries: ReviewAnchor[] = [];
       let verified = true;
-      for (const raw of instructions) {
+      for (const [index, raw] of instructions.entries()) {
         const ix = sentInstruction(raw);
         if (!ix || ix.accounts[0] !== task || ix.accounts[1] !== claim) continue;
-        const anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs);
-        if (anchor) transactionEntries.push(anchor);
-        else if (ix.programAddress === AGENC_COORDINATION_PROGRAM_ADDRESS) {
+        // This wallet signs only budget instructions, the memo and one decision.
+        // A third-party batch could resubmit inside the decision transaction.
+        const memo = index > 0 && index === outer.length - 1 && outer.slice(0, index - 1).every(raw =>
+          (raw as { programId?: string } | null)?.programId === "ComputeBudget111111111111111111111111111111")
+          ? outer[index - 1] : undefined;
+        const anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs, memo);
+        if (anchor) {
+          if (anchor.intendedDelivery) {
+            await identifyAppliedDelivery(rpc, task, claim, meta.logMessages!, anchor);
+            if (!anchor.appliedDelivery) verified = false;
+          }
+          transactionEntries.push(anchor);
+        } else if (ix.programAddress === AGENC_COORDINATION_PROGRAM_ADDRESS) {
           try {
             const { instructionType } = parseAgencCoordinationInstruction({ ...ix,
               accounts: ix.accounts.map(address => ({ address, role: AccountRole.READONLY })) });

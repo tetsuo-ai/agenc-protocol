@@ -303,9 +303,13 @@ describe("the wallet service", () => {
     expect(delivered.job!.status).toBe("delivered");
     expect(delivered.job!.can).toEqual(["approve", "ask_changes", "draft_rejection", "record"]);
     expect(delivered.job!.delivery?.untrusted_content).toContain("You asked: A haiku about a lighthouse.");
+    expect(delivered.job!.review).toMatchObject({ round: 1, quote_id: expect.any(String) });
+    for (const client of [owner, agent]) await expect(client.call("jobs.approve", { jobId: posted.job!.job_id })).rejects.toThrow(/delivery/);
+    await expect(agent.call("jobs.approve", { jobId: posted.job!.job_id, quoteId: "0".repeat(64) })).rejects.toThrow(/changed/);
     const paid = await runMarketTool(agent, agentView.id, "market_review", {
       job_id: posted.job!.job_id,
       action: "approve",
+      quote_id: delivered.job!.review!.quote_id,
       rating: 5,
     });
     expect(paid.ok).toBe(true);

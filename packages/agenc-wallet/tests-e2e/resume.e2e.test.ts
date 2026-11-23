@@ -6,7 +6,7 @@ import { SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, SolanaError } from "@solana/ki
 import { AgencError } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
-import { REVIEW_ALLOWANCE, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -264,7 +264,7 @@ describe("crash safety", () => {
     await sandbox.workOnce();
     const delivered = await reopened.getJob(job.id, true);
     expect(delivered.status).toBe("delivered");
-    expect((await reopened.approveJob(job.id, undefined, true)).status).toBe("paid");
+    expect((await confirmPayout(reopened, job.id)).status).toBe("paid");
     expect((await reopened.overview()).agents[0]!.name).toBe("My assistant");
   });
 
@@ -300,7 +300,7 @@ describe("crash safety", () => {
 
     await sandbox.workOnce();
     await wallet.getJob(job.id, true);
-    await wallet.approveJob(job.id, undefined, true);
+    await confirmPayout(wallet, job.id);
     await wallet.tick();
     await wallet.tick();
     const jobs = await wallet.listJobs({ role: "buying" }, true);

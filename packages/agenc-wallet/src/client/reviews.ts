@@ -29,8 +29,14 @@ export interface ReviewQuote {
   reviewWindowSeconds: number;
   estimatedResubmitBy: number | null;
 }
+export interface ReviewedDelivery { deliveryHash: string; submissionCount: number }
 export interface ReviewEntry {
-  action: ReviewAction;
+  action: ReviewAction | "approve";
+  intendedDelivery?: ReviewedDelivery | undefined;
+  appliedDelivery?: ReviewedDelivery | undefined;
+  /** From the payment receipt itself, including when the submission history was pruned. */
+  paidDeliveryHash?: string;
+  deliveryNotice?: string;
   signature: string;
   fee: Money | null;
   rent: Money | null;
@@ -47,7 +53,7 @@ export interface ReviewRecord {
   entries: ReviewEntry[];
   historyIncomplete?: boolean;
   continuation?: string;
-  publication?: { hashes: string[]; published?: string[]; signature?: string; confirmed: boolean };
+  publication?: { intendedDelivery?: ReviewedDelivery; hashes: string[]; published?: string[]; signature?: string; confirmed: boolean };
   historyAvailable: boolean;
   termsAvailable: boolean;
   resubmitBy: number | null;

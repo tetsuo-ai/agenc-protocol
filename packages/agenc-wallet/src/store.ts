@@ -366,6 +366,7 @@ export interface WalletState {
   /** Seller delivery cache and durable review-change timestamps. */
   reviewIntents?: Record<string, {
     payer: string; agentId: string | null; rate: number | null; reconciled?: boolean;
+    intendedDelivery?: import("./client/reviews.js").ReviewedDelivery;
     quoteId: string; action: string; createdAt: number; hashes: string[]; published?: string[]; confirmed: boolean;
     receipt?: PendingListingSend;
   }>;
