@@ -964,7 +964,9 @@ export class AgencWallet {
       policy: agent.policy,
       earn: {
         enabled: agent.earn.enabled && !retired,
-        state: agent.earn.enabled && !retired ? earn.state : "off",
+        state: agent.earn.enabled && !retired
+          ? earn.state
+          : this.#earn.hasUnfinishedJob(agent.id) ? "finishing" : "off",
         lastError: earn.lastError ?? agent.earn.lastError,
         jobsDone: agent.earn.jobsDone,
         minPayCents: agent.earn.minPayCents,
@@ -4117,6 +4119,9 @@ export class AgencWallet {
       if (rate === null) throw new WalletError("NETWORK", "A current dollar price is needed before taking jobs.");
       const minRewardLamports = centsToLamports(agent.earn.minPayCents, rate);
       const owed = this.#owed.get(agent.id);
+      // A switch off or shutdown may have happened while startup was waiting.
+      const current = this.#agentRecord(agent.id);
+      if (this.#closed || !current.earn.enabled || current.earn.retiredAt != null) return;
       this.#earn.start({
         agentId: agent.id,
         signer,
@@ -4218,10 +4223,20 @@ export class AgencWallet {
         this.#earn.clearPause(agentId);
       }
       await this.#startEarning(this.#agentRecord(agentId));
-    } else await this.#earn.stop(agentId);
+    } else {
+      // stop aborts discovery synchronously. Its promise still drains the job,
+      // but the owner can turn other agents off while that work finishes.
+      void this.#earn.stop(agentId).then(async () => {
+        const current = this.#agentRecord(agentId);
+        if (!this.#closed && current.earn.enabled) await this.#startEarning(current);
+      }).catch((error) => this.#log(`earn ${agentId}: stopping: ${describeError(error)}`));
+    }
     // A service on offer follows the switch: it leaves the marketplace while
     // nobody is taking jobs, and comes back when someone is.
-    await this.#advanceOffer(agentId);
+    if (enabled) await this.#advanceOffer(agentId);
+    else void this.#advanceOffer(agentId).then(() => {
+      this.#emit({ type: "overview" });
+    }).catch((error) => this.#log(`offer ${agentId}: ${describeError(error)}`));
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);
   }

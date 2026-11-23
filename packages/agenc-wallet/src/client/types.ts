@@ -38,7 +38,8 @@ export interface AgentPolicy {
   };
 }
 
-export type EarnState = "off" | "starting" | "watching" | "working" | "error";
+/** "finishing" takes no new jobs while an existing job still needs the agent. */
+export type EarnState = "off" | "starting" | "watching" | "working" | "finishing" | "error";
 
 /** Readonly upper bound for enabling earning and preparing the agent's offers. */
 export interface EarnFundingQuote {

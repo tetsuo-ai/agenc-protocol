@@ -1911,11 +1911,13 @@ async function listingMetadataForTask(
  * claim → execute → submit. Job-spec/claim failures are per-candidate (the
  * caller may try the next candidate); an execution failure AFTER a landed
  * claim ends the tick (the worker holds that claim until resolved).
+ * options.signal stops fresh claims without aborting a job already claimed.
  */
 export async function processCandidate(
   ctx: WorkerContext,
   agent: WorkerAgent,
   candidate: ClaimCandidate,
+  options: { signal?: AbortSignal } = {},
 ): Promise<ProcessOutcome> {
   const task = candidate.task;
   const state = loadState(ctx.stateDir);
@@ -2058,6 +2060,12 @@ export async function processCandidate(
   const budget = await ctx.modelBudgetForTask?.(decodedTask, task);
   if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0)) {
     throw new Error("This job has no valid model budget.");
+  }
+
+  // Discovery can stop during either asynchronous funding check above.
+  // Once the claim is sent, only ctx.signal may stop its execution.
+  if (options.signal?.aborted || ctx.signal?.aborted) {
+    return { status: "skipped", task, reason: "worker-stopping" };
   }
 
   const claimStartedAt = new Date().toISOString();
@@ -3194,7 +3202,7 @@ async function runUpLocked(
   // restart. Retry one deferred candidate per tick with canonical reads.
   const deferred = new Map<Address, ClaimCandidate>();
   const attempt = async (candidate: ClaimCandidate): Promise<void> => {
-    const result = await processCandidate(ctx, agent, candidate);
+    const result = await processCandidate(ctx, agent, candidate, options);
     deferred.delete(candidate.task);
     if (result.status === "skipped" && result.retryable && deferred.size < 100) {
       deferred.set(candidate.task, candidate);
