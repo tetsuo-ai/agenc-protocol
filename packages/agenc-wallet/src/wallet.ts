@@ -18,7 +18,7 @@ import {
   taskThread,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms } from "./worker-jobs.js";
+import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms, releaseQuoteLifetime } from "./worker-jobs.js";
 import type { WorkerQuote, WorkAction } from "./client/types.js";
 import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
@@ -4061,19 +4061,22 @@ export class AgencWallet {
     const rate = await this.#workRate();
     return dispatch(async (ctx, agent) => {
       const job = action === "claim" ? (await browseOpenWork(ctx, agent, 0, target)).jobs[0] : await heldWork(ctx, agent);
-      if (job?.task !== task || (action === "release" && !("canRelease" in job && job.canRelease)) ||
-        (action === "submit" && !("canSubmit" in job && job.canSubmit)))
+      if (job?.task !== task)
         throw new WalletError("NOT_ALLOWED", "This job is no longer available for that action.");
       const view = workerJob(job, rate, this.#chain.transferFeeLamports, action);
+      const quotedAt = this.#now();
+      const lifetime = action === "release" ? releaseQuoteLifetime(view, await this.#chain.clusterTime()) : Infinity;
+      if ((action === "release" && !view.canRelease) || (action === "submit" && !view.canSubmit))
+        throw new WalletError("NOT_ALLOWED", "This job is no longer available for that action.");
       const quote: WorkerQuote = {
         id: newId("work"), agentId, action, job: view, ...quoteTransfers(job, action, rate),
         dailyRemaining: money(this.#dailyRoom(this.#agentRecord(agentId), rate), rate),
-        expiresAt: this.#now() + 5 * 60_000,
+        expiresAt: quotedAt + Math.min(5 * 60_000, lifetime),
       };
       const terms = workAuthorizationTerms(job, action);
       for (const pending of this.pendingWork()) {
         if (pending.agentId === agentId && pending.action === action && pending.job.task === task) {
-          if (this.#workQuotes.get(pending.id)?.terms === terms && pending.charge.usdCents === quote.charge.usdCents &&
+          if (this.#workQuotes.get(pending.id)?.terms === terms && pending.expiresAt <= quote.expiresAt && pending.charge.usdCents === quote.charge.usdCents &&
             pending.dailyRemaining.lamports === quote.dailyRemaining.lamports) return pending;
           this.#workQuotes.delete(pending.id);
         }
@@ -4139,13 +4142,17 @@ export class AgencWallet {
           signature: receipt.signature, work: { lastValidBlockHeight: receipt.lastValidBlockHeight, fee: job.networkFee.lamports, rate: rate! },
         }));
       };
+      const checkReleaseTime = async () => { releaseQuoteLifetime(job, await this.#chain.clusterTime()); };
       try {
-        await inTransportScope({ signal, sending, confirmed: () => {} }, async () => {
+        if (action === "release") await checkReleaseTime();
+        await inTransportScope({ signal, sending, ...(action === "release" && { beforeSend: checkReleaseTime }), confirmed: () => {} }, async () => {
           if (action === "claim") await takeOpenWork(ctx, agent, signal, task, authorize);
           else await finishChosenWork(ctx, agent, signal, task, action, authorize, intent => { delivery = intent; });
         });
       } catch (error) {
         if (error instanceof WalletError) throw error;
+        // The SDK wraps a wallet refusal at the transport boundary in its own error.
+        if (!sent && error instanceof Error && error.cause instanceof WalletError) throw error.cause;
         throw new WalletError("NOT_AVAILABLE", "The worker could not confirm this action. Refresh the jobs before trying again.", { cause: error });
       } finally {
         if (sent) await this.#reconcileWorkAllowance(agentId);

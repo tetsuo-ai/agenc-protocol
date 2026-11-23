@@ -173,5 +173,6 @@ export {
 } from "./wallet.js";
 
 export * from "./chosen.js";
+export * from "./chosen-release.js";
 
 export { decodeHostedBrief } from "./hosted-brief.js";

@@ -1,9 +1,9 @@
 // The picker and the executor use the same verified spec, policy filters and claim instruction.
 import { unwrapOption, type Address } from "@solana/kit";
 import {
-  AGENC_COORDINATION_PROGRAM_ADDRESS, facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
+  facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
-  getReleaseClaimToInstructionAsync, getTaskClaimDecoder, getTaskSubmissionDecoder, getTaskValidationConfigDecoder,
+  getTaskClaimDecoder, getTaskSubmissionDecoder, getTaskValidationConfigDecoder,
   listDirectClaimableTasks, SubmissionStatus, TaskStatus, TaskType, ValidationMode, values, type Task,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
@@ -14,6 +14,7 @@ import {
 import { readTaskAccount } from "./upkeep.js";
 import { bytesToHex, hexToBytes, loadState, type SubmissionIntent } from "./state.js";
 import { decodeHostedBrief } from "./hosted-brief.js";
+import { chosenReleaseWindow } from "./chosen-release.js";
 import { resultDataFromHashHex, resultPlaceholderUri, uploadResult } from "./result.js";
 
 export type WorkerAction = "claim" | "submit" | "release";
@@ -155,10 +156,9 @@ async function deliveryInstruction(ctx: WorkerContext, agent: WorkerAgent, terms
     ...(parent && { dependencyParent: parent }) });
 }
 
-async function releaseInstruction(ctx: WorkerContext, agent: WorkerAgent, terms: Terms, refund: boolean) {
-  return getReleaseClaimToInstructionAsync({ task: terms.task, worker: agent.agentPda, creator: terms.buyer, authority: ctx.signer,
-    recipient: refund ? terms.worker : terms.buyer, taskValidationConfig: terms.direct ? AGENC_COORDINATION_PROGRAM_ADDRESS :
-      (await findTaskValidationConfigPda({ task: terms.task }))[0] });
+function releaseInstruction(ctx: WorkerContext, agent: WorkerAgent, terms: Terms) {
+  return facade.releaseClaim({ task: terms.task, worker: agent.agentPda, creator: terms.buyer, authority: ctx.signer,
+    ...(terms.direct && { taskValidationConfig: null }) });
 }
 
 export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
@@ -181,20 +181,31 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   }
   const terms = await taskTerms(ctx, agent, task, read.task, true);
   if (!terms) return null;
+  // Revision 9 can forfeit the posted deposit only if the claim still holds
+  // that much above rent. A prior delivery normally returned it already.
+  if (!terms.contest) {
+    const [balance, rent] = await Promise.all([
+      ctx.getBalance!(claimPda), ctx.getMinimumBalanceForRentExemption!(data.length),
+    ]);
+    if (balance - rent < BigInt(terms.deposit)) terms.deposit = "0";
+  }
   const releaseBy = Number(claim.claimedAt + values.CLAIM_RELEASE_GRACE_SECS);
-  const depositReturns = now <= releaseBy || !!read.task.reserved[13];
+  const window = chosenReleaseWindow(releaseBy, now);
+  // A prior dispute permanently protects the deposit, even on a late release.
+  const lateRecipient = read.task.reserved[13] ? terms.worker : terms.buyer;
+  const depositReturns = now <= releaseBy || lateRecipient === terms.worker;
   const expiresAt = Number(claim.expiresAt);
   const idle = !marker.chosenAttempt && !marker.releaseRequestedAt && (marker.phase === "claimed" || marker.phase === "executed");
   const canDeliver = idle && marker.execution && (terms.deadline === 0 || now <= terms.deadline);
   const room = ctx.checkChosenRoom !== undefined;
-  const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt &&
-    (now > releaseBy || now + RELEASE_LANDING_MARGIN_SECS < releaseBy || !!read.task.reserved[13]);
+  const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt && window.phase !== "paused";
   const [release, submit] = await Promise.all([
-    idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms, depositReturns)) : null,
+    idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms)) : null,
     canDeliver && room ? ctx.simulateWork(await deliveryInstruction(ctx, agent, terms, read.task, marker.execution!.resultHashHex)) : null,
   ]);
-  return { ...terms, ...(submitted?.length && !terms.contest && { deposit: "0" }), title: marker.title ?? "Chosen job",
+  return { ...terms, title: marker.title ?? "Chosen job",
     claimedAt: Number(claim.claimedAt), expiresAt, releaseBy: terms.contest ? null : releaseBy, depositReturns,
+    releaseWindow: terms.contest ? null : { ...window, lateRecipient },
     release, submit, canRelease: !!release, canSubmit: !!submit, resultHash: marker.execution?.resultHashHex ?? null,
     resultBytes: marker.execution ? Buffer.byteLength(marker.execution.resultBytesBase64, "base64") : null,
     preview: marker.execution ? Buffer.from(marker.execution.resultBytesBase64, "base64").toString("utf8").slice(0, 4000) : null };
@@ -224,7 +235,7 @@ export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, s
     ix = await deliveryInstruction(ctx, agent, held, read.task, resultHashHex);
   } else {
     prepare();
-    ix = await releaseInstruction(ctx, agent, held, held.depositReturns);
+    ix = await releaseInstruction(ctx, agent, held);
   }
   signal.throwIfAborted();
   await ctx.client.send([ix], { maxRetries: 0 });

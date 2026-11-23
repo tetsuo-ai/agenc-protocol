@@ -34,6 +34,7 @@ interface TransportScope {
   timeoutMs?: number;
   operation?: ListingOperation;
   startConfirmation?: () => void;
+  beforeSend?: () => Promise<void>;
   sending: (receipt: PendingListingSend) => void;
   confirmed: (signature: string, operation?: ListingOperation) => void;
 }
@@ -151,6 +152,10 @@ export function scopedSendTransport(base: Transport): Transport {
       if (context === undefined) return base.sendAndConfirm(transaction);
       context.signal.throwIfAborted();
       const signature = getSignatureFromTransaction(transaction);
+      if (context.beforeSend) {
+        await context.beforeSend();
+        context.signal.throwIfAborted();
+      }
       context.sending({
         signature,
         lastValidBlockHeight: transaction.lifetimeConstraint.lastValidBlockHeight.toString(),

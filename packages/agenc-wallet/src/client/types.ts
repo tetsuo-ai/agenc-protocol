@@ -586,8 +586,16 @@ export interface WorkerJobView {
   modelBudgetCents: number | null;
   networkFee: Money;
   contest: boolean;
+  /** Null while the landing time can change who gets the deposit. */
   depositReturns: boolean | null;
   releaseBy: number | null;
+  releaseWindow: {
+    phase: "early" | "paused" | "late";
+    pauseAt: number;
+    resumeAt: number;
+    lateRecipient: string;
+    notice: string;
+  } | null;
   expiresAt: number | null;
   resultHash: string | null;
   resultBytes: number | null;
@@ -599,6 +607,9 @@ export interface WorkerJobView {
 export interface WorkerQuote {
   flows: { label: string; from: string; to: string; amount: Money }[];
   balances: { account: string; net: Money }[];
+  /** For an early release, flows and balances above apply through releaseBy.
+   * This alternative applies when landing later changes the recipient. */
+  afterWindow?: { flows: WorkerQuote["flows"]; balances: WorkerQuote["balances"] };
   id: string;
   agentId: string;
   action: WorkAction;

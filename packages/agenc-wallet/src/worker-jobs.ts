@@ -1,5 +1,5 @@
 import { address } from "@solana/kit";
-import type { HeldWork, OpenWork } from "@tetsuo-ai/agenc-worker";
+import { chosenReleaseWindow, releasePauseNotice, type HeldWork, type OpenWork } from "@tetsuo-ai/agenc-worker";
 import type { WorkerJobView, WorkAction } from "./client/types.js";
 import { WalletError } from "./errors.js";
 import { money } from "./views.js";
@@ -9,10 +9,37 @@ export function workAddress(task: string) {
   catch { throw new WalletError("BAD_REQUEST", "Select a job from the list."); }
 }
 
+function releaseWindowView(job: HeldWork) {
+  const window = job.releaseWindow;
+  if (!window || job.releaseBy === null) return null;
+  const late = window.lateRecipient === job.worker ? "worker" : "buyer";
+  let notice: string;
+  if (window.phase === "paused") notice = releasePauseNotice(window.resumeAt);
+  else if (job.deposit === "0") notice = "This claim holds no deposit to pay out.";
+  else if (window.phase === "early") {
+    const end = new Date(job.releaseBy * 1000).toISOString();
+    notice = `If the release lands at or before ${end}, the worker (${job.worker}) gets the deposit. If it lands later, the ${late} (${window.lateRecipient}) gets it.`;
+  } else notice = `The return window has ended. The ${late} (${window.lateRecipient}) gets the deposit.`;
+  if (window.phase !== "paused") notice += " A release after the window counts as an expired claim.";
+  return { ...window, notice };
+}
+
+/** Read the chain clock again after quoting and immediately before broadcast. */
+export function releaseQuoteLifetime(job: WorkerJobView, now: number) {
+  if (!job.releaseWindow || job.releaseBy === null) throw new WalletError("NOT_ALLOWED", "This claim cannot be released.");
+  const current = chosenReleaseWindow(job.releaseBy, now);
+  if (current.phase === "paused") throw new WalletError("NOT_ALLOWED", releasePauseNotice(current.resumeAt));
+  if (current.phase !== job.releaseWindow.phase) throw new WalletError("NOT_ALLOWED", "The return window changed. Review a new release quote.");
+  return current.phase === "early" ? (current.pauseAt - now) * 1000 : Infinity;
+}
+
 export function workerJob(job: OpenWork | HeldWork, rate: number, defaultFee: bigint, action?: WorkAction): WorkerJobView {
   const open = "specHash" in job;
   const simulation = open ? job.simulation : action === "submit" ? job.submit : job.release ?? job.submit;
   const fee = simulation ? BigInt(simulation.fee) : defaultFee;
+  const releaseWindow = open ? null : releaseWindowView(job);
+  const fixedRecipient = releaseWindow && job.deposit !== "0" &&
+    (releaseWindow.phase === "late" || releaseWindow.lateRecipient === job.worker);
   return {
     task: job.task, title: job.title, reward: money(job.reward, rate), payout: money(job.payout, rate),
     deposit: money(job.deposit, rate), deadline: job.deadline, reviewSeconds: job.reviewSeconds,
@@ -22,7 +49,8 @@ export function workerJob(job: OpenWork | HeldWork, rate: number, defaultFee: bi
     futureRent: money(open ? job.futureRent : 0n, rate),
     feeReserve: money(open && BigInt(job.feeReserve) > fee ? job.feeReserve : fee, rate),
     modelBudgetCents: open ? job.modelBudgetCents : null, networkFee: money(fee, rate),
-    contest: job.contest, depositReturns: open || job.contest ? null : job.depositReturns,
+    contest: job.contest, depositReturns: fixedRecipient ? releaseWindow.lateRecipient === job.worker : null,
+    releaseWindow,
     releaseBy: open ? null : job.releaseBy, expiresAt: open ? null : job.expiresAt,
     resultHash: open ? null : job.resultHash, resultBytes: open ? null : job.resultBytes,
     preview: open ? null : job.preview, canSubmit: !open && job.canSubmit, canRelease: !open && job.canRelease,
@@ -38,10 +66,13 @@ export function quoteTransfers(job: OpenWork | HeldWork, action: WorkAction, rat
   const change = (addr: string) => changes.get(addr) ?? 0n;
   const transfer = (label: string, from: string, to: string, amount: bigint) => {
     if (amount <= 0n) return;
-    flows.push({ label, from, to, amount: money(amount, rate) });
+    const row = { label, from, to, amount: money(amount, rate) };
+    flows.push(row);
     changes.set(from, change(from) + amount);
     changes.set(to, change(to) - amount);
+    return row;
   };
+  let depositFlow: (typeof flows)[number] | undefined;
   const fee = BigInt(sim.fee);
   transfer("Network fee", job.worker, "Network", fee);
   if (action === "claim") {
@@ -51,7 +82,7 @@ export function quoteTransfers(job: OpenWork | HeldWork, action: WorkAction, rat
     const recipient = action === "release" && "depositReturns" in job && !job.depositReturns ? job.buyer : job.worker;
     const leaving = -change(job.claimAccount);
     const deposit = leaving < BigInt(job.deposit) ? leaving : BigInt(job.deposit);
-    transfer("Claim deposit returned or paid", job.claimAccount, recipient, deposit);
+    depositFlow = transfer("Claim deposit returned or paid", job.claimAccount, recipient, deposit);
     transfer("Claim rent and remaining balance returned", job.claimAccount, job.worker, -change(job.claimAccount));
   }
   transfer("Worker record rent", job.worker, job.recordAccount, change(job.recordAccount));
@@ -65,7 +96,20 @@ export function quoteTransfers(job: OpenWork | HeldWork, action: WorkAction, rat
   if ([...changes].some(([account, amount]) => account !== "Network" && amount !== 0n))
     throw new WalletError("NOT_AVAILABLE", "The wallet could not account for every transfer.");
   const charge = flows.filter(row => row.from === job.worker).reduce((sum, row) => sum + BigInt(row.amount.lamports), 0n);
-  return { flows, balances: sim.changes.map(row => ({ account: row.address, net: money(row.delta, rate) })), charge: money(charge, rate) };
+  const quoted = { flows, balances: sim.changes.map(row => ({ account: row.address, net: money(row.delta, rate) })), charge: money(charge, rate) };
+  if (action !== "release" || !("releaseWindow" in job) || job.releaseWindow?.phase !== "early" ||
+    job.releaseWindow.lateRecipient === job.worker) return quoted;
+  if (!depositFlow) return quoted;
+  // The same instruction returns rent and charges the same fee in either case.
+  // Only the deposit moves from the worker's quoted credit to the buyer's.
+  const lateBalances = new Map(sim.changes.map(row => [row.address, BigInt(row.delta)]));
+  const amount = BigInt(depositFlow.amount.lamports);
+  lateBalances.set(job.worker, (lateBalances.get(job.worker) ?? 0n) - amount);
+  lateBalances.set(job.buyer, (lateBalances.get(job.buyer) ?? 0n) + amount);
+  return { ...quoted, afterWindow: {
+    flows: flows.map(row => row === depositFlow ? { ...row, to: job.buyer } : row),
+    balances: [...lateBalances].map(([account, net]) => ({ account, net: money(net, rate) })),
+  } };
 }
 
 

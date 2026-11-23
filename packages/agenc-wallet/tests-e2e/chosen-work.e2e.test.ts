@@ -3,8 +3,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdtempSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { address } from "@solana/kit";
 import { loadState } from "@tetsuo-ai/agenc-worker";
-import { findAgentPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, values } from "@tetsuo-ai/marketplace-sdk";
+import { findAgentPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
 import type { WorkerQuote } from "../src/client/types.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
 import { CENT, eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
@@ -35,15 +36,15 @@ async function setup(ready = async () => {}, tamper = () => false, enabled = () 
   return { wallet, sandbox, id, task: other.task, first: first.task };
 }
 
-async function assertBalances(quote: WorkerQuote) {
-  const before = await Promise.all(quote.balances.map(row => world!.balance(row.account)));
-  for (const flow of quote.flows) {
+async function assertBalances(quote: WorkerQuote, outcome: Pick<WorkerQuote, "balances" | "flows"> = quote) {
+  const before = await Promise.all(outcome.balances.map(row => world!.balance(row.account)));
+  for (const flow of outcome.flows) {
     expect(flow.amount.usdCents).not.toBeNull();
     expect(flow.to).toBeTruthy();
     expect(flow.from).toBeTruthy();
   }
   expect(await world!.wallet.decideWork(quote.id, true)).toEqual({ approved: true });
-  for (const [i, row] of quote.balances.entries()) {
+  for (const [i, row] of outcome.balances.entries()) {
     expect(row.net.usdCents).not.toBeNull();
     expect(await world!.balance(row.account) - before[i]!).toBe(BigInt(row.net.lamports));
   }
@@ -129,13 +130,23 @@ describe("chosen open work", () => {
     await eventually(async () => (await restarted.openWork(id).catch(() => null))?.held?.canSubmit);
     expect(restarted.pendingWork()).toEqual([]);
     expect(sandbox.deliveries.size).toBe(0);
+    sandbox.advanceClock(2999);
     const early = await restarted.quoteWork(id, task, "release");
-    sandbox.advanceClock(3520);
-    await expect(restarted.decideWork(early.id, true)).rejects.toThrow();
-    expect((await restarted.openWork(id)).held).toMatchObject({ canRelease: false, depositReturns: true });
-    sandbox.advanceClock(150);
+    expect(early.expiresAt).toBe(world!.clock.now + 1000);
+    const resume = new Date((early.job.releaseBy! + 1) * 1000).toISOString();
+    sandbox.advanceClock(1);
+    await expect(restarted.decideWork(early.id, true)).rejects.toThrow(resume);
+    for (const elapsed of [0, 599, 1]) {
+      sandbox.advanceClock(elapsed);
+      expect((await restarted.openWork(id)).held).toMatchObject({ canRelease: false, canSubmit: true,
+        releaseWindow: { phase: "paused", notice: expect.stringContaining(resume) } });
+      await expect(restarted.quoteWork(id, task, "release")).rejects.toThrow(resume);
+    }
+    sandbox.advanceClock(1);
     const late = await restarted.quoteWork(id, task, "release");
     expect(late.job).toMatchObject({ canRelease: true, depositReturns: false });
+    expect(late.job.releaseWindow?.notice).toContain(`buyer (${late.job.buyer}) gets the deposit`);
+    expect(late.afterWindow).toBeUndefined();
     expect(late.balances.find(row => row.account === late.job.worker)?.net.lamports).toBe("2298760");
     expect(late.balances.find(row => row.account === late.job.buyer)?.net.lamports).toBe("5000000");
     await assertBalances(late);
@@ -167,22 +178,120 @@ describe("chosen open work", () => {
   });
 });
 
-it("rejects a refund that lands late, charges only the fee and restores the completed result", async () => {
-  let delay = false;
+it.each([3600, 3601])("discloses both recipients and reconciles a release landing %i seconds after claim", async delay => {
+  let approved = false;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (approved) world!.sandbox.advanceClock(delay);
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  const quote = await wallet.quoteWork(id, task, "release");
+  const { worker, buyer, deposit, releaseWindow, releaseBy } = quote.job;
+  expect(quote.job.depositReturns).toBeNull();
+  expect(releaseWindow!.notice).toContain(`at or before ${new Date(releaseBy! * 1000).toISOString()}, the worker (${worker}) gets the deposit`);
+  expect(releaseWindow!.notice).toContain(`If it lands later, the buyer (${buyer}) gets it`);
+  const later = quote.afterWindow!;
+  expect(quote.flows).toContainEqual(expect.objectContaining({ to: worker, amount: deposit }));
+  expect(later.flows).toContainEqual(expect.objectContaining({ to: buyer, amount: deposit }));
+  expect(later.balances).toContainEqual(expect.objectContaining({ account: worker, net: expect.objectContaining({ lamports: "2298760" }) }));
+  expect(later.balances).toContainEqual({ account: buyer, net: deposit });
+  expect(quote.charge.lamports).toBe("5000");
+  expect(wallet.pendingWork()).toEqual([quote]);
+  const buyerBefore = await world!.balance(buyer);
+  approved = true;
+  await assertBalances(quote, delay > 3600 ? later : quote);
+  expect(await world!.balance(buyer) - buyerBefore).toBe(delay > 3600 ? BigInt(deposit.lamports) : 0n);
+  expect(journal(id).failedJobs.find(row => row.task === task)?.claimReleased).toBe(true);
+});
+
+it("refuses an approved release that enters the pause while signing, before reserving or sending", async () => {
+  let delay = false, broadcasts = 0;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async getLatestBlockhash() {
+      if (delay) world!.sandbox.advanceClock(3000);
+      return base.getLatestBlockhash();
+    }, async sendAndConfirm(tx) {
+      if (delay) broadcasts++;
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  const hash = await completedRoom(id, task);
+  const quote = await wallet.quoteWork(id, task, "release");
+  delay = true;
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow("Check again at");
+  delay = false;
+  expect(broadcasts).toBe(0);
+  const submit = await wallet.quoteWork(id, task, "submit");
+  expect(submit.job.resultHash).toBe(hash);
+  expect(submit.dailyRemaining).toEqual(quote.dailyRemaining);
+});
+
+it("quotes the worker on both sides of the window for a claim protected by a prior dispute", async () => {
+  const { wallet, sandbox, id, task } = await setup();
+  await completedRoom(id, task);
+  const svm = sandbox.market.svm;
+  const raw = svm.getAccount(task)!;
+  if (!raw.exists) throw new Error("Missing task");
+  const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+  const reserved = Uint8Array.from(data.reserved);
+  reserved[13] = 1;
+  svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, reserved })) } as never);
+  const early = await wallet.quoteWork(id, task, "release");
+  expect(early.job.releaseWindow?.notice).toContain(`If it lands later, the worker (${early.job.worker}) gets it`);
+  expect(early.afterWindow).toBeUndefined();
+  sandbox.advanceClock(3601);
+  const late = await wallet.quoteWork(id, task, "release");
+  expect(late.job.releaseWindow?.notice).toContain(`The worker (${late.job.worker}) gets the deposit`);
+  await assertBalances(late);
+});
+
+it("returns residual claim rent to the worker when the balance cannot fund a late deposit", async () => {
+  const { wallet, sandbox, id, task } = await setup();
+  await completedRoom(id, task);
+  const original = await wallet.quoteWork(id, task, "release");
+  const claim = original.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+  const svm = sandbox.market.svm;
+  const raw = svm.getAccount(address(claim))!;
+  if (!raw.exists) throw new Error("Missing claim");
+  // One lamport below a full forfeitable deposit, as can happen with a rent change.
+  svm.setAccount({ ...raw, lamports: raw.lamports - 1n } as never);
+  await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
+  const early = await wallet.quoteWork(id, task, "release");
+  expect(early.job.deposit.lamports).toBe("0");
+  expect(early.afterWindow).toBeUndefined();
+  sandbox.advanceClock(3601);
+  const buyer = await world!.balance(early.job.buyer);
+  const late = await wallet.quoteWork(id, task, "release");
+  expect(late.job.depositReturns).toBeNull();
+  await assertBalances(late);
+  expect(await world!.balance(early.job.buyer)).toBe(buyer);
+});
+
+it("charges only the fee and restores the completed result after a landed release fails", async () => {
+  let freeze = false;
   let sends = 0;
   const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
     transport: base => ({ ...base, async sendAndConfirm(tx) {
-      if (delay) { sends++; world!.sandbox.advanceClock(3700); }
-      return base.sendAndConfirm(tx);
+      if (!freeze) return base.sendAndConfirm(tx);
+      sends++;
+      const svm = world!.sandbox.market.svm;
+      const raw = svm.getAccount(task)!;
+      if (!raw.exists) throw new Error("Missing task");
+      const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+      svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, status: TaskStatus.Disputed })) } as never);
+      try { return await base.sendAndConfirm(tx); }
+      finally { svm.setAccount(raw as never); }
     } }),
   });
   const hash = await completedRoom(id, task);
   const refund = await wallet.quoteWork(id, task, "release");
   const buyer = await world!.balance(refund.job.buyer);
   const worker = await world!.balance(refund.job.worker);
-  delay = true;
+  freeze = true;
   await expect(wallet.decideWork(refund.id, true)).rejects.toThrow();
-  delay = false;
+  freeze = false;
   expect(sends).toBe(1);
   expect(await world!.balance(refund.job.buyer)).toBe(buyer);
   expect(await world!.balance(refund.job.worker)).toBe(worker - 5000n);
@@ -292,7 +401,7 @@ it.each(["offline", "invalid"])("holds a chosen claim through %s spec recovery a
   fail = true;
   const buyer = await world!.balance(claim.job.buyer);
   await eventually(async () => !!(journal(id).openClaim?.ownerDecision || journal(id).openClaim?.fetchWaits));
-  expect((await wallet.openWork(id)).held).toMatchObject({ canRelease: true, depositReturns: true });
+  expect((await wallet.openWork(id)).held).toMatchObject({ canRelease: true, releaseWindow: { phase: "early" } });
   sandbox.advanceClock(3700);
   await new Promise(resolve => setTimeout(resolve, 300));
   expect(journal(id).openClaim).toMatchObject({ chosen: true, task });
@@ -413,10 +522,10 @@ it("pages a stable set of eligible addresses and reads an exact brief without ho
   expect((await slow).jobs[0]?.task).toBe(posted[0]!.task);
 }, 30000);
 
-it("refuses early release on a program without the recipient-checked instruction", async () => {
-  const { getReleaseClaimToDiscriminatorBytes } = await import("@tetsuo-ai/marketplace-sdk");
+it("refuses a release when the stock instruction cannot be simulated", async () => {
+  const { getReleaseClaimDiscriminatorBytes } = await import("@tetsuo-ai/marketplace-sdk");
   const { wallet, id, task } = await setup(undefined, undefined, undefined, { chain: base => ({
-    ...base, simulateWork: (payer, ix) => getReleaseClaimToDiscriminatorBytes().every((v, i) => ix.data?.[i] === v)
+    ...base, simulateWork: (payer, ix) => getReleaseClaimDiscriminatorBytes().every((v, i) => ix.data?.[i] === v)
       ? Promise.resolve(null) : base.simulateWork!(payer, ix),
   }) });
   await completedRoom(id, task);
