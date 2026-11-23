@@ -55,6 +55,7 @@ it("quotes a funded hire without spending and retains its payer, brief, price ca
   const deadline = await sandbox.chain.clusterTime() + 300;
   const { approval, job } = await wallet.hire({ agentId: agent.id, listing, request: brief.request, acceptance: brief.acceptance, deadline, reviewWindowSecs: 1, maxPriceCents: 21 }, true);
   expect(approval).toMatchObject({ fromMain: { lamports: "0" }, maxPriceCents: 21, terms: { deadline, reviewWindowSecs: 1, listingDurationSecs: 3600 } });
+  expect(approval!.expiresAt - approval!.createdAt).toBe(300_000);
   expect(job.task).toBeNull();
   expect(await wallet.listJobs({}, true)).toHaveLength(0);
   expect(await wallet.listApprovals()).toHaveLength(0);

@@ -193,6 +193,7 @@ export interface WalletOverview {
    * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
    *   the agent takes no new job. While its job is still in progress,
    *   `earn.state` is "finishing", never "off".
+   * - "job-terms": panel quotes and approvals bind the payer, costs and brief.
    * Clients may ignore this field and any capability they do not recognize.
    */
   capabilities: string[];

@@ -1947,12 +1947,19 @@ export class AgencWallet {
 
   async #queueJob(record: JobRecord, payer: "main" | "agent", service: ServiceView | null, rate: number | null, panel: boolean) {
     const address = payer === "main" ? this.mainAddress : this.#agentRecord(record.agentId).address as Address;
-    const deposits = await (isRequest(record) ? requestDeposits : purchaseDeposits)(this.#chain, address);
+    const [deposits, { protocolFeeBps }, chainNow] = await Promise.all([
+      (isRequest(record) ? requestDeposits : purchaseDeposits)(this.#chain, address),
+      readProtocolConfig(this.#chain),
+      this.#chain.clusterTime(),
+    ]);
+    if (!record.terms || record.terms.deadline <= chainNow) {
+      throw new WalletError("NOT_AVAILABLE", "The delivery deadline has passed. Choose a new deadline.");
+    }
     const now = this.#now();
-    const expiresAt = now + (this.#config.approvalTtlMs ?? 30 * 60_000);
+    const remainingDeliveryMs = (record.terms.deadline - chainNow) * 1000;
+    const expiresAt = now + Math.min(this.#config.approvalTtlMs ?? 30 * 60_000, remainingDeliveryMs);
     const approvalId = newId("ok");
     const name = record.agentId === "" ? "You" : this.#agentRecord(record.agentId).name;
-    const { protocolFeeBps } = await readProtocolConfig(this.#chain);
     const { job, approval } = buildJobQuote(record, {
       approvalId, payer, service, deposits, protocolFeeBps, rate, now, expiresAt,
     });
