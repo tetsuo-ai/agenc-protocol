@@ -11,6 +11,7 @@ export interface AllowanceCharge {
   usdCents?: number | null;
   id?: string;
   signature?: string;
+  work?: { lastValidBlockHeight: string; fee: string; rate: number };
 }
 
 export type ListingOperation =
@@ -41,6 +42,7 @@ interface TransportScope {
   timeoutMs?: number;
   operation?: ListingOperation;
   startConfirmation?: () => void;
+  beforeSend?: () => Promise<void>;
   sending: (receipt: PendingListingSend) => void;
   confirmed: (signature: string, operation?: ListingOperation) => void;
 }
@@ -158,6 +160,10 @@ export function scopedSendTransport(base: Transport): Transport {
       if (context === undefined) return base.sendAndConfirm(transaction);
       context.signal.throwIfAborted();
       const signature = getSignatureFromTransaction(transaction);
+      if (context.beforeSend) {
+        await context.beforeSend();
+        context.signal.throwIfAborted();
+      }
       context.sending({
         signature,
         ...(context.operation?.kind === "funding" && context.operation.decision && { signedTransaction: getBase64EncodedWireTransaction(transaction) }),

@@ -1,3 +1,4 @@
+import { findWorkerStatsPda } from "@tetsuo-ai/marketplace-sdk";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -299,7 +300,9 @@ async function attemptFreshClaimWithHireSnapshot(
     if (space === AGENT_STATS_ACCOUNT_SIZE) return 1_500_000n;
     throw new Error(`unexpected fresh-claim account size ${space}`);
   });
+  const [recordPda] = await findWorkerStatsPda({ worker: agent.agentPda });
   ctx.readAccountInfo = async (account) => {
+    if (account === recordPda) return null;
     if (account !== hireRecordPda) {
       throw new Error(`unexpected metadata read ${account}`);
     }

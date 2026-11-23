@@ -1,3 +1,4 @@
+import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // A whole marketplace in this process, for practice and for tests: the REAL
 // compiled marketplace program running in litesvm, play money, a local
 // moderator, in-memory hosting, and house providers that actually take and
@@ -19,7 +20,7 @@ import {
   createTransactionMessage,
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
-  getTransactionEncoder,
+  getTransactionEncoder, getSignatureFromTransaction,
   lamports,
   partiallySignTransactionMessageWithSigners,
   pipe,
@@ -164,6 +165,10 @@ export interface Sandbox {
     title: string;
     instructions: string;
     rewardLamports: bigint;
+    deadlineSeconds?: number;
+    settlement?: "auto" | "contest";
+    minReputation?: number;
+    brief?: Record<string, unknown>;
   }): Promise<OpenJob>;
   /** Move the sandbox clock forward. */
   advanceClock(seconds: number): void;
@@ -411,6 +416,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   // LiteSVM history is disabled so identical sandbox transactions can be replayed.
   const contestLogs = new Map<Address, Array<{ signature: string; logs: readonly string[]; changes: import("./contest-history.js").NativeChange[] }>>();
   const landedListingSends = new Set<string>();
+  const failedWorkSends = new Set<string>();
   const base = market.transport;
   const transport: Transport = {
     ...base,
@@ -421,7 +427,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       syncClock();
       const keys = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes).staticAccounts;
       const before = keys.map(key => BigInt(svm.getBalance(key) ?? 0n));
-      const result = await base.sendAndConfirm(signedTx);
+      const result = await base.sendAndConfirm(signedTx).catch(error => {
+        if (signal) failedWorkSends.add(getSignatureFromTransaction(signedTx));
+        throw error;
+      });
       const changes = keys.flatMap((address, i) => {
         const delta = BigInt(svm.getBalance(address) ?? 0n) - before[i]!;
         return delta ? [{ address, lamports: delta.toString() }] : [];
@@ -484,13 +493,37 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     };
   };
 
-  const sending = scopedSendTransport(options.transport?.(transport) ?? transport);
+  const decorated = options.transport?.(transport) ?? transport;
+  const inFlight = new Set<string>();
+  const sending = scopedSendTransport({
+    ...decorated,
+    async sendAndConfirm(tx) {
+      const signature = getSignatureFromTransaction(tx);
+      inFlight.add(signature);
+      try { return await decorated.sendAndConfirm(tx); }
+      finally { inFlight.delete(signature); }
+    },
+  });
   const chain: Chain = {
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
     // Local sends execute atomically; no broadcast can arrive after cancellation.
     listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
     listingSendSettled: async () => true,
+    workOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : failedWorkSends.has(signature) ? "failed" : inFlight.has(signature) ? "pending" : "expired",
+    async simulateWork(payer, ix) {
+      syncClock();
+      const { tx, accounts } = workSimulationMessage(payer, ix, svm.latestBlockhash());
+      // No await while the practice VM accepts unsigned simulation messages.
+      svm.withSigverify(false);
+      try {
+        const result = svm.simulateTransaction(tx);
+        if (!("postAccounts" in result)) return null;
+        const post = new Map(result.postAccounts().map(a => [a.address, BigInt(a.lamports)]));
+        const before = accounts.map(a => BigInt(svm.getBalance(a) ?? 0n));
+        return balanceChanges(accounts, before, accounts.map((a, i) => post.get(a) ?? before[i]!), BASE_FEE_LAMPORTS);
+      } finally { svm.withSigverify(true); }
+    },
     clientFor: (signer) => createMarketplaceClient({ transport: sending, signer }),
     sendSigned: (transaction) => sendThroughTransport(sending, transaction),
     readAccount: async (account) => readInfo(account)?.data ?? null,
@@ -997,7 +1030,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         stakeAmount: SANDBOX_MIN_AGENT_STAKE,
       });
       const [creatorAgent] = await findAgentPda({ agentId });
-      const payload = { title: job.title, instructions: job.instructions };
+      const payload = { title: job.title, ...(job.brief ?? { instructions: job.instructions }) };
       const hash = await values.canonicalJobSpecHash(payload);
       const description = new Uint8Array(64);
       description.set(hash.bytes, 0);
@@ -1013,17 +1046,17 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           requiredCapabilities: 1n,
           description,
           rewardAmount: job.rewardLamports,
-          maxWorkers: 1,
-          deadline: now + 3_600n,
-          taskType: 0,
+          maxWorkers: job.settlement === "contest" ? 3 : 1,
+          deadline: now + BigInt(job.deadlineSeconds ?? 3_600),
+          taskType: job.settlement === "contest" ? 2 : 0,
           constraintHash: null,
-          minReputation: 0,
+          minReputation: job.minReputation ?? 0,
           rewardMintArg: null,
         }),
       ]);
       const [task] = await findTaskPda({ creator: buyer.address, taskId });
       const [hireRecord] = await findHireRecordPda({ task });
-      await client.send([
+      if (job.settlement !== "auto") await client.send([
         await facade.configureTaskValidation({
           task,
           creator: buyer,

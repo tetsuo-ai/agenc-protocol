@@ -103,6 +103,12 @@ describe("the wallet service", () => {
       expect(agent.role).toBe("agent");
       expect(agent.agentId).toBe(mine.id);
       await expect(agent.call("overview", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(agent.call("work.pending", {})).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(agent.call("work.choose", { agentId: other.id, manual: true })).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(agent.call("work.decide", { id: "someone-elses-quote", approve: true })).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      // A forged id is ignored. The bound agent exists and has Earns off.
+      await expect(agent.call("work.list", { agentId: "unknown-agent" })).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+      await expect(agent.call("work.quote", { agentId: "unknown-agent", action: "claim", task: other.address })).rejects.toMatchObject({ code: "NOT_ALLOWED" });
       await expect(
         agent.call("agents.fund", { agentId: mine.id, amount: { usdCents: 100 } }),
       ).rejects.toMatchObject({ code: "NOT_ALLOWED" });

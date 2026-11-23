@@ -107,6 +107,9 @@ export interface OfferView {
 }
 
 export interface EarnView {
+  /** Present only when the host offers an isolated room for chosen jobs. */
+  chooseOpenJobs?: boolean;
+  heldChosenJob?: boolean;
   /** The person switched earning on for this agent. */
   enabled: boolean;
   state: EarnState;
@@ -199,7 +202,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY, "chosen-work"] as const);
 
 export interface WalletOverview {
   /**
@@ -210,6 +213,7 @@ export interface WalletOverview {
    * - "contests": contest posting, entry review and quoted prize release.
    * - "job-spend-quotes": durable call outcomes, paged approvals and all-in daily limits.
    * - "job-terms": panel quotes and approvals bind the payer, costs and brief.
+   * - "chosen-work": a verified picker and per-action owner quotes with itemized transfers.
    * Clients may ignore this field and any capability they do not recognize.
    */
   capabilities: string[];
@@ -680,4 +684,66 @@ export interface WalletErrorShape {
    * needed). Absent when the service does not say.
    */
   retryable?: boolean;
+}
+
+export type WorkAction = "claim" | "submit" | "release";
+
+export interface WorkerJobView {
+  /** An expired claim uses the release action to request an owner-approved cleanup. */
+  cleanup?: boolean;
+  ownerDecision?: boolean;
+  cleanupRecipient?: string | null;
+  brief: string;
+  direct: boolean;
+  selectionDeadline: number | null;
+  buyer: string;
+  worker: string;
+  treasury: string;
+  futureRent: Money;
+  task: string;
+  title: string;
+  request: string;
+  criteria: string[];
+  reward: Money;
+  payout: Money;
+  deposit: Money;
+  deadline: number;
+  reviewSeconds: number;
+  rent: Money;
+  recordRent: Money;
+  feeReserve: Money;
+  modelBudgetCents: number | null;
+  networkFee: Money;
+  contest: boolean;
+  /** Null while the landing time can change who gets the deposit. */
+  depositReturns: boolean | null;
+  releaseBy: number | null;
+  releaseWindow: {
+    phase: "early" | "paused" | "late";
+    pauseAt: number;
+    resumeAt: number;
+    lateRecipient: string;
+    notice: string;
+  } | null;
+  expiresAt: number | null;
+  resultHash: string | null;
+  resultBytes: number | null;
+  preview: string | null;
+  canSubmit: boolean;
+  canRelease: boolean;
+}
+
+export interface WorkerQuote {
+  flows: { label: string; from: string; to: string; amount: Money }[];
+  balances: { account: string; net: Money }[];
+  /** For an early release, flows and balances above apply through releaseBy.
+   * This alternative applies when landing later changes the recipient. */
+  afterWindow?: { flows: WorkerQuote["flows"]; balances: WorkerQuote["balances"] };
+  id: string;
+  agentId: string;
+  action: WorkAction;
+  job: WorkerJobView;
+  expiresAt: number;
+  charge: Money;
+  dailyRemaining: Money;
 }

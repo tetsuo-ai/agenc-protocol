@@ -531,3 +531,9 @@ describe("e2e: one worker tick against the real program", () => {
     expect(loadState(stateDir).openClaim).toBeNull();
   });
 });
+
+it("shows the short hosted description when a post omits its long description", async () => {
+  const { decodeHostedBrief } = await import("../src/hosted-brief.js");
+  const spec = JSON.stringify({ title: "Post", shortDescription: "Every word of the request.", acceptanceCriteria: ["All terms apply."] });
+  expect(decodeHostedBrief(new TextEncoder().encode(spec))).toEqual({ raw: spec, request: "Every word of the request.", acceptance: ["All terms apply."] });
+});

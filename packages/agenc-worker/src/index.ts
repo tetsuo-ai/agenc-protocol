@@ -106,6 +106,9 @@ export {
   couldBeWaitingPay,
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   workerStatus,
+  type WorkSimulation,
+  type WorkerDispatch,
+  type VerifiedCandidate,
   type ClaimCandidate,
   type ClaimAccountRentMinimums,
   type ClaimFundingExtras,
@@ -128,6 +131,7 @@ export {
   FAILED_JOB_RETENTION,
   hexToBytes,
   loadState,
+  pendingOwnerClaim,
   readJobEvidence,
   MAX_FAILURE_REASON_CHARS,
   MAX_JOB_TITLE_CHARS,
@@ -170,3 +174,7 @@ export {
 } from "./wallet.js";
 
 export { parseJobBrief, briefDeliverable, type BriefTerms } from "./job-brief.js";
+export * from "./chosen.js";
+export * from "./chosen-release.js";
+
+export { decodeHostedBrief } from "./hosted-brief.js";

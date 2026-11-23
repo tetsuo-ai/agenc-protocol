@@ -107,6 +107,11 @@ function handlers(wallet: AgencWallet): Handlers {
   const scope = (session: Session): string | undefined => session.agentId ?? undefined;
   return {
     overview: () => wallet.overview(),
+    "work.list": (p, session) => wallet.openWork(session.agentId ?? text(p.agentId, "agent"), p.offset, p.task),
+    "work.quote": (p, session) => wallet.quoteWork(session.agentId ?? text(p.agentId, "agent"), text(p.task, "task"), p.action),
+    "work.pending": async () => wallet.pendingWork(),
+    "work.decide": (p) => wallet.decideWork(text(p.id, "quote"), p.approve === true),
+    "work.choose": async (p) => wallet.chooseWork(text(p.agentId, "agent"), p.manual),
     "agents.create": (params) =>
       wallet.createAgent(
         typeof params.name === "string" ? params.name : undefined,

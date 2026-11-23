@@ -25,6 +25,7 @@ import {
   hexToBytes,
   loadState,
   saveState,
+  pendingOwnerClaim,
   readJobEvidence,
   readClaimAccountRentMinimums,
   readMinAgentStake,
@@ -36,12 +37,13 @@ import {
   type ExecutorMode,
   type UpkeepMemory,
   type WorkerAgent,
+  type WorkerDispatch,
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
-import { describeError } from "./errors.js";
+import { WalletError, describeError } from "./errors.js";
 import { readAgent } from "./market.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import type { MarketServices } from "./services.js";
@@ -79,6 +81,9 @@ export interface EarnExecutor {
 }
 
 export interface EarnOptions {
+  /** The host selected its isolated open-job room under the operator switch. */
+  chosenRoomEnabled?: () => boolean;
+  watchChosenRoom?: (revoke: () => void) => () => void;
   /** Null when this host cannot run jobs (earning is then unavailable). */
   executor: EarnExecutor | null;
   /**
@@ -115,6 +120,7 @@ export interface EarnOptions {
 }
 
 export interface EarnAgent {
+  chooseOpenJobs?: () => boolean;
   agentId: string;
   signer: KeyPairSigner;
   /** Skip jobs that pay less than this. */
@@ -130,7 +136,7 @@ export interface EarnAgent {
 /** Why the worker gave a job up, as its ledger records it. */
 export interface EarnFailure {
   /** "attempts": it kept failing. "expired": time ran out. "cancelled": the job ended first. */
-  cause: "attempts" | "expired" | "cancelled";
+  cause: "attempts" | "expired" | "cancelled" | "released";
   /** The worker's own words (a technical line, not for a person). */
   reason: string;
   attempts: number;
@@ -186,6 +192,8 @@ export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
+  dispatch?: WorkerDispatch | null;
+  read?: WorkerDispatch | undefined;
   recoveryOnly: boolean;
   discovering: boolean;
   firstDiscovery: Promise<void>;
@@ -526,6 +534,63 @@ export class EarnHost {
     }
   }
 
+  get chosenRoom(): boolean {
+    return this.#options.chosenRoomEnabled?.() === true && !this.ownJobsOnly &&
+      this.#options.executor?.mode === "sandboxed" &&
+      !!(this.#options.executor.readiness || this.#options.checkExecutionReady);
+  }
+
+  hasChosenClaim(agentId: string): boolean {
+    try {
+      const state = loadState(this.stateDir(agentId));
+      return state.openClaim?.chosen === true || !!pendingOwnerClaim(state);
+    }
+    catch (error) {
+      this.#log(`earn ${agentId}: reading chosen work: ${describeError(error)}`);
+      return false;
+    }
+  }
+
+  workerLane(agentId: string, heldOnly = false, readonly = false): WorkerDispatch {
+    const running = this.#running.get(agentId);
+    const dispatch = readonly ? running?.read : running?.dispatch;
+    if (!dispatch || (heldOnly ? !this.hasChosenClaim(agentId) : !this.chosenRoom || !this.canTakeJobs(agentId))) {
+      throw new WalletError("NOT_AVAILABLE", "Turn on Take jobs from other agents and Earns with a ready job room.");
+    }
+    return dispatch;
+  }
+
+  // A stopped or replacement wallet may have no executor at all. An owner
+  // decision still uses the same claim journal lock and can never start a room.
+  activeHeldLane(agentId: string, readonly: boolean): WorkerDispatch | undefined {
+    const entry = this.#running.get(agentId);
+    const dispatch = readonly ? entry?.read : entry?.dispatch;
+    return dispatch && !entry?.controller.signal.aborted ? dispatch : undefined;
+  }
+
+  heldLane(agentId: string, signer: () => Promise<KeyPairSigner>, readonly: boolean): WorkerDispatch {
+    const active = this.activeHeldLane(agentId, readonly);
+    if (active) return active;
+    return async work => {
+      const stateDir = this.stateDir(agentId);
+      const key = await signer();
+      const prior = loadState(stateDir);
+      const reconcile = !!(prior.openClaim?.chosenAttempt || prior.openClaim?.releaseRequestedAt || pendingOwnerClaim(prior));
+      const unlock = readonly && !reconcile ? () => {} : acquireStateLock(stateDir);
+      try {
+        const state = loadState(stateDir);
+        if ((!state.openClaim?.chosen && !pendingOwnerClaim(state)) || !state.agentIdHex) throw new Error("There is no chosen claim.");
+        const agentIdBytes = hexToBytes(state.agentIdHex);
+        const [agentPda] = await findAgentPda({ agentId: agentIdBytes });
+        const agent = { agentId, signer: key, minRewardLamports: 0n };
+        const ctx: WorkerContext = { ...this.#chainContext(agent, stateDir), config: this.#config(agent, []), log: () => {} };
+        const registered = { agentId: agentIdBytes, agentPda, registered: true, justRegistered: false };
+        if (reconcile) await resumeOpenClaim(ctx, registered);
+        return await work(ctx, registered, this.#shutdown.signal);
+      } finally { unlock(); }
+    };
+  }
+
   canTakeJobs(agentId: string): boolean {
     const entry = this.#running.get(agentId);
     return entry?.discovering === true && !entry.controller.signal.aborted && entry.paused === null;
@@ -664,7 +729,7 @@ export class EarnHost {
           const cause = event.cause;
           if (
             typeof event.task === "string" &&
-            (cause === "attempts" || cause === "expired" || cause === "cancelled")
+            (cause === "attempts" || cause === "expired" || cause === "cancelled" || cause === "released")
           ) {
             this.#notify(agent.agentId, {
               type: "failed",
@@ -723,6 +788,31 @@ export class EarnHost {
 
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
+      onWorkerReady: (dispatch, read) => { entry.dispatch = dispatch; entry.read = read; },
+      ...(!entry.recoveryOnly && !this.ownJobsOnly && executor.mode === "sandboxed" &&
+        this.#options.chosenRoomEnabled && (executor.readiness || this.#options.checkExecutionReady) ? {
+        withChosenRoom: async (work) => {
+          const stop = new AbortController();
+          const revoke = () => stop.abort(new Error("Taking jobs from other agents is off."));
+          const current = AbortSignal.any([stop.signal, signal, this.#shutdown.signal]);
+          const unwatch = this.#options.watchChosenRoom?.(revoke);
+          const check = () => { if (!this.chosenRoom) revoke(); };
+          const timer = setInterval(check, 25);
+          try {
+            check();
+            current.throwIfAborted();
+            return await work(current);
+          } finally { clearInterval(timer); unwatch?.(); }
+        },
+        checkChosenRoom: async (scope?: AbortSignal) => {
+          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          signal.throwIfAborted();
+          await checkReady(scope ?? signal);
+          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          signal.throwIfAborted();
+        },
+      } : {}),
       acceptServiceHiresBelowMinReward: true,
       modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
       executorForTask: async (task, _address, reservedCents) => {
@@ -767,9 +857,11 @@ export class EarnHost {
       const endRun = (): void => run.abort();
       signal.addEventListener("abort", endRun, { once: true });
       const startedAt = Date.now();
+      const choosing = agent.chooseOpenJobs?.();
       const refresh = setInterval(
         () => {
           // An own-jobs loop also starts afresh, to learn of agents added since.
+          if (choosing !== agent.chooseOpenJobs?.()) run.abort();
           const due = this.#serves(agent.agentId) || this.ownJobsOnly;
           if (due && Date.now() - startedAt >= refreshMs) run.abort();
         },
@@ -833,13 +925,23 @@ export class EarnHost {
       const agentId = hexToBytes(agentIdHex);
       const [agentPda] = await findAgentPda({ agentId });
       const worker: WorkerAgent = { agentId, agentPda, registered: true, justRegistered: false };
+      let queue: Promise<unknown> = Promise.resolve();
+      const serial = <T>(work: () => Promise<T>) => {
+        const result = queue.then(work);
+        queue = result.catch(() => {});
+        return result;
+      };
+      entry.read = async read => { signal.throwIfAborted(); return read(ctx, worker, signal); };
+      entry.dispatch = work => serial(() => { signal.throwIfAborted(); return work(ctx, worker, signal); });
       const upkeepMemory: UpkeepMemory = new Map();
       while (!signal.aborted) {
         try {
-          await checkSettlements(ctx, worker);
-          await resumeOpenClaim(ctx, worker);
-          await runUpkeep(ctx, worker, upkeepMemory);
-          await checkSettlements(ctx, worker);
+          await serial(async () => {
+            await checkSettlements(ctx, worker);
+            await resumeOpenClaim(ctx, worker);
+            await runUpkeep(ctx, worker, upkeepMemory);
+            await checkSettlements(ctx, worker);
+          });
         } catch (error) {
           this.#log(`earn ${agent.agentId}: recovering: ${describeError(error)}`);
         }
@@ -847,6 +949,8 @@ export class EarnHost {
         if (state.openClaim === null && state.failedJobs.every((job) => job.claimReleased)) return;
         await delay(ctx.config.pollIntervalMs, undefined, { signal }).catch(() => undefined);
       }
+      entry.dispatch = null;
+      await queue;
     } finally {
       release();
     }
@@ -897,6 +1001,8 @@ export class EarnHost {
       readAccount: (account: Address) => this.#chain.readAccount(account),
       readAccountInfo: this.#chain.readAccountInfo,
       stateDir,
+      ...(this.#chain.simulateWork && { simulateWork: ix => this.#chain.simulateWork!(agent.signer.address, ix) }),
+      ...(this.#chain.workOutcome && { chosenOutcome: receipt => this.#chain.workOutcome!(receipt) }),
       getBalance: (account) => this.#chain.getBalance(account),
       getMinimumBalanceForRentExemption: (space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),

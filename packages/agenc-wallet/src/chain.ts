@@ -1,3 +1,4 @@
+import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // The one seam between the wallet and a Solana cluster. Everything above this
 // file asks for bytes, balances and a signing client; nothing above it knows
 // whether the cluster is mainnet over RPC or the in-process sandbox.
@@ -7,7 +8,7 @@ import {
   address,
   createDefaultRpcTransport,
   createSolanaRpcFromTransport,
-  getCompiledTransactionMessageDecoder,
+  getCompiledTransactionMessageDecoder, getBase64EncodedWireTransaction,
   isSolanaError,
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   type Address,
@@ -29,7 +30,7 @@ import {
 import {
   createSolanaAccountReaders,
   findVerifiedSettlementSignature,
-  type AccountInfoReader,
+  type AccountInfoReader, type WorkSimulation,
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
@@ -58,6 +59,8 @@ export interface RawAccount {
 export interface Chain {
   contestHistory?(task: Address, since: string | null, checkpoint?: import("./contest-history.js").ContestCheckpoint): Promise<import("./contest-history.js").ContestHistory>;
   readonly network: WalletNetwork;
+  simulateWork?(payer: Address, ix: Instruction): Promise<WorkSimulation | null>;
+  workOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired">;
   /**
    * A client that signs and pays fees with `signer`. On a real network it
    * refuses, with nothing signed, anything that calls the marketplace
@@ -363,7 +366,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     options.computeUnitPrice === undefined
       ? 0n
       : (options.computeUnitPrice * BigInt(PRICED_COMPUTE_UNIT_LIMIT) + 999_999n) / 1_000_000n;
-  async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
+  async function workOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired"> {
     const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
       searchTransactionHistory: true,
     }).send()).value[0];
@@ -378,9 +381,23 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     if (epoch.blockHeight <= BigInt(receipt.lastValidBlockHeight)) return "pending";
     // The status view can lag the height. Recheck after verified expiry.
     const last = await status();
-    return first == null && last == null ? "failed" : outcome(last);
+    return first == null && last == null ? "expired" : outcome(last);
   }
+  const listingSendOutcome = async (receipt: PendingListingSend) => {
+    const status = await workOutcome(receipt);
+    return status === "expired" ? "failed" : status;
+  };
   return usesScopedRequests<Chain>({
+    workOutcome,
+    async simulateWork(payer, ix) {
+      const { blockhash } = await transport.getLatestBlockhash();
+      const { tx, accounts } = workSimulationMessage(payer, ix, blockhash, options.computeUnitPrice === undefined ? undefined : PRICED_COMPUTE_UNIT_LIMIT, options.computeUnitPrice);
+      const { value } = await rpc.simulateTransaction(getBase64EncodedWireTransaction(tx), {
+        encoding: "base64", commitment: "confirmed", sigVerify: false, replaceRecentBlockhash: true,
+      }).send();
+      if (value.err !== null || !value.preBalances || !value.postBalances || value.fee == null) return null;
+      return balanceChanges(accounts, value.preBalances, value.postBalances, value.fee);
+    },
     listingSendOutcome,
     listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
     network: options.network,

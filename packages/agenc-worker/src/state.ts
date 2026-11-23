@@ -80,6 +80,12 @@ export type ModelBudget = { totalCents: number; remainingCents: number };
 
 /** A claim/execution/submission transaction that still needs reconciliation. */
 export type OpenClaim = {
+  /** An owner release was sent or may have been sent. Hold work until reconciled. */
+  releaseRequestedAt?: string;
+  ownerDecision?: true;
+  chosenAttempt?: { signature: string; lastValidBlockHeight: string; cleanup?: true; delivery?: SubmissionIntent };
+  /** A selected claim holds the room output for owner approval. */
+  chosen?: true;
   jobEvidence?: JobEvidence;
   jobEvidenceRef?: string;
   modelBudget?: ModelBudget;
@@ -91,6 +97,7 @@ export type OpenClaim = {
   phase: "claiming" | "claimed" | "executed" | "uploading" | "submitting";
   /** Ambiguous claim transaction signature, when the SDK surfaced one. */
   claimTransactionSignature?: string;
+  claimLastValidBlockHeight?: string;
   /** Rejected submission_count already acknowledged as request_changes. */
   revisionSubmissionCount?: number;
   /** Required exactly for `executed` and `uploading`. */
@@ -138,6 +145,7 @@ export type OpenClaim = {
  * expires or the task ends; `claimReleased` says when its deposit is back.
  */
 export type FailedJob = {
+  chosen?: boolean;
   /** Task PDA (base58). */
   task: string;
   /** ISO timestamp at which claiming the task began. */
@@ -148,7 +156,7 @@ export type FailedJob = {
    * "attempts": every allowed attempt failed. "expired": the time to deliver
    * ran out first. "cancelled": the task ended before anything was delivered.
    */
-  cause: "attempts" | "expired" | "cancelled";
+  cause: "attempts" | "expired" | "cancelled" | "released";
   /** Why, in the worker's words (redacted, one line). */
   reason: string;
   /** Attempts that failed. */
@@ -171,6 +179,7 @@ export type WorkerPause = {
 
 /** One submitted result awaiting (or past) settlement. */
 export type SubmissionRecord = {
+  chosen?: true;
   jobEvidence?: JobEvidence;
   jobEvidenceRef?: string;
   modelBudget?: ModelBudget;
@@ -438,10 +447,13 @@ function openClaim(value: unknown, label: string): OpenClaim {
     label,
     ["task", "claimedAt", "phase"],
     [
+      "releaseRequestedAt",
+      "ownerDecision", "chosenAttempt",
+      "chosen",
       "jobEvidence",
       "jobEvidenceRef",
       "modelBudget",
-      "claimTransactionSignature",
+      "claimTransactionSignature", "claimLastValidBlockHeight",
       "revisionSubmissionCount",
       "execution",
       "submission",
@@ -456,6 +468,14 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "lastFailure",
     ],
   );
+  let chosenAttempt: OpenClaim["chosenAttempt"];
+  if (parsed.chosenAttempt !== undefined) {
+    const attempt = record(parsed.chosenAttempt, label);
+    exactKeys(attempt, label, ["signature", "lastValidBlockHeight"], ["delivery", "cleanup"]);
+    chosenAttempt = { signature: nonempty(attempt.signature, label), lastValidBlockHeight: decimal(attempt.lastValidBlockHeight, label),
+      ...(attempt.cleanup !== undefined && { cleanup: onlyTrue(attempt.cleanup, label) }),
+      ...(attempt.delivery !== undefined && { delivery: submissionIntent(attempt.delivery, label) }) };
+  }
   const phase = parsed.phase;
   if (
     phase !== "claiming" &&
@@ -498,7 +518,12 @@ function openClaim(value: unknown, label: string): OpenClaim {
   return {
     task: taskAddress(parsed.task, `${label}.task`),
     claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
+    ...(chosenAttempt && { chosenAttempt }),
+    ...(parsed.ownerDecision !== undefined ? { ownerDecision: onlyTrue(parsed.ownerDecision, label) } : {}),
+    ...(parsed.releaseRequestedAt !== undefined ? { releaseRequestedAt: iso(parsed.releaseRequestedAt, `${label}.releaseRequestedAt`) } : {}),
+    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, `${label}.chosen`) } : {}),
     phase,
+    ...(parsed.claimLastValidBlockHeight !== undefined && { claimLastValidBlockHeight: decimal(parsed.claimLastValidBlockHeight, label) }),
     ...(claimTransactionSignature !== undefined
       ? { claimTransactionSignature }
       : {}),
@@ -557,21 +582,29 @@ function reasonLine(value: unknown, label: string): string {
   return parsed;
 }
 
+/** An older worker did not record who could release an exhausted claim. */
+export function pendingOwnerClaim(state: WorkerState): FailedJob | undefined {
+  if (state.openClaim) return undefined;
+  return state.failedJobs.find(job => job.chosen && !job.claimReleased &&
+    !state.submissions.some(submission => submission.task === job.task));
+}
+
 function failedJob(value: unknown, label: string): FailedJob {
   const parsed = record(value, label);
   exactKeys(
     parsed,
     label,
     ["task", "claimedAt", "failedAt", "cause", "reason", "attempts", "claimReleased"],
-    ["rewardAmount", "title", "listing"],
+    ["rewardAmount", "title", "listing", "chosen"],
   );
   const cause = parsed.cause;
-  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled") {
+  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled" && cause !== "released") {
     fail(`${label}.cause is unsupported`);
   }
   if (typeof parsed.claimReleased !== "boolean") {
     fail(`${label}.claimReleased must be boolean`);
   }
+  if (parsed.chosen !== undefined && typeof parsed.chosen !== "boolean") fail(`${label}.chosen must be boolean`);
   return {
     task: taskAddress(parsed.task, `${label}.task`),
     claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
@@ -584,6 +617,7 @@ function failedJob(value: unknown, label: string): FailedJob {
       : {}),
     ...jobLabels(parsed, label),
     claimReleased: parsed.claimReleased,
+    chosen: parsed.chosen ?? !parsed.claimReleased,
   };
 }
 
@@ -612,6 +646,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       "settled",
     ],
     [
+      "chosen",
       "jobEvidence",
       "jobEvidenceRef",
       "modelBudget",
@@ -694,6 +729,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
   }
   return {
     task: taskAddress(parsed.task, `${label}.task`),
+    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, `${label}.chosen`) } : {}),
     submissionSignature:
       parsed.submissionSignature === null
         ? null

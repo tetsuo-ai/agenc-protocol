@@ -106,6 +106,7 @@ export interface AgentRecord {
   refills: AllowanceCharge[];
   jobSpends?: { id: string; at: number; microcents: string | null }[];
   earn: {
+    chooseOpenJobs?: boolean;
     enabled: boolean;
     minPayCents: number;
     /** Interrupted listing work must read the chain before admitting jobs. */

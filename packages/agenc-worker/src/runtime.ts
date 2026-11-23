@@ -25,7 +25,7 @@ import {
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findWorkerStatsPda,
-  getAgentRegistrationDecoder,
+  getAgentRegistrationDecoder, getAgentStatsDecoder, getAgentStatsDiscriminatorBytes,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
   getHireRecordSize,
@@ -34,6 +34,7 @@ import {
   getServiceListingDiscriminatorBytes,
   getTaskClaimDecoder,
   getTaskSubmissionDecoder,
+  isTaskStateDirectlyClaimable,
   listOpenTasks,
   listPinnedJobSpecTasks,
   settlementReceiptUrl,
@@ -49,6 +50,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { decodeHostedBrief } from "./hosted-brief.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
 import {
@@ -78,6 +80,7 @@ import {
   bytesToHex,
   hexToBytes,
   loadState,
+  pendingOwnerClaim,
   MAX_JOB_TITLE_CHARS,
   MAX_UNSETTLED_SUBMISSIONS,
   newAgentId,
@@ -183,8 +186,16 @@ export const DEFAULT_MAX_FETCH_WAIT_MS = 6 * 60 * 60_000;
 export const FETCH_RESUME_GAP_MS = 2 * MAX_RETRY_DELAY_MS;
 
 /** Everything the worker loop needs, injected (see cli.ts for the RPC wiring). */
+export type WorkSimulation = { fee: string; changes: { address: Address; delta: string }[] };
 export type WorkerContext = {
   config: WorkerRuntimeConfig;
+  /** Optional host controls, installed only inside the live worker lock. */
+  onWorkerReady?: (dispatch: WorkerDispatch | null, read?: WorkerDispatch) => void;
+  withChosenRoom?: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  simulateWork?: (instruction: import("@solana/kit").Instruction) => Promise<WorkSimulation | null>;
+  chosenOutcome?: (receipt: { signature: string; lastValidBlockHeight: string }) => Promise<"pending" | "landed" | "failed" | "expired">;
+  chooseOpenJobs?: () => boolean;
+  checkChosenRoom?: (signal?: AbortSignal) => Promise<void>;
   /** Signing + sending (the hot wallet is this client's signer/fee payer). */
   client: MarketplaceClient;
   /** The hot-wallet signer (identical to `client.signer`). */
@@ -263,6 +274,15 @@ export type WorkerContext = {
    */
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal }) => Promise<void>;
 };
+
+/** Owner operations run on the watcher's serialized lane, with its real context. */
+export type WorkerDispatch = <T>(operation: (ctx: WorkerContext, agent: WorkerAgent, signal: AbortSignal) => Promise<T>) => Promise<T>;
+
+export interface VerifiedCandidate {
+  task: Task;
+  spec: VerifiedJobSpec;
+  isHire: boolean;
+}
 
 /** The worker's on-chain identity. */
 export type WorkerAgent = {
@@ -455,10 +475,28 @@ export function registrationFundingRequirement(
   );
 }
 
+export async function workerRecordShortfall(ctx: WorkerContext, agent: WorkerAgent) {
+  const [pda] = await findWorkerStatsPda({ worker: agent.agentPda });
+  const info = await ctx.readAccountInfo?.(pda);
+  const data = info === undefined ? await ctx.readAccount(pda) : info?.data;
+  if (data?.length) {
+    if (info && (info.executable || info.owner !== AGENC_COORDINATION_PROGRAM_ADDRESS)) throw new Error("Invalid worker record.");
+    if (info && (!getAgentStatsDiscriminatorBytes().every((v, i) => data[i] === v) || getAgentStatsDecoder().decode(data).agent !== agent.agentPda))
+      throw new Error("Invalid worker record.");
+    return 0n;
+  }
+  if (info && (info.executable || info.owner !== DEFAULT_ADDRESS)) throw new Error("Invalid worker record owner.");
+  const minimum = validateRentMinimum("worker record", await ctx.getMinimumBalanceForRentExemption!(AGENT_STATS_ACCOUNT_SIZE));
+  const balance = data != null ? await ctx.getBalance!(pda) : 0n;
+  if (typeof balance !== "bigint" || balance < 0n) throw new Error("Invalid worker record balance.");
+  return balance < minimum ? minimum - balance : 0n;
+}
+
 async function assertFreshClaimFunding(
   ctx: WorkerContext,
   agent: WorkerAgent,
   task: Task,
+  chosenTask?: Address,
 ): Promise<void> {
   if (
     ctx.getBalance === undefined ||
@@ -472,15 +510,14 @@ async function assertFreshClaimFunding(
   const rents = await readClaimAccountRentMinimums(
     ctx.getMinimumBalanceForRentExemption,
   );
+  if (chosenTask) {
+    const [claim] = await findClaimPda({ task: chosenTask, bidder: agent.agentPda });
+    const funded = await ctx.getBalance(claim);
+    rents.claim = funded < rents.claim ? rents.claim - funded : 0n;
+    if (task.constraintHash.every(b => b === 0)) rents.submission = 0n;
+  }
   const depositLamports = claimDepositFor(task);
-  const [record] = await findWorkerStatsPda({ worker: agent.agentPda });
-  const recordRentLamports =
-    (await ctx.readAccount(record)) === null
-      ? validateRentMinimum(
-          "worker record",
-          await ctx.getMinimumBalanceForRentExemption(AGENT_STATS_ACCOUNT_SIZE),
-        )
-      : 0n;
+  const recordRentLamports = await workerRecordShortfall(ctx, agent);
   const required = claimFundingRequirement(rents, {
     depositLamports,
     recordRentLamports,
@@ -813,6 +850,7 @@ export async function listClaimCandidates(
 /** Outcome of attempting one candidate. */
 export type ProcessOutcome =
   | { status: "submitted"; task: Address; record: SubmissionRecord }
+  | { status: "held"; task: Address }
   | { status: "dry-run"; task: Address }
   | { status: "skipped"; task: Address; reason: string; retryable?: boolean }
   | { status: "claim-failed"; task: Address; reason: string }
@@ -1044,6 +1082,7 @@ function keptMarkerFields(
   marker: OpenClaim,
 ): Pick<
   OpenClaim,
+  | "chosen"
   | "jobEvidence"
   | "jobEvidenceRef"
   | "modelBudget"
@@ -1056,6 +1095,7 @@ function keptMarkerFields(
   | "lastFailure"
 > {
   return {
+    ...(marker.chosen ? { chosen: true } : {}),
     ...(marker.jobEvidenceRef !== undefined ? { jobEvidenceRef: marker.jobEvidenceRef } : {}),
     ...(marker.modelBudget !== undefined ? { modelBudget: marker.modelBudget } : {}),
     ...(marker.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
@@ -1097,7 +1137,7 @@ function retryDelayMs(ctx: WorkerContext, failures: number): number {
  * Move the in-flight job into the given-up ledger and free the worker for
  * other work. The claim itself stays on the chain until it can be released.
  */
-function giveUpJob(
+export function giveUpJob(
   ctx: WorkerContext,
   state: WorkerState,
   marker: OpenClaim,
@@ -1114,6 +1154,7 @@ function giveUpJob(
     marker.execution?.rewardAmount ??
     marker.submission?.rewardAmount;
   const job: FailedJob = {
+    chosen: marker.chosen === true,
     task: marker.task,
     claimedAt: marker.claimedAt,
     failedAt: new Date().toISOString(),
@@ -1125,6 +1166,11 @@ function giveUpJob(
     ...(marker.listing !== undefined ? { listing: marker.listing } : {}),
     claimReleased: details.claimReleased,
   };
+  if (marker.chosen && !details.claimReleased && details.cause === "attempts") {
+    state.openClaim = { ...marker, ownerDecision: true, lastFailure: reason };
+    saveState(ctx.stateDir, state);
+    return job;
+  }
   state.openClaim = null;
   state.failedJobs = [
     ...state.failedJobs.filter((entry) => entry.task !== job.task),
@@ -1136,7 +1182,7 @@ function giveUpJob(
   // when any of its tries ran its work, whatever its last failure was.
   const ranWork =
     marker.ranWork === true || marker.execution !== undefined || marker.submission !== undefined;
-  if (details.cause !== "cancelled" && ranWork) {
+  if (details.cause !== "cancelled" && details.cause !== "released" && ranWork) {
     state.consecutiveFailures += 1;
     const limit = Math.max(
       1,
@@ -1282,7 +1328,7 @@ function noteJobWait(
 }
 
 /** Seconds left for a release to land before the claim's release grace ends. */
-const RELEASE_LANDING_MARGIN_SECS = 120;
+export const RELEASE_LANDING_MARGIN_SECS = 120;
 /** In the last this-many seconds of the release grace, an unfetchable spec releases the claim. */
 const RELEASE_DECISION_WINDOW_SECS = 600;
 
@@ -1555,6 +1601,8 @@ function restoreRevisionRound(
     task: task as string,
     claimedAt: claimTimestamp(claim, fallbackClaimedAt),
     phase: "claimed",
+    ...(priorMarker?.chosen || priorRecord?.chosen ? { chosen: true } : {}),
+    ...(priorMarker?.ownerDecision && { ownerDecision: true }),
     ...(priorMarker?.claimTransactionSignature !== undefined
       ? { claimTransactionSignature: priorMarker.claimTransactionSignature }
       : {}),
@@ -1613,6 +1661,7 @@ function commitSubmission(
     rewardAmount: intent.rewardAmount,
     submittedAt: options.submittedAt ?? new Date().toISOString(),
     settled: false,
+    ...(marker?.chosen && { chosen: true }),
     ...(marker?.jobEvidenceRef !== undefined ? { jobEvidenceRef: marker.jobEvidenceRef } : {}),
     ...(marker?.modelBudget !== undefined ? { modelBudget: marker.modelBudget } : {}),
     ...(marker?.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
@@ -1880,6 +1929,7 @@ async function executeAndSubmit(
     execution,
   };
   saveState(ctx.stateDir, executedState);
+  if (marker.chosen) return { status: "held", task };
   return continueExecutedResult(ctx, agent, task, execution);
 }
 
@@ -1926,7 +1976,11 @@ export async function processCandidate(
   ctx: WorkerContext,
   agent: WorkerAgent,
   candidate: ClaimCandidate,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    inspect?: (facts: VerifiedCandidate) => void;
+    authorizeChosen?: (facts: VerifiedCandidate, budget: number | undefined) => Promise<void>;
+  } = {},
 ): Promise<ProcessOutcome> {
   const task = candidate.task;
   const state = loadState(ctx.stateDir);
@@ -1937,7 +1991,10 @@ export async function processCandidate(
   }
 
   const decodedTask = await readTask(ctx, task);
-  if (decodedTask === null || decodedTask.status !== TaskStatus.Open) {
+  const chosen = options.authorizeChosen !== undefined || options.inspect !== undefined;
+  if (decodedTask === null || (chosen
+    ? !isTaskStateDirectlyClaimable(decodedTask, BigInt(await clusterNowSeconds(ctx)))
+    : decodedTask.status !== TaskStatus.Open)) {
     ctx.log({ event: "task.skipped", task, reason: "no-longer-open" });
     return { status: "skipped", task, reason: "no-longer-open" };
   }
@@ -2036,6 +2093,12 @@ export async function processCandidate(
     return { status: "skipped", task, reason };
   }
 
+  const facts = { task: decodedTask, spec: verified, isHire: hireBinding.isHire };
+  options.inspect?.(facts);
+  if (!ctx.dryRun && !hireBinding.isHire && !options.authorizeChosen && ctx.chooseOpenJobs?.()) {
+    return { status: "skipped", task, reason: "waiting-for-owner-choice" };
+  }
+
   if (ctx.dryRun) {
     ctx.log({
       event: "task.would-claim",
@@ -2067,7 +2130,7 @@ export async function processCandidate(
     ctx.log({ event: "task.execution-not-ready", task, reason });
     return { status: "skipped", task, reason, retryable: true };
   }
-  await assertFreshClaimFunding(ctx, agent, decodedTask);
+  await assertFreshClaimFunding(ctx, agent, decodedTask, options.authorizeChosen ? task : undefined);
   // A missing host spending limit must stop the claim as well as execution.
   await ctx.executorForTask?.(decodedTask, task);
   const budget = await ctx.modelBudgetForTask?.(decodedTask, task);
@@ -2080,6 +2143,15 @@ export async function processCandidate(
   if (options.signal?.aborted || ctx.signal?.aborted) {
     return { status: "skipped", task, reason: "worker-stopping" };
   }
+
+  if (options.authorizeChosen) {
+    if (!ctx.checkExecutionReady || !ctx.checkChosenRoom || ctx.config.executorMode !== "sandboxed") throw new Error("The job room is unavailable.");
+    await options.authorizeChosen(facts, budget);
+  } else if (!hireBinding.isHire && ctx.chooseOpenJobs?.()) {
+    return { status: "skipped", task, reason: "waiting-for-owner-choice" };
+  }
+  options.signal?.throwIfAborted();
+  ctx.signal?.throwIfAborted();
 
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
@@ -2094,6 +2166,7 @@ export async function processCandidate(
     task: task as string,
     claimedAt: claimStartedAt,
     phase: "claiming",
+    ...(options.authorizeChosen ? { chosen: true } : {}),
     ...(budget !== undefined ? { modelBudget: { totalCents: budget, remainingCents: budget } } : {}),
     ...labels,
   };
@@ -2166,6 +2239,10 @@ export async function processCandidate(
           signature: null,
           parentTask,
         });
+      } else if (loadState(ctx.stateDir).openClaim?.claimLastValidBlockHeight) {
+        // A chosen claim reached the signed send boundary. Only its receipt
+        // can distinguish a rejection from a delayed broadcast.
+        return { status: "execution-failed", task, reason };
       } else if (
         error instanceof AgencError &&
         (error.signature === null || error.code !== null)
@@ -2199,6 +2276,7 @@ export async function processCandidate(
     }
   }
 
+  if (options.authorizeChosen) return { status: "held", task };
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
 }
 
@@ -2212,7 +2290,23 @@ export async function resumeOpenClaim(
   agent: WorkerAgent,
 ): Promise<ProcessOutcome | null> {
   const state = loadState(ctx.stateDir);
-  if (state.openClaim === null) return null;
+  if (state.openClaim === null) {
+    const job = pendingOwnerClaim(state);
+    if (!job || ctx.dryRun) return null;
+    // Move one outstanding decision into the normal held-job slot. Other
+    // legacy failures retain their own decision until this slot is free.
+    if (!await readClaim(ctx, agent, job.task as Address)) {
+      job.claimReleased = true;
+      saveState(ctx.stateDir, state);
+      return null;
+    }
+    state.openClaim = { task: job.task, claimedAt: job.claimedAt, phase: "claimed",
+      chosen: true, ownerDecision: true, lastFailure: job.reason,
+      ...(job.attempts > 0 && { failures: job.attempts }),
+      ...(job.title && { title: job.title }), ...(job.listing && { listing: job.listing }) };
+    state.failedJobs = state.failedJobs.filter(entry => entry !== job);
+    saveState(ctx.stateDir, state);
+  }
   let marker = state.openClaim;
   const task = marker.task as Address;
   const [claim, decodedTask, submission] = await Promise.all([
@@ -2220,6 +2314,43 @@ export async function resumeOpenClaim(
     readTask(ctx, task),
     readSubmission(ctx, agent, task),
   ]);
+
+  // A chosen action gets exactly one signed attempt. Reconciliation never signs.
+  if (marker.chosen && marker.chosenAttempt) {
+    const receipt = marker.chosenAttempt;
+    const outcome = await ctx.chosenOutcome?.(receipt);
+    if (!outcome || outcome === "pending") return { status: "held", task };
+    if (outcome === "landed") {
+      if (receipt.delivery) {
+        const record = commitSubmission(ctx, task, receipt.delivery, { signature: receipt.signature });
+        return { status: "submitted", task, record };
+      }
+      giveUpJob(ctx, state, marker, { cause: receipt.cleanup ? "expired" : "released",
+        reason: receipt.cleanup ? "The owner closed the expired claim." : "The worker gave the job back.", claimReleased: true,
+        ...(decodedTask && { rewardAmount: decodedTask.rewardAmount.toString() }) });
+      ctx.log({ event: "claim.released", task, how: receipt.cleanup ? "expired" : "released", signature: receipt.signature });
+      return null;
+    }
+    delete marker.chosenAttempt;
+    saveState(ctx.stateDir, state);
+    return { status: "held", task };
+  }
+
+  if (marker.chosen && marker.releaseRequestedAt && !ctx.dryRun) {
+    if (!claim && !submission) {
+      giveUpJob(ctx, state, marker, { cause: "released", reason: "The claim closed after release was requested.", claimReleased: true });
+      return null;
+    }
+    // The old journal only timestamped the send. Give it the existing
+    // ambiguity window before offering another approval on a live claim.
+    if (Date.now() - Date.parse(marker.releaseRequestedAt) < TRANSACTION_RECONCILIATION_GRACE_MS)
+      return { status: "held", task };
+    if (claim && decodedTask && !claim.isCompleted) {
+      delete marker.releaseRequestedAt;
+      marker.ownerDecision = true;
+      saveState(ctx.stateDir, state);
+    }
+  }
 
   let revisionRound = false;
   if (
@@ -2335,6 +2466,13 @@ export async function resumeOpenClaim(
   }
 
   if (claim === null && marker.phase === "claiming") {
+    if (marker.chosen && marker.claimTransactionSignature && marker.claimLastValidBlockHeight) {
+      const outcome = await ctx.chosenOutcome?.({ signature: marker.claimTransactionSignature, lastValidBlockHeight: marker.claimLastValidBlockHeight });
+      if (!outcome || outcome === "pending" || outcome === "landed") return { status: "held", task };
+      state.openClaim = null;
+      saveState(ctx.stateDir, state);
+      return null;
+    }
     const startedAt = Date.parse(marker.claimedAt);
     if (
       Number.isFinite(startedAt) &&
@@ -2426,6 +2564,7 @@ export async function resumeOpenClaim(
       (marker.phase !== "submitting" && deliverBy > 0 && now > deliverBy) ||
       (claimEnds > 0 && now > claimEnds)
     ) {
+      if (marker.chosen) return { status: "held", task };
       giveUpJob(ctx, loadState(ctx.stateDir), marker, {
         cause: "expired",
         reason: "the time to deliver ran out",
@@ -2465,13 +2604,26 @@ export async function resumeOpenClaim(
   // A pending/terminal task with no readable canonical submission is an RPC
   // inconsistency, not permission to execute again. Retain the marker and wait
   // for a coherent read rather than risking duplicate work.
+  const otherContestEntry = marker.chosen && !submission && !claim.isCompleted && !claim.isValidated &&
+    decodedTask.taskType === TaskType.Competitive && (decodedTask.reserved[0] ?? 0) >= 1 &&
+    decodedTask.constraintHash.some(byte => byte !== 0);
   if (
     decodedTask.status !== TaskStatus.InProgress &&
-    !(revisionRound && decodedTask.status === TaskStatus.PendingValidation)
+    !((revisionRound || otherContestEntry) && decodedTask.status === TaskStatus.PendingValidation)
   ) {
     const reason = `task status ${decodedTask.status} is not executable but its canonical submission is unavailable`;
     ctx.log({ event: "task.submission-recovery-pending", task, reason });
     return { status: "execution-failed", task, reason };
+  }
+
+  if (marker.chosen) {
+    if (marker.ownerDecision || marker.releaseRequestedAt || marker.phase === "executed" || !ctx.checkChosenRoom) return { status: "held", task };
+    // Legacy journals carried delivery intent but no bounded signed attempt.
+    if (marker.phase === "uploading" && marker.execution) {
+      marker.phase = "executed";
+      saveState(ctx.stateDir, state);
+    }
+    if (marker.phase !== "claiming" && marker.phase !== "claimed") return { status: "held", task };
   }
 
   if (marker.phase === "submitting" && marker.submission !== undefined) {
@@ -2537,7 +2689,7 @@ export async function resumeOpenClaim(
     if (error instanceof JobSpecUnreachableError) {
       noteJobWait(ctx, task, "the job spec", reason, decodedTask.rewardAmount);
       // A delivery made before a change request already had its deposit back.
-      if (!revisionRound) {
+      if (!marker.chosen && !revisionRound) {
         await releaseWithinGraceIfUnfetchable(ctx, agent, task, decodedTask);
       }
     } else {
@@ -2562,6 +2714,17 @@ export async function resumeOpenClaim(
       rewardAmount: decodedTask.rewardAmount,
     });
     return { status: "execution-failed", task, reason };
+  }
+  if (marker.chosen) {
+    if (!ctx.withChosenRoom) return { status: "held", task };
+    return ctx.withChosenRoom(async signal => {
+      await ctx.checkChosenRoom!(signal);
+      signal.throwIfAborted();
+      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified);
+    }).catch(error => {
+      ctx.log({ event: "task.execution-not-ready", task, reason: formatDiagnosticError(error) });
+      return { status: "held" as const, task };
+    });
   }
   return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
 }
@@ -2731,6 +2894,7 @@ export async function checkSettlements(
           task: record.task,
           claimedAt: claimTimestamp(claim, record.submittedAt),
           phase: "claimed",
+          ...(record.chosen && { chosen: true }),
           ...(record.modelBudget !== undefined ? { modelBudget: record.modelBudget } : {}),
           ...(record.jobEvidenceRef !== undefined ? { jobEvidenceRef: record.jobEvidenceRef } : {}),
           revisionSubmissionCount: submission.account.submissionCount,
@@ -2986,11 +3150,12 @@ export function expectedWorkerPayout(
     | "operatorFeeBps"
     | "referrer"
     | "referrerFeeBps"
-  >,
+  > & Partial<Pick<Task, "completions">>,
 ): bigint {
   const base =
     task.taskType === TaskType.Collaborative && task.requiredCompletions > 0
-      ? task.rewardAmount / BigInt(task.requiredCompletions)
+      ? task.rewardAmount / BigInt(task.requiredCompletions) +
+        (task.completions !== undefined && BigInt(task.completions) < task.rewardAmount % BigInt(task.requiredCompletions) ? 1n : 0n)
       : task.rewardAmount;
   const leg = (payee: Address, bps: number): bigint =>
     payee === DEFAULT_ADDRESS || bps <= 0 ? 0n : (base * BigInt(bps)) / 10_000n;
@@ -3262,7 +3427,23 @@ async function runUpLocked(
     ...(signal !== undefined ? { signal } : {}),
   });
 
+  const stopped = new AbortController();
+  const lifetime = signal ? AbortSignal.any([signal, stopped.signal]) : stopped.signal;
   try {
+    ctx.onWorkerReady?.((operation) => new Promise((resolve, reject) => {
+      if (lifetime.aborted) { reject(new Error("The worker stopped.")); return; }
+      void enqueue(async () => {
+        try {
+          lifetime.throwIfAborted();
+          resolve(await operation(ctx, agent, lifetime));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }), async (read) => {
+      lifetime.throwIfAborted();
+      return read(ctx, agent, lifetime);
+    });
     ctx.log({ event: "watch.started" });
     for await (const claimable of watch) {
       if (signal?.aborted) break;
@@ -3297,6 +3478,8 @@ async function runUpLocked(
       });
     }
   } finally {
+    stopped.abort();
+    ctx.onWorkerReady?.(null);
     clearInterval(settleTimer);
     await watch.stop();
     await chain;
