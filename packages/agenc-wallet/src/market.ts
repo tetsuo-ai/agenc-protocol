@@ -1609,7 +1609,7 @@ export async function sendCreateListing(
     specUri: offer.specUri,
     price: offer.priceLamports,
     priceMint: null,
-    requiredCapabilities: 1n,
+    requiredCapabilities: BigInt(offer.terms.servicePin?.capabilities ?? "1"),
     defaultDeadlineSecs: BigInt(offer.deliverySecs),
     maxOpenJobs: offer.terms.maxOpenJobs,
     operator: offer.terms.operator ? address(offer.terms.operator) : null,
@@ -1642,7 +1642,7 @@ export async function sendUpdateListing(
           ? { specHash: null, specUri: null }
           : { specHash: input.spec.hash, specUri: input.spec.uri }),
         tags: values.encodeListingTags(input.terms.tags),
-        requiredCapabilities: null,
+        requiredCapabilities: BigInt(input.terms.servicePin?.capabilities ?? "1"),
         defaultDeadlineSecs: BigInt(input.terms.deliverySecs),
         maxOpenJobs: input.terms.maxOpenJobs,
         operator: input.terms.operator ? address(input.terms.operator) : SYSTEM_PROGRAM_ADDRESS,

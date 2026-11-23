@@ -136,7 +136,7 @@ describe("an agent that delivers files", () => {
 
     const started = JSON.parse(readFileSync(seen, "utf8")) as Record<string, string>;
     expect(started.agent).toBe(agent.id);
-    expect(started.source).toBe("own");
+    expect(started.source).toBe("external");
     expect(path.basename(started.outbox!)).toBe("outbox");
     expect(started.outbox).toContain(world.dataDir);
     expect(started.prefix).toBe("agenc://artifact/sha256/");

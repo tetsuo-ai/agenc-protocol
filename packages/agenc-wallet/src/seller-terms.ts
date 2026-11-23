@@ -7,7 +7,7 @@ import {
   values,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "./chain.js";
-import type { CatalogRow } from "./services.js";
+import { buildListingSpec, type CatalogRow } from "./services.js";
 import {
   DEFAULT_SELLER_TERMS,
   sellerTermsProblem,
@@ -39,7 +39,7 @@ export function resolveTerms(
   if (
     patch &&
     Object.keys(patch).some(
-      (field) => !Object.hasOwn(DEFAULT_SELLER_TERMS, field),
+      (field) => !Object.hasOwn(DEFAULT_SELLER_TERMS, field) && !["servicePin", "minimumMarginCents", "modelCapCents"].includes(field),
     )
   )
     throw new WalletError(
@@ -67,6 +67,19 @@ export function resolveTerms(
       "The category is fixed once a service is listed.",
     );
   return terms;
+}
+
+export function sellerListingSpec(input: SellerTerms & { name: string; summary: string }) {
+  const spec = buildListingSpec(input);
+  if (input.servicePin || input.minimumMarginCents || input.modelCapCents) {
+    const custom = spec.custom as { listingMetadata: Record<string, unknown> };
+    custom.listingMetadata.fulfilment = {
+      ...(input.servicePin && { servicePin: input.servicePin }),
+      minimumMarginCents: input.minimumMarginCents ?? 0,
+      ...(input.modelCapCents && { modelCapCents: input.modelCapCents }),
+    };
+  }
+  return spec;
 }
 
 export function sameChainTerms(

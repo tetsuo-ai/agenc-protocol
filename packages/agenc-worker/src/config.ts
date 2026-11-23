@@ -56,6 +56,11 @@ export type ExecutorMode = "safe" | "sandboxed" | "unsafe";
 /** Default capability bitmask claimed/required (bit 0). */
 export const DEFAULT_CAPABILITIES = 1n;
 
+/** Locally supported work must also be authorized by this registration. */
+export function effectiveCapabilities(local: bigint, registered: bigint): bigint {
+  return local & registered;
+}
+
 /** Default poll interval for `up` mode sweeps + settlement checks (ms). */
 export const DEFAULT_POLL_INTERVAL_MS = 15_000;
 

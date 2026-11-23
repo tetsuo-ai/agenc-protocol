@@ -53,7 +53,7 @@ import {
 import { claimBudget, budgetForRevision, enrollClaimBudget, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
-import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
+import { assertActiveWorkerConfig, effectiveCapabilities, type WorkerConfig } from "./config.js";
 import {
   assertExecutorPromptFits,
   ExecutorError,
@@ -266,7 +266,7 @@ export type WorkerContext = {
   /** Discover cheap service hires, then verify their provider before waiving the open-job floor. */
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string) => Promise<string[]>;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
   reserveRevisionBudget?: boolean;
   /** Only the isolated job-room adapter supplies its input validator. */
@@ -276,7 +276,9 @@ export type WorkerContext = {
   };
   /** Kept outside the wallet backup and restore set. */
   modelSpendDir?: string;
-  modelBudgetForTask?: (task: Task, address: Address) => Promise<number>;
+  modelBudgetForTask?: (task: Task, address: Address, listingMetadata?: Uint8Array | null) => Promise<number>;
+  /** Wallet-local authority over canonical listing addresses. Rechecked before the claim journal. */
+  admitsListing?: (listing: Address) => boolean;
   /**
    * Host job-room self-test. Resolves only when execution is ready. Called
    * before every fresh claim, before its WAL or transaction. Throw to defer.
@@ -692,9 +694,10 @@ export async function ensureRegistered(
         event: "agent.capabilities-mismatch",
         registered: registration.capabilities.toString(),
         configured: ctx.config.capabilities.toString(),
-        note: "on-chain claims are checked against the REGISTERED bitmask; update the agent or the config",
+        note: "Unavailable capabilities are excluded from discovery and claims.",
       });
     }
+    ctx.config.capabilities = effectiveCapabilities(ctx.config.capabilities, registration.capabilities);
     return { agentId, agentPda, registered: true, justRegistered: false };
   }
   if (ctx.dryRun) {
@@ -750,6 +753,13 @@ export async function ensureRegistered(
     metadataUri: null,
     stakeAmount: minAgentStake,
   });
+  if (ctx.config.capabilities !== 1n) {
+    const bytes = await ctx.readAccount(agentPda);
+    const registered = bytes && getAgentRegistrationDecoder().decode(bytes);
+    if (!registered || registered.authority !== ctx.signer.address ||
+        effectiveCapabilities(ctx.config.capabilities, registered.capabilities) !== ctx.config.capabilities)
+      throw new Error("The requested service capabilities were not confirmed on the registration.");
+  }
   ctx.log({
     event: "agent.registered",
     agentPda,
@@ -1873,6 +1883,7 @@ async function executeAndSubmit(
   prompt: string,
   verified: VerifiedJobSpec,
   reviewInputs?: ReviewInputFile[],
+  serviceMetadata?: Uint8Array | null,
 ): Promise<ProcessOutcome> {
   // Retain what the seller agreed to before running the work. This survives
   // submission, settlement, and removal of the public job-spec account.
@@ -1912,7 +1923,7 @@ async function executeAndSubmit(
     const execute = reviewInputs === undefined ? runExecutor : ctx.reviewRoom?.execute;
     if (!execute) throw new Error("This revision needs an isolated job room.");
     const result = await execute({
-      argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents),
+      argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request),
       prompt,
       ...(reviewInputs?.length ? { reviewInputs } : {}),
       timeoutMs: ctx.config.executorTimeoutMs,
@@ -2056,6 +2067,12 @@ export async function processCandidate(
     ctx.log({ event: "task.skipped", task, reason: hireBinding.rejection });
     return { status: "skipped", task, reason: hireBinding.rejection };
   }
+  if (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)) {
+    return { status: "skipped", task, reason: "listing-not-approved" };
+  }
+  if (!chosen && !hireBinding.isHire && ctx.chooseOpenJobs?.()) {
+    return { status: "skipped", task, reason: "waiting-for-owner-choice" };
+  }
   if (!hireBinding.isHire && decodedTask.rewardAmount < ctx.config.minRewardLamports && ctx.owedTasks?.has(task) !== true) {
     ctx.log({ event: "task.skipped", task, reason: "below-min-reward" });
     return { status: "skipped", task, reason: "below-min-reward" };
@@ -2157,8 +2174,15 @@ export async function processCandidate(
   }
   await assertFreshClaimFunding(ctx, agent, decodedTask, options.authorizeChosen ? task : undefined);
   // A missing host spending limit must stop the claim as well as execution.
-  await ctx.executorForTask?.(decodedTask, task);
-  const budget = await ctx.modelBudgetForTask?.(decodedTask, task);
+  let budget: number | undefined;
+  try {
+    budget = await ctx.modelBudgetForTask?.(decodedTask, task, listingMetadata);
+    await ctx.executorForTask?.(decodedTask, task, undefined, hireBinding.listing, listingMetadata);
+  } catch (error) {
+    const reason = formatDiagnosticError(error);
+    ctx.log({ event: "task.execution-not-ready", task, reason });
+    return { status: "skipped", task, reason, retryable: true };
+  }
   if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0)) {
     throw new Error("This job has no valid model budget.");
   }
@@ -2178,6 +2202,9 @@ export async function processCandidate(
   options.signal?.throwIfAborted();
   ctx.signal?.throwIfAborted();
 
+  if (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)) {
+    return { status: "skipped", task, reason: "listing-not-approved" };
+  }
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
   // reconciles the canonical claim PDA before considering another task.
@@ -2306,7 +2333,7 @@ export async function processCandidate(
   }
 
   if (options.authorizeChosen) return { status: "held", task };
-  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified, undefined, listingMetadata);
 }
 
 /**
@@ -2784,13 +2811,13 @@ export async function resumeOpenClaim(
     return ctx.withChosenRoom(async signal => {
       await ctx.checkChosenRoom!(signal);
       signal.throwIfAborted();
-      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined);
+      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined, listingMetadata);
     }).catch(error => {
       ctx.log({ event: "task.execution-not-ready", task, reason: formatDiagnosticError(error) });
       return { status: "held" as const, task };
     });
   }
-  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined, listingMetadata);
 }
 
 /** One observed settlement (or terminal outcome) for a tracked submission. */

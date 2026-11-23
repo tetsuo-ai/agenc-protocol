@@ -11,6 +11,10 @@ import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // person gave it, and the executor is whatever the host configured (for the
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
 import { deliveryFileProblem } from "./client/delivery-files.js";
+import { reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
+import { readServiceRehearsal } from "./service-rehearsal.js";
+import { validServicePin, type SellerTerms } from "./client/seller-terms.js";
+import { serviceEconomics } from "./service-economics.js";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -127,6 +131,10 @@ export interface EarnOptions {
 
 export interface EarnAgent {
   chooseOpenJobs?: () => boolean;
+  admitsListing?: (listing: Address) => boolean;
+  capabilities?: bigint;
+  currentCapabilities?: () => Promise<bigint>;
+  specialistTerms?: (required: bigint) => Partial<SellerTerms> | undefined;
   agentId: string;
   signer: KeyPairSigner;
   /** Skip jobs that pay less than this. */
@@ -154,6 +162,7 @@ export interface EarnedJob {
   rewardLamports: bigint;
   state: "working" | "delivered" | "paid" | "not_paid" | "failed";
   earnedLamports: bigint | null;
+  modelUsage?: ServiceUsage | null;
   at: number;
   resultHashHex: string | null;
   resultUri: string | null;
@@ -478,6 +487,7 @@ export class EarnHost {
             ? "paid"
             : "not_paid",
         earnedLamports: earned,
+        modelUsage: serviceUsage(this.stateDir(agentId), record.task),
         at: Date.parse(record.settledAt ?? record.submittedAt) || 0,
         resultHashHex: record.resultHashHex,
         resultUri: record.resultUri,
@@ -802,8 +812,17 @@ export class EarnHost {
     };
     entry.checkReady = checkReady;
 
+    const termsFor = (metadata?: Uint8Array | null): Partial<SellerTerms> => {
+      if (!metadata) return {};
+      const terms = JSON.parse(Buffer.from(metadata).toString("utf8")).custom?.listingMetadata?.fulfilment;
+      if (terms === undefined) return {};
+      if (!terms || typeof terms !== "object" || (terms.servicePin !== undefined && !validServicePin(terms.servicePin)))
+        throw new Error("The hired service has invalid fulfilment terms.");
+      return terms;
+    };
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
       ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
       onWorkerReady: (dispatch, read) => { entry.dispatch = dispatch; entry.read = read; },
       ...(!entry.recoveryOnly && !this.ownJobsOnly && executor.mode === "sandboxed" &&
@@ -833,13 +852,55 @@ export class EarnHost {
       ...(executor.isolatedJobRoom && executor.mode === "sandboxed" && { reviewRoom: { fileProblem: deliveryFileProblem, execute: this.#options.runReviewRoom ?? runExecutor } }),
       modelSpendDir: path.resolve(this.#dataDir, "..", "model-spend"),
       reserveRevisionBudget: executor.reserveRevisionBudget === true,
-      modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
-      executorForTask: async (task, _address, reservedCents) => {
+      modelBudgetForTask: async (task, _address, metadata) => {
+        const rate = await agent.solUsd?.() ?? null;
+        const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);
+        if (!terms) return jobPayCents(task.rewardAmount, rate);
+        return serviceEconomics({
+          priceLamports: task.rewardAmount, usdPerSol: rate, marketFeeBps: task.protocolFeeBps,
+          operatorFeeBps: task.operatorFeeBps, referrerFeeBps: task.referrerFeeBps,
+          ...(terms.minimumMarginCents !== undefined && { minimumMarginCents: terms.minimumMarginCents }),
+          ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
+        }).modelBudgetCents;
+      },
+      executorForTask: async (task, address, reservedCents, listing, metadata, request) => {
+        const ownRequest = this.#ownAddresses().includes(task.creator);
+        const room = executor.isolatedJobRoom === true && executor.mode === "sandboxed";
+        if (!ownRequest && (listing || metadata || this.ownJobsOnly) && !room)
+          throw new Error("This buyer's hire requires the isolated job room.");
+        const pin = (metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.servicePin;
+        if (pin && (!room || !executor.argv.includes("{requestSource}")))
+          throw new Error("This service requires the rehearsed room.");
+        const paired = executor.argv[2] === "peer-job";
+        if (paired) {
+          if (!room || !pin || executor.readiness?.argv[2] !== "peer-ready")
+            throw new Error("The paired room cannot serve this job.");
+          if (reservedCents === undefined)
+            await runExecutor({ argv: [...executor.readiness.argv.map(fill), pin.digest], timeoutMs: executor.readiness.timeoutMs ?? 30000,
+              envAllowlist: executor.envAllowlist, signal });
+        }
+        const bundleDir = pin && !paired ? readServiceRehearsal(stateDir, pin) : null;
+        if (pin && bundleDir && reservedCents === undefined) {
+          const argv = executor.readiness?.argv;
+          if (!argv || argv[2] !== "self-test" || !argv[0] || !argv[1] || !argv[3])
+            throw new Error("This service needs image verification before claim.");
+          await runExecutor({ argv: [argv[0], argv[1], "verify-service", argv[3], bundleDir, JSON.stringify(pin)],
+            timeoutMs: 30000, envAllowlist: executor.envAllowlist, signal });
+        }
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
-        const ownRequest = this.#chain.network === "sandbox" || this.#ownAddresses().includes(task.creator);
-        return executor.argv.map(part => {
-          if (part === "{requestSource}") return ownRequest ? "own" : "external";
-          return fill(part).replaceAll("{pay}", String(pay));
+        const receipt = reservedCents ? reserveServiceRun(stateDir, address, reservedCents) : null;
+        return executor.argv.flatMap(part => {
+          if (part === "{requestSource}") {
+            const source = ownRequest ? "own" : "external";
+            return !paired && room && (receipt || bundleDir) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, task: address, ...(pin && { request }) })] : [source];
+          }
+          if (part === "{task}") return [address];
+          if (part === "{servicePin}") {
+            if (!pin) throw new Error("The paired service requires a verified service pin.");
+            return [pin.digest];
+          }
+          if (part === "{jobExpires}") return [task.deadline.toString()];
+          return [fill(part).replaceAll("{pay}", String(pay))];
         });
       },
       ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),
@@ -882,6 +943,7 @@ export class EarnHost {
       signal.addEventListener("abort", endRun, { once: true });
       const startedAt = Date.now();
       const choosing = agent.chooseOpenJobs?.();
+      if (agent.currentCapabilities) ctx.config.capabilities = await agent.currentCapabilities();
       const refresh = setInterval(
         () => {
           // An own-jobs loop also starts afresh, to learn of agents added since.
@@ -989,7 +1051,7 @@ export class EarnHost {
         ? DEFAULT_MAX_REWARD_LAMPORTS
         : this.#options.maxRewardLamports;
     return {
-      capabilities: 1n,
+      capabilities: agent.capabilities ?? 1n,
       minRewardLamports: agent.minRewardLamports,
       maxRewardLamports: maxReward,
       allowUnboundedReward: maxReward === null,

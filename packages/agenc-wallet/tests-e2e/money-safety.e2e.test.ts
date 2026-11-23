@@ -289,7 +289,7 @@ describe("selling money safety", () => {
     expect(await world.balance(world.wallet.mainAddress)).toBe(before);
   });
 
-  it("funds and delivers a 1 SOL hire, and gives the executor that hire's price", async () => {
+  it("funds and delivers a 1 SOL hire, and caps the executor at the seller's net", async () => {
     world = await startWorld({ earn: EARN });
     const { wallet } = world;
     const seller = await wallet.createAgent();
@@ -313,7 +313,7 @@ describe("selling money safety", () => {
       const j = await wallet.getJob(job.id, true);
       return j.status === "delivered" ? j : null;
     });
-    expect(delivered.result?.text).toBe("pay=10000");
+    expect(delivered.result?.text).toBe("pay=9500");
   }, 30_000);
 
   it("takes a cheap own service hire while refusing an equally cheap open job", async () => {

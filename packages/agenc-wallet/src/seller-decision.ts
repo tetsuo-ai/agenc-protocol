@@ -1,11 +1,22 @@
 import { agentOffers, type AgentRecord, type OfferRecord } from "./store.js";
 
-export type SellerEffect = { offer: OfferRecord; enableEarns?: true } | { minPayCents: number };
+export type SellerEffect = { offer: OfferRecord; enableEarns?: true; setupId?: string } | { minPayCents: number; manual?: boolean };
+interface SellerSetupReceipt {
+  action: string;
+  quoteId: string;
+  offerId: string;
+  fundedLamports: string;
+  signature: string | null;
+}
+declare module "./store.js" {
+  interface AgentRecord { serviceSetups?: Record<string, SellerSetupReceipt> }
+}
 export interface SellerDecision {
   quoteId: string;
   action: string;
   effect: SellerEffect;
   expiresAt: number;
+  fundedLamports?: string;
 }
 
 export function saveSellerOffer(agent: AgentRecord, offer: OfferRecord): void {
@@ -33,6 +44,14 @@ export function applySellerDecision(agent: AgentRecord, decision: SellerDecision
   if (ids.length > 128) delete receipts[ids[0]!];
   if (!landed) return;
   if ("offer" in decision.effect) {
+    // The same journal write both spends the quote and limits the first sweep.
+    agent.earn.chooseOpenJobs ??= true;
+    if (decision.effect.setupId) {
+      (agent.serviceSetups ??= {})[decision.effect.setupId] = {
+        quoteId: decision.quoteId, action: decision.action, offerId: decision.effect.offer.id,
+        fundedLamports: decision.fundedLamports ?? "0", signature: signature ?? null,
+      };
+    }
     saveSellerOffer(agent, { ...decision.effect.offer, fundingConfirmed: true });
     if (decision.effect.enableEarns && agent.earn.retiredAt == null) {
       agent.earn.enabled = true;
@@ -44,6 +63,8 @@ export function applySellerDecision(agent: AgentRecord, decision: SellerDecision
       if (offer.wanted) offer.fundingConfirmed = true;
     }
     agent.earn.enabled = agent.earn.retiredAt == null;
+    if (decision.effect.manual) agent.earn.chooseOpenJobs = true;
+    else if (agentOffers(agent).length === 0) agent.earn.chooseOpenJobs ??= false;
     agent.earn.minPayCents = decision.effect.minPayCents;
     agent.earn.lastError = null;
   }
