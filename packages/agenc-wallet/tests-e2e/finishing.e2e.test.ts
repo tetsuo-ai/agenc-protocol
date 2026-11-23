@@ -230,14 +230,18 @@ describe("switching earning off while finishing work", () => {
     } });
     expect((await promptly(client.call("earn.set", { agentId: agent.id, enabled: false }))).earn)
       .toMatchObject({ enabled: false, state: "finishing" });
-    expect((await promptly(client.call("overview", {}))).agents[0]!.earn)
+    const finishing = await promptly(client.call("overview", {}));
+    expect(finishing.capabilities).toEqual(["earn-finishing"]);
+    expect(finishing.agents[0]!.earn)
       .toMatchObject({ enabled: false, state: "finishing" });
     await eventually(async () => (await Promise.all(observed)).includes("finishing"));
     observed.length = 0;
     work.release(agent.id);
     await delivered(job.task);
     await eventually(async () => (await Promise.all(observed)).includes("off"));
-    expect((await client.call("overview", {})).agents[0]!.earn).toMatchObject({ enabled: false, state: "off" });
+    const finished = await client.call("overview", {});
+    expect(finished.capabilities).toEqual(["earn-finishing"]);
+    expect(finished.agents[0]!.earn).toMatchObject({ enabled: false, state: "off" });
   }, 60_000);
 
   it("keeps retirement waiting for the running job", async () => {

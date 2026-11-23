@@ -18,7 +18,12 @@ import type {
 export type AmountInput = { usdCents: number } | { lamports: string };
 
 export interface WalletMethods {
-  /** Balances, agents and counts: everything the panel's first screen needs. */
+  /**
+   * Balances, agents, counts and service `capabilities` on every response.
+   * "earn-finishing" means disabling earning replies once the agent takes
+   * no new job; an in-progress job stays "finishing", never "off".
+   * Clients may ignore capabilities they do not recognize.
+   */
   overview: { params: Record<string, never>; result: WalletOverview };
 
   /**
