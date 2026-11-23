@@ -1,3 +1,8 @@
+import { publishTaskReview } from "./task-review-publication.js";
+import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/task-review.js";
+import { contestStake } from "./contest-retirement.js";
+import { indexAccountChanges } from "./money-history.js";
+import { operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
 // every job. It accepts plain requests ("hire this", "approve that"), decides
@@ -8,7 +13,8 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
-import { applySellerDecision, saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
+import { recordSellerDecision, sellerReceipt } from "./seller-operation.js";
+import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
 import { checkHireOperator, checkOperator } from "./payable-operator.js";
 import { fillCatalogTerms, reducesListingCapacity, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
 import type { SellerOfferInput } from "./client/protocol.js";
@@ -17,6 +23,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { createNoopSigner, address, type Address, type KeyPairSigner } from "@solana/kit";
 import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS, facade, findHireRatingPda,
   AgencError,
   SubmissionStatus,
   findClaimPda,
@@ -77,7 +84,7 @@ import { describeError, WalletError } from "./errors.js";
 import { jobListPreview } from "./list-preview.js";
 import {
   acceptedApprovers,
-  alreadyRated,
+  canRateHire, landedRating,
   DEFAULT_REVIEW_WINDOW_SECS,
   FEE_HEADROOM_LAMPORTS,
   findListingGate,
@@ -305,6 +312,8 @@ function registrationFacts(account: AgentRegistration): RegistrationFacts {
 }
 
 export interface WalletConfig {
+  /** Local site relay for isolated practice profiles. */
+  reviewRelay?: typeof fetch;
   /** Absolute folder for the vault, the journal and the earn ledgers. */
   dataDir: string;
   /** Unlocks the vault. Held by the host (an OS keychain), never stored here. */
@@ -699,6 +708,18 @@ export class AgencWallet {
     const requestKey = key?.trim();
     if (!requestKey) return work();
     const scope = JSON.stringify([agentId, kind, requestKey]);
+    if (Buffer.byteLength(requestKey) > 512) throw new WalletError("BAD_REQUEST", "The purchase identity is too long.");
+    const binding = this.#store.state.purchaseBindings?.[scope];
+    if (binding !== undefined) this.#checkFingerprint(binding, fingerprint);
+    else {
+      const jobKind = kind === "hire" ? "hire" : "request";
+      const state = this.#store.state;
+      // Older installations already have a binding in the original job or
+      // archived receipt. Let #sameCall verify its original encoding.
+      const existing = state.callReceipts?.[JSON.stringify([agentId, jobKind, requestKey])] ??
+        Object.values(state.jobs).find(job => job.agentId === agentId && job.idempotencyKey === requestKey && (job.kind ?? "hire") === jobKind);
+      if (!existing) this.#store.update(s => { (s.purchaseBindings ??= {})[scope] = fingerprint; });
+    }
     const pending = this.#jobCalls.get(scope);
     if (pending !== undefined) {
       this.#checkFingerprint(pending.fingerprint, fingerprint);
@@ -1111,7 +1132,20 @@ export class AgencWallet {
       changesCanBeSent: this.#services.postChangeRequest !== undefined,
       firstRecordCostLamports: await this.#firstRecordCost(job),
     });
+    if (job.role === "buying" && job.outcome === "paid" && job.task && job.listing) {
+      const buyer = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address as Address;
+      const task = job.task as Address, listing = job.listing as Address;
+      // Older journals could contain the score requested by a losing caller.
+      view.rating = await landedRating(this.#chain, task, buyer, listing).catch(() => null);
+      view.canRate = view.canRate && view.rating === null && (isOwner || job.payer === "agent") &&
+        await canRateHire(this.#chain, task, buyer, listing).catch(() => false);
+    }
+    if (this.#store.state.taskReviews?.[job.id]?.published) Object.assign(view, { creatorReview: this.#store.state.taskReviews[job.id]!.packet.review });
+    if (this.#store.state.requestedRatings?.[job.id]) Object.assign(view, { pendingRating: this.#store.state.requestedRatings[job.id] });
     if (job.task && view.status === "paid") {
+      const creator = job.payer === "main" ? this.mainAddress : this.#store.state.agents[job.agentId]?.address;
+      const facts = creator && job.role === "buying" && await this.#chain.findSettlement?.(job.task as Address, creator as Address).catch(() => null);
+      if (facts && facts.reputation) Object.assign(view, { reputation: facts.reputation });
       const split = await settledOperatorPayment(this.#chain, job.task as Address).catch(() => null);
       if (split) view.operatorPayment = { address: split.address, paid: money(split.paid, rate),
         forfeited: money(split.forfeited, rate), sellerNet: money(split.sellerNet, rate) };
@@ -1385,7 +1419,7 @@ export class AgencWallet {
       if (pending) agent.earn.pendingListingSends = pending.filter((r) => r.signature !== signature);
       if (operation?.kind === "funding" && operation.decision) {
         if (agent.earn.sellerDecisions?.[operation.decision.quoteId]) return;
-        applySellerDecision(agent, operation.decision, landed, signature);
+        recordSellerDecision(agent, operation.decision, landed, signature, operation.lamports);
         if (landed) agentOffers(agent).forEach(clearOfferFundingWait);
       }
       if (!landed || !operation) return;
@@ -1421,6 +1455,7 @@ export class AgencWallet {
     funding?: { approved?: boolean; exact?: EarnFundingQuote; decision?: SellerDecision },
   ): Promise<void> {
     await this.#lock(MAIN_KEY, async () => {
+      await this.#checkMoneyPending(this.mainAddress);
       this.#checkPendingFunding(agent.id);
       const floor = await this.#floor();
       const mainBalance = await this.#chain.getBalance(this.mainAddress);
@@ -1481,92 +1516,184 @@ export class AgencWallet {
         ...(reservation && { charge: reservation }),
         ...(funding?.decision && { decision: funding.decision }),
       };
-      const signature = await withListingOperation(operation, () => this.#send(MAIN_KEY, agent.address as Address, lamports, !!funding?.decision));
+      let signature: string;
+      if (transportSignal()) {
+        signature = await withListingOperation(operation, () => this.#send(MAIN_KEY, agent.address as Address, lamports, !!funding?.decision));
+      } else {
+        const signer = await this.#vault.signer(MAIN_KEY);
+        const recipient = agent.address as Address;
+        const id = funding?.decision?.quoteId ?? reservation?.id ?? operationId();
+        const receipt = await sendOperation({ chain: this.#chain, store: this.#store, signer, id,
+          fingerprint: operationFingerprint([this.#chain.network, recipient, operation]), kind: "fund", recipient, amount: lamports,
+          reserve: (draft, signed) => {
+            if (operation.decision && this.#now() >= operation.decision.expiresAt) throw new WalletError("PRICE_CHANGED", "The funding quote expired.");
+            if (operation.charge) this.#reserveCharge(draft.agents[agent.id]!, operation.charge);
+            (draft.agents[agent.id]!.earn.pendingListingSends ??= []).push({ ...signed, operation });
+          },
+          instructions: [transferInstruction(signer, recipient, lamports)] });
+        if (receipt.state !== "confirmed") throw new WalletError("NETWORK", `Funding ${id} is ${receipt.state}. Check signature ${receipt.receipt.signature}.`);
+        signature = receipt.receipt.signature;
+      }
+      this.#dropBalances();
       if (!transportSignal()) this.#finishListingSend(agent.id, signature, true, operation);
       this.#emit({ type: "overview" });
       this.#emit({ type: "activity" });
     });
   }
 
+  /** Exact owner transfer terms. Opening a quote only records an intention. */
+  async quoteTransfer(request: TransferRequest): Promise<TransferQuote> {
+    const quote = await this.#transferTerms(request, operationId(), this.#now() + 120_000);
+    await this.#checkMoneyPending(quote.payer);
+    this.#store.update(draft => {
+      for (const [key, entry] of Object.entries(draft.transferQuotes ?? {})) {
+        if (entry.quote.expiresAt <= this.#now() && !draft.moneyOperations?.[key]) delete draft.transferQuotes![key];
+      }
+      (draft.transferQuotes ??= {})[quote.id] = { quote, request };
+    });
+    return quote;
+  }
+
+  async #transferTerms(request: TransferRequest, id: string, expiresAt: number): Promise<TransferQuote> {
+    if (!["fund", "reclaim", "withdraw"].includes(request.kind)) throw new WalletError("BAD_REQUEST", "Unknown transfer.");
+    const agent = request.kind === "withdraw" ? null : this.#agentRecord(request.agentId ?? "");
+    const payer = request.kind === "reclaim" ? agent! : "main";
+    const from = payer === "main" ? this.mainAddress : payer.address as Address;
+    const to = request.kind === "fund" ? agent!.address as Address : request.kind === "reclaim" ? this.mainAddress : toAddress(request.to ?? "", "address");
+    if (request.kind === "withdraw" && this.#walletIds().some(wallet => wallet.address === to))
+      throw new WalletError("BAD_REQUEST", "That address is already yours: your balance or one of your agents.");
+    const [floor, balance, recipientBalance, rate] = await Promise.all([
+      this.#floor(), this.#chain.getBalance(from), this.#chain.getBalance(to), this.#displayRate(),
+    ]);
+    const fee = this.#chain.transferFeeLamports;
+    const allReserve = request.amount === "all" ? await this.#keepOnAll(payer) : floor + fee;
+    const keep = request.kind === "fund" && allReserve < floor + fee ? floor + fee : allReserve;
+    const credit = request.amount === "all" ? balance - keep : await this.#toLamports(request.amount);
+    if (credit <= 0n || credit + keep > balance) throw new WalletError("NOT_ENOUGH_MONEY",
+      request.kind === "reclaim" ? "That agent does not have that much to give back." : "There is not enough in your balance.");
+    if (credit + recipientBalance < floor) throw new WalletError("BAD_REQUEST", request.kind === "fund"
+      ? `The smallest amount an agent's wallet can hold is ${formatMoney(money(floor, rate))}.`
+      : "That is too little to open a new wallet at that address. Send a larger amount.");
+    return { kind: request.kind, id, network: this.#chain.network, payer: from, recipient: to,
+      credit: money(credit, rate), retained: money(balance - credit - fee, rate), fee: money(fee, rate),
+      maximumDebit: money(credit + fee, rate), expiresAt };
+  }
+
+  async quoteContestRetirement(jobId: string) {
+    const q = await contestStake(this.#chain, this.#store.state, this.mainAddress, jobId, await this.#displayRate(), this.#now() + 120_000);
+    this.#store.update(s => {
+      for (const [id, previous] of Object.entries(s.retirementQuotes ?? {}))
+        if (previous.expiresAt <= this.#now() && !s.moneyOperations?.[id]) delete s.retirementQuotes![id];
+      (s.retirementQuotes ??= {})[q.id] = q;
+    });
+    return q;
+  }
+
+  async retireContestRegistration(id: string) {
+    return this.#lock(MAIN_KEY, async () => {
+      const q = this.#store.state.retirementQuotes?.[id];
+      if (!q) throw new WalletError("NOT_FOUND", "Review the registration in Market.");
+      if (!this.#store.state.moneyOperations?.[id]) {
+        await this.#checkMoneyPending(this.mainAddress);
+        const current = await contestStake(this.#chain, this.#store.state, this.mainAddress, q.jobId, null, q.expiresAt);
+        if (q.expiresAt <= this.#now() || q.id !== current.id || current.obligations.length)
+          throw new WalletError("NOT_ALLOWED", "The registration has obligations or its quote changed.");
+      }
+      await this.#chain.assertSigningRevision?.();
+      const payer = await this.#vault.signer(MAIN_KEY);
+      const op = await sendOperation({ chain: this.#chain, store: this.#store, id, fingerprint: q.id,
+        kind: "retirement", signer: payer, recipient: payer.address, jobId: q.jobId, amount: BigInt(q.credit.lamports),
+        instructions: [await facade.deregisterAgent({ agent: q.registration, authority: payer })] });
+      const evidence = op.state === "confirmed" ? await this.#chain.accountChange?.(payer.address, op.receipt.signature) : null;
+      return { id, signature: op.receipt.signature, state: op.state, actualNetLamports: evidence?.delta ?? null,
+        actualCreditLamports: evidence ? String(BigInt(evidence.delta) + BigInt(evidence.payerFee)) : null };
+    });
+  }
+
+  async operationOutcome(id: string) {
+    const saved = await reconcileOperation(this.#chain, this.#store, id);
+    if (!saved) return null;
+    const { receipt, allowance: _allowance, ...outcome } = saved;
+    return { ...outcome, signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight };
+  }
+
+  async confirmTransfer(id: string) {
+    const entry = this.#store.state.transferQuotes?.[id];
+    if (!entry) throw new WalletError("NOT_FOUND", "That transfer quote does not exist.");
+    const { quote, request } = entry;
+    const agent = request.agentId ? this.#agentRecord(request.agentId) : null;
+    const key = quote.kind === "reclaim" ? agent!.keyId : MAIN_KEY;
+    return this.#lock(quote.kind === "reclaim" ? `wallet:${agent!.id}` : MAIN_KEY, async () => {
+      const earlier = this.#store.state.moneyOperations?.[id];
+      if (!earlier) {
+        await this.#checkMoneyPending(quote.payer);
+        if (agent) this.#checkPendingFunding(agent.id);
+        const fresh = await this.#transferTerms(request, id, quote.expiresAt);
+        if (quote.network !== fresh.network || quote.payer !== fresh.payer || quote.recipient !== fresh.recipient ||
+            quote.expiresAt <= this.#now() || ["credit", "retained", "fee"].some(k =>
+              quote[k as "credit"].lamports !== fresh[k as "credit"].lamports))
+          throw new WalletError("PRICE_CHANGED", "The transfer figures changed or expired. Review a new quote.");
+      }
+      const signer = await this.#vault.signer(key);
+      const to = toAddress(quote.recipient, "recipient");
+      const amount = BigInt(quote.credit.lamports);
+      const result = await sendOperation({ chain: this.#chain, store: this.#store, signer, id, kind: quote.kind,
+        recipient: to, amount, fingerprint: operationFingerprint([quote]), instructions: [transferInstruction(signer, to, amount)] });
+      if (result.state === "confirmed") {
+        this.#store.update(draft => {
+          if (result.recorded) return;
+          const kind = quote.kind === "fund" ? "allowance" : quote.kind === "reclaim" ? "returned" : "withdrawn";
+          const text = quote.kind === "fund" ? `Gave ${agent!.name} an allowance.` : quote.kind === "reclaim" ?
+            `Took money back from ${agent!.name}.` : "Sent money out of your balance.";
+          this.#note(draft, { kind, text, lamports: amount, agentId: agent?.id ?? null, signature: result.receipt.signature });
+          draft.moneyOperations![id]!.recorded = true;
+          if (draft.lastMainLamports !== null) draft.lastMainLamports = String(quote.kind === "reclaim"
+            ? BigInt(draft.lastMainLamports) + amount : BigInt(quote.retained.lamports));
+        });
+        this.#dropBalances();
+        this.#emit({ type: "activity" });
+        this.#emit({ type: "overview" });
+      }
+      return (await this.operationOutcome(id))!;
+    });
+  }
+
+  async #checkMoneyPending(payer: string) {
+    for (const op of Object.values(this.#store.state.moneyOperations ?? {})) {
+      if (op.payer === payer && op.state === "pending" && (await this.operationOutcome(op.id))?.state === "pending")
+        throw new WalletError("NOT_AVAILABLE", `Operation ${op.id} is awaiting confirmation. Check signature ${op.receipt.signature}.`);
+    }
+  }
+
+  // Old clients have no operation ID. Repeating an identical request recovers
+  // its original receipt. A new intentional transfer must open its own quote.
+  async #legacyTransfer(request: TransferRequest) {
+    const binding = operationFingerprint([request.kind, request.agentId, request.to, request.amount === "all" ? "all" :
+      "lamports" in request.amount ? ["lamports", request.amount.lamports] : ["cents", request.amount.usdCents]]);
+    const id = await this.#lock("transfer:" + binding, async () => {
+      const previous = this.#store.state.legacyTransfers?.[binding];
+      if (previous && (this.#store.state.moneyOperations?.[previous] || (this.#store.state.transferQuotes?.[previous]?.quote.expiresAt ?? 0) > this.#now())) return previous;
+      const quote = await this.quoteTransfer(request);
+      this.#store.update(draft => { (draft.legacyTransfers ??= {})[binding] = quote.id; });
+      return quote.id;
+    });
+    const outcome = await this.confirmTransfer(id);
+    if (outcome.state !== "confirmed") throw new WalletError("NETWORK", `Transfer ${id} is ${outcome.state}. Check signature ${outcome.signature}.`);
+    return { signature: outcome.signature };
+  }
+
   async fundAgent(agentId: string, amount: AmountInput): Promise<AgentView> {
-    const agent = this.#agentRecord(agentId);
-    const lamports = await this.#toLamports(amount);
-    await this.#mainToAgent(agent, lamports, `Gave ${agent.name} an allowance.`);
+    await this.#legacyTransfer({ kind: "fund", agentId, amount });
     return this.#oneAgentView(agentId);
   }
 
   async reclaimFromAgent(agentId: string, amount: AmountInput | "all"): Promise<AgentView> {
-    const agent = this.#agentRecord(agentId);
-    await this.#lock(`wallet:${agentId}`, async () => {
-      // A part leaves the network's minimum and the fee of this very
-      // transfer; all of it leaves nothing once the agent pays for nothing.
-      const keep =
-        amount === "all" ? await this.#keepOnAll(agent) : (await this.#floor()) + this.#chain.transferFeeLamports;
-      const balance = await this.#chain.getBalance(agent.address as Address);
-      const available = balance > keep ? balance - keep : 0n;
-      const lamports = amount === "all" ? available : await this.#toLamports(amount);
-      if (lamports <= 0n || lamports > available) {
-        throw new WalletError(
-          "NOT_ENOUGH_MONEY",
-          "That agent does not have that much to give back.",
-        );
-      }
-      const signature = await this.#send(agent.keyId, this.mainAddress, lamports);
-      this.#store.update((draft) => {
-        this.#note(draft, {
-          kind: "returned",
-          text: `Took money back from ${agent.name}.`,
-          lamports,
-          agentId,
-          signature,
-        });
-        if (draft.lastMainLamports !== null) {
-          draft.lastMainLamports = (BigInt(draft.lastMainLamports) + lamports).toString();
-        }
-      });
-    });
-    this.#emit({ type: "overview" });
-    this.#emit({ type: "activity" });
+    await this.#legacyTransfer({ kind: "reclaim", agentId, amount });
     return this.#oneAgentView(agentId);
   }
 
-  /** Send money from the main balance to an outside address. Owner only. */
   async withdraw(to: string, amount: AmountInput | "all"): Promise<{ signature: string }> {
-    const destination = toAddress(to, "address");
-    if (this.#walletIds().some((wallet) => wallet.address === destination)) {
-      throw new WalletError("BAD_REQUEST", "That address is already yours: your balance or one of your agents.");
-    }
-    return this.#lock(MAIN_KEY, async () => {
-      const floor = await this.#floor();
-      // As for an agent: everything leaves when nothing may still need it.
-      const keep = amount === "all" ? await this.#keepOnAll("main") : floor + this.#chain.transferFeeLamports;
-      const balance = await this.#chain.getBalance(this.mainAddress);
-      const available = balance > keep ? balance - keep : 0n;
-      const lamports = amount === "all" ? available : await this.#toLamports(amount);
-      if (lamports <= 0n || lamports > available) {
-        throw new WalletError("NOT_ENOUGH_MONEY", "There is not that much in your balance.");
-      }
-      const destinationBalance = await this.#chain.getBalance(destination);
-      if (destinationBalance + lamports < floor) {
-        throw new WalletError(
-          "BAD_REQUEST",
-          "That is too little to open a new wallet at that address. Send a larger amount.",
-        );
-      }
-      const signature = await this.#send(MAIN_KEY, destination, lamports);
-      this.#store.update((draft) => {
-        this.#note(draft, {
-          kind: "withdrawn",
-          text: "Sent money out of your balance.",
-          lamports,
-          signature,
-        });
-        draft.lastMainLamports = (balance - lamports).toString();
-      });
-      this.#emit({ type: "overview" });
-      this.#emit({ type: "activity" });
-      return { signature };
-    });
+    return this.#legacyTransfer({ kind: "withdraw", to, amount });
   }
 
   // ------------------------------------------------------------ catalog
@@ -1926,10 +2053,19 @@ export class AgencWallet {
     };
   }
 
+  sellerOperation(agentId: string, quoteId: string) {
+    const receipt = sellerReceipt(this.#agentRecord(agentId), quoteId);
+    return receipt && { ...receipt, network: this.#chain.network };
+  }
+
   async callOutcome(agentId: string, kind: "hire" | "request", key: string) {
     const result = await this.#sameCall(agentId, key.trim(), kind);
     if (!result) throw new WalletError("NOT_FOUND", "There is no saved outcome for this call.");
-    return result;
+    const job = this.#store.state.jobs[result.job.id] ?? this.#store.state.callReceipts?.[JSON.stringify([agentId, kind, key.trim()])];
+    return { ...result, receipt: job ? { operationId: key.trim(), network: this.#chain.network, agentId, kind,
+      payer: job.payer === "main" ? this.mainAddress : job.payer === "agent" ? this.#agentRecord(agentId).address : null,
+      listing: job.listing, task: job.task, jobId: job.id, priceLamports: job.priceLamports, terms: job.terms,
+      request: job.request, fingerprint: job.inputFingerprint, signatures: { ...job.signatures }, status: result.job.status } : null };
   }
 
   // --------------------------------------------------------------- post
@@ -3980,15 +4116,17 @@ export class AgencWallet {
     isOwner: boolean,
     agentId?: string,
     quoteId?: string,
+    ratingQuoteId?: string,
   ): Promise<JobView> {
     if (this.#ownedJob(jobId, agentId).terms?.contest) return contestUnavailable("Review the contest payout quote in Jobs.");
     const initial = this.#ownedJob(jobId, agentId);
-    if (initial.payer !== "agent" && !isOwner) throw this.#reviewRequired(false);
+    if (!isOwner && (!agentId || initial.payer !== "agent")) throw this.#reviewRequired(false);
     if (!quoteId) throw new WalletError(isOwner ? "APPROVAL_REQUIRED" : "NOT_ALLOWED",
       isOwner ? "Review the current delivery and confirm payment in Market." : "Read the current delivery in chat before approving payment.");
     if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
       throw new WalletError("BAD_REQUEST", "A rating is a whole number from 1 to 5.");
     }
+    const stars = rating === undefined || isRequest(initial) ? undefined : this.#ratingAuthorization(initial, rating, ratingQuoteId, isOwner, agentId);
     await this.#advance(jobId);
     await this.#lock(`job:${jobId}`, async () => {
       const job = this.#jobRecord(jobId);
@@ -4002,6 +4140,12 @@ export class AgencWallet {
         throw new WalletError("NOT_ALLOWED", "The delivery or payment terms changed. Open the job and review it again.");
       }
       await this.#withReviewPayment(job, quote, "approve", async payer => {
+        if (!isOwner) {
+          const guard = (this as AgencWallet & { requireDeliveryInspection?: (jobId: string, agentId: string, hash: string, count: number) => Promise<void> }).requireDeliveryInspection;
+          if (!guard) throw new WalletError("NOT_ALLOWED", "Read and verify the complete current delivery before payment.");
+          await guard.call(this, job.id, job.agentId, quote.deliveryHash, quote.submissionCount);
+        }
+        if (stars) this.#store.update(s => { (s.requestedRatings ??= {})[jobId] = { quoteId: stars.id }; });
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
         this.#records.invalidate();
@@ -4009,8 +4153,8 @@ export class AgencWallet {
     });
     // A request was not hired from a service, so there is nothing to rate.
     if (rating !== undefined && !isRequest(this.#jobRecord(jobId))) {
-      await this.rateJob(jobId, rating, isOwner, agentId).catch((error) => {
-        this.#log(`job ${jobId} rating: ${describeError(error)}`);
+      await this.rateJob(jobId, rating, isOwner, agentId, ratingQuoteId).catch((error) => {
+        this.#store.update(s => { (s.requestedRatings ??= {})[jobId] = { quoteId: ratingQuoteId!, message: describeError(error) }; });
       });
     }
     void this.#advance(jobId);
@@ -4444,48 +4588,115 @@ export class AgencWallet {
   }
 
   /** Leave 1 to 5 stars on a paid job. */
-  async rateJob(
-    jobId: string,
-    score: number,
-    isOwner: boolean,
-    agentId?: string,
-  ): Promise<JobView> {
-    this.#ownedJob(jobId, agentId);
-    if (!Number.isInteger(score) || score < 1 || score > 5) {
-      throw new WalletError("BAD_REQUEST", "A rating is a whole number from 1 to 5.");
-    }
-    await this.#lock(`job:${jobId}`, async () => {
-      const job = this.#jobRecord(jobId);
-      if (job.rating !== null) return;
-      if (isRequest(job)) {
-        throw new WalletError("NOT_ALLOWED", "Only a hired service can be rated.");
+  async publishOrdinaryReview(jobId: string, stars: number, text: string) {
+    return this.#lock("public-review:" + jobId, async () => {
+      const prior = this.#store.state.taskReviews?.[jobId];
+      if (prior && (prior.packet.review.stars !== stars || prior.packet.review.text !== text.trim()))
+        throw new WalletError("BAD_REQUEST", "This task already has a different signed review.");
+      const packet = prior?.packet ?? await this.signTaskReview(jobId, stars, text);
+      if (!prior?.published) {
+        const post = this.#config.reviewRelay ?? (this.#chain.network === "mainnet" ? fetch : null);
+        if (!post) throw new WalletError("NOT_AVAILABLE", "A local review relay is required for practice reviews.");
+        this.#store.update(s => { (s.taskReviews ??= {})[jobId] = { packet, published: false }; });
+        await publishTaskReview(packet, post);
+        this.#store.update(s => { s.taskReviews![jobId]!.published = true; });
       }
-      if (job.outcome !== "paid" || job.tidied || job.task === null) {
-        throw new WalletError("NOT_ALLOWED", "This job can no longer be rated.");
-      }
-      const task = job.task as Address;
-      if (!(await alreadyRated(this.#chain, task))) {
-        const payer = await this.#payerSigner(job);
-        try {
-          const signature = await sendRating(this.#chain, payer, task, job.listing as Address, score);
-          this.#patchJob(jobId, (entry) => {
-            entry.signatures.rate = signature;
-          });
-          this.#records.invalidate();
-        } catch (error) {
-          throw new WalletError(
-            "NETWORK",
-            "The rating could not be recorded right now. Try again in a moment.",
-            { cause: error },
-          );
-        }
-      }
-      this.#patchJob(jobId, (entry) => {
-        entry.rating = score;
-      });
-      this.#dropBalances();
+      return packet;
     });
-    void this.#advance(jobId);
+  }
+
+  async signTaskReview(jobId: string, stars: number, text: string): Promise<SignedTaskReview> {
+    const job = this.#ownedJob(jobId, undefined);
+    if (!isRequest(job) || job.terms?.contest || job.outcome !== "paid" || !job.task || !job.signatures.hire)
+      throw new WalletError("NOT_ALLOWED", "Only a paid ordinary request can receive a creator review.");
+    if (!Number.isInteger(stars) || stars < 1 || stars > 5 || typeof text !== "string" || !text.trim() || text.length > 2000)
+      throw new WalletError("BAD_REQUEST", "Choose 1 to 5 stars and write up to 2,000 characters.");
+    const signer = await this.#payerSigner(job);
+    const task = job.task as Address;
+    const facts = await this.#chain.findSettlement?.(task, signer.address, { listing: true });
+    const settlement = await this.#chain.findSettlementSignature?.(task) ?? job.signatures.accept;
+    if (!facts || facts.listing || !settlement) throw new WalletError("NOT_AVAILABLE", "The original task and paid worker could not be verified.");
+    const review: TaskReview = { domain: "agenc.ag/task-review/v1", network: this.#chain.network,
+      program: AGENC_COORDINATION_PROGRAM_ADDRESS, task, worker: facts.worker, creator: signer.address,
+      creation: job.signatures.hire, settlement, stars, text: text.trim() };
+    const [signed] = await signer.signMessages([{ content: reviewBytes(review), signatures: {} }]);
+    const sig = signed?.[signer.address];
+    if (!sig) throw new WalletError("INTERNAL", "The creator review could not be signed.");
+    return { review, signature: Buffer.from(sig).toString("base64") };
+  }
+
+  async quoteRating(jobId: string, score: number, isOwner: boolean, agentId?: string): Promise<RatingQuote> {
+    const job = this.#ownedJob(jobId, agentId);
+    if (!isOwner && (!agentId || job.payer !== "agent")) throw this.#reviewRequired(false);
+    if (!Number.isInteger(score) || score < 1 || score > 5) throw new WalletError("BAD_REQUEST", "Choose 1 to 5 stars.");
+    if (isRequest(job) || !job.task || !job.listing || job.tidied || (job.outcome !== "paid" && job.chainStatus !== "pending_validation"))
+      throw new WalletError("NOT_ALLOWED", "This hire is unavailable for rating.");
+    const payer = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address as Address;
+    if (job.outcome === "paid" && !await canRateHire(this.#chain, job.task as Address, payer, job.listing as Address))
+      throw new WalletError("NOT_ALLOWED", "This hire does not qualify for a listing rating.");
+    const cost = await ratingCost(this.#chain);
+    const rate = await this.#displayRate();
+    const q = { id: operationId(), jobId, payer, score, task: job.task, listing: job.listing, expiresAt: this.#now() + 120_000,
+      fee: money(this.#chain.transferFeeLamports, rate), rent: money(cost - this.#chain.transferFeeLamports, rate), maximumDebit: money(cost, rate) };
+    this.#store.update(s => {
+      for (const [id, previous] of Object.entries(s.ratingQuotes ?? {}))
+        if (previous.expiresAt <= this.#now() && !s.moneyOperations?.[id] && s.requestedRatings?.[previous.jobId]?.quoteId !== id)
+          delete s.ratingQuotes![id];
+      (s.ratingQuotes ??= {})[q.id] = q;
+    });
+    return q;
+  }
+
+  #ratingAuthorization(job: JobRecord, score: number, id: string | undefined, isOwner: boolean, agentId?: string) {
+    if (!isOwner && (!agentId || job.agentId !== agentId || job.payer !== "agent")) throw this.#reviewRequired(false);
+    const q = id && this.#store.state.ratingQuotes?.[id];
+    const payer = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address;
+    if (!q || q.jobId !== job.id || q.score !== score || q.payer !== payer || q.task !== job.task || q.listing !== job.listing ||
+        (q.expiresAt <= this.#now() && !this.#store.state.moneyOperations?.[q.id]))
+      throw new WalletError("APPROVAL_REQUIRED", "Review the stars, payer, rent and network fee for this hire.");
+    return q;
+  }
+
+  async rateJob(jobId: string, score: number, isOwner: boolean, agentId?: string, quoteId?: string): Promise<JobView> {
+    const initial = this.#ownedJob(jobId, agentId);
+    if (!isOwner && (!agentId || initial.payer !== "agent")) throw this.#reviewRequired(false);
+    if (isRequest(initial)) throw new WalletError("NOT_ALLOWED", "Only a hired service can receive listing stars.");
+    const quote = this.#ratingAuthorization(initial, score, quoteId, isOwner, agentId);
+    await this.#lock(`job:${jobId}`, () => this.#lock(this.#payerLock(initial), async () => {
+      const job = this.#jobRecord(jobId);
+      const task = toAddress(quote.task, "task"), listing = toAddress(quote.listing, "listing"), buyer = toAddress(quote.payer, "payer");
+      let actual = await landedRating(this.#chain, task, buyer, listing);
+      if (actual === null) {
+        if (job.outcome !== "paid" || job.tidied || !(await canRateHire(this.#chain, task, buyer, listing)))
+          throw new WalletError("NOT_ALLOWED", "This hire does not qualify for a listing rating.");
+        const cost = await ratingCost(this.#chain);
+        if (cost !== BigInt(quote.maximumDebit.lamports) || this.#chain.transferFeeLamports !== BigInt(quote.fee.lamports))
+          throw new WalletError("PRICE_CHANGED", "Rating costs changed. Review a new quote.");
+        if (!this.#store.state.moneyOperations?.[quote.id]) await this.#checkMoneyPending(buyer);
+        const payer = await this.#payerSigner(job);
+        const rate = await this.#freshRate();
+        await this.#chain.assertSigningRevision?.();
+        const op = await sendOperation({ chain: this.#chain, store: this.#store, signer: payer, id: quote.id,
+          fingerprint: operationFingerprint([quote]), kind: "rating", jobId, recipient: (await findHireRatingPda({task}))[0],
+          amount: BigInt(quote.rent.lamports), instructions: [await facade.rateHire({ task, listing, buyer: payer, score })],
+          ...(job.payer === "agent" && rate !== null && { allowance: { agentId: job.agentId, usdPerSol: rate } }),
+          reserve: draft => {
+            if (job.payer === "agent" && (rate === null || cost > this.#dailyRoom(draft.agents[job.agentId]!, rate) ||
+              !reserveJobSpend(draft.agents[job.agentId]!, quote.id, microcents(cost, rate), microcents(cost, rate), this.#now(), false)))
+              throw new WalletError("NOT_ALLOWED", "The rating exceeds the agent's allowance.");
+          } });
+        if (op.state !== "confirmed") throw new WalletError("NETWORK", `Rating ${quote.id} is ${op.state}. Check its signature.`);
+        actual = await landedRating(this.#chain, task, buyer, listing);
+        if (actual === null) throw new WalletError("NETWORK", "Waiting for the rating receipt.");
+        this.#patchJob(jobId, j => { j.signatures.rate = op.receipt.signature; });
+      }
+      this.#patchJob(jobId, (j, draft) => {
+        j.rating = actual;
+        if (draft.requestedRatings) delete draft.requestedRatings[jobId];
+      });
+      this.#records.invalidate();
+      this.#dropBalances();
+    }));
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
 
@@ -5010,7 +5221,7 @@ export class AgencWallet {
           this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`,
             { approved: true, ...(decision && { exact: entry.quote, decision }) }));
       } else if (decision) {
-        this.#store.update((draft) => applySellerDecision(draft.agents[agent.id]!, decision, true));
+        this.#store.update((draft) => recordSellerDecision(draft.agents[agent.id]!, decision, true));
       }
       this.#store.update((draft) => agentOffers(draft.agents[agent.id]!).forEach(clearOfferFundingWait));
       this.#emit({ type: "overview" });
@@ -6114,68 +6325,20 @@ export class AgencWallet {
   }
 
   /** Notice money that arrived in the main balance from outside. */
+  moneyHistory(jobId?: string) {
+    const state = this.#store.state;
+    return { rows: Object.values(state.moneyRows ?? {}).filter(row => !jobId || row.jobId === jobId).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)),
+      gaps: Object.entries(state.moneyCursors ?? {}).flatMap(([account, cursor]) => (cursor.gap ?? cursor.missingCheckpoint) ? [{ account, message: (cursor.gap ?? cursor.missingCheckpoint)! }] : []) };
+  }
+
   async #noticeDeposits(): Promise<void> {
-    await this.#lock(MAIN_KEY, async () => {
-      const balance = await this.#chain.getBalance(this.mainAddress);
-      const last = this.#store.state.lastMainLamports;
-      if (last === null) {
-        this.#store.update((draft) => {
-          draft.lastMainLamports = balance.toString();
-          if (balance > 0n) {
-            this.#note(draft, {
-              kind: "added",
-              text: "Money arrived in your balance.",
-              lamports: balance,
-            });
-          }
-        });
-        if (balance > 0n) this.#emit({ type: "activity" });
-        return;
-      }
-      const previous = BigInt(last);
-      // Jobs that gave money back which is not counted in yet. A read soon
-      // after may still show the balance from before, so only a look well
-      // after counts it in, whatever it shows; until then a rise is theirs.
-      const now = this.#now();
-      const unsettled = Object.values(this.#store.state.jobs).filter(
-        (job) => job.payer === "main" && job.balanceSettled === false,
-      );
-      const settling = unsettled
-        .filter((job) => now - (job.returnedAt ?? 0) >= BALANCE_SETTLE_MS)
-        .map((job) => job.id);
-      const markSettled = (draft: WalletState): void => {
-        for (const id of settling) {
-          const entry = draft.jobs[id];
-          if (entry !== undefined) entry.balanceSettled = true;
-        }
-      };
-      if (balance === previous) {
-        if (settling.length > 0) this.#store.update(markSettled);
-        return;
-      }
-      // Purchases paid from the main balance move it too; only a rise that
-      // no running job explains is reported as money added. A job that just
-      // ended gave its price or deposits back, and that is no arrival either.
-      const mainJobsMoving =
-        unsettled.length > 0 ||
-        Object.values(this.#store.state.jobs).some(
-          (job) => job.payer === "main" && !(job.phase === "done" && job.tidied) && job.phase !== "failed" && job.phase !== "declined",
-        );
-      this.#store.update((draft) => {
-        markSettled(draft);
-        draft.lastMainLamports = balance.toString();
-        if (balance > previous && !mainJobsMoving) {
-          this.#note(draft, {
-            kind: "added",
-            text: "Money arrived in your balance.",
-            lamports: balance - previous,
-          });
-        }
+    const accounts = this.#walletIds().map(a => a.address);
+    const own = new Set<string>(accounts);
+    for (const account of accounts) {
+      await indexAccountChanges(this.#chain, this.#store, account as Address, own, (draft, row) => {
+        this.#note(draft, { kind: "added", text: "Money arrived in your balance.", lamports: BigInt(row.delta) + BigInt(row.payerFee), signature: row.signature });
       });
-      this.#dropBalances();
-      this.#emit({ type: "overview" });
-      if (balance > previous && !mainJobsMoving) this.#emit({ type: "activity" });
-    });
+    }
   }
 
   /** Apply each agent's top-up rule. */

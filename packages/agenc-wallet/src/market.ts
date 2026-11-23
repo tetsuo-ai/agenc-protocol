@@ -43,6 +43,7 @@ import {
   getCreatorStatsDiscriminatorBytes,
   getCreatorStatsSize,
   getDisputeBondSize,
+  getHireRatingDecoder, getHireRatingDiscriminatorBytes,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
   getHireRecordSize,
@@ -1523,7 +1524,21 @@ export async function prepareTidy(chain: Chain, buyer: TransactionSigner, task: 
 
 /** What leaving a rating costs: the record's deposit (never returned) plus a fee. */
 export async function ratingCost(chain: Chain): Promise<bigint> {
-  return (await chain.getMinimumBalanceForRentExemption(HIRE_RATING_SPACE)) + 5_000n;
+  return (await chain.getMinimumBalanceForRentExemption(HIRE_RATING_SPACE)) + chain.transferFeeLamports;
+}
+
+export async function landedRating(chain: Chain, task: Address, buyer: Address, listing: Address) {
+  const [pda] = await findHireRatingPda({ task });
+  const row = await readProgramAccount(chain, pda, getHireRatingDiscriminatorBytes(), bytes => getHireRatingDecoder().decode(bytes));
+  if (row && (row.task !== task || row.listing !== listing || row.buyer !== buyer || row.score < 1 || row.score > 5))
+    throw new WalletError("NOT_ALLOWED", "The rating receipt does not match this hire.");
+  return row?.score ?? null;
+}
+
+export async function canRateHire(chain: Chain, task: Address, buyer: Address, listing: Address) {
+  const [row, hire] = await Promise.all([readTask(chain, task), readHireRecord(chain, task)]);
+  return row?.creator === buyer && Number(row.status) === TaskStatus.Completed && hire?.listing === listing &&
+    facade.isHireRatingFeeQualified(row);
 }
 
 /** Whether this buyer already rated this job. */
