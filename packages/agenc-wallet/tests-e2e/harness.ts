@@ -62,7 +62,7 @@ export async function startWorld(options: {
   earn?: EarnOptions;
   /** Disable the fixture host self-test to exercise the configured probe. */
   hostReady?: boolean;
-  chain?: (chain: Chain) => Chain;
+  chain?: (chain: Chain, sandbox: Sandbox) => Chain;
   /** Stand between the wallet and the marketplace's services (a faulty or dishonest one). */
   services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
   config?: Partial<WalletConfig>;
@@ -72,7 +72,7 @@ export async function startWorld(options: {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-"));
   const secret = randomBytes(32);
   const clock = { now: 1_800_000_000_000 };
-  const chain = options.chain ? options.chain(sandbox.chain) : sandbox.chain;
+  const chain = options.chain ? options.chain(sandbox.chain, sandbox) : sandbox.chain;
   const config: WalletConfig = {
     dataDir,
     unlockSecret: secret,
@@ -125,4 +125,10 @@ export async function eventually<T>(
     if (Date.now() > deadline) throw new Error("condition was not met in time");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+export async function approvedPost(wallet: AgencWallet, params: Parameters<AgencWallet["quotePost"]>[0]) {
+  const { job, approval } = await wallet.quotePost(params);
+  if (approval) return wallet.decideApproval(approval.id, true);
+  return job;
 }

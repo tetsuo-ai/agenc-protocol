@@ -16,7 +16,7 @@ afterEach(async () => {
 
 const POLICY = {
   askAboveCents: 100,
-  refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+  refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
 };
 
 /** A chain whose hire can be made to lose its answer, or never be sent. */

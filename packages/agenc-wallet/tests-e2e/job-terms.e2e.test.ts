@@ -1,3 +1,4 @@
+import { approvedPost } from "./harness.js";
 import type { Address } from "@solana/kit";
 import { findAgentPda, findTaskJobSpecPda, findTaskValidationConfigPda, getTaskDecoder, getTaskJobSpecDecoder, getTaskValidationConfigDecoder, values } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it } from "vitest";
@@ -89,7 +90,7 @@ it("refuses changed terms for concurrent calls and after restart, without creati
   for (const change of [{ requiredCapabilities: "2" }, { reviewWindowSecs: 42 }, { acceptance: ["Other terms"] }, { deadlineDays: 3 }]) {
     await expect(world.wallet.post({ ...input, ...change })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
-  expect((await world.wallet.post(input)).approval?.id).toBe(quote.approval!.id);
+  expect((await world.wallet.post({ ...input, acceptance: ["  Name   its author. "] })).approval?.id).toBe(quote.approval!.id);
   expect(await world.wallet.listJobs({}, true)).toHaveLength(1);
 });
 
@@ -97,7 +98,7 @@ it("refuses a changed deposit and an expired quote before funding", async () => 
   world = await startWorld();
   const { wallet, clock } = world;
   const first = await wallet.quotePost(brief);
-  await wallet.postFromBalance({ ...brief, request: "Start the payer's record." });
+  await approvedPost(wallet, { ...brief, request: "Start the payer's record." });
   const before = await world.balance(wallet.mainAddress);
   await expect(wallet.decideApproval(first.approval!.id, true)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
   const fresh = await wallet.quotePost(brief);
@@ -133,16 +134,16 @@ it("binds the owner post's key and checks eligibility before main-balance spendi
   const { wallet } = world;
   const before = await world.balance(wallet.mainAddress);
   for (const minReputation of [-1, 0.5, 10001]) {
-    await expect(wallet.postFromBalance({ ...brief, minReputation })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(approvedPost(wallet, { ...brief, minReputation })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   for (const mask of ["0", "-1", "1.5", "18446744073709551616"]) {
-    await expect(wallet.postFromBalance({ ...brief, requiredCapabilities: mask })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(approvedPost(wallet, { ...brief, requiredCapabilities: mask })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
   expect(await world.balance(wallet.mainAddress)).toBe(before);
   const input = { ...brief, idempotencyKey: "main-post", minReputation: 50 };
-  const job = await wallet.postFromBalance(input);
-  expect((await wallet.postFromBalance(input)).task).toBe(job.task);
-  await expect(wallet.postFromBalance({ ...input, minReputation: 51 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  const job = await approvedPost(wallet, input);
+  expect((await approvedPost(wallet, input)).task).toBe(job.task);
+  await expect(approvedPost(wallet, { ...input, minReputation: 51 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
 });
 
 it("requires a new hire quote when the dollar cap can no longer cover the price", async () => {

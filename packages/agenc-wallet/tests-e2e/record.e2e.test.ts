@@ -26,7 +26,7 @@ async function spender(world: World, cents: number) {
   const agent = await world.wallet.createAgent("Buyer");
   await world.wallet.setPolicy(agent.id, {
     askAboveCents: cents,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: { enabled: false, topUpToCents: 0, perDayCents: 100_000 },
   });
   await world.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;

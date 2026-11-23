@@ -1,3 +1,4 @@
+import { runMarketTool } from "../src/client/tools.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -185,6 +186,28 @@ describe("delivery recovery", () => {
 });
 
 describe("seller records", () => {
+  it("reads both agreed clocks and worker eligibility after restart with the on-chain spec gone", async () => {
+    const f = await fixture([]);
+    const dir = path.join(f.dataDir, "earn", f.agent.id);
+    seedWork(f.dataDir, f.agent.id);
+    const state = loadState(dir);
+    const terms = { deadline: NOW / 1000 + 300, reviewWindowSecs: 1, eligibility: { minReputation: 100, requiredCapabilities: "9223372036854775808" }, listingDurationSecs: null };
+    const marketplaceDeadline = NOW / 1000 + 3600;
+    state.submissions[0]!.jobEvidence = { request: "Write the report.", acceptance: ["Cite sources."], terms, marketplaceDeadline };
+    saveState(dir, state);
+    const wallet = await f.reopen();
+    expect(await wallet.listJobs({ role: "working" }, true)).toContainEqual(expect.objectContaining({ terms, marketplaceDeadline }));
+    const jobId = `earn_${f.agent.id}_${TASK}`;
+    const token = randomBytes(32).toString("hex");
+    const socketPath = path.join(f.dataDir, "w.sock");
+    const server = await serveWallet({ wallet, socketPath, ownerToken: token, agentExists: () => true });
+    const client = await connectWallet({ socketPath, token, actAs: f.agent.id });
+    try {
+      const chat = await runMarketTool(client, f.agent.id, "market_status", { job_id: jobId });
+      expect(chat.job).toMatchObject({ terms, marketplace_deadline: new Date(marketplaceDeadline * 1000).toISOString() });
+    } finally { client.close(); await server.close(); }
+  });
+
   it("includes the request, criteria, complete text, files and artifact URI", async () => {
     const f = await fixture([]);
     seedWork(f.dataDir, f.agent.id);

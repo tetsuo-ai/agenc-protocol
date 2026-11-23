@@ -614,6 +614,7 @@ describe("publishing", () => {
     const original = await host(specStore()).publishJobSpec(job);
     expect(original.spec.deliverables).toEqual([expect.stringContaining("41 seconds")]);
     for (const change of [
+      { acceptance: ["Other checks."] }, { instructions: "Different work." }, { details: "Another brief." },
       { acceptanceCriteria: [] }, { shortDescription: "Something else." }, { deliverables: [] },
     ]) {
       const payload = { ...original.spec, ...change };

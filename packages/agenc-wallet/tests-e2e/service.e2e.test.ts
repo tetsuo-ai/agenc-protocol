@@ -1,8 +1,9 @@
+import type { WalletState } from "../src/store.js";
 // The wallet behind its socket, driven the way a desktop host drives it:
 // an owner connection for the panel and an agent-bound connection for the
 // four chat tools. Proves an agent connection cannot reach owner methods.
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -179,8 +180,11 @@ describe("the wallet service", () => {
     });
     expect(asked.job).toMatchObject({ agentId: mine.id, kind: "request", status: "needs_approval" });
     expect(asked.approval).toMatchObject({ kind: "request", service: null });
-    // The person posts from the main balance with one call, and nobody is asked.
-    const own = await owner.call("wallet.post", { request: "A haiku about snow.", reward: { usdCents: 30 } });
+    const input = { request: "A haiku about snow.", reward: { usdCents: 30 } };
+    await expect(owner.call("wallet.post", input)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    await expect(owner.call("market.hire", { agentId: mine.id, listing: world.listing, request: input.request })).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    const quote = await owner.call("wallet.quotePost", input);
+    const own = await owner.call("approvals.decide", { approvalId: quote.approval!.id, approve: true });
     expect(own.job).toMatchObject({ agentId: "", kind: "request", status: "waiting" });
 
     // Another agent cannot watch that request either.
@@ -306,4 +310,48 @@ describe("the wallet service", () => {
     const { jobs } = await agent.call("jobs.list", {});
     expect(jobs).toHaveLength(1);
   });
+});
+
+it("uses the same fractional maximum for search and hire over the agent socket", async () => {
+  world = await startWorld();
+  const buyer = await world.wallet.createAgent("Buyer");
+  await world.wallet.setBudget(buyer.id, 500);
+  const { connect } = await serve(world);
+  const agent = await connect({ actAs: buyer.id });
+  const cap = { max_price_usd: 0.199 };
+  const search = await runMarketTool(agent, buyer.id, "market_find", { query: "haiku", ...cap });
+  expect(search.services).toEqual([]);
+  const before = await world.balance(buyer.address);
+  const hire = await runMarketTool(agent, buyer.id, "market_hire", { service: world.listing, request: "Write it.", ...cap });
+  expect(hire).toMatchObject({ ok: false, message: expect.stringMatching(/price limit/) });
+  expect(await world.balance(buyer.address)).toBe(before);
+  expect(await world.wallet.listJobs({}, true)).toEqual([]);
+});
+
+it("pages a queue larger than a socket frame, with full briefs available by ID", async () => {
+  world = await startWorld();
+  const agent = await world.wallet.createAgent("Buyer");
+  const request = "🌳".repeat(1900);
+  const { approval } = await world.wallet.hire({ agentId: agent.id, listing: world.listing, request });
+  await world.wallet.close();
+  const file = path.join(world.dataDir, "state.json");
+  const state = JSON.parse(readFileSync(file, "utf8")) as WalletState;
+  const model = state.approvals[approval!.id]!;
+  for (let n = 0; n < 160; n++) {
+    const id = "quote-" + n;
+    state.approvals[id] = { ...model, id };
+  }
+  writeFileSync(file, JSON.stringify(state));
+  world.wallet = await world.reopen();
+  const owner = await (await serve(world)).connect({});
+  const ids: string[] = [];
+  let after: string | undefined;
+  do {
+    const page = await owner.call("approvals.page", after ? { after } : {});
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(8192);
+    ids.push(...page.entries.map(entry => entry.id));
+    after = page.next ?? undefined;
+  } while (after);
+  expect(new Set(ids).size).toBe(161);
+  expect((await owner.call("approvals.get", { approvalId: ids.at(-1)! })).approval.request).toBe(request);
 });

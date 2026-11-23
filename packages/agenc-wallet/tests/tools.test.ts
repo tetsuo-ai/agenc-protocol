@@ -123,7 +123,7 @@ describe("market_post", () => {
     expect(MARKET_TOOL_INSTRUCTIONS).toMatch(/market_post .* It is public: anyone can read it/);
     // Revision 9: what a first cancel costs, once.
     expect(MARKET_TOOL_INSTRUCTIONS).toMatch(
-      /A small network fee per job is not returned, and the first job a wallet cancels also pays once to start its marketplace record\./,
+      /The quote includes network fees, deposits and the cost of the payer's first cancellation record\./,
     );
   });
 
