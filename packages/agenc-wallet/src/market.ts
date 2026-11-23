@@ -1505,10 +1505,9 @@ export interface ListingOffer {
 }
 
 /**
- * Create the listing. Hires are not capped: the marketplace only lowers a
- * listing's open-job count when a buyer tidies the finished job, so a cap
- * would let one buyer who never tidies block every later hire. The worker
- * still takes one job at a time.
+ * Admit one open hire per listing. The program enforces this atomically,
+ * including concurrent buyers. close_task frees the slot after settlement.
+ * A delayed close conservatively keeps the service busy.
  */
 export async function sendCreateListing(
   chain: Chain,
@@ -1528,7 +1527,7 @@ export async function sendCreateListing(
     priceMint: null,
     requiredCapabilities: 1n,
     defaultDeadlineSecs: BigInt(offer.deliverySecs),
-    maxOpenJobs: 0,
+    maxOpenJobs: 1,
     operator: null,
     operatorFeeBps: 0,
   });
@@ -1558,7 +1557,7 @@ export async function sendUpdateListing(
       tags: null,
       requiredCapabilities: null,
       defaultDeadlineSecs: null,
-      maxOpenJobs: null,
+      maxOpenJobs: 1,
       operator: null,
       operatorFeeBps: null,
     }),

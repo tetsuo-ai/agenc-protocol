@@ -599,12 +599,29 @@ export async function fetchAndVerifyJobSpec(options: {
     throw new JobSpecError(`task ${task}: job-spec hash is all zeros (unpinned)`);
   }
 
+  return fetchAndVerifyContent({ ...options, jobSpecHash, jobSpecUri: spec.jobSpecUri });
+}
+
+/** Verify a content envelope against an immutable on-chain commitment. */
+export async function fetchAndVerifyContent(options: {
+  task: Address;
+  jobSpecHash: Uint8Array;
+  jobSpecUri: string;
+  fetchUri?: UriFetcher;
+  resolveAgencUri?: UriFetcher;
+  maxBytes?: number;
+}): Promise<VerifiedJobSpec> {
+  const { task, jobSpecHash, jobSpecUri } = options;
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_JOB_SPEC_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new JobSpecError("job-spec byte cap must be a positive safe integer");
+  }
   let url: URL;
   try {
-    url = new URL(spec.jobSpecUri);
+    url = new URL(jobSpecUri);
   } catch {
     throw new JobSpecError(
-      `task ${task}: job-spec URI is not a valid URI: ${JSON.stringify(spec.jobSpecUri)}`,
+      `task ${task}: job-spec URI is not a valid URI: ${JSON.stringify(jobSpecUri)}`,
     );
   }
 
@@ -617,7 +634,7 @@ export async function fetchAndVerifyJobSpec(options: {
       );
     }
     try {
-      envelopeBytes = await options.resolveAgencUri(spec.jobSpecUri);
+      envelopeBytes = await options.resolveAgencUri(jobSpecUri);
     } catch (error) {
       if (error instanceof JobSpecError) throw error;
       throw new JobSpecUnreachableError(
@@ -630,7 +647,7 @@ export async function fetchAndVerifyJobSpec(options: {
     // The built-in path is public-network-only and pins validated DNS answers.
     const fetchUri = options.fetchUri ?? createPublicUriFetcher({ maxBytes });
     try {
-      envelopeBytes = await fetchUri(spec.jobSpecUri);
+      envelopeBytes = await fetchUri(jobSpecUri);
     } catch (error) {
       if (error instanceof JobSpecError) throw error;
       throw new JobSpecUnreachableError(
@@ -654,5 +671,5 @@ export async function fetchAndVerifyJobSpec(options: {
   }
 
   const content = await verifyJobSpecEnvelope(task, envelopeBytes, jobSpecHash);
-  return { jobSpecHash, jobSpecUri: spec.jobSpecUri, content };
+  return { jobSpecHash, jobSpecUri, content };
 }

@@ -112,8 +112,8 @@ describe("money arriving in the main balance", () => {
     await wallet.tick();
     // Nobody starts it: the job is cancelled, the price comes back, and the
     // job is tidied.
-    clock.now += 11 * 60_000;
-    sandbox.advanceClock(11 * 60);
+    clock.now += 61 * 60_000;
+    sandbox.advanceClock(61 * 60);
     await wallet.tick();
     await wallet.tick();
     await wallet.tick();

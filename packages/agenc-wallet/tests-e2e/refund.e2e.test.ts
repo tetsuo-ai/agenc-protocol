@@ -83,6 +83,13 @@ describe("refunds", () => {
     expect((await wallet.getJob(job.id, true)).status).toBe("waiting");
 
     clock.now += 2 * 60_000;
+    world.sandbox.advanceClock(11 * 60);
+    await wallet.tick();
+    expect((await wallet.getJob(job.id, true)).status).toBe("waiting");
+
+    // The serial provider has the full agreed delivery window to start.
+    world.sandbox.advanceClock(49 * 60 + 1);
+    clock.now += (49 * 60 + 1) * 1000;
     await wallet.tick();
     await wallet.tick();
     const refunded = await wallet.getJob(job.id, true);

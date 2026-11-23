@@ -337,7 +337,7 @@ export interface WalletConfig {
   now?: () => number;
   /** Diagnostic sink. Lines may contain addresses; never show them in a panel. */
   log?: (line: string) => void;
-  /** A posted job nobody starts is refunded after this long. Default 10 minutes. */
+  /** Optional earlier refund timeout for unstarted hires. Default: the on-chain delivery deadline. */
   autoRefundAfterMs?: number;
   /** An approval nobody answers lapses after this long. Default 30 minutes. */
   approvalTtlMs?: number;
@@ -2497,13 +2497,14 @@ export class AgencWallet {
     const request = isRequest(job);
     const activate = async (signature?: string): Promise<void> => {
       const agent = this.#store.state.agents[job.agentId];
-      // A hire nobody starts is cancelled soon. A request waits for someone
-      // to take it until the time it must be delivered by.
-      let refundAt = this.#now() + (this.#config.autoRefundAfterMs ?? 10 * 60_000);
-      if (request) {
-        const clock = await this.#chain.clusterTime();
-        refundAt = this.#now() + Math.max(0, (job.requestDeadline ?? clock) - clock) * 1000;
-      }
+      // Hires can wait behind another listing's work. Use the agreed chain
+      // deadline, never the old unconditional ten-minute timer.
+      const seen = await inspectJob(this.#chain, task, this.#provider(job));
+      const clock = await this.#chain.clusterTime();
+      const deadline = seen?.deadline ?? job.requestDeadline ?? 0;
+      const refundAt = !request && this.#config.autoRefundAfterMs !== undefined
+        ? this.#now() + this.#config.autoRefundAfterMs
+        : deadline > 0 ? this.#now() + Math.max(0, deadline - clock) * 1000 : null;
       this.#patchJob(job.id, (entry, draft) => {
         entry.phase = "active";
         entry.chainStatus = "open";
@@ -2765,12 +2766,11 @@ export class AgencWallet {
     }
 
     if (seen.status === "open" && seen.workers === 0) {
-      // A hire nobody starts is refunded after a few minutes; a request
-      // waits until the time it had to be delivered by, after which nobody
-      // can take it.
-      const due = request
-        ? seen.deadline > 0 && (await this.#chain.clusterTime()) >= seen.deadline
-        : job.autoRefundAt !== null && this.#now() >= job.autoRefundAt;
+      // Also applies to records made by older wallets with a ten-minute
+      // autoRefundAt. A queued hire keeps its agreed start window on upgrade.
+      const deadlineDue = seen.deadline > 0 && (await this.#chain.clusterTime()) >= seen.deadline;
+      const due = deadlineDue || (!request && this.#config.autoRefundAfterMs !== undefined &&
+        job.autoRefundAt !== null && this.#now() >= job.autoRefundAt);
       if (due) {
         const payer = await this.#payerSigner(job);
         if (await this.#refundBlocked(job, payer.address)) return;
@@ -4287,6 +4287,7 @@ export class AgencWallet {
         wantLive &&
         state === LISTING_STATE_PAUSED &&
         // Back exactly as it was: same price, same words, where they are.
+        account.maxOpenJobs === 1 &&
         account.price === BigInt(offer.priceLamports) &&
         values.bytesToHex(new Uint8Array(account.specHash)) === offer.specHashHex &&
         (offer.specUri ?? null) !== null &&
@@ -4437,7 +4438,7 @@ export class AgencWallet {
       return settle("problem", "This network has nowhere to publish a service's description yet.");
     }
     const movedDescription = account.specUri !== specUri;
-    if (priceChanged || wordsChanged || movedDescription) {
+    if (priceChanged || wordsChanged || movedDescription || account.maxOpenJobs !== 1) {
       const spec =
         wordsChanged || movedDescription
           ? { hash: values.hexToBytes(offer.specHashHex), uri: specUri }
@@ -4693,11 +4694,22 @@ export class AgencWallet {
     }
   }
 
-  /** Run the janitor every `intervalMs` (default 15 seconds). */
-  start(intervalMs = 15_000): void {
+  /** Housekeeping every minute while busy, every five while idle. An explicit interval wins. */
+  start(intervalMs?: number): void {
     if (this.#timer !== null || this.#closed) return;
+    let lastTickAt = Date.now();
     void this.tick();
-    this.#timer = setInterval(() => void this.tick(), intervalMs);
+    this.#timer = setInterval(() => {
+      const busy = Object.values(this.#store.state.jobs).some((job) =>
+        ["cleared", "hiring", "hired", "active"].includes(job.phase) || (job.phase === "done" && !job.tidied),
+      ) || Object.values(this.#store.state.agents).some((agent) =>
+        this.#earn.state(agent.id).state === "working" ||
+        agentOffers(agent).some((offer) => offer.status === "getting_ready" || offer.status === "being_checked"),
+      );
+      if (intervalMs === undefined && !busy && Date.now() - lastTickAt < 5 * 60_000) return;
+      lastTickAt = Date.now();
+      void this.tick();
+    }, intervalMs ?? 60_000);
     this.#timer.unref?.();
   }
 
