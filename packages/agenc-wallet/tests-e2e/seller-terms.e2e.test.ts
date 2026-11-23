@@ -110,6 +110,7 @@ it("quotes, publishes and reconciles the exact terms buyers see, including after
     deliverySecs: 7201,
     maxOpenJobs: 4,
   });
+  expect(buyer.proceeds?.marketFee).toEqual(buyer.marketFee?.amount);
   expect(BigInt(buyer.proceeds!.sellerNet!.lamports)).toBe(
     3000999n - 36912n - BigInt(buyer.marketFee!.amount.lamports),
   );

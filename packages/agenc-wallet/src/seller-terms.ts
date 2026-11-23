@@ -93,15 +93,11 @@ export function sellerProceeds(
   rate: number | null,
 ) {
   const operatorFee = (price * BigInt(operatorBps)) / 10000n;
+  const marketFee = marketBps === null ? null : (price * BigInt(marketBps)) / 10000n;
   return {
+    marketFee: marketFee === null ? null : money(marketFee, rate),
     operatorFee: money(operatorFee, rate),
-    sellerNet:
-      marketBps === null
-        ? null
-        : money(
-            price - operatorFee - (price * BigInt(marketBps)) / 10000n,
-            rate,
-          ),
+    sellerNet: marketFee === null ? null : money(price - operatorFee - marketFee, rate),
   };
 }
 

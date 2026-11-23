@@ -35,6 +35,7 @@ export interface SellerTerms {
 }
 
 export interface SellerProceeds {
+  marketFee?: Money | null;
   operatorFee: Money;
   /** Estimate at the current marketplace rate, before reputation discounts. */
   sellerNet: Money | null;
