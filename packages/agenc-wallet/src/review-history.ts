@@ -276,6 +276,10 @@ export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address
               accounts: ix.accounts.map(address => ({ address, role: AccountRole.READONLY })) });
             if (instructionType === Ix.RequestChanges || instructionType === Ix.RejectAndFreeze ||
                 instructionType === Ix.DisputeRejection) verified = false;
+            // Older payments have no delivery memo. Their acceptance event still has to be present.
+            if ((instructionType === Ix.AcceptTaskResult || instructionType === Ix.AutoAcceptTaskResult) && !parseAgencCoordinationEvents(meta.logMessages!).some(event =>
+              event.eventName === "TaskResultAccepted" && event.data.task === task && event.data.claim === claim)) verified = false;
+
           } catch { verified = false; }
         }
       }

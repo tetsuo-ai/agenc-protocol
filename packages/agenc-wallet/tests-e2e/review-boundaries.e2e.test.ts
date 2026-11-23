@@ -8,6 +8,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WalletState } from "../src/store.js";
 import { HAIKU, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 
+import { reviewRpc } from "./review-rpc.js";
+
 let world: World;
 afterEach(async () => { await world?.wallet.close(); });
 
@@ -64,6 +66,20 @@ it("reports public evidence and an unsent rejection after the balance drops", as
   // A retry can hit the same shortfall in preflight, before publication is attempted again.
   await expect(world.wallet.confirmReview(job.id, draft, true)).rejects.toThrow(/evidence is public.*rejection was not sent/i);
   expect((await world.wallet.getJob(job.id, true)).status).toBe("delivered");
+});
+
+it("retries a confirmed payment with a missing acceptance event", async () => {
+  const history = reviewRpc(true);
+  world = await startWorld({ chain: history.chain, transport: history.transport });
+  const job = await hire((await buyer()).id);
+  await world.sandbox.workOnce();
+  await world.wallet.getJob(job.id, true);
+  const quote = (await world.wallet.reviewRecord(job.id)).quote!;
+  history.hideAcceptance(true);
+  expect((await world.wallet.approveJob(job.id, undefined, true, undefined, quote.id)).status).toBe("paid");
+  expect(await world.wallet.reviewRecord(job.id)).toMatchObject({ entries: [], historyAvailable: false });
+  history.hideAcceptance(false);
+  expect(await world.wallet.reviewRecord(job.id)).toMatchObject({ entries: [{ action: "approve" }], historyAvailable: true });
 });
 
 it("uses the quoted rent shortfall and fee when the payer has exactly the displayed total", async () => {

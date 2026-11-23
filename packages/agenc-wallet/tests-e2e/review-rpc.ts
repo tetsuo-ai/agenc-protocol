@@ -1,12 +1,14 @@
 // Return actual SVM instructions, logs and before/after balances in the
 // production JSON-RPC shape. The production reader must interpret them.
 import { getBase58Decoder, getCompiledTransactionMessageDecoder, type Address } from "@solana/kit";
-import type { Transport } from "@tetsuo-ai/marketplace-sdk";
+import { TASK_RESULT_ACCEPTED_EVENT_DISCRIMINATOR, type Transport } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "../src/chain.js";
-import { readReviewHistory } from "../src/review-history.js";
+import { readReviewHistory, type ReviewAnchor } from "../src/review-history.js";
 import type { SettlementHistoryRpc } from "../src/settlement.js";
 
-export function reviewRpc() {
+export function reviewRpc(withCache = false) {
+  const cache = withCache ? new Map<string, readonly ReviewAnchor[]>() : undefined;
+  let hideAcceptance = false;
   let legacy = false;
   let hideDeliveries = false;
   let local: Chain | undefined;
@@ -19,16 +21,22 @@ export function reviewRpc() {
     } }),
     getTransaction: signature => ({ send: async () => {
       const tx = rows.get(signature)?.tx as { meta: { logMessages: string[] } } | undefined;
+      if (hideAcceptance && tx) {
+        return { ...tx, meta: { ...tx.meta, logMessages: tx.meta.logMessages.filter(line =>
+          !line.startsWith("Program data: ") || !Buffer.from(line.slice("Program data: ".length), "base64").subarray(0, 8).equals(Buffer.from(TASK_RESULT_ACCEPTED_EVENT_DISCRIMINATOR))) } };
+      }
       if (hideDeliveries && tx?.meta.logMessages.includes("Program log: Instruction: SubmitTaskResult")) return null;
       return tx && legacy ? { ...tx, meta: { ...tx.meta, logMessages: tx.meta.logMessages.filter(line => !line.startsWith("Program log: Revision deadline ")) } } : tx ?? null;
     } }),
   };
   return {
+    rpc,
+    hideAcceptance(hidden: boolean) { hideAcceptance = hidden; },
     pruneSubmissions(pruned = true) { hideDeliveries = pruned; },
     useLegacyReceipts() { legacy = true; },
     chain(base: Chain): Chain {
       local = base;
-      return { ...base, reviewHistory: (task, claim, before) => readReviewHistory(rpc, task, claim, undefined, before) };
+      return { ...base, reviewHistory: (task, claim, before) => readReviewHistory(rpc, task, claim, cache, before) };
     },
     transport(base: Transport): Transport {
       return { ...base, async sendAndConfirm(signed) {
