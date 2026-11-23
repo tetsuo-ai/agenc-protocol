@@ -25,6 +25,10 @@ it("pages distinct provider terms on one ranking while a third offer gets cheape
   const filter = { provider: id(10), tag: "proofreading", category: "writing", state: "active", sort: "price_low", limit: 2 } as const;
   const first = await world.wallet.find(filter);
   expect(first).toMatchObject({ total: 3, services: [{ listing: id(1), deliverySecs: 60 }, { listing: id(2), deliverySecs: 86400 }] });
+  const byOffer = await world.wallet.find({ ...filter, limit: 1 });
+  expect(byOffer.services).toMatchObject([{ listing: id(1), deliverySecs: 60 }]);
+  const otherTerms = await world.wallet.find({ ...filter, limit: 1, offset: 1, cursor: byOffer.cursor! });
+  expect(otherTerms.services).toMatchObject([{ listing: id(2), deliverySecs: 86400 }]);
   const wallet = world.wallet;
   const client = { call: (_method: string, params: Parameters<typeof wallet.findPage>[0]) => wallet.findPage(params) } as unknown as WalletClient;
   const chatArgs = { provider: id(10), tag: "proofreading", category: "writing", state: "active", sort: "price_low", limit: 2 };
@@ -79,6 +83,20 @@ it("prepares an approval without awaiting optional catalog metadata", async () =
   expect(catalogReads).toBe(0);
 });
 
+it.each([true, false])("checks cached descriptions against the on-chain hash at hire (matching: %s)", async (matching) => {
+  world = await startWorld({ services: (local) => ({ ...local, listServices: async (filters) =>
+    (await local.listServices(filters)).map((row) => ({
+      ...row, specHashHex: matching ? row.specHashHex : "a".repeat(64), description: "Cached service description.",
+    })),
+  }) });
+  const agent = await world.wallet.createAgent("Buyer");
+  const found = await world.wallet.find({ query: world.listing });
+  expect(found.services[0]?.description).toBe("Cached service description.");
+  const hire = await world.wallet.hire({ agentId: agent.id, listing: world.listing, request: "A poem." });
+  expect(hire.approval?.service).toMatchObject(matching
+    ? { details: "ready", description: "Cached service description." }
+    : { details: "unavailable", description: null });
+});
 
 it("keeps a higher search ceiling from widening the existing panel price guard", async () => {
   world = await startWorld();
