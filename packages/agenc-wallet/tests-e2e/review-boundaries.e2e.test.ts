@@ -117,7 +117,7 @@ it("preflights allowance before publication and serializes concurrent decisions 
   expect(published).not.toHaveBeenCalled();
   // Different providers share one creator record. Both first-turn-down quotes include its rent.
   const total = (await world.wallet.reviewRecord(jobs[0]!.id)).quote!.rejectionTotal;
-  await world.wallet.setPolicy(agent.id, { askAboveCents: 500, refill: { ...REVIEW_ALLOWANCE, perDayCents: Math.ceil(Number(total.lamports) / 100000) } });
+  await world.wallet.setPolicy(agent.id, { askAboveCents: 500, refill: { ...REVIEW_ALLOWANCE, perDayCents: Math.ceil(Number(total.lamports) / 100000 + state().agents[agent.id]!.jobSpends!.reduce((sum, row) => sum + Number(row.microcents) / 1_000_000, 0)) } });
   const drafts = await Promise.all(jobs.map(job => world.wallet.draftReview(job.id, "reject", "A line is missing.")));
   const outcomes = await Promise.allSettled(jobs.map((job, i) => world.wallet.confirmReview(job.id, drafts[i]!, true)));
   expect(outcomes.filter(result => result.status === "fulfilled")).toHaveLength(1);

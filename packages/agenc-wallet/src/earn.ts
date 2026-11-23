@@ -578,6 +578,16 @@ export class EarnHost {
     const active = this.activeHeldLane(agentId, readonly);
     if (active) return active;
     return async work => {
+      // Startup and shutdown can both hold the journal before a dispatch is available.
+      const running = this.#running.get(agentId);
+      if (running) {
+        if (!running.controller.signal.aborted) await running.firstDiscovery;
+        const dispatch = this.activeHeldLane(agentId, readonly);
+        if (dispatch) return dispatch(work);
+        if (running.controller.signal.aborted) await running.done;
+        else if (this.#running.get(agentId) === running)
+          throw new WalletError("NOT_AVAILABLE", "The worker is changing state. Try again.");
+      }
       const stateDir = this.stateDir(agentId);
       const key = await signer();
       const prior = loadState(stateDir);
@@ -947,6 +957,7 @@ export class EarnHost {
       };
       entry.read = async read => { signal.throwIfAborted(); return read(ctx, worker, signal); };
       entry.dispatch = work => serial(() => { signal.throwIfAborted(); return work(ctx, worker, signal); });
+      entry.finishStartup();
       const upkeepMemory: UpkeepMemory = new Map();
       while (!signal.aborted) {
         try {

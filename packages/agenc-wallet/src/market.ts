@@ -187,6 +187,9 @@ function bytesEqual(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
 
 /** Listing terms as a buyer needs them, read fresh from the chain. */
 export interface ListingTerms {
+  maxOpenJobs: number;
+  operator: Address | null;
+  operatorFeeBps: number;
   listing: Address;
   providerAgent: Address;
   name: string;
@@ -202,7 +205,7 @@ export interface ListingTerms {
  * Read a listing and refuse anything a buyer cannot hire: paused or closed,
  * priced in a token, or at capacity.
  */
-export async function readHireableListing(chain: Chain, listing: Address): Promise<ListingTerms & { maxOpenJobs: number; operator: Address | null; operatorFeeBps: number }> {
+export async function readHireableListing(chain: Chain, listing: Address): Promise<ListingTerms> {
   const account = await readListing(chain, listing);
   if (account === null) {
     throw new WalletError("NOT_FOUND", "That service does not exist.");

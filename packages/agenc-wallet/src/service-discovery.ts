@@ -176,6 +176,14 @@ export class ServiceDiscovery {
     now: () => number;
   }) {}
 
+  rememberListing(row: CatalogRow, context: ServiceContext): ServiceView {
+    const view = serviceView(row, context, this.source.publicNetwork);
+    this.recentRows.delete(row.listing);
+    this.recentRows.set(row.listing, { row, view });
+    if (this.recentRows.size > 100) this.recentRows.delete(this.recentRows.keys().next().value!);
+    return view;
+  }
+
   /** Optional description for a hire. Only reuse text for the currently committed hash. */
   describeHire(terms: ListingTerms, rate: number | null, feeBps: number | null): ServiceView {
     const cached = this.recentRows.get(terms.listing);
@@ -188,6 +196,7 @@ export class ServiceDiscovery {
       listingVersion: terms.version.toString(), maxOpenJobs: terms.maxOpenJobs, operator: terms.operator, operatorFeeBps: terms.operatorFeeBps,
       priceLamports: terms.priceLamports, deliverySecs: terms.deliverySecs, specHashHex: hash, ratingCount: terms.ratingCount,
     };
+    if (row.details !== "ready") row.summary = null;
     const result = serviceView(row, { rate, feeBps, known: { reading: false, record: null }, byProvider: new Map() }, this.source.publicNetwork);
     if (!verified) return result;
     const { rating, ratingCount, jobsDone, paid, buyers, offeredBy, record } = verified.view;
@@ -219,11 +228,8 @@ export class ServiceDiscovery {
     const { context, rows } = ranking;
     const slice = await this.source.fillTerms(rows.slice(offset, offset + limit));
     const services = slice.map((row) => {
-      const view = serviceView(row, context, this.source.publicNetwork);
+      const view = this.rememberListing(row, context);
       if (context.rate !== null) view.maxPriceCents = params.maxPriceCents ?? Number(microcents(row.priceLamports, context.rate)) / 1_000_000;
-      this.recentRows.delete(row.listing);
-      this.recentRows.set(row.listing, { row, view });
-      if (this.recentRows.size > 100) this.recentRows.delete(this.recentRows.keys().next().value!);
       return view;
     });
     return { rate: context.rate, page: {

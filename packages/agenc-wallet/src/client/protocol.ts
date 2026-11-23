@@ -21,6 +21,10 @@ export type AmountInput = { usdCents: number } | { lamports: string };
 export const MAX_LISTING_DELIVERY_SECS = 31_536_000;
 
 export interface SellerOfferInput {
+  /** Enable Earns with this offer under the same owner quote. */
+  enableEarns?: true;
+  /** Identifies the room setup shown with the quote. */
+  setupId?: string;
   name: string;
   summary: string;
   price: AmountInput;

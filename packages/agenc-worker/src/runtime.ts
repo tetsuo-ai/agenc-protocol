@@ -50,7 +50,6 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { decodeHostedBrief } from "./hosted-brief.js";
 import { claimBudget, budgetForRevision, enrollClaimBudget, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";

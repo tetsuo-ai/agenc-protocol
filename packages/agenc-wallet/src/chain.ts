@@ -1,3 +1,4 @@
+import { BASE_FEE_LAMPORTS } from "./network-fee.js";
 import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // The one seam between the wallet and a Solana cluster. Everything above this
 // file asks for bytes, balances and a signing client; nothing above it knows
@@ -322,7 +323,7 @@ export interface RpcChainOptions {
 }
 
 /** What the network charges per signature. */
-export const BASE_FEE_LAMPORTS = 5_000n;
+export { BASE_FEE_LAMPORTS } from "./network-fee.js";
 
 /** Compute-unit ceiling used whenever a priority fee is configured. */
 const PRICED_COMPUTE_UNIT_LIMIT = 250_000;

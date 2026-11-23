@@ -498,6 +498,12 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     requestJson(fetchImpl, siteUrl + path, { method: "GET" }, { timeoutMs, maxBytes: 2 * 1024 * 1024 }), publicFetcher);
   return usesScopedRequests<MarketServices>({
     ...discovery,
+    ...(artifactBaseUrl !== null && artifactUploadUrl !== null ? {
+      async postChangeRequest(this: MarketServices, envelope: taskThread.TaskThreadEnvelope, signer: KeyPairSigner) {
+        const data = new TextEncoder().encode(taskThread.canonicalEnvelopeJson(taskThread.assertTaskThreadEnvelope(envelope)));
+        await publishReviewBytes(this, signer, data);
+      },
+    } : {}),
     async fetchReviewEvidence(uri, hash) {
       if (!uri.startsWith("https://")) return null;
       const bytes = await publicFetcher(uri);

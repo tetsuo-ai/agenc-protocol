@@ -24,7 +24,7 @@ import {
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
   getBase58Decoder,
-  getTransactionEncoder, getSignatureFromTransaction,
+  getTransactionEncoder,
   lamports,
   partiallySignTransactionMessageWithSigners,
   pipe,

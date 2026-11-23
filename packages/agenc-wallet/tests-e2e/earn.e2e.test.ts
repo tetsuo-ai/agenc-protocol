@@ -1,3 +1,4 @@
+import { approvedPost } from "./harness.js";
 import { confirmDecision, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // "Take jobs while idle": the stock worker loop runs for an agent, signs with
 // the agent's own wallet, delivers a public job, and the pay shows up.
@@ -65,7 +66,7 @@ describe("earning", () => {
     await eventually(() => other.delivered());
     expect([...sandbox.deliveries.values()].map(bytes => Buffer.from(bytes).toString())).toContain("external");
     await other.approve();
-    const own = await wallet.postFromBalance({ request: "Use contact@example.org.", reward: { usdCents: 50 } });
+    const own = await approvedPost(wallet, { request: "Use contact@example.org.", reward: { usdCents: 50 } });
     await eventually(async () => (await wallet.getJob(own.id, true)).result?.text === "own");
   }, 30000);
 

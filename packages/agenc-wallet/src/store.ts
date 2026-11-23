@@ -416,6 +416,7 @@ export interface ActivityRecord {
 }
 
 export interface WalletState {
+  setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;
   version: number;
   createdAt: number;
   agents: Record<string, AgentRecord>;

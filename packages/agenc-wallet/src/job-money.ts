@@ -49,6 +49,13 @@ export function remainingJobMicrocents(agent: AgentRecord, now: number, except?:
     if (entry.microcents === null) return 0n;
     room -= BigInt(entry.microcents);
   }
+  // Review fees and deposits come out of the same payer as the job.
+  // The review receipt reconciles this charge in place, including after restart.
+  for (const charge of agent.refills) {
+    if (!charge.id?.startsWith("review:") || charge.ts <= now - 86_400_000) continue;
+    if (charge.usdCents == null) return 0n;
+    room -= BigInt(Math.round(charge.usdCents * 1_000_000));
+  }
   return room > 0n ? room : 0n;
 }
 

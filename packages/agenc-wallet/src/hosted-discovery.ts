@@ -64,7 +64,7 @@ function describedRow(
     ...entry.base,
     specHashHex: entry.specHashHex,
     category: details.category ?? entry.listedCategory,
-    summary: state === "ready" ? summarize(entry.base.name, details.description) : null,
+    summary: summarize(entry.base.name, details.description) ?? entry.listedSummary,
     description:
       details.description === null ? null : withoutLeadingName(entry.base.name, details.description),
     tags: details.tags.length ? details.tags : entry.listedTags,

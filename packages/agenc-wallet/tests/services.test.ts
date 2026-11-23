@@ -446,7 +446,7 @@ describe("the catalog", () => {
     const rows = await services.listServices();
     expect(rows).toHaveLength(102);
     expect(rows.slice(100).map((row) => row.listing)).toEqual([addressOf(101), addressOf(102)]);
-    expect(pages).toEqual([1, 2]);
+    expect(pages).toEqual([1, 2, 1, 2]); // Discovery verifies the complete ordered snapshot.
   });
 
   it("uses words the list itself carries only when the description gives none", async () => {

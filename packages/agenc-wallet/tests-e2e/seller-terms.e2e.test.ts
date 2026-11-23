@@ -10,7 +10,7 @@ import {
   DEFAULT_SELLER_TERMS,
   SELLER_CATEGORIES,
 } from "../src/client/seller-terms.js";
-import { eventually, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, eventually, startWorld, type World } from "./harness.js";
 
 const earn = {
   executor: {
@@ -162,7 +162,7 @@ it("quotes, publishes and reconciles the exact terms buyers see, including after
   await wallet.fundAgent(customer.id, { usdCents: 500 });
   await wallet.setPolicy(customer.id, {
     askAboveCents: 100,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   const { job } = await wallet.hire({
     agentId: customer.id,
@@ -353,7 +353,7 @@ it("funds concurrent deliveries and reports both possible operator credits from 
   });
   const listing = offer.listing!;
   await wallet.fundAgent(buyer.id, { usdCents: 2000 });
-  await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: { ...REVIEW_ALLOWANCE, perDayCents: 10_000 } });
   const before = await world.balance(wallet.mainAddress);
   const jobs = [];
   for (let i = 0; i < 6; i++) {
@@ -368,7 +368,7 @@ it("funds concurrent deliveries and reports both possible operator credits from 
   for (const [index, id] of jobs.slice(0, 2).entries()) {
     if (index) await wallet.fundAgent(operator.id, { usdCents: 100 });
     const initial = await world.balance(operator.address);
-    const paid = await wallet.approveJob(id, undefined, true);
+    const paid = await confirmPayout(wallet, id);
     const credited = index ? 36912n : 0n;
     expect(await world.balance(operator.address) - initial).toBe(credited);
     expect(paid.operatorPayment).toMatchObject({ address: operator.address,
@@ -445,11 +445,11 @@ it("keeps the rounded-zero operator split in the preview and paid receipt after 
   const preview = (await wallet.find({ query: service.name })).services.find(row => row.listing === listing);
   expect(preview).toMatchObject({ operator: operator.address, operatorFeeBps: 1, proceeds });
   await wallet.fundAgent(buyer.id, { lamports: "500000000" });
-  await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: { ...REVIEW_ALLOWANCE, perDayCents: 10_000 } });
   const { job } = await wallet.hire({ agentId: buyer.id, listing, request: "Edit my paragraph." });
   await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered");
   const before = await world.balance(operator.address);
-  const paid = await wallet.approveJob(job.id, undefined, true);
+  const paid = await confirmPayout(wallet, job.id);
   expect(await world.balance(operator.address)).toBe(before);
   const receipt = { address: operator.address, paid: { lamports: "0" }, forfeited: { lamports: "0" }, sellerNet: { lamports: "8550" } };
   expect(paid.operatorPayment).toMatchObject(receipt);
@@ -518,3 +518,24 @@ it("switches Earns off and withdraws an unrelated live offer while an offer tran
   expect(recovered.earn.offers.find(o => o.id === editing.id)).toMatchObject({ terms: { maxOpenJobs: 6 } });
   expect(await world.balance(wallet.mainAddress)).toBe(spent);
 }, 30_000);
+
+it("binds a cold-room quote to one seller setup across a wallet restart", async () => {
+  world = await startWorld({ earn });
+  const seller = await world.wallet.createAgent();
+  const input = { ...service, setupId: "room-setup-one", enableEarns: true as const };
+  const initial = await world.balance(world.wallet.mainAddress);
+  const stale = await world.wallet.quoteEarn(seller.id, input);
+  await world.wallet.close();
+  world.wallet = await world.reopen();
+  await expect(world.wallet.approveEarnFunding(stale.quoteId)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+  await expect(world.wallet.setOffer(seller.id, { ...input, setupId: "changed-room" }, undefined, stale.quoteId))
+    .rejects.toMatchObject({ code: "PRICE_CHANGED" });
+  expect(await world.balance(world.wallet.mainAddress)).toBe(initial);
+  const quote = await world.wallet.quoteEarn(seller.id, input);
+  await world.wallet.close();
+  world.wallet = await world.reopen();
+  const confirm = () => world.wallet.setOffer(seller.id, input, undefined, quote.quoteId);
+  expect((await confirm()).earn.enabled).toBe(true);
+  expect((await confirm()).earn.offers).toHaveLength(1);
+  expect(initial - await world.balance(world.wallet.mainAddress)).toBe(BigInt(quote.totalFromMain.lamports));
+});

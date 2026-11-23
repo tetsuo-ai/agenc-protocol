@@ -601,8 +601,7 @@ it("lets the seller repair an unset delivery period on the existing listing", as
   const edit = { ...LINE_WRITER, deliverySecs: 1800 };
   const cost = await wallet.quoteEarn(worker.id, edit, offer.id);
   expect(BigInt(cost.listings.lamports)).toBeGreaterThan(0n);
-  if (cost.requiresApproval) await wallet.approveEarnFunding(cost.quoteId);
-  await wallet.setOffer(worker.id, edit, offer.id);
+  await wallet.setOffer(worker.id, edit, offer.id, cost.quoteId);
   expect((await readListing(sandbox.chain, listing))!.defaultDeadlineSecs).toBe(1800n);
   const repaired = (await agentView(current, worker.id)).earn.offers;
   expect(repaired).toHaveLength(1);

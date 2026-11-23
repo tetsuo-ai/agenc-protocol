@@ -1,6 +1,6 @@
 import { agentOffers, type AgentRecord, type OfferRecord } from "./store.js";
 
-export type SellerEffect = { offer: OfferRecord } | { minPayCents: number };
+export type SellerEffect = { offer: OfferRecord; enableEarns?: true } | { minPayCents: number };
 export interface SellerDecision {
   quoteId: string;
   action: string;
@@ -32,7 +32,13 @@ export function applySellerDecision(agent: AgentRecord, decision: SellerDecision
   const ids = Object.keys(receipts);
   if (ids.length > 128) delete receipts[ids[0]!];
   if (!landed) return;
-  if ("offer" in decision.effect) saveSellerOffer(agent, { ...decision.effect.offer, fundingConfirmed: true });
+  if ("offer" in decision.effect) {
+    saveSellerOffer(agent, { ...decision.effect.offer, fundingConfirmed: true });
+    if (decision.effect.enableEarns && agent.earn.retiredAt == null) {
+      agent.earn.enabled = true;
+      agent.earn.lastError = null;
+    }
+  }
   else {
     for (const offer of agentOffers(agent)) {
       if (offer.wanted) offer.fundingConfirmed = true;

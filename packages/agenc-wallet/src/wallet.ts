@@ -42,7 +42,7 @@ import type { ContestAction, ContestQuote } from "./client/types.js";
 import { ceilingLamports, jobNetworkFees, microcents, remainingJobMicrocents, reserveJobSpend, type JobDeposits } from "./job-money.js";
 import { checkedAcceptance, jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
 import { legacyRefreshLimit, buildJobQuote, checkPriceLimit, jobCosts } from "./job-quote.js";
-import type { JobTerms } from "./client/types.js";
+import type { JobTerms, ServiceView } from "./client/types.js";
 import { WALLET_CAPABILITIES } from "./client/types.js";
 import type {
   ActivityKind,
@@ -1746,6 +1746,13 @@ export class AgencWallet {
 
     const now = this.#now();
     const jobId = newId("job");
+    if (quoteOnly) {
+      const rows = await this.#services.listServices({ listing }).catch(() => []);
+      const row = rows.find(candidate => candidate.listing === listing);
+      if (row && row.specHashHex !== values.bytesToHex(terms.specHash))
+        throw new WalletError("PRICE_CHANGED", "The description changed. Refresh the listing.");
+      if (row) this.#discovery.rememberListing(row, await this.#serviceContext([row], 0, rate));
+    }
     const service = this.#discovery.describeHire(terms, rate, await this.#marketFeeBps());
     const record: JobRecord = {
       id: jobId,
@@ -2737,7 +2744,7 @@ export class AgencWallet {
     if (await this.#reconcileCreation(job, landed, "order")) return;
 
     await this.#lock(this.#payerLock(job), async () => {
-      const terms: ListingTerms = {
+      const terms = {
         listing: intent.listing,
         providerAgent: intent.providerAgent,
         name: job.title,
@@ -4026,7 +4033,11 @@ export class AgencWallet {
   }
 
   #reviewJob(jobId: string, agentId?: string): JobRecord {
-    if (!jobId.startsWith("earn_")) return this.#ownedJob(jobId, agentId);
+    if (!jobId.startsWith("earn_")) {
+      const job = this.#ownedJob(jobId, agentId);
+      if (job.terms?.contest) return contestUnavailable("Review contest entries in Jobs.");
+      return job;
+    }
     const match = /^earn_(.+)_([1-9A-HJ-NP-Za-km-z]{32,44})$/u.exec(jobId);
     if (match && (agentId === undefined || agentId === match[1])) {
       const job = this.#earnJobs(match[1]!).find(entry => entry.id === jobId);
@@ -4842,7 +4853,7 @@ export class AgencWallet {
       const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, previous);
       quotedTerms = terms;
       const spec = buildListingSpec({ name, summary, ...terms });
-      action = this.#quotedOfferKey(offerId, name, summary, price, terms);
+      action = this.#quotedOfferKey(offerId, name, summary, price, terms, input.enableEarns, input.setupId);
       const hash = await jobSpecHash(spec);
       const next: OfferRecord = {
         id: previous?.id ?? "quote",
@@ -4884,6 +4895,16 @@ export class AgencWallet {
     for (const [id, value] of this.#fundingQuotes)
       if (value.quote.expiresAt <= this.#now()) this.#fundingQuotes.delete(id);
     if (this.#fundingQuotes.size >= 100) this.#fundingQuotes.delete(this.#fundingQuotes.keys().next().value!);
+    if (input?.setupId) {
+      if (typeof input.setupId !== "string" || input.setupId.length > 80) throw new WalletError("BAD_REQUEST", "Invalid service setup.");
+      this.#store.update(state => {
+        const saved = state.setupQuotes ??= {};
+        for (const [key, entry] of Object.entries(saved)) if (entry.quote.expiresAt <= this.#now()) delete saved[key];
+        if (Object.keys(saved).length >= 100) delete saved[Object.keys(saved)[0]!];
+        saved[quote.quoteId] = { quote: structuredClone(quote), action, before: this.#sellerRevision(agent), offers: structuredClone(offers) };
+      });
+      return quote;
+    }
     this.#fundingQuotes.set(quote.quoteId, {
       quote: structuredClone(quote),
       target: BigInt(quote.requiredBalance.lamports),
@@ -4916,8 +4937,8 @@ export class AgencWallet {
     return this.#toLamports(price);
   }
 
-  #quotedOfferKey(id: string | undefined, name: string, summary: string, price: bigint, terms: ReturnType<typeof storedTerms>): string {
-    return JSON.stringify([id ?? null, name, summary, price.toString(), terms]);
+  #quotedOfferKey(id: string | undefined, name: string, summary: string, price: bigint, terms: ReturnType<typeof storedTerms>, enableEarns?: true, setupId?: string): string {
+    return JSON.stringify([id ?? null, name, summary, price.toString(), terms, ...(enableEarns ? ["enableEarns"] : []), ...(setupId ? [setupId] : [])]);
   }
 
   /** Explicit owner approval of this quote's agent and maximum transfer, once. */
@@ -4947,7 +4968,10 @@ export class AgencWallet {
       }
       this.#checkPendingFunding(agent.id);
     }
-    const entry = this.#fundingQuotes.get(quoteId);
+    const setup = this.#store.state.setupQuotes?.[quoteId];
+    if (setup && !confirm) throw new WalletError("NOT_ALLOWED", "Use this quote to confirm the service setup.");
+    const entry = setup ? { ...setup, target: BigInt(setup.quote.requiredBalance.lamports) } : this.#fundingQuotes.get(quoteId);
+    if (setup) this.#store.update(state => { delete state.setupQuotes![quoteId]; });
     this.#fundingQuotes.delete(quoteId);
     if (entry === undefined || entry.quote.expiresAt <= this.#now())
       throw new WalletError("BAD_REQUEST", "That funding quote expired or was already used. Get a new quote.");
@@ -5443,6 +5467,7 @@ export class AgencWallet {
     if (!this.#earn.available) {
       throw new WalletError("NOT_AVAILABLE", "This computer is not set up to do jobs yet.");
     }
+    if (input.enableEarns && !fundingQuoteId) throw new WalletError("APPROVAL_REQUIRED", "Approve the service setup quote in Market.");
     checkOfferDelivery(input.deliverySecs);
     const name = tidyText(input.name, 60);
     if (name === null) throw new WalletError("BAD_REQUEST", "Give the service a name.");
@@ -5503,7 +5528,8 @@ export class AgencWallet {
       summary,
       category,
       priceLamports: price,
-      deliverySecs: terms.deliverySecs,
+      deliverySecs: previous?.deliverySecs ?? terms.deliverySecs,
+      ...((input.deliverySecs !== undefined || input.terms?.deliverySecs !== undefined) && { pendingDeliverySecs: terms.deliverySecs }),
       terms,
       spec,
       specHashHex: hash.hex,
@@ -5521,15 +5547,18 @@ export class AgencWallet {
       signatures: previous?.signatures ?? {},
     };
     if (fundingQuoteId !== undefined) {
-      const action = this.#quotedOfferKey(offerId, name, summary, priceLamports, terms);
-      const decision = await this.#consumeFunding(fundingQuoteId, { agentId, action, effect: { offer: next } });
+      const action = this.#quotedOfferKey(offerId, name, summary, priceLamports, terms, input.enableEarns, input.setupId);
+      const decision = await this.#consumeFunding(fundingQuoteId, { agentId, action, effect: { offer: next, ...(input.enableEarns && { enableEarns: true }) } });
       if (decision.replayed) return this.#oneAgentView(agentId);
     } else {
       if (previous?.status === "awaiting_approval" && sameTerms && sameWords && previous.priceLamports === price)
         return this.#oneAgentView(agentId);
       this.#store.update((draft) => saveSellerOffer(draft.agents[agentId]!, next));
     }
-    await this.#continueSellerAction(agentId, fundingQuoteId, () => this.#advanceOffer(agentId));
+    await this.#continueSellerAction(agentId, fundingQuoteId, async () => {
+      if (input.enableEarns) await this.#startEarning(this.#agentRecord(agentId));
+      await this.#advanceOffer(agentId);
+    });
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);
   }
@@ -5846,7 +5875,7 @@ export class AgencWallet {
         async () => sendCreateListing(this.#chain, await this.#vault.signer(agent.keyId), {
           providerAgent, listingId, name: offer.name, category: offer.category,
           specHash: values.hexToBytes(offer.specHashHex), specUri,
-          priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.deliverySecs, terms: storedTerms(offer),
+          priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.pendingDeliverySecs ?? offer.deliverySecs, terms: storedTerms(offer),
         }));
       this.#dropBalances();
       this.#emit({ type: "overview" });
@@ -5864,6 +5893,7 @@ export class AgencWallet {
     if (offer.deliverySecs !== landedPeriod || offer.pendingDeliverySecs === landedPeriod) {
       this.#patchOffer(agentId, offerId, entry => {
         entry.deliverySecs = landedPeriod;
+        if (entry.terms && entry.pendingDeliverySecs === undefined) entry.terms.deliverySecs = landedPeriod;
         if (entry.pendingDeliverySecs === landedPeriod) delete entry.pendingDeliverySecs;
       });
       this.#emit({ type: "overview" });
@@ -5898,7 +5928,7 @@ export class AgencWallet {
 
     // Freeze admissions before trying a finite cap. The program refuses a cap
     // below outstanding hires, and another buyer must not extend that backlog.
-    const terms = storedTerms(offer);
+    const terms = { ...storedTerms(offer), deliverySecs: offer.pendingDeliverySecs ?? landedPeriod };
     const reducingCapacity = reducesListingCapacity(account.maxOpenJobs, terms.maxOpenJobs);
     if (reducingCapacity && state === LISTING_STATE_ACTIVE) {
       await sendListingState(this.#chain, await this.#vault.signer(agent.keyId), {

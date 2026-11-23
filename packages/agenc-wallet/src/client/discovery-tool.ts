@@ -70,7 +70,7 @@ export function describeService(service: ServiceView) {
       : {}),
     ...describeRecord(service),
     delivery:
-      service.deliverySecs === null ? null : `within ${formatDuration(service.deliverySecs)}`,
+      service.deliverySecs === null ? "The seller must set a delivery period before you can hire this service." : `within ${formatDuration(service.deliverySecs)}`,
   };
 }
 
