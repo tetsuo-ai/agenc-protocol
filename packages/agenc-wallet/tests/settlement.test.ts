@@ -245,6 +245,7 @@ describe("what a settlement paid (revision 9)", () => {
     );
     expect(await settlementFactsIn(paidAnswer(logs), PAID_TASK, "settled", BUYER)).toEqual({
       worker: WORKER,
+      operatorPayment: { address: at(6), paid: 50_000n, forfeited: 0n, sellerNet: 1_850_000n },
       priceLamports: 2_000_000n,
       feeLamports: 100_000n,
       listing: null,

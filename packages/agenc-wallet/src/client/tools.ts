@@ -264,6 +264,7 @@ function describeService(service: ServiceView) {
     ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
     ...(service.terms.length > 0 ? { terms: service.terms } : {}),
     price: formatMoney(service.price),
+    listing_version: service.listingVersion,
     ...(service.maxOpenJobs !== undefined && { max_open_jobs: service.maxOpenJobs, delivery_secs: service.deliverySecs,
       price_lamports: service.price.lamports, tags: service.tags, operator: service.operator,
       operator_fee_bps: service.operatorFeeBps, proceeds: service.proceeds }),

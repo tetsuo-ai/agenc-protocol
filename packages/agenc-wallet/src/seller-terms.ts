@@ -1,3 +1,4 @@
+import { checkOperator } from "./payable-operator.js";
 import { address } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -22,6 +23,7 @@ export function storedTerms(offer: OfferRecord): SellerTerms {
     category: offer.category,
     deliverySecs: offer.deliverySecs,
     ...offer.terms,
+    maxOpenJobs: offer.terms?.maxOpenJobs === 0 ? 5 : (offer.terms?.maxOpenJobs ?? DEFAULT_SELLER_TERMS.maxOpenJobs),
   };
 }
 
@@ -57,6 +59,8 @@ export function resolveTerms(
       throw new WalletError("BAD_REQUEST", "Enter a valid operator address.");
     }
   }
+  checkOperator(terms.operator, terms.operatorFeeBps);
+  if (terms.maxOpenJobs === 0) terms.maxOpenJobs = 5;
   if (previous?.listed && previous.category !== terms.category)
     throw new WalletError(
       "BAD_REQUEST",
@@ -98,6 +102,7 @@ export function sellerProceeds(
   return {
     marketFee: marketFee === null ? null : money(marketFee, rate),
     operatorFee: money(operatorFee, rate),
+    sellerNetIfForfeited: marketFee === null ? null : money(price - marketFee, rate),
     sellerNet:
       marketFee === null ? null : money(price - operatorFee - marketFee, rate),
   };
@@ -110,8 +115,9 @@ export async function fillCatalogTerms(
 ): Promise<CatalogRow[]> {
   const missing = rows.filter(
     (row) =>
+      row.listingVersion === undefined ||
       row.maxOpenJobs === undefined ||
-      row.operatorFeeBps === undefined ||
+      row.operatorFeeBps === undefined || row.operator === undefined ||
       (row.operatorFeeBps > 0 && !row.operator),
   );
   if (missing.length === 0) return rows;
@@ -140,6 +146,7 @@ export async function fillCatalogTerms(
         continue;
       terms.set(row.listing, {
         ...row,
+        listingVersion: account.version.toString(),
         maxOpenJobs: account.maxOpenJobs,
         operatorFeeBps: account.operatorFeeBps,
         deliverySecs:

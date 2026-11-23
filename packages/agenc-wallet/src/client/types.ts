@@ -43,6 +43,7 @@ export type EarnState = "off" | "starting" | "watching" | "working" | "finishing
 
 /** Readonly upper bound for enabling earning and preparing the agent's offers. */
 export interface EarnFundingQuote {
+  capacity?: { open: number; proposed: number; pausing: boolean };
   /** Supports consuming this quote together with its exact action. */
   confirmAction?: boolean;
   /** Additional main balance needed, leaving its network reserve intact. */
@@ -251,6 +252,7 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  listingVersion?: string;
   maxOpenJobs?: number;
   operatorFeeBps?: number;
   operator?: string | null;
@@ -487,6 +489,7 @@ export interface JobView {
    * Null once that record exists, or when not known.
    */
   firstRecordCost: Money | null;
+  operatorPayment?: { address: string; paid: Money; forfeited: Money; sellerNet: Money };
   receiptUrl: string | null;
   error: string | null;
 }

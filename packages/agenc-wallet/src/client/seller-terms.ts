@@ -37,6 +37,7 @@ export interface SellerTerms {
 export interface SellerProceeds {
   marketFee?: Money | null;
   operatorFee: Money;
+  sellerNetIfForfeited?: Money | null;
   /** Estimate at the current marketplace rate, before reputation discounts. */
   sellerNet: Money | null;
 }
@@ -90,7 +91,7 @@ export function sellerTermsProblem(terms: SellerTerms): string | null {
     terms.maxOpenJobs < 0 ||
     terms.maxOpenJobs > 65535
   )
-    return "Capacity must be 0 to 65535 open hires. Zero allows unlimited hires.";
+    return "Capacity must be 0 to 65535 open hires. Zero selects the funded default of five hires.";
   if (
     !Number.isInteger(terms.deliverySecs) ||
     terms.deliverySecs < 1 ||

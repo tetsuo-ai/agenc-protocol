@@ -37,7 +37,7 @@ export interface Settlement {
  * on a job that needs no review. A dispute's ruling is left out: it may pay
  * either side.
  */
-export function settlementOf(instruction: SentInstruction): Settlement | null {
+export function settlementOf(instruction: SentInstruction, includeFrozen = false): Settlement | null {
   if (instruction.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return null;
   let parsed: ReturnType<typeof parseAgencCoordinationInstruction>;
   try {
@@ -56,6 +56,9 @@ export function settlementOf(instruction: SentInstruction): Settlement | null {
     case AgencCoordinationInstruction.AutoAcceptTaskResult:
     case AgencCoordinationInstruction.CompleteTask:
       return { task: parsed.accounts.task.address, worker: parsed.accounts.worker.address };
+    case AgencCoordinationInstruction.ResolveRejectFrozen:
+    case AgencCoordinationInstruction.ExpireRejectFrozen:
+      return includeFrozen ? { task: parsed.accounts.task.address, worker: parsed.accounts.worker.address } : null;
     default:
       return null;
   }
@@ -88,7 +91,7 @@ function sentInstruction(value: unknown): SentInstruction | null {
  * one asked for, or does not settle that job. Instructions another program
  * called count as well: the program checked them the same way.
  */
-export function settlementWorkerIn(value: unknown, task: Address, signature: string): Address | null {
+export function settlementWorkerIn(value: unknown, task: Address, signature: string, includeFrozen = false): Address | null {
   const answer = record(value);
   const meta = record(answer?.meta);
   if (meta === null || meta.err !== null) return null;
@@ -106,7 +109,7 @@ export function settlementWorkerIn(value: unknown, task: Address, signature: str
   for (const raw of [...outer, ...inner]) {
     const instruction = sentInstruction(raw);
     if (instruction === null) continue;
-    const settled = settlementOf(instruction);
+    const settled = settlementOf(instruction, includeFrozen);
     if (settled !== null && settled.task === task) return settled.worker;
   }
   return null;
@@ -120,6 +123,7 @@ export interface SettlementFacts {
   priceLamports: bigint;
   /** The marketplace's fee taken out of it. */
   feeLamports: bigint;
+  operatorPayment?: { address: Address; paid: bigint; forfeited: bigint; sellerNet: bigint };
   /**
    * The service it was hired from, as the program's own hire event names it
    * (for the same job, buyer and agent), or null when no such event was read.
@@ -148,8 +152,9 @@ export async function settlementFactsIn(
   task: Address,
   signature: string,
   creator: Address,
+  includeFrozen = false,
 ): Promise<SettlementFacts | null> {
-  const worker = settlementWorkerIn(value, task, signature);
+  const worker = settlementWorkerIn(value, task, signature, includeFrozen);
   if (worker === null) return null;
   const logs = record(record(value)?.meta)?.logMessages;
   if (!Array.isArray(logs) || !logs.every((line) => typeof line === "string")) return null;
@@ -173,7 +178,12 @@ export async function settlementFactsFromLogs(
     const [paid] = await findTaskPda({ creator, taskId: event.data.taskId });
     if (paid !== task) continue;
     let shares = 0n;
+    let operatorPayment: SettlementFacts["operatorPayment"];
     for (const other of events) {
+      if (other.eventName === "OperatorFeePaid" && sameBytes(other.data.taskId, event.data.taskId))
+        operatorPayment = { address: other.data.operator, paid: other.data.amount, forfeited: 0n, sellerNet: event.data.amount };
+      if (other.eventName === "MarketplaceFeeForfeited" && other.data.role === 0 && sameBytes(other.data.taskId, event.data.taskId))
+        operatorPayment = { address: other.data.payee, paid: 0n, forfeited: other.data.amount, sellerNet: event.data.amount };
       if (
         (other.eventName === "OperatorFeePaid" || other.eventName === "ReferrerFeePaid") &&
         sameBytes(other.data.taskId, event.data.taskId)
@@ -183,6 +193,7 @@ export async function settlementFactsFromLogs(
     }
     return {
       worker,
+      ...(operatorPayment && { operatorPayment }),
       priceLamports: event.data.amount + event.data.protocolFee + shares,
       feeLamports: event.data.protocolFee,
       listing: null,
@@ -244,7 +255,7 @@ export async function readSettlementFacts(
   rpc: SettlementHistoryRpc,
   task: Address,
   creator: Address,
-  options: { listing?: boolean; limit?: number } = {},
+  options: { listing?: boolean; limit?: number; includeFrozen?: boolean } = {},
 ): Promise<SettlementFacts | null> {
   const limit = options.limit ?? SETTLEMENT_HISTORY_LIMIT;
   const history = await rpc.getSignaturesForAddress(task, { limit, commitment: "confirmed" }).send();
@@ -259,7 +270,7 @@ export async function readSettlementFacts(
       })
       .send();
     if (facts === null) {
-      facts = await settlementFactsIn(transaction, task, entry.signature, creator);
+      facts = await settlementFactsIn(transaction, task, entry.signature, creator, options.includeFrozen);
       // Newest first: what was read before the settlement came after it.
       if (facts !== null && options.listing !== true) return facts;
       continue;

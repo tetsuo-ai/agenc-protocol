@@ -382,6 +382,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
   // The agent each settled job paid, and the log of the transaction that
   // settled it: the history the live network keeps and litesvm does not.
+  const frozenReceipts = new Map<Address, { worker: Address; logs: readonly string[] }>();
   const settledBy = new Map<Address, Address>();
   const settledLogs = new Map<Address, readonly string[]>();
   // The log of the transaction that hired each job, which names its service.
@@ -424,11 +425,16 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           if (programAddress === undefined) continue;
           const accounts = (instruction.accountIndices ?? []).map((index: number) => message.staticAccounts[index]);
           if (accounts.some((account: Address | undefined) => account === undefined)) continue;
-          const settled = settlementOf({
+          const sent = {
             programAddress,
             accounts: accounts as Address[],
             data: Uint8Array.from(instruction.data ?? []),
-          });
+          };
+          const settled = settlementOf(sent);
+          if (!settled) {
+            const exit = settlementOf(sent, true);
+            if (exit) frozenReceipts.set(exit.task, { worker: exit.worker, logs: result.logs });
+          }
           if (settled !== null) {
             settledBy.set(settled.task, settled.worker);
             settledLogs.set(settled.task, result.logs);
@@ -496,8 +502,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return worker === undefined || logs === undefined ? null : settledDeliveryFromLogs(logs, task, creator, worker);
     },
     findSettlement: async (task, creator, options) => {
-      const worker = settledBy.get(task);
-      const logs = settledLogs.get(task);
+      const exit = options?.includeFrozen ? frozenReceipts.get(task) : undefined;
+      const worker = exit?.worker ?? settledBy.get(task);
+      const logs = exit?.logs ?? settledLogs.get(task);
       if (worker === undefined || logs === undefined) return null;
       const facts = await settlementFactsFromLogs(logs, task, worker, creator);
       if (facts === null || options?.listing !== true) return facts;
@@ -621,6 +628,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           summary: entry.summary,
           description: entry.summary.length > 0 ? entry.summary : null,
           tags: values.decodeListingTags(new Uint8Array(account.tags)),
+          listingVersion: account.version.toString(),
           maxOpenJobs: account.maxOpenJobs,
           operatorFeeBps: account.operatorFeeBps,
           operator: account.operator === SYSTEM_PROGRAM_ADDRESS ? null : account.operator,

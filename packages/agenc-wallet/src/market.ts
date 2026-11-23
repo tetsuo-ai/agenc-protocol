@@ -865,6 +865,13 @@ async function readSubmission(
   return { address: submission, claim, account };
 }
 
+export async function settledOperatorPayment(chain: Chain, task: Address) {
+  const read = await facade.readTask(snapshotReader(chain), task);
+  if (read.kind === "missing") return null;
+  const creator = read.kind === "closed" ? read.marker.creator : read.task.creator;
+  return (await chain.findSettlement?.(task, creator, { includeFrozen: true }))?.operatorPayment ?? null;
+}
+
 /**
  * Where a job stands on the chain, or null when its task does not exist.
  * `providerAgent` is null for a request nobody is known to have taken: there
