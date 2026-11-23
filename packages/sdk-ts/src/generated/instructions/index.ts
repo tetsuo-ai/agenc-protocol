@@ -10,7 +10,6 @@ export * from "./acceptBid";
 export * from "./acceptTaskResult";
 export * from "./applyDisputeSlash";
 export * from "./applyInitiatorSlash";
-export * from "./assertReviewDelivery";
 export * from "./assignDisputeResolver";
 export * from "./assignModerationAttestor";
 export * from "./autoAcceptTaskResult";

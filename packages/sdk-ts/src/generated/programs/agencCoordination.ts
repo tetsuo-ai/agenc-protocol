@@ -187,7 +187,6 @@ import {
   getAcceptTaskResultInstructionAsync,
   getApplyDisputeSlashInstructionAsync,
   getApplyInitiatorSlashInstructionAsync,
-  getAssertReviewDeliveryInstruction,
   getAssignDisputeResolverInstructionAsync,
   getAssignModerationAttestorInstructionAsync,
   getAutoAcceptTaskResultInstructionAsync,
@@ -294,7 +293,6 @@ import {
   parseAcceptTaskResultInstruction,
   parseApplyDisputeSlashInstruction,
   parseApplyInitiatorSlashInstruction,
-  parseAssertReviewDeliveryInstruction,
   parseAssignDisputeResolverInstruction,
   parseAssignModerationAttestorInstruction,
   parseAutoAcceptTaskResultInstruction,
@@ -401,7 +399,6 @@ import {
   type AcceptTaskResultAsyncInput,
   type ApplyDisputeSlashAsyncInput,
   type ApplyInitiatorSlashAsyncInput,
-  type AssertReviewDeliveryInput,
   type AssignDisputeResolverAsyncInput,
   type AssignModerationAttestorAsyncInput,
   type AutoAcceptTaskResultAsyncInput,
@@ -450,7 +447,6 @@ import {
   type ParsedAcceptTaskResultInstruction,
   type ParsedApplyDisputeSlashInstruction,
   type ParsedApplyInitiatorSlashInstruction,
-  type ParsedAssertReviewDeliveryInstruction,
   type ParsedAssignDisputeResolverInstruction,
   type ParsedAssignModerationAttestorInstruction,
   type ParsedAutoAcceptTaskResultInstruction,
@@ -1285,7 +1281,6 @@ export enum AgencCoordinationInstruction {
   AcceptTaskResult,
   ApplyDisputeSlash,
   ApplyInitiatorSlash,
-  AssertReviewDelivery,
   AssignDisputeResolver,
   AssignModerationAttestor,
   AutoAcceptTaskResult,
@@ -1437,17 +1432,6 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ApplyInitiatorSlash;
-  }
-  if (
-    containsBytes(
-      data,
-      getFixedBytesEncoder(8).encode(
-        new Uint8Array([139, 103, 176, 41, 240, 95, 186, 213]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationInstruction.AssertReviewDelivery;
   }
   if (
     containsBytes(
@@ -2593,9 +2577,6 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ApplyInitiatorSlash;
     } & ParsedApplyInitiatorSlashInstruction<TProgram>)
   | ({
-      instructionType: AgencCoordinationInstruction.AssertReviewDelivery;
-    } & ParsedAssertReviewDeliveryInstruction<TProgram>)
-  | ({
       instructionType: AgencCoordinationInstruction.AssignDisputeResolver;
     } & ParsedAssignDisputeResolverInstruction<TProgram>)
   | ({
@@ -2933,13 +2914,6 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ApplyInitiatorSlash,
         ...parseApplyInitiatorSlashInstruction(instruction),
-      };
-    }
-    case AgencCoordinationInstruction.AssertReviewDelivery: {
-      assertIsInstructionWithAccounts(instruction);
-      return {
-        instructionType: AgencCoordinationInstruction.AssertReviewDelivery,
-        ...parseAssertReviewDeliveryInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.AssignDisputeResolver: {
@@ -3794,10 +3768,6 @@ export type AgencCoordinationPluginInstructions = {
     input: ApplyInitiatorSlashAsyncInput,
   ) => ReturnType<typeof getApplyInitiatorSlashInstructionAsync> &
     SelfPlanAndSendFunctions;
-  assertReviewDelivery: (
-    input: AssertReviewDeliveryInput,
-  ) => ReturnType<typeof getAssertReviewDeliveryInstruction> &
-    SelfPlanAndSendFunctions;
   assignDisputeResolver: (
     input: AssignDisputeResolverAsyncInput,
   ) => ReturnType<typeof getAssignDisputeResolverInstructionAsync> &
@@ -4443,11 +4413,6 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getApplyInitiatorSlashInstructionAsync(input),
-            ),
-          assertReviewDelivery: (input) =>
-            addSelfPlanAndSendFunctions(
-              client,
-              getAssertReviewDeliveryInstruction(input),
             ),
           assignDisputeResolver: (input) =>
             addSelfPlanAndSendFunctions(

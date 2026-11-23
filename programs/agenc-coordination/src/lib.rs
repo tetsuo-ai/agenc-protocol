@@ -1436,20 +1436,6 @@ pub mod agenc_coordination {
         instructions::reclaim_completion_bond::handler(ctx, role)
     }
 
-    /// Assert the delivery reviewed by the signer in the same transaction as the decision.
-    pub fn assert_review_delivery(
-        ctx: Context<AssertReviewDelivery>,
-        proof_hash: [u8; 32],
-        submission_count: u16,
-    ) -> Result<()> {
-        let submission = &ctx.accounts.task_submission;
-        require!(
-            submission.proof_hash == proof_hash && submission.submission_count == submission_count,
-            CoordinationError::SubmissionNotPending
-        );
-        Ok(())
-    }
-
     /// Request free, non-terminal revisions on a submitted result (Batch 3 §8). Keeps
     /// the claim open for an in-place resubmit; bounded by MAX_REVISION_ROUNDS.
     #[cfg(not(feature = "mainnet-canary"))]
