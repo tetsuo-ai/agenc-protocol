@@ -396,10 +396,23 @@ and deduplicate this event by task. Throwing leaves the event pending. The walle
 host applies the credit and its task receipt in one atomic journal write.
 Pending events are never removed by settled-record retention.
 
-New submission records retain `jobEvidence: { request: string; acceptance: string[] }`
-from the verified job spec so sellers can inspect their agreed work after payment.
-These optional fields are read by this build. Older builds with strict state
-validation cannot read a ledger once it contains the new fields.
+Complete `JobEvidence = { request: string; acceptance: string[] }` is written to
+private content-addressed files before the hot journal stores a bounded
+`jobEvidenceRef`. `readJobEvidence(stateDir, entry)` loads and verifies it on
+demand. Legacy inline evidence is archived on the next save. Unsettled work and
+pending settlement events remain in the journal; large request histories no
+longer consume its 16 MiB budget. Archive files are retained independently of hot
+record retention. Older strict readers cannot read these new optional fields.
+
+Hosts may provide `WorkerContext.modelBudgetForTask(task, address)` to fix a
+whole-task authorization in cents before claiming. `OpenClaim.modelBudget` and
+`SubmissionRecord.modelBudget` persist the total and remaining cents across
+recovery and revisions. The runtime reserves remaining cents durably before
+calling `executorForTask(task, address, reservedCents)` and starting work. The
+wallet uses this hook for `{pay}`. There is no trusted host usage receipt yet,
+so a reservation is not refunded after success, failure, timeout or interruption.
+Unknown legacy spend and exhausted budgets prevent automatic re-execution;
+upload/submission retries still use saved output.
 
 ### Host readiness and service context
 

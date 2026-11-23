@@ -11,6 +11,7 @@ import path from "node:path";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   AgencError,
+  SubmissionStatus,
   findClaimPda,
   getTaskMarkerSize,
   taskThread,
@@ -53,6 +54,7 @@ import {
 import { firstPartyAccounts } from "./first-party.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
+import { jobListPreview } from "./list-preview.js";
 import {
   acceptedApprovers,
   alreadyRated,
@@ -2576,13 +2578,17 @@ export class AgencWallet {
       const seen = await inspectJob(this.#chain, task, this.#provider(job));
       const clock = await this.#chain.clusterTime();
       const deadline = seen?.deadline ?? job.requestDeadline ?? 0;
-      const refundAt = !request && this.#config.autoRefundAfterMs !== undefined
+      const timeoutAt = !request && this.#config.autoRefundAfterMs !== undefined
         ? this.#now() + this.#config.autoRefundAfterMs
-        : deadline > 0 ? this.#now() + Math.max(0, deadline - clock) * 1000 : null;
+        : null;
+      const chainRefundAt = deadline > 0 ? this.#now() + Math.max(0, deadline - clock) * 1000 : null;
+      const refundAt = timeoutAt === null ? chainRefundAt
+        : chainRefundAt === null ? timeoutAt : Math.min(timeoutAt, chainRefundAt);
       this.#patchJob(job.id, (entry, draft) => {
         entry.phase = "active";
         entry.chainStatus = "open";
         entry.autoRefundAt = refundAt;
+        if (timeoutAt !== null) entry.autoRefundTimeoutAt = timeoutAt;
         if (signature !== undefined) entry.signatures.activate = signature;
         this.#note(draft, {
           kind: "hired",
@@ -2837,12 +2843,19 @@ export class AgencWallet {
         dataBase64: Buffer.from(seen.submission.resultData).toString("base64"),
       };
       if (job.deliveryPointer?.hash !== pointer.hash || job.deliveryPointer?.dataBase64 !== pointer.dataBase64) {
-        this.#patchJob(job.id, (entry) => { entry.deliveryPointer = pointer; });
+        this.#patchJob(job.id, (entry) => { entry.deliveryPointer = pointer; entry.result = null; });
+      }
+      if (seen.status === "completed" && seen.submission.status === SubmissionStatus.Accepted) {
+        this.#patchJob(job.id, (entry) => { entry.finalDeliveryChecked = true; });
       }
     }
     await this.#refreshDelivery(this.#jobRecord(job.id));
 
     if (seen.status === "completed") {
+      if (!this.#jobRecord(job.id).finalDeliveryChecked) {
+        // An earlier verified revision is not evidence of what was paid for.
+        this.#patchJob(job.id, (entry) => { entry.result = null; delete entry.deliveryPointer; });
+      }
       await this.#recoverPaidDelivery(this.#jobRecord(job.id));
       this.#recordPaid(job.id, null);
       return;
@@ -2852,12 +2865,27 @@ export class AgencWallet {
       return;
     }
 
+    let autoRefundAt: number | null = null;
+    const configuredAt = request ? null : job.autoRefundTimeoutAt ?? (this.#config.autoRefundAfterMs === undefined
+      ? null : (job.hiredAt ?? job.createdAt) + this.#config.autoRefundAfterMs);
+    if (seen.status === "open") {
+      const clock = await this.#chain.clusterTime();
+      const chainRefundAt = seen.deadline > 0 ? this.#now() + (seen.deadline - clock) * 1000 : null;
+      autoRefundAt = chainRefundAt === null ? configuredAt
+        : configuredAt === null ? chainRefundAt : Math.min(chainRefundAt, configuredAt);
+      // Migrate before any early return (including a refund blocked by funding).
+      if (job.autoRefundAt !== autoRefundAt || (configuredAt !== null && job.autoRefundTimeoutAt !== configuredAt)) {
+        this.#patchJob(job.id, (entry) => {
+          entry.autoRefundAt = autoRefundAt;
+          if (configuredAt !== null) entry.autoRefundTimeoutAt = configuredAt;
+        });
+      }
+    }
     if (seen.status === "open" && seen.workers === 0) {
       // Also applies to records made by older wallets with a ten-minute
       // autoRefundAt. A queued hire keeps its agreed start window on upgrade.
       const deadlineDue = seen.deadline > 0 && (await this.#chain.clusterTime()) >= seen.deadline;
-      const due = deadlineDue || (!request && this.#config.autoRefundAfterMs !== undefined &&
-        job.autoRefundAt !== null && this.#now() >= job.autoRefundAt);
+      const due = deadlineDue || (configuredAt !== null && this.#now() >= configuredAt);
       if (due) {
         const payer = await this.#payerSigner(job);
         if (await this.#refundBlocked(job, payer.address)) return;
@@ -2959,6 +2987,7 @@ export class AgencWallet {
     const changed =
       job.chainStatus !== seen.status ||
       job.deadline !== seen.deadline ||
+      job.autoRefundAt !== autoRefundAt ||
       job.reviewDeadlineAt !== reviewDeadlineAt ||
       job.result !== result ||
       knownRecorded !== providerRecorded ||
@@ -2973,7 +3002,7 @@ export class AgencWallet {
       else entry.turnDown = turnDown;
       if (providerRecorded !== undefined) entry.providerRecorded = providerRecorded;
       if (seen.status === "pending_validation") entry.changesRequested = false;
-      if (seen.status !== "open") entry.autoRefundAt = null;
+      entry.autoRefundAt = autoRefundAt;
     });
   }
 
@@ -2984,7 +3013,7 @@ export class AgencWallet {
   }
 
   async #recoverPaidDelivery(job: JobRecord): Promise<void> {
-    if (job.result?.verified || job.deliveryPointer !== undefined || job.task === null) return;
+    if (job.finalDeliveryChecked || job.task === null) return;
     const creator = job.payer === "main" ? this.mainAddress : this.#store.state.agents[job.agentId]?.address;
     if (creator === undefined || this.#chain.findSettledDelivery === undefined) return;
     try {
@@ -2992,7 +3021,10 @@ export class AgencWallet {
       if (delivery === null || (job.providerAgent && job.providerAgent !== delivery.worker)) return;
       this.#patchJob(job.id, (entry) => {
         entry.providerAgent = delivery.worker;
-        entry.deliveryPointer = { hash: delivery.proofHashHex, dataBase64: Buffer.from(delivery.resultData).toString("base64") };
+        const pointer = { hash: delivery.proofHashHex, dataBase64: Buffer.from(delivery.resultData).toString("base64") };
+        if (entry.deliveryPointer?.hash !== pointer.hash || entry.deliveryPointer?.dataBase64 !== pointer.dataBase64) entry.result = null;
+        entry.deliveryPointer = pointer;
+        entry.finalDeliveryChecked = true;
       });
       await this.#refreshDelivery(this.#jobRecord(job.id));
     } catch (error) {
@@ -3051,11 +3083,13 @@ export class AgencWallet {
   /** done: collect what can come back and free the provider's slot. */
   async #stepTidy(job: JobRecord): Promise<void> {
     // Downloads still retry after payment, including records made by older builds.
-    if (job.outcome === "paid" && !job.result?.verified) {
-      if (job.deliveryPointer === undefined && job.task !== null) {
+    if (job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified)) {
+      if (!job.finalDeliveryChecked && job.task !== null) {
         const seen = await inspectJob(this.#chain, job.task as Address, this.#provider(job));
-        if (seen?.submission) {
+        if (seen?.status === "completed" && seen.submission?.status === SubmissionStatus.Accepted) {
           this.#patchJob(job.id, (entry) => {
+            entry.result = null;
+            entry.finalDeliveryChecked = true;
             entry.deliveryPointer = {
               hash: seen.submission!.proofHashHex,
               dataBase64: Buffer.from(seen.submission!.resultData).toString("base64"),
@@ -3064,6 +3098,10 @@ export class AgencWallet {
         }
       }
       await this.#recoverPaidDelivery(this.#jobRecord(job.id));
+      if (!this.#jobRecord(job.id).finalDeliveryChecked) {
+        this.#patchJob(job.id, (entry) => { entry.result = null; delete entry.deliveryPointer; });
+        return;
+      }
       await this.#refreshDelivery(this.#jobRecord(job.id));
       // Do not destroy the last on-chain pointer before retaining the delivery.
       if (!this.#jobRecord(job.id).result?.verified) return;
@@ -3422,7 +3460,7 @@ export class AgencWallet {
     // cancel costs, as one job's own view does.
     const recordCosts = await Promise.all(shown.map((job) => this.#firstRecordCost(job)));
     return shown.map((job, index) =>
-      jobView(job, { ...context, firstRecordCostLamports: recordCosts[index] ?? null }),
+      jobListPreview(jobView(job, { ...context, firstRecordCostLamports: recordCosts[index] ?? null })),
     );
   }
 
@@ -4788,6 +4826,20 @@ export class AgencWallet {
       return offer.wanted && BigInt(offer.priceLamports) > maximumOfferPrice(this.#config.earn ?? { executor: null })
         ? settle("problem", "This service is above the worker's reward limit. Lower its price to offer it again.")
         : settle("paused");
+    }
+
+    // Freeze admissions before trying a finite cap. The program refuses a cap
+    // below outstanding hires, and another buyer must not extend that backlog.
+    if (account.maxOpenJobs !== 1 && state === LISTING_STATE_ACTIVE) {
+      const signature = await sendListingState(this.#chain, await this.#vault.signer(agent.keyId), {
+        listing, providerAgent, state: "Paused",
+      });
+      this.#patchOffer(agentId, offerId, (entry) => { entry.signatures.state = signature; entry.status = "paused"; });
+      this.#dropBalances();
+      return true;
+    }
+    if (account.maxOpenJobs !== 1 && account.openJobs > 1) {
+      return settle("paused", "Existing hires must finish before this service can take new work.");
     }
 
     const priceChanged = account.price !== BigInt(offer.priceLamports);

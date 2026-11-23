@@ -74,9 +74,14 @@ export type SubmissionIntent = {
 /** Display evidence from the verified job spec. Never interpreted as instructions. */
 export type JobEvidence = { request: string; acceptance: string[] };
 
+/** A durable authorization ledger. Unknown spend consumes the reservation. */
+export type ModelBudget = { totalCents: number; remainingCents: number };
+
 /** A claim/execution/submission transaction that still needs reconciliation. */
 export type OpenClaim = {
   jobEvidence?: JobEvidence;
+  jobEvidenceRef?: string;
+  modelBudget?: ModelBudget;
   /** Task PDA (base58). */
   task: string;
   /** ISO timestamp at which claiming this task began. */
@@ -166,6 +171,8 @@ export type WorkerPause = {
 /** One submitted result awaiting (or past) settlement. */
 export type SubmissionRecord = {
   jobEvidence?: JobEvidence;
+  jobEvidenceRef?: string;
+  modelBudget?: ModelBudget;
   /** Durable outbox flag. Cleared only after the settlement consumer returns. */
   settlementEventPending?: boolean;
   /** Task PDA (base58). */
@@ -398,6 +405,23 @@ function jobEvidence(value: unknown, label: string): JobEvidence {
   return evidence;
 }
 
+function evidenceAndBudget(parsed: Record<string, unknown>, label: string) {
+  let modelBudget: ModelBudget | undefined;
+  if (parsed.modelBudget !== undefined) {
+    const budget = record(parsed.modelBudget, `${label}.modelBudget`);
+    exactKeys(budget, `${label}.modelBudget`, ["totalCents", "remainingCents"]);
+    const totalCents = count(budget.totalCents, `${label}.modelBudget.totalCents`, 0);
+    const remainingCents = count(budget.remainingCents, `${label}.modelBudget.remainingCents`, 0);
+    if (remainingCents > totalCents) fail(`${label}.modelBudget exceeds its total`);
+    modelBudget = { totalCents, remainingCents };
+  }
+  return {
+    ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
+    ...(parsed.jobEvidenceRef !== undefined ? { jobEvidenceRef: hash(parsed.jobEvidenceRef, `${label}.jobEvidenceRef`) } : {}),
+    ...(modelBudget !== undefined ? { modelBudget } : {}),
+  };
+}
+
 function openClaim(value: unknown, label: string): OpenClaim {
   const parsed = record(value, label);
   exactKeys(
@@ -406,6 +430,8 @@ function openClaim(value: unknown, label: string): OpenClaim {
     ["task", "claimedAt", "phase"],
     [
       "jobEvidence",
+      "jobEvidenceRef",
+      "modelBudget",
       "claimTransactionSignature",
       "revisionSubmissionCount",
       "execution",
@@ -473,7 +499,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
     ...(execution !== undefined ? { execution } : {}),
     ...(submission !== undefined ? { submission } : {}),
     ...jobLabels(parsed, label),
-    ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
+    ...evidenceAndBudget(parsed, label),
     ...(parsed.failures !== undefined
       ? { failures: count(parsed.failures, `${label}.failures`, 1) }
       : {}),
@@ -578,6 +604,8 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
     ],
     [
       "jobEvidence",
+      "jobEvidenceRef",
+      "modelBudget",
       "settlementEventPending",
       "outcome",
       "terminalEvidence",
@@ -684,7 +712,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       ? { settledAt: iso(parsed.settledAt, `${label}.settledAt`) }
       : {}),
     ...jobLabels(parsed, label),
-    ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
+    ...evidenceAndBudget(parsed, label),
   };
 }
 
@@ -1041,9 +1069,70 @@ function fsyncDirectory(stateDir: string): void {
   }
 }
 
+/** Read full evidence on demand, without inflating the hot journal on load. */
+export function readJobEvidence(
+  stateDir: string,
+  entry: { jobEvidence?: JobEvidence; jobEvidenceRef?: string },
+): JobEvidence | undefined {
+  if (entry.jobEvidence !== undefined) return entry.jobEvidence;
+  if (entry.jobEvidenceRef === undefined) return undefined;
+  const ref = hash(entry.jobEvidenceRef, "jobEvidenceRef");
+  const directoryFd = openPrivateStateDirectory(stateDir, { create: false, missingOk: false });
+  if (directoryFd === null) throw new WorkerStateError("worker evidence directory vanished");
+  let fd: number | undefined;
+  try {
+    const file = stateLeafPath(stateDir, directoryFd, `evidence-${ref}.json`);
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const metadata = fstatSync(fd);
+    assertPrivateStateFile(metadata, file);
+    if (metadata.size > 128 * 1024) fail("job evidence is too large");
+    const raw = readFileSync(fd);
+    if (createHash("sha256").update(raw).digest("hex") !== ref) fail("job evidence hash mismatch");
+    return jobEvidence(JSON.parse(raw.toString("utf8")), "jobEvidence");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    closeSync(directoryFd);
+  }
+}
+
+/** Archive before referencing it. A crash can leave an orphan, never a dangling reference. */
+function archiveJobEvidence(stateDir: string, state: WorkerState): void {
+  const entries = [...state.submissions, ...(state.openClaim === null ? [] : [state.openClaim])];
+  if (!entries.some((entry) => entry.jobEvidence !== undefined)) return;
+  const directoryFd = openPrivateStateDirectory(stateDir, { create: true, missingOk: false });
+  if (directoryFd === null) throw new WorkerStateError("worker evidence directory vanished");
+  try {
+    for (const entry of entries) {
+      if (entry.jobEvidence === undefined) continue;
+      const raw = JSON.stringify(entry.jobEvidence);
+      const ref = createHash("sha256").update(raw).digest("hex");
+      const target = stateLeafPath(stateDir, directoryFd, `evidence-${ref}.json`);
+      const tmp = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+      let fd: number | undefined;
+      try {
+        fd = openSync(tmp, "wx", 0o600);
+        writeFileSync(fd, raw);
+        fsyncSync(fd);
+        closeSync(fd);
+        fd = undefined;
+        renameSync(tmp, target);
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+        try { unlinkSync(tmp); } catch { /* Already renamed. */ }
+      }
+      entry.jobEvidenceRef = ref;
+      delete entry.jobEvidence;
+    }
+    fsyncSync(directoryFd);
+  } finally {
+    closeSync(directoryFd);
+  }
+}
+
 /** Persist validated state atomically and durably. */
 export function saveState(stateDir: string, state: WorkerState): void {
   const validated = currentState(state);
+  archiveJobEvidence(stateDir, validated);
   pruneSettledSubmissions(validated);
   pruneFailedJobs(validated);
   // The root fields for given-up jobs stay off the file at their defaults.

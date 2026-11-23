@@ -22,6 +22,7 @@ import {
   DEFAULT_ENDPOINT,
   hexToBytes,
   loadState,
+  readJobEvidence,
   readClaimAccountRentMinimums,
   readMinAgentStake,
   registrationFundingRequirement,
@@ -370,6 +371,15 @@ export class EarnHost {
     }
   }
 
+  #jobEvidence(agentId: string, entry: Parameters<typeof readJobEvidence>[1]) {
+    try {
+      return readJobEvidence(this.stateDir(agentId), entry);
+    } catch (error) {
+      this.#log(`earn evidence: ${String(error)}`);
+      return undefined;
+    }
+  }
+
   /** The jobs this agent has taken, newest first. */
   jobs(agentId: string): EarnedJob[] {
     let state: ReturnType<typeof loadState>;
@@ -381,6 +391,7 @@ export class EarnHost {
     const jobs: EarnedJob[] = [];
     if (state.openClaim !== null) {
       const claim = state.openClaim;
+      const evidence = this.#jobEvidence(agentId, claim);
       const reward = claim.execution?.rewardAmount ?? claim.submission?.rewardAmount;
       jobs.push({
         task: claim.task,
@@ -390,8 +401,8 @@ export class EarnHost {
         at: Date.parse(claim.claimedAt) || 0,
         resultHashHex: null,
         resultUri: null,
-        request: claim.jobEvidence?.request ?? "",
-        acceptance: claim.jobEvidence?.acceptance ?? [],
+        request: evidence?.request ?? "",
+        acceptance: evidence?.acceptance ?? [],
         createdAt: Date.parse(claim.claimedAt) || 0,
         settlementSignature: null,
         title: claim.title ?? null,
@@ -400,6 +411,7 @@ export class EarnHost {
       });
     }
     for (const record of state.submissions) {
+      const evidence = this.#jobEvidence(agentId, record);
       const earned =
         record.earnedLamports === undefined || record.earnedLamports === null
           ? null
@@ -416,8 +428,8 @@ export class EarnHost {
         at: Date.parse(record.settledAt ?? record.submittedAt) || 0,
         resultHashHex: record.resultHashHex,
         resultUri: record.resultUri,
-        request: record.jobEvidence?.request ?? "",
-        acceptance: record.jobEvidence?.acceptance ?? [],
+        request: evidence?.request ?? "",
+        acceptance: evidence?.acceptance ?? [],
         createdAt: Date.parse(record.submittedAt) || 0,
         settlementSignature: record.settlementSignature ?? null,
         title: record.title ?? null,
@@ -612,8 +624,9 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       acceptServiceHiresBelowMinReward: true,
-      executorForTask: async (task) => {
-        const pay = jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
+      modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
+      executorForTask: async (task, _address, reservedCents) => {
+        const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
         return executor.argv.map((part) => fill(part).replaceAll("{pay}", String(pay)));
       },
       ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),

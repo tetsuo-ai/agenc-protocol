@@ -373,6 +373,8 @@ export interface JobResult {
 }
 
 export interface JobView {
+  /** List evidence was shortened or omitted. Use jobs.get/jobs.delivery for details. */
+  previewTruncated?: boolean;
   id: string;
   /** "buying": this agent is paying. "working": this agent is doing the job. */
   role: "buying" | "working";

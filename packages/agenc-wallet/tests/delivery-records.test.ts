@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getAddressDecoder } from "@solana/kit";
@@ -12,7 +12,7 @@ import { EarnHost } from "../src/earn.js";
 import type { JobOnChain } from "../src/market.js";
 import { fixedPrice } from "../src/pricing.js";
 import type { MarketServices } from "../src/services.js";
-import { StateStore, type JobRecord } from "../src/store.js";
+import { MAX_WORK_RECORD_CACHE_BYTES, StateStore, type JobRecord } from "../src/store.js";
 import { AgencWallet, type WalletConfig } from "../src/wallet.js";
 
 const mocks = vi.hoisted(() => ({ inspect: vi.fn(), tidy: vi.fn(async () => null) }));
@@ -54,7 +54,7 @@ function chainJob(status: JobOnChain["status"] = "pending_validation"): JobOnCha
   return {
     status, deadline: 0, rewardLamports: 2000000n, workers: 1, completions: 1,
     activated: true, turnDown: null, closed: false,
-    submission: { address: TASK as never, status: 1, proofHashHex: HASH,
+    submission: { address: TASK as never, status: status === "completed" ? 2 : 1, proofHashHex: HASH,
       resultData: new TextEncoder().encode("artifact pointer"), reviewDeadlineAt: NOW / 1000 + 86400, submissionCount: 1 },
   };
 }
@@ -283,3 +283,124 @@ describe("seller records", () => {
     expect(start).not.toHaveBeenCalled();
   });
 });
+
+describe("bounded evidence and offline upgrades", () => {
+  it.each([50, 200])("serves %s large escaped multi-byte seller previews over the socket", async (count) => {
+    const f = await fixture([]);
+    seedWork(f.dataDir, f.agent.id, count);
+    const stateDir = path.join(f.dataDir, "earn", f.agent.id);
+    const state = loadState(stateDir);
+    const large = 'é雪😀"\\\n'.repeat(3000);
+    for (const record of state.submissions) record.jobEvidence = { request: large, acceptance: [large] };
+    saveState(stateDir, state);
+    f.fetchResult.mockResolvedValue({ bytes: Buffer.from(large), uri: URI });
+    const token = "a".repeat(40);
+    const socketPath = path.join(f.dataDir, "s.sock");
+    const server = await serveWallet({ wallet: f.wallet, socketPath, ownerToken: token, agentExists: () => true });
+    const owner = await connectWallet({ socketPath, token });
+    try {
+      const response = await owner.call("jobs.list", { role: "working", limit: count });
+      expect(response.jobs).toHaveLength(count);
+      expect(Buffer.byteLength(JSON.stringify({ id: 1, result: response }))).toBeLessThan(1024 * 1024);
+      for (const row of response.jobs) {
+        expect(Buffer.byteLength(JSON.stringify(row))).toBeLessThanOrEqual(4096);
+        expect(row.previewTruncated).toBe(true);
+        expect(row.result?.textTruncated).toBe(true);
+      }
+      const id = response.jobs[0]!.id;
+      expect((await owner.call("jobs.get", { jobId: id })).job).toMatchObject({ request: large, acceptance: [large] });
+      expect((await owner.call("jobs.delivery", { jobId: id })).result).toMatchObject({ text: large, textTruncated: false });
+      expect(statSync(path.join(f.dataDir, "state.json")).size).toBeLessThan(8 * 1024 * 1024);
+      const reopened = await f.reopen();
+      expect((await reopened.getJob(id, true)).request).toBe(large);
+    } finally {
+      owner.close();
+      await server.close();
+    }
+  }, 30_000);
+
+  it("bounds wallet work caches by bytes and count while retaining pending review metadata", async () => {
+    const f = await fixture([]);
+    const file = path.join(f.dataDir, "state.json");
+    await f.wallet.close();
+    const store = StateStore.open(file, NOW);
+    store.update((draft) => {
+      draft.workRecords = {};
+      for (let i = 0; i < 600; i++) {
+        draft.workRecords[`earn_${i}`] = { request: "é".repeat(30000), acceptance: ["x".repeat(10000)], updatedAt: i };
+      }
+      draft.workRecords.pending = { request: "x".repeat(60000), reviewDeadlineAt: NOW + 3600000, updatedAt: -1 };
+    });
+    const reopened = StateStore.open(file, NOW);
+    expect(Buffer.byteLength(JSON.stringify(reopened.state.workRecords))).toBeLessThanOrEqual(MAX_WORK_RECORD_CACHE_BYTES);
+    expect(reopened.state.workRecords?.pending).toEqual({ reviewDeadlineAt: NOW + 3600000, updatedAt: -1 });
+    reopened.update((draft) => {
+      for (let i = 0; i < 1500; i++) (draft.workRecords ??= {})[`tiny_${i}`] = { request: "tiny", updatedAt: i };
+    });
+    expect(Object.keys(StateStore.open(file, NOW).state.workRecords!)).toHaveLength(1000);
+  });
+
+  it.each([false, true])("authenticates the final offline revision and persists it (download delayed: %s)", async (delayed) => {
+    const old = { text: "First revision", uri: URI, hash: HASH, verified: true, files: [] };
+    const f = await fixture([job({ result: old, deliveryPointer: { hash: HASH, dataBase64: Buffer.from(URI).toString("base64") }, changesRequested: true })]);
+    mocks.inspect.mockResolvedValue({ ...chainJob("completed"), submission: null });
+    const finalHash = "cd".repeat(32);
+    const finalUri = "https://artifacts.example/final";
+    f.chain.findSettledDelivery = vi.fn(async () => ({ worker: TASK as never, proofHashHex: finalHash, resultData: Buffer.from(finalUri) }));
+    f.fetchResult.mockResolvedValue(delayed ? null : { bytes: Buffer.from("Final revision"), uri: finalUri });
+    const paid = await f.wallet.getJob("job_test", true);
+    expect(paid.status).toBe("paid");
+    expect(paid.result?.text ?? null).toBe(delayed ? null : "Final revision");
+    expect(f.chain.findSettledDelivery).toHaveBeenCalledOnce();
+    const reopened = await f.reopen();
+    f.fetchResult.mockResolvedValue({ bytes: Buffer.from("Final revision"), uri: finalUri });
+    expect(await reopened.getJob("job_test", true)).toMatchObject({ status: "paid", result: { text: "Final revision", hash: finalHash } });
+    expect(f.chain.findSettledDelivery).toHaveBeenCalledOnce();
+    expect(StateStore.open(path.join(f.dataDir, "state.json"), NOW).state.jobs.job_test?.finalDeliveryChecked).toBe(true);
+  });
+
+  it.each(["active", "done"] as const)("retries an unavailable final commitment for a %s job without exposing its earlier revision", async (phase) => {
+    const f = await fixture([job({ phase, ...(phase === "done" ? { outcome: "paid" as const, tidied: true } : {}), result: { text: "Old", uri: URI, hash: HASH, verified: true, files: [] }, deliveryPointer: { hash: HASH, dataBase64: Buffer.from(URI).toString("base64") } })]);
+    mocks.inspect.mockResolvedValue({ ...chainJob("completed"), submission: null });
+    f.chain.findSettledDelivery = vi.fn(async () => null);
+    expect((await f.wallet.getJob("job_test", true)).result).toBeNull();
+    await expect(f.wallet.jobDelivery("job_test", true)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    const reopened = await f.reopen();
+    f.chain.findSettledDelivery = vi.fn(async () => ({ worker: TASK as never, proofHashHex: "cd".repeat(32), resultData: Buffer.from(URI) }));
+    expect((await reopened.getJob("job_test", true)).result?.text).toBe("Complete work.");
+  });
+
+  it.each([undefined, 5 * 60_000, 2 * 3600_000])("reconciles a reopened legacy refund time (configured timeout: %s)", async (timeout) => {
+    const stale = timeout === undefined ? NOW - 1000 : NOW + 5 * 60_000;
+    const f = await fixture([job({ chainStatus: "open", autoRefundAt: stale })]);
+    if (timeout !== undefined) f.config.autoRefundAfterMs = timeout;
+    const reopened = await f.reopen();
+    mocks.inspect.mockResolvedValue({ ...chainJob("open"), workers: 0, completions: 0, submission: null, deadline: NOW / 1000 + 3600 });
+    const expected = NOW + Math.min(timeout ?? 3600000, 3600000);
+    expect(await reopened.getJob("job_test", true)).toMatchObject({ status: "waiting", autoRefundAt: expected });
+    expect(StateStore.open(path.join(f.dataDir, "state.json"), NOW).state.jobs.job_test?.autoRefundAt).toBe(expected);
+    expect((await (await f.reopen()).getJob("job_test", true)).autoRefundAt).toBe(expected);
+  });
+});
+
+it("bounds every variable buyer preview field without changing exact job evidence", async () => {
+  const large = '雪😀\u0001"\\'.repeat(500);
+  const result = { text: large, uri: `https://artifacts.example/${"x".repeat(5000)}`, hash: HASH, verified: true, files: Array.from({ length: 8 }, () => ({ name: "x".repeat(64), type: "application/octet-stream", bytes: 1, sha256: HASH })) };
+  const f = await fixture(Array.from({ length: 200 }, (_, i) => job({ id: `job_${i}`, phase: "failed", title: large, request: large, acceptance: Array.from({ length: 4 }, () => large), error: large, result })));
+  const token = "a".repeat(40);
+  const socketPath = path.join(f.dataDir, "s.sock");
+  const server = await serveWallet({ wallet: f.wallet, socketPath, ownerToken: token, agentExists: () => true });
+  const owner = await connectWallet({ socketPath, token });
+  try {
+    const { jobs } = await owner.call("jobs.list", { role: "buying", limit: 200 });
+    expect(jobs).toHaveLength(200);
+    expect(Buffer.byteLength(JSON.stringify({ id: 1, result: { jobs } }))).toBeLessThan(1024 * 1024);
+    expect(jobs.every((row) => Buffer.byteLength(JSON.stringify(row)) <= 4096 && row.previewTruncated)).toBe(true);
+    expect(jobs[0]?.result?.uri).toBeNull();
+    expect(jobs[0]?.result?.files.length).toBeLessThan(8);
+    expect((await f.wallet.getJob(jobs[0]!.id, true)).acceptance).toEqual(Array.from({ length: 4 }, () => large));
+  } finally {
+    owner.close();
+    await server.close();
+  }
+}, 30_000);

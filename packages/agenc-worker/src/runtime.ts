@@ -239,8 +239,8 @@ export type WorkerContext = {
   /**
    * Aborted when whoever runs the worker shuts down. A job program in
    * progress is then killed at once instead of outliving it; that is not a
-   * failed try, and the job is run again on the next start. (`runUp`'s own
-   * signal only stops it looking for work: a job in progress finishes.)
+   * failed try. Recovery can run it again only with remaining authorization.
+   * `runUp`'s own signal stops discovery and lets a job in progress finish.
    */
   signal?: AbortSignal;
   /**
@@ -252,7 +252,9 @@ export type WorkerContext = {
   /** Discover cheap service hires, then verify their provider before waiving the open-job floor. */
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
-  executorForTask?: (task: Task, address: Address) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number) => Promise<string[]>;
+  /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
+  modelBudgetForTask?: (task: Task, address: Address) => Promise<number>;
   /**
    * Host job-room self-test. Resolves only when execution is ready. Called
    * before every fresh claim, before its WAL or transaction. Throw to defer.
@@ -1030,6 +1032,8 @@ function keptMarkerFields(
 ): Pick<
   OpenClaim,
   | "jobEvidence"
+  | "jobEvidenceRef"
+  | "modelBudget"
   | "claimTransactionSignature"
   | "revisionSubmissionCount"
   | "title"
@@ -1039,6 +1043,8 @@ function keptMarkerFields(
   | "lastFailure"
 > {
   return {
+    ...(marker.jobEvidenceRef !== undefined ? { jobEvidenceRef: marker.jobEvidenceRef } : {}),
+    ...(marker.modelBudget !== undefined ? { modelBudget: marker.modelBudget } : {}),
     ...(marker.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
     ...(marker.claimTransactionSignature !== undefined
       ? { claimTransactionSignature: marker.claimTransactionSignature }
@@ -1527,6 +1533,8 @@ function restoreRevisionRound(
   const priorRecord = state.submissions.find((record) => record.task === task);
   const title = priorMarker?.title ?? priorRecord?.title;
   const listing = priorMarker?.listing ?? priorRecord?.listing;
+  const modelBudget = priorMarker?.modelBudget ?? priorRecord?.modelBudget;
+  const jobEvidenceRef = priorMarker?.jobEvidenceRef ?? priorRecord?.jobEvidenceRef;
   state.submissions = state.submissions.filter(
     (record) => record.task !== task,
   );
@@ -1537,6 +1545,8 @@ function restoreRevisionRound(
     ...(priorMarker?.claimTransactionSignature !== undefined
       ? { claimTransactionSignature: priorMarker.claimTransactionSignature }
       : {}),
+    ...(modelBudget !== undefined ? { modelBudget } : {}),
+    ...(jobEvidenceRef !== undefined ? { jobEvidenceRef } : {}),
     revisionSubmissionCount: submission.submissionCount,
     ...(title !== undefined ? { title } : {}),
     ...(listing !== undefined ? { listing } : {}),
@@ -1590,6 +1600,8 @@ function commitSubmission(
     rewardAmount: intent.rewardAmount,
     submittedAt: options.submittedAt ?? new Date().toISOString(),
     settled: false,
+    ...(marker?.jobEvidenceRef !== undefined ? { jobEvidenceRef: marker.jobEvidenceRef } : {}),
+    ...(marker?.modelBudget !== undefined ? { modelBudget: marker.modelBudget } : {}),
     ...(marker?.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
     ...(marker?.title !== undefined ? { title: marker.title } : {}),
     ...(marker?.listing !== undefined ? { listing: marker.listing } : {}),
@@ -1797,8 +1809,28 @@ async function executeAndSubmit(
   }
   let stdout: Buffer;
   try {
+    // A queued recovery tick can drain after shutdown. Cancellation must not
+    // turn an already-spent reservation into an additional failed attempt.
+    if (ctx.signal?.aborted) {
+      throw new ExecutorError("executor was stopped before it started", {
+        exitCode: null, signal: null, reason: "aborted",
+      });
+    }
+    let reservedCents: number | undefined;
+    if (ctx.modelBudgetForTask !== undefined) {
+      const state = loadState(ctx.stateDir);
+      const marker = state.openClaim;
+      if (marker?.task !== task) throw new Error("Cannot authorize untracked work.");
+      // Legacy/incomplete attempts have unknown spend. Never replenish them.
+      reservedCents = marker.modelBudget?.remainingCents ?? 0;
+      if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
+      marker.modelBudget = { totalCents: marker.modelBudget!.totalCents, remainingCents: 0 };
+      // Reserve before starting the host. Without an authenticated usage receipt,
+      // success, failure, timeout and interruption all consume the reservation.
+      saveState(ctx.stateDir, state);
+    }
     const result = await runExecutor({
-      argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task),
+      argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents),
       prompt,
       timeoutMs: ctx.config.executorTimeoutMs,
       envAllowlist: ctx.config.executorEnvAllowlist,
@@ -2023,6 +2055,10 @@ export async function processCandidate(
   await assertFreshClaimFunding(ctx, agent, decodedTask);
   // A missing host spending limit must stop the claim as well as execution.
   await ctx.executorForTask?.(decodedTask, task);
+  const budget = await ctx.modelBudgetForTask?.(decodedTask, task);
+  if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0)) {
+    throw new Error("This job has no valid model budget.");
+  }
 
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
@@ -2037,6 +2073,7 @@ export async function processCandidate(
     task: task as string,
     claimedAt: claimStartedAt,
     phase: "claiming",
+    ...(budget !== undefined ? { modelBudget: { totalCents: budget, remainingCents: budget } } : {}),
     ...labels,
   };
   saveState(ctx.stateDir, claimingState);
@@ -2063,6 +2100,7 @@ export async function processCandidate(
       task: task as string,
       claimedAt: claimStartedAt,
       phase: "claimed",
+      ...(claimedState.openClaim === null ? {} : keptMarkerFields(claimedState.openClaim)),
       ...labels,
     };
     saveState(ctx.stateDir, claimedState);
@@ -2094,6 +2132,7 @@ export async function processCandidate(
           task: task as string,
           claimedAt: claimStartedAt,
           phase: "claimed",
+          ...(recoveredState.openClaim === null ? {} : keptMarkerFields(recoveredState.openClaim)),
           ...(ambiguousSignature !== undefined
             ? { claimTransactionSignature: ambiguousSignature }
             : {}),
@@ -2537,8 +2576,8 @@ function replaySettlementEvents(ctx: WorkerContext): void {
       message:
         earnedLamports !== null && earnedLamports > 0n
           ? receiptUrl !== null
-            ? `earned ${lamportsToSol(earnedLamports)} SOL — receipt: ${receiptUrl}`
-            : `earned ${lamportsToSol(earnedLamports)} SOL — task ${record.task}`
+            ? `earned ${lamportsToSol(earnedLamports)} SOL. receipt: ${receiptUrl}`
+            : `earned ${lamportsToSol(earnedLamports)} SOL. task ${record.task}`
           : `task ${record.task} settled: ${record.outcome}`,
     });
     record.settlementEventPending = false;
@@ -2671,6 +2710,8 @@ export async function checkSettlements(
           task: record.task,
           claimedAt: claimTimestamp(claim, record.submittedAt),
           phase: "claimed",
+          ...(record.modelBudget !== undefined ? { modelBudget: record.modelBudget } : {}),
+          ...(record.jobEvidenceRef !== undefined ? { jobEvidenceRef: record.jobEvidenceRef } : {}),
           revisionSubmissionCount: submission.account.submissionCount,
           ...(record.title !== undefined ? { title: record.title } : {}),
           ...(record.listing !== undefined ? { listing: record.listing } : {}),

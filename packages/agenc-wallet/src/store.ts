@@ -20,6 +20,8 @@ export const STATE_VERSION = 1;
 const MAX_STATE_BYTES = 32 * 1024 * 1024;
 const MAX_ACTIVITY = 1_000;
 const MAX_FINISHED_JOBS = 500;
+export const MAX_WORK_RECORD_CACHE_BYTES = 4 * 1024 * 1024;
+const MAX_WORK_RECORDS = 1_000;
 
 /**
  * A service an earning agent offers for others to hire.
@@ -228,11 +230,15 @@ export interface JobRecord {
   reviewDeadlineAt: number | null;
   /** Unix ms: when a job nobody started is refunded by itself. */
   autoRefundAt: number | null;
+  /** Explicit local timeout, separate from the chain-derived display timestamp. */
+  autoRefundTimeoutAt?: number;
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
   /** Durable download pointer, retained even when a fetch fails or the job is paid. */
   deliveryPointer?: { hash: string; dataBase64: string };
+  /** The pointer was authenticated against the final paid commitment. */
+  finalDeliveryChecked?: boolean;
 
   /**
    * Whether the provider has a marketplace record of turn-downs, read while
@@ -404,6 +410,26 @@ function isFinished(job: JobRecord): boolean {
 
 /** Keep the file bounded: old finished jobs and old activity fall off. */
 function prune(state: WalletState): void {
+  // Complete worker request evidence lives in its archive. These are disposable
+  // display caches; retain compact review metadata while a dispute is unresolved.
+  const records = state.workRecords ?? {};
+  const ordered = Object.entries(records).sort((a, b) => (a[1].updatedAt ?? 0) - (b[1].updatedAt ?? 0));
+  let size = Buffer.byteLength(JSON.stringify(records));
+  let count = ordered.length;
+  for (const [id, record] of ordered) {
+    if (size <= MAX_WORK_RECORD_CACHE_BYTES && count <= MAX_WORK_RECORDS) break;
+    const before = Buffer.byteLength(JSON.stringify({ [id]: record }));
+    if (record.turnDown !== undefined || record.reviewDeadlineAt !== undefined) {
+      delete record.result;
+      delete record.request;
+      delete record.acceptance;
+      size -= before - Buffer.byteLength(JSON.stringify({ [id]: record }));
+    } else {
+      delete records[id];
+      count -= 1;
+      size -= before - 1;
+    }
+  }
   if (state.activity.length > MAX_ACTIVITY) {
     state.activity = state.activity.slice(state.activity.length - MAX_ACTIVITY);
   }
@@ -555,6 +581,10 @@ export class StateStore {
   }
 
   #save(): void {
-    writePrivateFileAtomic(this.#file, JSON.stringify(this.#state));
+    const serialized = JSON.stringify(this.#state);
+    if (Buffer.byteLength(serialized) > MAX_STATE_BYTES) {
+      throw new WalletError("INTERNAL", "The wallet's records exceed the storage limit.");
+    }
+    writePrivateFileAtomic(this.#file, serialized);
   }
 }

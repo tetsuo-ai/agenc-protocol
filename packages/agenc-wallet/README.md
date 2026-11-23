@@ -353,11 +353,14 @@ folder. Three more are replaced the same way:
   delivery (see below). Empty when this network has nowhere to keep them.
 - `{files}`: what a file's sha-256 is added to, to make its address in the
   delivery store. Empty with `{outbox}`.
-- `{pay}`: the current job's reward in whole US cents, rounded down. The
-  wallet refreshes the SOL price before claiming and before each execution,
-  including retries and recovery. If the rate is missing or invalid, or the
-  reward is less than one cent, no executor is started. Missing pricing at
-  startup also stops the worker until a later housekeeping pass can read it.
+- `{pay}`: the attempt's reserved model budget in whole US cents. The wallet
+  fixes the whole-job budget from its reward and the SOL price before claiming,
+  rounds down, and saves it across recovery and revisions. It reserves the
+  remaining budget before starting the executor. Until the host supplies trusted
+  usage receipts, every started attempt consumes its full reservation, including
+  failures and interruptions. An exhausted or legacy unknown-spend attempt is
+  never retried with a fresh budget. Missing or invalid pricing and rewards below
+  one cent stop new claims. Upload and submission retries reuse saved output.
 
 ### Files with a delivery
 
@@ -639,10 +642,18 @@ On a real network, and nothing else:
 
 `jobs.get` and `jobs.list` return `JobView.acceptance: string[]` for the buyer's
 acceptance criteria. Seller records also include the request, delivery preview,
-files and original artifact URI. New work keeps its request and criteria in the
-worker ledger. Older work tries to recover its verified job spec while available.
+files and original artifact URI. New work archives its complete request and
+criteria outside the worker's hot journal. Older work tries to recover its
+verified job spec while available. Wallet evidence caches are pruned by encoded
+bytes and count, preserving compact unresolved-review metadata.
 
-A delivery preview is at most 20,000 characters. `JobResult.textTruncated` is true
+Each `jobs.list` row is at most 4 KiB of encoded JSON, including escaping and
+UTF-8. All variable evidence fields and arrays share that bound, so 200 rows fit
+within the 1 MiB socket frame. `JobView.previewTruncated?: boolean` signals
+shortened or omitted evidence. Oversized links are omitted instead of shortened.
+Use `jobs.get` for full request and criteria, and `jobs.delivery` for full results.
+
+An exact-job delivery preview is at most 20,000 characters. `JobResult.textTruncated` is true
 when more text exists. Read `jobs.delivery` with `{ jobId: string }` to get
 `{ result: JobResult }` with the complete verified text and `textTruncated: false`.
 This read uses the same owner or agent scope as `jobs.get`. Failed reads can be
@@ -663,7 +674,17 @@ Paid delivery recovery uses `Chain.findSettledDelivery(task, creator)` when the
 submission account is already closed. RPC-backed and sandbox chains implement
 this optional method. It returns `{ worker, proofHashHex, resultData }` or null
 from authenticated completion events. A custom chain without history can recover
-only pointers it observed before settlement.
+only final pointers it observed in accepted submission accounts. The paid
+transition authenticates the final commitment even when an earlier revision was
+verified, replaces stale evidence, and persists that check across restart. If the
+final commitment cannot yet be authenticated, the old revision is not shown as
+the paid result; a later exact-job read retries.
+
+Upgrades pause unlimited listings before repairing their finite cap. Existing
+hires can finish or refund while admissions are paused; resumption requires a
+successful `maxOpenJobs: 1` update. Open legacy jobs reconcile their displayed
+refund time to the chain deadline, retaining an explicitly configured earlier
+timeout separately from that display value.
 
 ## Develop
 
