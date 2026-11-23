@@ -74,7 +74,6 @@ export * from "./registerStore";
 export * from "./rejectAndFreeze";
 export * from "./rejectTaskResult";
 export * from "./releaseClaim";
-export * from "./releaseClaimTo";
 export * from "./repairDisputeInitiatorCounter";
 export * from "./requestAttestorExit";
 export * from "./requestChanges";

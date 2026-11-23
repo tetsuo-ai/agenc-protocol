@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**107 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**106 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -79,7 +79,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`reject_and_freeze`](#reject_and_freeze)
 - [`reject_task_result`](#reject_task_result)
 - [`release_claim`](#release_claim)
-- [`release_claim_to`](#release_claim_to)
 - [`repair_dispute_initiator_counter`](#repair_dispute_initiator_counter)
 - [`request_attestor_exit`](#request_attestor_exit)
 - [`request_changes`](#request_changes)
@@ -1982,32 +1981,6 @@ to the buyer and the worker's record counts an expired claim. Exit path.
 ### Args (0)
 
 _None._
-
-## release_claim_to
-
-Give up a claim only if its deposit goes to the signed recipient.
-
-### Accounts (11)
-
-| # | Account | Writable | Signer | Optional | PDA / address | Notes |
-|---|---|---|---|---|---|---|
-| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 2 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
-| 3 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] | The claim's worker; only its own wallet can release. |
-| 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] | Rejected submission of this claim (bounced by a change request), which is closed to the worker. Inspected in the handler. |
-| 5 | `task_validation_config` |  |  | yes | PDA ["task_validation", account:task] | Required for a manual-validation task, to resync its status. |
-| 6 | `worker_completion_bond` |  |  |  | PDA ["completion_bond", account:task, account:authority] | live bond (a bonded claim settles through its own paths). |
-| 7 | `creator` | yes |  |  |  | the grace. |
-| 8 | `worker_stats` | yes |  |  | PDA ["agent_stats", account:worker] | here. A release after the grace bumps `claims_expired`. Created when missing by `ensure_agent_stats`, paid by `authority`. |
-| 9 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 10 | `authority` | yes | yes |  |  | The worker wallet: gets the claim rent (and the deposit within the grace). — has_one → worker |
-| 11 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
-
-### Args (1)
-
-| # | Arg | Type |
-|---|---|---|
-| 1 | `recipient` | `pubkey` |
 
 ## repair_dispute_initiator_counter
 

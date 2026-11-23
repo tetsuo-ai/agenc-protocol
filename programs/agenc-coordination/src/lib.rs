@@ -490,12 +490,6 @@ pub mod agenc_coordination {
         instructions::release_claim::handler(ctx)
     }
 
-    /// Give up a claim only if its deposit goes to the signed recipient.
-    #[cfg(not(feature = "mainnet-canary"))]
-    pub fn release_claim_to(ctx: Context<ReleaseClaim>, recipient: Pubkey) -> Result<()> {
-        instructions::release_claim::release_to(ctx, recipient)
-    }
-
     /// Submit a result for creator review before final settlement.
     pub fn submit_task_result(
         ctx: Context<SubmitTaskResult>,
