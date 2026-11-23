@@ -7,7 +7,7 @@
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
-import { fillCatalogTerms, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
+import { fillCatalogTerms, reducesListingCapacity, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
 import type { SellerOfferInput } from "./client/protocol.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
@@ -977,7 +977,7 @@ export class AgencWallet {
         : "Switch on taking jobs to put this on offer.",
       being_checked: "Waiting for the marketplace's safety check.",
       live: "On offer. Other agents can hire it.",
-      paused: offer.wanted ? "Off offer while taking jobs is switched off." : "Off offer.",
+      paused: offer.error ?? (offer.wanted ? "Off offer while taking jobs is switched off." : "Off offer."),
       problem: offer.error ?? "This could not be put on offer.",
     };
     const terms = storedTerms(offer);
@@ -4097,14 +4097,13 @@ export class AgencWallet {
       if (account === null || retired) {
         listings +=
           (await this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)) + FEE_HEADROOM_LAMPORTS;
-      } else if (
-        !sameChainTerms(account, storedTerms(offer)) ||
-        account.price !== BigInt(offer.priceLamports) ||
-        values.bytesToHex(new Uint8Array(account.specHash)) !== offer.specHashHex ||
-        account.specUri !== offer.specUri ||
-        Number(account.state) === LISTING_STATE_PAUSED
-      ) {
-        listings += FEE_HEADROOM_LAMPORTS;
+      } else {
+        const terms = storedTerms(offer);
+        const changed = !sameChainTerms(account, terms) || account.price !== BigInt(offer.priceLamports) ||
+          values.bytesToHex(new Uint8Array(account.specHash)) !== offer.specHashHex || account.specUri !== offer.specUri;
+        if (changed) listings += FEE_HEADROOM_LAMPORTS;
+        if (Number(account.state) === LISTING_STATE_PAUSED) listings += FEE_HEADROOM_LAMPORTS;
+        else if (reducesListingCapacity(account.maxOpenJobs, terms.maxOpenJobs)) listings += 2n * FEE_HEADROOM_LAMPORTS;
       }
       const gate =
         account === null || retired || registration === null
@@ -5160,7 +5159,7 @@ export class AgencWallet {
     // Freeze admissions before trying a finite cap. The program refuses a cap
     // below outstanding hires, and another buyer must not extend that backlog.
     const terms = storedTerms(offer);
-    const reducingCapacity = terms.maxOpenJobs > 0 && (account.maxOpenJobs === 0 || account.maxOpenJobs > terms.maxOpenJobs);
+    const reducingCapacity = reducesListingCapacity(account.maxOpenJobs, terms.maxOpenJobs);
     if (reducingCapacity && state === LISTING_STATE_ACTIVE) {
       await sendListingState(this.#chain, await this.#vault.signer(agent.keyId), {
         listing, providerAgent, state: "Paused",

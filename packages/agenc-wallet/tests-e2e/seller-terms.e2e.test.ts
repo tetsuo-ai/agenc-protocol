@@ -121,6 +121,36 @@ it("quotes, publishes and reconciles the exact terms buyers see, including after
       offer.id,
     ),
   ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  const change = {
+    ...service,
+    terms: {
+      deliverySecs: 1800,
+      tags: ["proof"],
+      operatorFeeBps: 234,
+    },
+  };
+  const revised = await wallet.quoteEarn(seller.id, change, offer.id);
+  await wallet.setOffer(seller.id, change, offer.id, revised.quoteId);
+  await live();
+  await wallet.close();
+  wallet = world.wallet = await world.reopen();
+  await live();
+  const account = (await readListing(world.sandbox.chain, listing))!;
+  expect(account).toMatchObject({
+    maxOpenJobs: 4,
+    defaultDeadlineSecs: 1800n,
+    operator: operator.address,
+    operatorFeeBps: 234,
+    price: 3000999n,
+  });
+  expect(values.decodeListingTags(new Uint8Array(account.tags))).toEqual([
+    "proof",
+  ]);
+  expect((await wallet.find({ query: "proof" })).services[0]).toMatchObject({
+    outputs: terms.outputs,
+    inputs: terms.inputs,
+    tags: ["proof"],
+  });
   const customer = await wallet.createAgent("Customer");
   await wallet.fundAgent(customer.id, { usdCents: 500 });
   await wallet.setPolicy(customer.id, {
@@ -136,39 +166,9 @@ it("quotes, publishes and reconciles the exact terms buyers see, including after
   expect(task).toMatchObject({
     rewardAmount: 3000999n,
     operator: operator.address,
-    operatorFeeBps: 123,
+    operatorFeeBps: 234,
   });
-  expect(task.deadline - task.createdAt).toBe(7201n);
-  const change = {
-    ...service,
-    terms: {
-      deliverySecs: 1800,
-      tags: ["proof"],
-      operator: null,
-      operatorFeeBps: 0,
-    },
-  };
-  const revised = await wallet.quoteEarn(seller.id, change, offer.id);
-  await wallet.setOffer(seller.id, change, offer.id, revised.quoteId);
-  await live();
-  await wallet.close();
-  wallet = world.wallet = await world.reopen();
-  await live();
-  const account = (await readListing(world.sandbox.chain, listing))!;
-  expect(account).toMatchObject({
-    maxOpenJobs: 4,
-    defaultDeadlineSecs: 1800n,
-    operatorFeeBps: 0,
-    price: 3000999n,
-  });
-  expect(values.decodeListingTags(new Uint8Array(account.tags))).toEqual([
-    "proof",
-  ]);
-  expect((await wallet.find({ query: "proof" })).services[0]).toMatchObject({
-    outputs: terms.outputs,
-    inputs: terms.inputs,
-    tags: ["proof"],
-  });
+  expect(task.deadline - task.createdAt).toBe(1800n);
 }, 60000);
 
 it("refuses expired, changed and unaffordable confirmations before enabling or saving", async () => {
@@ -230,3 +230,37 @@ it("validates the same terms before quoting and saving", async () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }
 });
+
+it("publishes for an agent already earning and pauses for a lower capacity with one approval", async () => {
+  world = await startWorld({ earn });
+  const { wallet } = world;
+  const seller = await wallet.createAgent();
+  const startup = await wallet.quoteEarn(seller.id);
+  await wallet.setEarn(seller.id, true, undefined, startup.quoteId);
+  await eventually(async () => {
+    await wallet.tick();
+    return (await wallet.overview()).agents[0]?.earn.state === "watching";
+  });
+
+  const publish = async (maxOpenJobs: number, id?: string) => {
+    const input = { ...service, terms: { maxOpenJobs } };
+    const before = await world.balance(wallet.mainAddress);
+    const quote = await wallet.quoteEarn(seller.id, input, id);
+    await wallet.setOffer(seller.id, input, id, quote.quoteId);
+    const live = await eventually(async () => {
+      await wallet.tick();
+      const offer = (await wallet.overview()).agents[0]!.earn.offer;
+      if (offer?.status === "problem") throw new Error(offer.statusText);
+      return offer?.status === "live" ? offer : null;
+    });
+    expect(before - (await world.balance(wallet.mainAddress))).toBe(
+      BigInt(quote.totalFromMain.lamports),
+    );
+    expect(
+      await readListing(world.sandbox.chain, live.listing as Address),
+    ).toMatchObject({ maxOpenJobs });
+    return live;
+  };
+  const offer = await publish(0);
+  await publish(2, offer.id);
+}, 60000);

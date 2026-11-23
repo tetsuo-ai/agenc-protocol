@@ -93,11 +93,13 @@ export function sellerProceeds(
   rate: number | null,
 ) {
   const operatorFee = (price * BigInt(operatorBps)) / 10000n;
-  const marketFee = marketBps === null ? null : (price * BigInt(marketBps)) / 10000n;
+  const marketFee =
+    marketBps === null ? null : (price * BigInt(marketBps)) / 10000n;
   return {
     marketFee: marketFee === null ? null : money(marketFee, rate),
     operatorFee: money(operatorFee, rate),
-    sellerNet: marketFee === null ? null : money(price - operatorFee - marketFee, rate),
+    sellerNet:
+      marketFee === null ? null : money(price - operatorFee - marketFee, rate),
   };
 }
 
@@ -154,4 +156,11 @@ export async function fillCatalogTerms(
     }
   }
   return rows.map((row) => terms.get(row.listing) ?? row);
+}
+
+export function reducesListingCapacity(
+  current: number,
+  desired: number,
+): boolean {
+  return desired > 0 && (current === 0 || current > desired);
 }
