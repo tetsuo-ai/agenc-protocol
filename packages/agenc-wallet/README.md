@@ -312,9 +312,11 @@ folder. Three more are replaced the same way:
   delivery (see below). Empty when this network has nowhere to keep them.
 - `{files}`: what a file's sha-256 is added to, to make its address in the
   delivery store. Empty with `{outbox}`.
-- `{pay}`: the least a job this agent takes pays, in US cents, so the
-  executor can keep what it spends on a job under what the job earns. Empty
-  when the going rate is not known.
+- `{pay}`: the current job's reward in whole US cents, rounded down. The
+  wallet refreshes the SOL price before claiming and before each execution,
+  including retries and recovery. If the rate is missing or invalid, or the
+  reward is less than one cent, no executor is started. Missing pricing at
+  startup also stops the worker until a later housekeeping pass can read it.
 
 ### Files with a delivery
 
@@ -362,6 +364,74 @@ await owner.call("earn.offer", {
   },
 });
 ```
+
+Before enabling earning or saving an offer, Desktop must show the complete
+funding quote. `offerCost` and `wordsCost` describe only marketplace costs;
+they are not funding quotes.
+
+```ts
+const quote = await owner.call("earn.quote", { agentId, offer, offerId });
+// Show totalFromMain and its breakdown. If requiresApproval is true,
+// wait for the person's explicit approval before this owner-only call:
+await owner.call("earn.approveFunding", { quoteId: quote.quoteId });
+// Use the quoted SOL price so an exchange-rate change does not reprice it.
+await owner.call("earn.offer", {
+  agentId, offerId,
+  offer: { ...offer, price: { lamports: quote.offerPrice!.lamports } },
+});
+await owner.call("earn.set", { agentId, enabled: true, minPayCents: 10 });
+```
+
+`earn.quote({ agentId })` quotes the current offers and enabling earning,
+including background upkeep. Passing `offer` quotes adding or updating that
+service, plus other pending offers. It reads balances, rents, registration
+and checks without signing, publishing or transferring. It returns:
+
+```ts
+{
+  quoteId: string, agentId: string, expiresAt: number,
+  offerPrice: Money | null,
+  registration: Money, listings: Money, checks: Money,
+  workingReserve: Money, networkReserve: Money, agentBalance: Money,
+  requiredBalance: Money, fromMain: Money, transferFee: Money,
+  totalFromMain: Money, dailyRemaining: Money, requiresApproval: boolean
+}
+// Money = { lamports: string, usdCents: number | null }
+```
+
+`registration` includes the stake, registration rent and fee headroom.
+`workingReserve` includes one claim deposit based on the highest advertised
+price, the first worker record, claim and submission rents, worker fees,
+and four earlier jobs' claim and submission rents. A claim deposit comes
+back on delivery, so only one price-based deposit is needed for serial work.
+`listings` and `checks` include all pending listing records, description
+checks and their fee headroom. `networkReserve` keeps the agent account alive.
+`requiredBalance` is their sum. `fromMain` is the shortfall after its current
+balance; `totalFromMain` adds the main wallet's transfer fee. These are
+conservative funding bounds, not promises that all reserves will be spent.
+
+Quotes expire after five minutes and do not survive a wallet restart.
+Approval moves at most the quoted amount to that quote's agent, once, and
+returns `AgentView`. A higher agent balance reduces the transfer. Approval
+funds the agent; it does not enable earning or save the offer. Get a new quote
+if the agent's balance or the intended offer changes before continuing.
+`earn.quote` and `earn.approveFunding` are owner-only RPC methods.
+
+Automatic registration, offer creation, edits and description-check funding
+share the agent's rolling 24-hour refill allowance. All transferred money,
+including reserves and the transfer fee, counts. An above-budget `earn.set`
+throws `APPROVAL_REQUIRED`; background offers show `status: "problem"` with
+an approval message and move no money. Quote and explicitly approve funding
+to continue. Missing dollar pricing also requires approval. An approved
+transfer counts in that day's usage, even above the cap. Charges are saved
+before sending; ambiguous or failed sends conservatively retain their charge
+for 24 hours. Old journals' refill entries are also counted.
+
+Offers must cost at most 1 SOL, or the configured worker maximum if lower.
+Higher prices are refused for both creation and edits. Existing oversized
+offers are paused until their prices are lowered and cannot receive automatic funding. A service hire below the
+agent's open-job minimum is accepted only after canonical hire provenance is
+checked. Unrelated open-market jobs keep the person's minimum.
 
 The wallet then does the rest by itself, one step per housekeeping pass, and
 reads the chain before each step so it can be interrupted anywhere:
@@ -501,8 +571,7 @@ On a real network, and nothing else:
 - A description is plain text. A provider's links and sample files are not
   shown.
 - A file with a delivery is at most 256 KB, because that is what the
-  marketplace's store keeps. `{pay}` is the least a job pays, not what the
-  job at hand pays: the worker does not tell the executor about the job.
+  marketplace's store keeps.
 
 ## Develop
 

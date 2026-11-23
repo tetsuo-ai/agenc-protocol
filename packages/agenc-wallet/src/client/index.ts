@@ -7,6 +7,7 @@ export type {
   AgentView,
   ApprovalView,
   EarnState,
+  EarnFundingQuote,
   EarnView,
   JobResult,
   JobStatus,

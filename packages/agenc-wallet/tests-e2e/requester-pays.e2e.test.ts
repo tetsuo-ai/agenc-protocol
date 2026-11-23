@@ -1,3 +1,4 @@
+import { setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // "Whoever asks for an approval pays for it", against the real program with
 // no change to it.
 //
@@ -329,12 +330,12 @@ describe("the wallet pays for its own approvals", () => {
 
     // The one-time cost shown before anything is spent includes the check:
     // the listing's deposit and fee, the check's deposit and its fee.
-    const before = await wallet.setEarn(worker.id, true, 10);
+    const before = await setEarnWithApproval(wallet, worker.id, true, 10);
     expect(BigInt(before.earn.offerCost!.lamports)).toBe(
       (await rent(697)) + 5_000n + (await rent(getListingModerationSize())) + 10_000n,
     );
 
-    await wallet.setOffer(worker.id, {
+    await setOfferWithApproval(wallet, worker.id, {
       name: "Line Writer",
       summary: "One friendly line about anything you name.",
       price: { usdCents: 30 },
@@ -365,13 +366,13 @@ describe("the wallet pays for its own approvals", () => {
     const { wallet, sandbox } = world;
     const rent = (space: number) => sandbox.chain.getMinimumBalanceForRentExemption(space);
     const worker = await wallet.createAgent("Worker");
-    const before = await wallet.setEarn(worker.id, true, 10);
+    const before = await setEarnWithApproval(wallet, worker.id, true, 10);
     // Known before anything is spent: a new check's deposit, its fee and the change's own fee.
     expect(BigInt(before.earn.wordsCost!.lamports)).toBe(
       (await rent(getListingModerationSize())) + 10_000n + BASE_FEE_LAMPORTS,
     );
     const words = { name: "Line Writer", summary: "One friendly line about anything you name.", price: { usdCents: 30 } };
-    await wallet.setOffer(worker.id, words);
+    await setOfferWithApproval(wallet, worker.id, words);
     const liveAgain = async (): Promise<AgentView> =>
       eventually(async () => {
         await wallet.tick();
@@ -385,23 +386,26 @@ describe("the wallet pays for its own approvals", () => {
 
     // A new price: the change's fee and nothing for a check.
     const repricedFrom = await world.balance(worker.address);
-    await wallet.setOffer(worker.id, { ...words, price: { usdCents: 45 } }, offerId);
+    await setOfferWithApproval(wallet, worker.id, { ...words, price: { usdCents: 45 } }, offerId);
     await liveAgain();
     expect(repricedFrom - (await world.balance(worker.address))).toBe(BASE_FEE_LAMPORTS);
 
     // The same words, tidied the same way, are not new words: nothing is sent at all.
     const sameFrom = await world.balance(worker.address);
-    await wallet.setOffer(worker.id, { ...words, summary: `  ${words.summary}  `, price: { usdCents: 45 } }, offerId);
+    await setOfferWithApproval(wallet, worker.id, { ...words, summary: `  ${words.summary}  `, price: { usdCents: 45 } }, offerId);
     await liveAgain();
     expect(await world.balance(worker.address)).toBe(sameFrom);
 
     // New words: exactly the figure the view gave beforehand.
     const rewordedFrom = await world.balance(worker.address);
-    await wallet.setOffer(worker.id, { ...words, summary: "Two friendly lines about anything you name.", price: { usdCents: 45 } }, offerId);
+    await setOfferWithApproval(wallet, worker.id, { ...words, summary: "Two friendly lines about anything you name.", price: { usdCents: 45 } }, offerId);
     const reworded = await liveAgain();
-    expect(rewordedFrom - (await world.balance(worker.address))).toBe(BigInt(reworded.earn.wordsCost!.lamports));
-    // None of it came from the balance.
-    expect(await world.balance(main)).toBe(mainBefore);
+    const fromMain = mainBefore - await world.balance(main);
+    // An approved top-up preserves the working reserve. Across both balances,
+    // the only cost is the quoted check/update plus that transfer's fee.
+    expect(rewordedFrom - await world.balance(worker.address) + fromMain).toBe(
+      BigInt(reworded.earn.wordsCost!.lamports) + (fromMain > 0n ? sandbox.chain.transferFeeLamports : 0n),
+    );
   }, 90_000);
 
   it("does not sign an approval that takes more than its deposit", async () => {
