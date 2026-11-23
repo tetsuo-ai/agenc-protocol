@@ -184,6 +184,39 @@ describe("the catalog", () => {
     expect(hosts.asked).toEqual([LIVE_ITEM.specUri]);
   });
 
+  it("loads the whole catalog once, even when two searches cross the former 300-row cutoff", async () => {
+    const items = Array.from({ length: 315 }, (_, index) => {
+      const bytes = new Uint8Array(32);
+      new DataView(bytes.buffer).setUint32(0, index + 1);
+      return { ...LIVE_ITEM, pda: getAddressDecoder().decode(bytes), specHash: "", specUri: "" };
+    });
+    const pages: number[] = [];
+    const services = createHostedServices({ fetchImpl: fakeFetch({
+      "GET https://agenc.ag/api/listings": ({ url }) => {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        return json({ items: items.slice((page - 1) * 100, page * 100), total: items.length });
+      },
+    }).fetch });
+    const [first, second] = await Promise.all([services.listServices(), services.listServices()]);
+    expect(first.map((row) => row.listing)).toEqual(items.map((row) => row.pda));
+    expect(second).toEqual(first);
+    expect(pages).toEqual([1, 2, 3, 4]);
+  });
+
+  it("rejects a repeated page and retries without caching a partial list", async () => {
+    let repeats = true;
+    const services = createHostedServices({ fetchImpl: fakeFetch({
+      "GET https://agenc.ag/api/listings": ({ url }) => json({
+        total: 2,
+        items: [{ ...LIVE_ITEM, specUri: "", pda: repeats || url.searchParams.get("page") === "1" ? LISTING : TASK, specHash: "" }],
+      }),
+    }).fetch });
+    await expect(services.listServices()).rejects.toMatchObject({ code: "NETWORK" });
+    repeats = false;
+    expect((await services.listServices()).map((row) => row.listing)).toEqual([LISTING, TASK]);
+  });
+
   it("says so plainly when the catalog is down", async () => {
     const { fetch } = fakeFetch({});
     await expect(createHostedServices({ fetchImpl: fetch }).listServices()).rejects.toMatchObject({
@@ -387,6 +420,8 @@ describe("the catalog", () => {
       fetchImpl: fakeFetch(listingsRoute([untried, proven, dearer, someoneElse])).fetch,
       publicFetcher: hosts.fetcher,
     });
+    const targeted = await services.listServices({ listing: untried.pda });
+    expect(targeted.find((row) => row.listing === untried.pda)?.details).toBe("ready");
     const rows = await services.listServices();
     expect(rows.map((row) => row.listing)).toEqual([addressOf(12), addressOf(13), addressOf(14)]);
   });

@@ -9,7 +9,7 @@
 import { inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { address, type Address, type KeyPairSigner } from "@solana/kit";
+import { address, isAddress, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   AgencError,
   SubmissionStatus,
@@ -22,7 +22,7 @@ import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
-import type { AmountInput, WalletEvent } from "./client/protocol.js";
+import type { AmountInput, MethodParams, MethodResult, WalletEvent } from "./client/protocol.js";
 import { WALLET_CAPABILITIES } from "./client/types.js";
 import type {
   ActivityKind,
@@ -115,6 +115,7 @@ import {
   buildJobSpec,
   buildListingSpec,
   jobSpecHash,
+  distinctOffers,
   tidyText,
   type CatalogRow,
   type MarketServices,
@@ -1606,9 +1607,12 @@ export class AgencWallet {
       this.#marketFeeBps(),
     ]);
     const byProvider = new Map<string, { listing: string; name: string }[]>();
+    const seen = new Set<string>();
     for (const row of rows) {
+      if (seen.has(row.listing)) continue;
+      seen.add(row.listing);
       const list = byProvider.get(row.providerAgent) ?? [];
-      if (!list.some((entry) => entry.listing === row.listing)) list.push({ listing: row.listing, name: row.name });
+      list.push({ listing: row.listing, name: row.name });
       byProvider.set(row.providerAgent, list);
     }
     return { known, rate, feeBps, byProvider };
@@ -1622,6 +1626,7 @@ export class AgencWallet {
     let offeredBy: ProviderView | null = null;
     if (record !== null && facts !== null) {
       const provider = context.known.record!.providers.get(row.providerAgent) ?? EMPTY_RECORD;
+      const siblings = context.byProvider.get(row.providerAgent) ?? [];
       offeredBy = {
         since: facts.since,
         jobsDone: provider.jobs,
@@ -1630,11 +1635,13 @@ export class AgencWallet {
         turnedDown: facts.turnedDown,
         disputesLost: facts.disputesLost,
         deposit: facts.depositLamports === null ? null : money(facts.depositLamports, rate),
-        otherServices: (context.byProvider.get(row.providerAgent) ?? []).filter((other) => other.listing !== row.listing),
+        otherServices: siblings.slice(0, 9).filter((other) => other.listing !== row.listing).slice(0, 8),
+        otherServiceCount: Math.max(0, siblings.length - 1),
       };
     }
     return {
       listing: row.listing,
+      ...(this.#chain.network === "mainnet" ? { listingUrl: `https://agenc.ag/listings/${row.listing}` } : {}),
       name: row.name,
       summary: row.summary,
       description: row.description,
@@ -1687,31 +1694,65 @@ export class AgencWallet {
    * same word further down. Words that say nothing ("find someone to ...")
    * are left out, so a whole sentence works as a search.
    */
-  async find(params: {
-    query?: string;
-    maxPriceCents?: number;
-    limit?: number;
-    offset?: number;
-  }): Promise<{ services: ServiceView[]; total: number }> {
-    const [listed, rate] = await Promise.all([this.#services.listServices(), this.#displayRate()]);
-    const rows = [...listed, ...(await this.#ownServices(listed))];
-    const context = await this.#serviceContext(rows, RECORD_WAIT_MS);
-    const words = searchWords(params.query ?? "");
+  async find(params: MethodParams<"market.find">): Promise<Omit<MethodResult<"market.find">, "networkFee">> {
+    const { provider, minRating, minPaidJobs } = params;
+    if (provider !== undefined && (typeof provider !== "string" || !isAddress(provider))) {
+      throw new WalletError("BAD_REQUEST", "Enter the full provider ID.");
+    }
+    if (minRating !== undefined && (!Number.isFinite(minRating) || minRating < 1 || minRating > 5)) {
+      throw new WalletError("BAD_REQUEST", "The minimum rating must be between 1 and 5.");
+    }
+    if (minPaidJobs !== undefined && (!Number.isSafeInteger(minPaidJobs) || minPaidJobs < 1)) {
+      throw new WalletError("BAD_REQUEST", "The minimum paid jobs must be a positive whole number.");
+    }
+    if (params.maxPriceCents !== undefined && (!Number.isFinite(params.maxPriceCents) || params.maxPriceCents < 0)) {
+      throw new WalletError("BAD_REQUEST", "Enter a nonnegative maximum price.");
+    }
+    const query = (params.query ?? "").trim();
+    const exact = isAddress(query);
+    const words = exact ? [] : searchWords(query);
     const limit = Math.min(MAX_FIND_LIMIT, Math.max(1, Math.trunc(params.limit ?? 8)));
     const offset = Math.max(0, Math.trunc(params.offset ?? 0));
     let maxLamports: bigint | null = null;
     if (params.maxPriceCents !== undefined) {
+      const rate = await this.#displayRate();
       if (rate === null) {
         throw new WalletError(
           "NETWORK",
           "Dollar prices are not available right now. Try again in a moment.",
         );
       }
-      maxLamports = centsToLamports(params.maxPriceCents, rate);
+      // A filter is an upper bound. A fraction of a lamport cannot buy the next one.
+      maxLamports = BigInt(Math.floor((params.maxPriceCents * 10_000_000) / rate));
     }
+    const listed = await this.#services.listServices({
+      ...(exact ? { listing: query } : {}),
+      ...(provider === undefined ? {} : { provider }),
+      ...(maxLamports === null ? {} : { maxLamports }),
+    });
+    const rows = [...listed, ...(await this.#ownServices(listed))];
+    const context = await this.#serviceContext(rows, RECORD_WAIT_MS);
+    const trustFiltered = minRating !== undefined || minPaidJobs !== undefined;
+    let pending = trustFiltered && (context.known.record?.pending ?? 0) > 0;
+    let recordsUnavailable = false;
     const matched = rows
+      .filter((row) => !exact || row.listing === query)
+      .filter((row) => provider === undefined || row.providerAgent === provider)
       .filter((row) => maxLamports === null || row.priceLamports <= maxLamports)
+      .filter((row) => {
+        if (!trustFiltered) return true;
+        const record = knownRecord(context.known, row);
+        if (record === null) {
+          if (context.known.reading) pending = true;
+          else recordsUnavailable = true;
+          return false;
+        }
+        return (minPaidJobs === undefined || record.jobs >= minPaidJobs)
+          && (minRating === undefined || (record.rating !== null && record.rating >= minRating));
+      })
       .map((row) => {
+        if (words.length === 0) return { row, hits: 0, inName: 0 };
+        if (row.details === "loading") pending = true;
         const name = searchable(row.name);
         const rest = searchable(
           [
@@ -1739,7 +1780,10 @@ export class AgencWallet {
     // them: all of them when any service does, the nearest ones otherwise.
     // One stray word in a long description does not make a match.
     const most = matched.reduce((best, entry) => Math.max(best, entry.hits), 0);
-    const scored = matched.filter((entry) => words.length === 0 || (most > 0 && entry.hits === most));
+    const scored = distinctOffers(
+      matched.filter((entry) => words.length === 0 || (most > 0 && entry.hits === most)),
+      (entry) => entry.row,
+    );
     // Then by what buyers really paid and said, weighed by money: many good
     // paid jobs rank above one excellent cheap one (trust.ts).
     const recordOf = (row: CatalogRow): TrustRecord => knownRecord(context.known, row) ?? EMPTY_RECORD;
@@ -1749,11 +1793,14 @@ export class AgencWallet {
         // A service nobody can read about goes below the ones that say what they do.
         Number(a.row.details === "unavailable") - Number(b.row.details === "unavailable") ||
         compareRecords(recordOf(a.row), recordOf(b.row)) ||
-        (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
+        (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0) ||
+        (a.row.listing < b.row.listing ? -1 : a.row.listing > b.row.listing ? 1 : 0),
     );
     return {
       services: scored.slice(offset, offset + limit).map((entry) => this.#serviceView(entry.row, context)),
       total: scored.length,
+      ...(pending ? { pending } : {}),
+      ...(recordsUnavailable ? { recordsUnavailable } : {}),
     };
   }
 
@@ -1862,7 +1909,7 @@ export class AgencWallet {
 
     const now = this.#now();
     const jobId = newId("job");
-    const catalog = await this.#services.listServices().catch(() => [] as CatalogRow[]);
+    const catalog = await this.#services.listServices({ listing: params.listing }).catch(() => [] as CatalogRow[]);
     const catalogRow = catalog.find((row) => row.listing === listing);
     const service: ServiceView = this.#serviceView(
       catalogRow ?? {

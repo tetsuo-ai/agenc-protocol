@@ -251,6 +251,28 @@ async function described(service: unknown): Promise<Record<string, unknown>> {
 }
 
 describe("a service as an agent reads it", () => {
+  it("passes discovery filters and the offset, and returns navigable IDs and the next offset", async () => {
+    const service = { ...SERVICE, listingUrl: `https://agenc.ag/listings/${SERVICE.listing}` };
+    const { client, calls } = wallet({ "market.find": { services: [service], total: 3, networkFee: usd(22) } });
+    const page = await runMarketTool(client, "agent_1", "market_find", {
+      query: SERVICE.listing, provider: SERVICE.provider, min_rating: 4.5, min_paid_jobs: 3,
+      max_price_usd: 1.255, offset: 1, limit: 1,
+    });
+    expect(calls).toEqual([["market.find", { query: SERVICE.listing, provider: SERVICE.provider,
+      minRating: 4.5, minPaidJobs: 3, maxPriceCents: 125.5, offset: 1, limit: 1 }]]);
+    expect(page).toMatchObject({ ok: true, total: 3, next_offset: 2,
+      services: [{ id: SERVICE.listing, provider_id: SERVICE.provider, url: service.listingUrl }] });
+    expect((await runMarketTool(client, "agent_1", "market_find", { offset: 2 })).next_offset).toBeNull();
+  });
+
+  it("rejects invalid filters or offsets without making a wallet call", async () => {
+    const { client, calls } = wallet({});
+    for (const args of [{ offset: -1 }, { offset: 0.5 }, { min_rating: 6 }, { min_rating: "4" }, { min_paid_jobs: 0 }, { provider: "partial" }]) {
+      expect((await runMarketTool(client, "agent_1", "market_find", args)).ok).toBe(false);
+    }
+    expect(calls).toEqual([]);
+  });
+
   it("gives its record with the count beside the stars, and the marketplace's share", async () => {
     expect(await described(SERVICE)).toMatchObject({
       marketplace_fee: "$0.01 of the price (5%)",

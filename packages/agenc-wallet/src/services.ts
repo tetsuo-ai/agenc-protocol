@@ -137,8 +137,11 @@ export interface ResultUploader {
 }
 
 export interface MarketServices {
-  /** Services a buyer can hire right now. */
-  listServices(): Promise<CatalogRow[]>;
+  /**
+   * Hireable offers. For discovery, keep all listing IDs until the caller has filtered
+   * them, but only read descriptions that can match the supplied constraints.
+   */
+  listServices(filters?: { listing?: string; provider?: string; maxLamports?: bigint }): Promise<CatalogRow[]>;
   /**
    * The jobs a provider agent finished, by their task addresses, as the
    * marketplace's own record lists them. Only the attribution is taken from
@@ -429,7 +432,7 @@ export const DEFAULT_ATTEST_URL = "https://attest.agenc.ag";
 
 const CATALOG_TTL_MS = 60_000;
 const INFO_TTL_MS = 10 * 60_000;
-const MAX_CATALOG_PAGES = 3;
+const CATALOG_PAGE_SIZE = 100;
 /** How long a provider's list of finished jobs is kept before it is read again. */
 const FINISHED_TTL_MS = 10 * 60_000;
 /** A provider's finished jobs are read in pages of this many, at most this many pages. */
@@ -501,28 +504,18 @@ function describedRow(
  * one with the most finished jobs stays. Services from different providers
  * are never merged, however alike they look.
  */
-function withoutRepeats(listed: readonly ListedService[]): ListedService[] {
-  const best = new Map<string, ListedService>();
-  const order: string[] = [];
-  listed.forEach((entry, index) => {
-    const key =
-      entry.specHashHex === null
-        ? `single ${index}`
-        : `${entry.base.providerAgent} ${entry.specHashHex} ${entry.base.priceLamports}`;
-    const kept = best.get(key);
-    if (kept === undefined) {
-      best.set(key, entry);
-      order.push(key);
-      return;
-    }
-    if (
-      entry.base.jobsDone > kept.base.jobsDone ||
-      (entry.base.jobsDone === kept.base.jobsDone && entry.base.ratingCount > kept.base.ratingCount)
-    ) {
+export function distinctOffers<T>(entries: readonly T[], rowOf: (entry: T) => CatalogRow): T[] {
+  const best = new Map<string, T>();
+  for (const entry of entries) {
+    const row = rowOf(entry);
+    const key = row.specHashHex === null ? row.listing : `${row.providerAgent} ${row.specHashHex} ${row.priceLamports}`;
+    const previous = best.get(key);
+    const kept = previous === undefined ? undefined : rowOf(previous);
+    if (!kept || row.jobsDone > kept.jobsDone || (row.jobsDone === kept.jobsDone && row.ratingCount > kept.ratingCount)) {
       best.set(key, entry);
     }
-  });
-  return order.map((key) => best.get(key) as ListedService);
+  }
+  return [...best.values()];
 }
 
 function trimBase(url: string, label: string): string {
@@ -576,7 +569,8 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
   /** When the marketplace was last asked for a list of finished jobs (the real clock). */
   let finishedAskedAt = Number.NEGATIVE_INFINITY;
 
-  let catalog: { at: number; listed: ListedService[] } | null = null;
+  type Catalog = { at: number; listed: ListedService[] };
+  let catalog: Catalog | null = null;
   let info: { at: number; moderator: Address } | null = null;
   /** When a description last failed to load, by hash and address. */
   const detailsFailedAt = new Map<string, number>();
@@ -792,6 +786,43 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     return tasks;
   }
 
+  let catalogRead: Promise<Catalog> | null = null;
+
+  async function readCatalog(): Promise<Catalog> {
+    const found = new Map<string, ListedService>();
+    const seen = new Set<string>();
+    // Freeze the first reported total. A growing catalog cannot keep a read open forever.
+    let total: number | null = null;
+    let received = 0;
+    for (let page = 1; ; page += 1) {
+      const { status, body } = await requestJson(
+        fetchImpl,
+        `${siteUrl}/api/listings?hireable=1&page=${page}&pageSize=${CATALOG_PAGE_SIZE}`,
+        { method: "GET" },
+        { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
+      );
+      const data = record(body);
+      if (status !== 200 || data === null || !Array.isArray(data.items)) {
+        throw new WalletError("NETWORK", "The list of services could not be loaded. Try again in a moment.");
+      }
+      if (page === 1) total = finite(data.total);
+      if (data.items.length === 0) break;
+      // Some listings can move between pages while the index changes. Refuse a repeated
+      // page rather than silently reporting that the first page was the whole catalog.
+      const pageIds = JSON.stringify(data.items.map((item: unknown) => record(item)?.pda));
+      if (seen.has(pageIds)) throw new WalletError("NETWORK", "The service list changed while loading. Try again.");
+      seen.add(pageIds);
+      for (const item of data.items) {
+        const row = parseRow(item);
+        if (row !== null) found.set(row.base.listing, row);
+      }
+      received += data.items.length;
+      if (total === null ? data.items.length < CATALOG_PAGE_SIZE : received >= total) break;
+    }
+    catalog = { at: now(), listed: [...found.values()] };
+    return catalog;
+  }
+
   return usesScopedRequests<MarketServices>({
     async finishedJobs(provider) {
       const fresh = (list: FinishedList | undefined): list is FinishedList =>
@@ -815,34 +846,22 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       return turn;
     },
 
-    async listServices() {
-      if (catalog === null || now() - catalog.at >= CATALOG_TTL_MS) {
-        const found: ListedService[] = [];
-        for (let page = 1; page <= MAX_CATALOG_PAGES; page += 1) {
-          const { status, body } = await requestJson(
-            fetchImpl,
-            `${siteUrl}/api/listings?hireable=1&page=${page}&pageSize=100`,
-            { method: "GET" },
-            { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
-          );
-          const data = record(body);
-          if (status !== 200 || data === null || !Array.isArray(data.items)) {
-            throw new WalletError(
-              "NETWORK",
-              "The list of services could not be loaded. Try again in a moment.",
-            );
-          }
-          for (const item of data.items) {
-            const row = parseRow(item);
-            if (row !== null) found.push(row);
-          }
-          const total = finite(data.total) ?? 0;
-          if (data.items.length === 0 || page * 100 >= total) break;
+    async listServices(filters) {
+      const snapshot = catalog !== null && now() - catalog.at < CATALOG_TTL_MS
+        ? catalog
+        : await (catalogRead ??= readCatalog().finally(() => { catalogRead = null; }));
+      const listed = snapshot.listed;
+      // Record attribution needs the catalog, even on a narrow search. Fetch provider-hosted
+      // descriptions only for candidates that could reach the result page.
+      const describeMatch = (entry: ListedService): CatalogRow => {
+        if ((filters?.listing !== undefined && entry.base.listing !== filters.listing)
+          || (filters?.provider !== undefined && entry.base.providerAgent !== filters.provider)
+          || (filters?.maxLamports !== undefined && entry.base.priceLamports > filters.maxLamports)) {
+          return describedRow(entry, NO_DETAILS, "unavailable");
         }
-        catalog = { at: now(), listed: withoutRepeats(found) };
-      }
-      const listed = catalog.listed;
-      let rows = listed.map(describe);
+        return describe(entry);
+      };
+      let rows = listed.map(describeMatch);
       if (detailsWaitMs > 0 && rows.some((row) => row.details === "loading")) {
         // Most descriptions are small files that arrive at once. Wait a moment
         // for them, then hand the list back with whatever has come in: the
@@ -856,9 +875,9 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
           }),
         ]);
         clearTimeout(timer);
-        rows = listed.map(describe);
+        rows = listed.map(describeMatch);
       }
-      return rows;
+      return filters ? rows : distinctOffers(rows, (row) => row);
     },
 
     async trustedModerators() {

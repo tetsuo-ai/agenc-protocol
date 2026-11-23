@@ -65,13 +65,31 @@ export interface WalletMethods {
 
   "market.find": {
     /** `limit` is at most 50 a page; `offset` skips that many of the best matches. */
-    params: { query?: string; maxPriceCents?: number; limit?: number; offset?: number };
+    params: {
+      /** Search words or an exact service ID. */
+      query?: string;
+      maxPriceCents?: number;
+      provider?: string;
+      /** Minimum fee-weighted buyer rating (1 to 5) and number of verified paid jobs. */
+      minRating?: number;
+      minPaidJobs?: number;
+      limit?: number;
+      offset?: number;
+    };
     /**
      * `total` is how many services match in all, of which `services` is one
      * page. `networkFee` is what every job costs on top of its price and is
      * not returned, even when the job is cancelled.
      */
-    result: { services: ServiceView[]; total: number; networkFee: Money };
+    result: {
+      services: ServiceView[];
+      total: number;
+      networkFee: Money;
+      /** More matches may appear when descriptions or verified records finish loading. */
+      pending?: boolean;
+      /** A trust filter excluded services whose record could not be read. */
+      recordsUnavailable?: boolean;
+    };
   };
   "market.hire": {
     params: {

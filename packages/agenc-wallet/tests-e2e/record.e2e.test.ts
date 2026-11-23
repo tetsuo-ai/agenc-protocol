@@ -154,6 +154,9 @@ describe("a service's record", () => {
 
     const listed = (await wallet.find({})).services;
     expect(listed.map((service) => service.name)).toEqual(["Northlight", "Haiku Writer"]);
+    expect(await wallet.find({ minPaidJobs: 2, minRating: 4 })).toMatchObject({ total: 1, services: [{ listing: names }] });
+    expect(await wallet.find({ minRating: 4.5, maxPriceCents: 20 })).toMatchObject({ total: 1, services: [{ listing: haiku }] });
+    expect(await wallet.find({ minRating: 5, minPaidJobs: 2 })).toEqual({ total: 0, services: [] });
     const [northlight, poem] = listed;
     // What the person reads next to each: the stars with how many there are,
     // and what was paid by how many buyers.

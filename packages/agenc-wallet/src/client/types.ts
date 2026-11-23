@@ -243,6 +243,8 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  /** Canonical listing page for a service on the public marketplace. */
+  listingUrl?: string;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;
@@ -332,7 +334,9 @@ export interface ProviderView {
   disputesLost: number | null;
   /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
   deposit: Money | null;
-  /** Its other services on offer now. */
+  /** Count across the catalog. Filter by provider to page through all of them. */
+  otherServiceCount?: number;
+  /** A preview of its other services on offer now. */
   otherServices: { listing: string; name: string }[];
 }
 

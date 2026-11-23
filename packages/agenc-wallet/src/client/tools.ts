@@ -56,7 +56,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
         query: {
           type: "string",
           maxLength: 200,
-          description: "What you are looking for, in plain words.",
+          description: "Search words or the full service ID.",
         },
         max_price_usd: {
           type: "number",
@@ -64,6 +64,10 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
           maximum: 100000,
           description: "Only show services at or below this price in US dollars.",
         },
+        provider: { type: "string", pattern: "^[1-9A-HJ-NP-Za-km-z]{32,44}$", description: "Exact provider ID from a service." },
+        min_rating: { type: "number", minimum: 1, maximum: 5, description: "Minimum rating from paying buyers." },
+        min_paid_jobs: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Minimum verified paid jobs for this service." },
+        offset: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Skip this many matches. Use next_offset for the next page." },
         limit: { type: "integer", minimum: 1, maximum: 20 },
       },
     },
@@ -216,6 +220,8 @@ export interface MarketToolResult {
   /** One or two plain sentences: what happened and what to do next. */
   message: string;
   services?: ReturnType<typeof describeService>[];
+  total?: number;
+  next_offset?: number | null;
   job?: ReturnType<typeof describeJob>;
   jobs?: ReturnType<typeof describeJob>[];
 }
@@ -239,17 +245,22 @@ function text(value: unknown, field: string, max: number, required: boolean): st
   return trimmed;
 }
 
-function dollarsToCents(value: unknown, field: string): number | undefined {
+function dollarsToCents(value: unknown, field: string, fractionalCents = false): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 100_000) {
     throw new ToolInputError(`${field} must be a dollar amount above zero.`);
   }
-  return Math.round(value * 100);
+  if (!fractionalCents) return Math.round(value * 100);
+  // Shift the decimal point in the quoted cap: $1.255 is exactly 125.5 cents.
+  const [amount, exponent = "0"] = String(value).split("e");
+  return Number(`${amount}e${Number(exponent) + 2}`);
 }
 
 function describeService(service: ServiceView) {
   return {
     id: service.listing,
+    provider_id: service.provider,
+    ...(service.listingUrl ? { url: service.listingUrl } : {}),
     name: service.name,
     ...(service.category !== null ? { category: service.category } : {}),
     // Everything from here to `terms` is the provider's own text.
@@ -309,11 +320,15 @@ function describeRecord(service: ServiceView): Record<string, unknown> {
               ? { on_the_marketplace_since: new Date(provider.since).toISOString().slice(0, 10) }
               : {}),
             paid_jobs: paidJobs(provider.jobsDone, provider.paid, provider.buyers),
+            ...(provider.otherServiceCount !== undefined ? { other_service_count: provider.otherServiceCount } : {}),
             // A provider without a stats record has not been counted, not cleared.
             turned_down: provider.turnedDown ?? "no record kept",
             disputes_lost: provider.disputesLost ?? "no record kept",
             ...(provider.otherServices.length > 0
-              ? { other_services: provider.otherServices.slice(0, 8).map((other) => other.name) }
+              ? {
+                  other_services: provider.otherServices.slice(0, 8).map((other) => other.name),
+                  related_services: provider.otherServices.slice(0, 8).map((other) => ({ id: other.listing, name: other.name })),
+                }
               : {}),
           },
         }
@@ -415,26 +430,57 @@ export async function runMarketTool(
   try {
     if (name === "market_find") {
       const query = text(args.query, "query", 200, false);
-      const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd");
+      const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd", true);
       const limit =
         typeof args.limit === "number" && Number.isInteger(args.limit)
           ? Math.min(20, Math.max(1, args.limit))
           : 8;
-      const { services, total, networkFee } = await client.call(
+      const provider = text(args.provider, "provider", 44, false);
+      if (provider !== undefined && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(provider)) {
+        throw new ToolInputError("Enter the full provider ID.");
+      }
+      const minRating = args.min_rating;
+      if (minRating !== undefined && (typeof minRating !== "number" || !Number.isFinite(minRating) || minRating < 1 || minRating > 5)) {
+        throw new ToolInputError("min_rating must be between 1 and 5.");
+      }
+      const minPaidJobs = args.min_paid_jobs;
+      if (minPaidJobs !== undefined && (typeof minPaidJobs !== "number" || !Number.isSafeInteger(minPaidJobs) || minPaidJobs < 1)) {
+        throw new ToolInputError("min_paid_jobs must be a positive whole number.");
+      }
+      const offset = args.offset === undefined ? 0 : args.offset;
+      if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+        throw new ToolInputError("offset must be a nonnegative whole number.");
+      }
+      const { services, total, networkFee, pending, recordsUnavailable } = await client.call(
         "market.find",
         {
           ...(query !== undefined ? { query } : {}),
           ...(maxPriceCents !== undefined ? { maxPriceCents } : {}),
+          ...(provider !== undefined ? { provider } : {}),
+          ...(minRating !== undefined ? { minRating } : {}),
+          ...(minPaidJobs !== undefined ? { minPaidJobs } : {}),
+          ...(offset > 0 ? { offset } : {}),
           limit,
         },
         callOptions,
       );
+      const end = offset + services.length;
+      const messages: string[] = [];
+      if (services.length > 0) {
+        messages.push(offset === 0 && end === total
+          ? `Found ${plural(total, "service", "services")}.`
+          : `Showing services ${offset + 1} to ${end} of ${total}.`);
+        messages.push(`Each job also costs about ${formatMoney(networkFee)} in network fees, which are not returned even if the job is cancelled. Tell the user the name and price before hiring.`);
+      } else {
+        messages.push(total > 0 ? "There are no more services on this page." : "No matching services found.");
+      }
+      if (pending) messages.push("More matches may appear as details load. Search again in a moment.");
+      if (recordsUnavailable) messages.push("Some service records could not be checked.");
       return {
         ok: true,
-        message:
-          services.length === 0
-            ? "No service matches that right now."
-            : `${total > services.length ? `Showing the best ${services.length} of ${total} services` : `Found ${services.length} ${services.length === 1 ? "service" : "services"}`}. Each job also costs about ${formatMoney(networkFee)} in network fees, which are not returned even if the job is cancelled. Tell the user the name and price before hiring.`,
+        message: messages.join(" "),
+        total,
+        next_offset: services.length > 0 && end < total ? end : null,
         services: services.map(describeService),
       };
     }
