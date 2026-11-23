@@ -504,6 +504,36 @@ On a real network, and nothing else:
   marketplace's store keeps. `{pay}` is the least a job pays, not what the
   job at hand pays: the worker does not tell the executor about the job.
 
+## Delivery and job records
+
+`jobs.get` and `jobs.list` return `JobView.acceptance: string[]` for the buyer's
+acceptance criteria. Seller records also include the request, delivery preview,
+files and original artifact URI. New work keeps its request and criteria in the
+worker ledger. Older work tries to recover its verified job spec while available.
+
+A delivery preview is at most 20,000 characters. `JobResult.textTruncated` is true
+when more text exists. Read `jobs.delivery` with `{ jobId: string }` to get
+`{ result: JobResult }` with the complete verified text and `textTruncated: false`.
+This read uses the same owner or agent scope as `jobs.get`. Failed reads can be
+retried. Hosts must show `result.uri` whenever present, including when text is
+shown. Desktop must adopt this link behavior and the full-delivery read.
+
+Page through `jobs.list` using `{ role?, agentId?, limit?, before? }`. Set `before`
+to the last job ID of the previous page. Keep the same filters while paging.
+The response remains `{ jobs: JobView[] }`. Stop on a short or empty page. An
+expired cursor returns `NOT_FOUND`; restart from the first page. Exact
+`jobs.get` reads search the full retained ledger, including old unresolved jobs.
+
+Turning earning off stops new work. Wallet housekeeping still reconciles payments
+and collects overdue reviews. Settlement notices can replay after a crash. The
+wallet records each task's credit with its earnings and activity in one write.
+
+Paid delivery recovery uses `Chain.findSettledDelivery(task, creator)` when the
+submission account is already closed. RPC-backed and sandbox chains implement
+this optional method. It returns `{ worker, proofHashHex, resultData }` or null
+from authenticated completion events. A custom chain without history can recover
+only pointers it observed before settlement.
+
 ## Develop
 
 ```bash

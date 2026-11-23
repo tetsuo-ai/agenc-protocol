@@ -98,6 +98,8 @@ import {
 
 /** One structured log event (a JSON line in the CLI). */
 export type WorkerLogEvent = { event: string } & Record<string, unknown>;
+/** Settlement events may replay after a crash. Persist consumers synchronously
+ * and deduplicate settlement.observed by task before returning. */
 export type WorkerLogger = (event: WorkerLogEvent) => void;
 
 /** The runtime slice of the worker config (no rpcUrl/walletPath — those build the deps). */
@@ -1000,6 +1002,7 @@ function keptMarkerFields(
   marker: OpenClaim,
 ): Pick<
   OpenClaim,
+  | "jobEvidence"
   | "claimTransactionSignature"
   | "revisionSubmissionCount"
   | "title"
@@ -1009,6 +1012,7 @@ function keptMarkerFields(
   | "lastFailure"
 > {
   return {
+    ...(marker.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
     ...(marker.claimTransactionSignature !== undefined
       ? { claimTransactionSignature: marker.claimTransactionSignature }
       : {}),
@@ -1559,6 +1563,7 @@ function commitSubmission(
     rewardAmount: intent.rewardAmount,
     submittedAt: options.submittedAt ?? new Date().toISOString(),
     settled: false,
+    ...(marker?.jobEvidence !== undefined ? { jobEvidence: marker.jobEvidence } : {}),
     ...(marker?.title !== undefined ? { title: marker.title } : {}),
     ...(marker?.listing !== undefined ? { listing: marker.listing } : {}),
   };
@@ -1748,7 +1753,21 @@ async function executeAndSubmit(
   task: Address,
   decodedTask: Task,
   prompt: string,
+  verified: VerifiedJobSpec,
 ): Promise<ProcessOutcome> {
+  // Retain what the seller agreed to before running the work. This survives
+  // submission, settlement, and removal of the public job-spec account.
+  const payload = JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
+  const request = [payload.instructions, payload.details, payload.summary].find((value) => typeof value === "string");
+  const criteria = payload.acceptance ?? payload.acceptanceCriteria;
+  const evidenceState = loadState(ctx.stateDir);
+  if (evidenceState.openClaim?.task === task) {
+    evidenceState.openClaim.jobEvidence = {
+      request: typeof request === "string" ? request : "",
+      acceptance: Array.isArray(criteria) ? criteria.filter((value): value is string => typeof value === "string") : [],
+    };
+    saveState(ctx.stateDir, evidenceState);
+  }
   let stdout: Buffer;
   try {
     const result = await runExecutor({
@@ -2039,7 +2058,7 @@ export async function processCandidate(
     }
   }
 
-  return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
 }
 
 /**
@@ -2399,7 +2418,7 @@ export async function resumeOpenClaim(
     });
     return { status: "execution-failed", task, reason };
   }
-  return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
 }
 
 /** One observed settlement (or terminal outcome) for a tracked submission. */
@@ -2412,6 +2431,36 @@ export type SettlementReport = {
   receiptUrl: string | null;
 };
 
+/** Replay durable settlement notices before looking for new chain changes.
+ * Consumers must deduplicate by task and persist before returning from log.
+ */
+function replaySettlementEvents(ctx: WorkerContext): void {
+  const state = loadState(ctx.stateDir);
+  for (const record of state.submissions) {
+    if (!record.settled || !record.settlementEventPending) continue;
+    const earnedLamports = record.earnedLamports == null ? null : BigInt(record.earnedLamports);
+    const receiptUrl = record.settlementSignature ? settlementReceiptUrl(record.settlementSignature) : null;
+    ctx.log({
+      event: "settlement.observed",
+      task: record.task,
+      outcome: record.outcome,
+      earnedLamports:
+        earnedLamports === null ? null : earnedLamports.toString(),
+      earnedSol: earnedLamports === null ? null : lamportsToSol(earnedLamports),
+      settlementSignature: record.settlementSignature ?? null,
+      receiptUrl,
+      message:
+        earnedLamports !== null && earnedLamports > 0n
+          ? receiptUrl !== null
+            ? `earned ${lamportsToSol(earnedLamports)} SOL. receipt: ${receiptUrl}`
+            : `earned ${lamportsToSol(earnedLamports)} SOL. task ${record.task}`
+          : `task ${record.task} settled: ${record.outcome}`,
+    });
+    record.settlementEventPending = false;
+    saveState(ctx.stateDir, state);
+  }
+}
+
 /**
  * Reconcile tracked submissions against on-chain task state. Earnings are
  * measured from the agent's on-chain `totalEarned` delta since the last
@@ -2423,6 +2472,7 @@ export async function checkSettlements(
   ctx: WorkerContext,
   agent: WorkerAgent,
 ): Promise<SettlementReport[]> {
+  replaySettlementEvents(ctx);
   const state = loadState(ctx.stateDir);
   const pending = state.submissions.filter((record) => !record.settled);
   if (pending.length === 0) return [];
@@ -2725,9 +2775,6 @@ export async function checkSettlements(
   const attributed = shares.reduce((sum, share) => sum + share, 0n);
 
   const reports: SettlementReport[] = [];
-  // Told only once the ledger says so, so whoever reacts to an event and
-  // reads the state back finds the job settled.
-  const observed: WorkerLogEvent[] = [];
   for (const { record, outcome, solDenominated } of resolved) {
     const paid = outcome === "accepted" || outcome === "closed";
     const earnedLamports = !paid
@@ -2751,6 +2798,7 @@ export async function checkSettlements(
         : null;
 
     record.settled = true;
+    record.settlementEventPending = true;
     record.outcome = outcome;
     record.earnedLamports =
       earnedLamports === null ? null : earnedLamports.toString();
@@ -2765,28 +2813,12 @@ export async function checkSettlements(
       receiptUrl,
     };
     reports.push(report);
-    observed.push({
-      event: "settlement.observed",
-      task: record.task,
-      outcome,
-      earnedLamports:
-        earnedLamports === null ? null : earnedLamports.toString(),
-      earnedSol: earnedLamports === null ? null : lamportsToSol(earnedLamports),
-      settlementSignature,
-      receiptUrl,
-      message:
-        earnedLamports !== null && earnedLamports > 0n
-          ? receiptUrl !== null
-            ? `earned ${lamportsToSol(earnedLamports)} SOL — receipt: ${receiptUrl}`
-            : `earned ${lamportsToSol(earnedLamports)} SOL — task ${record.task}`
-          : `task ${record.task} settled: ${outcome}`,
-    });
   }
   if (totalEarned !== null) {
     state.totalEarnedBaseline = (baseline + attributed).toString();
   }
   saveState(ctx.stateDir, state);
-  for (const event of observed) ctx.log(event);
+  replaySettlementEvents(ctx);
   return reports;
 }
 

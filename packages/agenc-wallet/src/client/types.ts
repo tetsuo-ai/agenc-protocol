@@ -334,7 +334,9 @@ export type JobStatus =
 export interface JobResult {
   /** The delivered text, when it could be fetched and is text. */
   text: string | null;
-  /** Where the delivery lives, when the provider published a link. */
+  /** True when text is a preview. Read jobs.delivery for the complete text. */
+  textTruncated?: boolean;
+  /** Original artifact link. Hosts should show it even when text is present. */
   uri: string | null;
   /** sha-256 of the delivery, as recorded with the job. */
   hash: string | null;
@@ -363,6 +365,8 @@ export interface JobView {
   title: string;
   /** What was asked for. */
   request: string;
+  /** The buyer's criteria for accepting the work. */
+  acceptance: string[];
   price: Money;
   status: JobStatus;
   /** One plain sentence describing `status`. */

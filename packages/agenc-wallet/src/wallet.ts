@@ -16,6 +16,7 @@ import {
   taskThread,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
@@ -545,8 +546,8 @@ export class AgencWallet {
   #balances: BalanceSnapshot | null = null;
   /**
    * Deliveries of this wallet's agents that a buyer turned down, by task:
-   * when their review time ends, and when collecting was last tried. Rebuilt
-   * from the chain on every tick, so it is not journaled.
+   * when their review time ends, and when collecting was last tried. Review
+   * changes are journaled so catch-up notifications survive a restart.
    */
   readonly #frozenWork = new Map<
     string,
@@ -594,6 +595,12 @@ export class AgencWallet {
       },
       this.#now,
     );
+    for (const [jobId, record] of Object.entries(this.#store.state.workRecords ?? {})) {
+      if (record.turnDown !== undefined && record.reviewDeadlineAt !== undefined) {
+        const task = jobId.slice(jobId.lastIndexOf("_") + 1);
+        this.#frozenWork.set(task, { reviewDeadlineAt: record.reviewDeadlineAt, attemptAt: null, turnDown: record.turnDown });
+      }
+    }
     this.#earn = new EarnHost({
       chain: config.chain,
       services: config.services,
@@ -2755,7 +2762,20 @@ export class AgencWallet {
       }
     }
 
+    // Keep the commitment before settlement or cleanup can remove its account.
+    if (seen.submission !== null) {
+      const pointer = {
+        hash: seen.submission.proofHashHex,
+        dataBase64: Buffer.from(seen.submission.resultData).toString("base64"),
+      };
+      if (job.deliveryPointer?.hash !== pointer.hash || job.deliveryPointer?.dataBase64 !== pointer.dataBase64) {
+        this.#patchJob(job.id, (entry) => { entry.deliveryPointer = pointer; });
+      }
+    }
+    await this.#refreshDelivery(this.#jobRecord(job.id));
+
     if (seen.status === "completed") {
+      await this.#recoverPaidDelivery(this.#jobRecord(job.id));
       this.#recordPaid(job.id, null);
       return;
     }
@@ -2848,12 +2868,9 @@ export class AgencWallet {
       }
     }
 
-    let result = job.result;
+    const result = this.#jobRecord(job.id).result;
     let providerRecorded = knownRecorded;
     if (seen.status === "pending_validation" && seen.submission !== null) {
-      if (result === null || result.hash !== seen.submission.proofHashHex) {
-        result = await this.#loadResult(seen.submission.proofHashHex, seen.submission.resultData);
-      }
       // Whether turning this down would go on the provider's record. Read
       // until it has one: anyone may start it at any time, and nobody can
       // remove it.
@@ -2899,13 +2916,41 @@ export class AgencWallet {
     return (await this.#chain.readAccountInfo(claim)) !== null;
   }
 
+  async #recoverPaidDelivery(job: JobRecord): Promise<void> {
+    if (job.result?.verified || job.deliveryPointer !== undefined || job.task === null) return;
+    const creator = job.payer === "main" ? this.mainAddress : this.#store.state.agents[job.agentId]?.address;
+    if (creator === undefined || this.#chain.findSettledDelivery === undefined) return;
+    try {
+      const delivery = await this.#chain.findSettledDelivery(job.task as Address, creator as Address);
+      if (delivery === null || (job.providerAgent && job.providerAgent !== delivery.worker)) return;
+      this.#patchJob(job.id, (entry) => {
+        entry.providerAgent = delivery.worker;
+        entry.deliveryPointer = { hash: delivery.proofHashHex, dataBase64: Buffer.from(delivery.resultData).toString("base64") };
+      });
+      await this.#refreshDelivery(this.#jobRecord(job.id));
+    } catch (error) {
+      this.#log(`paid delivery lookup: ${describeError(error)}`);
+    }
+  }
+
+  async #refreshDelivery(job: JobRecord): Promise<void> {
+    const pointer = job.deliveryPointer;
+    if (pointer === undefined) return;
+    if (job.result?.verified && job.result.hash === pointer.hash) return;
+    const result = await this.#loadResult(pointer.hash, Buffer.from(pointer.dataBase64, "base64"));
+    if (result !== null || job.result !== null) {
+      this.#patchJob(job.id, (entry) => { entry.result = result; });
+    }
+  }
+
   async #loadResult(
     proofHashHex: string,
     resultData: Uint8Array,
-  ): Promise<NonNullable<JobRecord["result"]>> {
+    fullText = false,
+  ): Promise<JobRecord["result"]> {
     try {
       const fetched = await this.#services.fetchResult({ proofHashHex, resultData });
-      if (fetched !== null) {
+      if (fetched !== null && fetched.bytes.length > 0) {
         let text: string | null = null;
         let files: DeliveryFile[] = [];
         try {
@@ -2916,10 +2961,7 @@ export class AgencWallet {
             // Files that came with it are listed at the end of the text.
             const parts = splitDelivery(whole);
             files = parts.files;
-            text =
-              parts.text.length > MAX_RESULT_TEXT
-                ? `${parts.text.slice(0, MAX_RESULT_TEXT)}\n[cut here]`
-                : parts.text;
+            text = parts.text;
           }
         } catch {
           text = null;
@@ -2927,16 +2969,38 @@ export class AgencWallet {
         // A host opens this address for a person. Whatever a source of
         // deliveries hands back, only a web address ever leaves here.
         const uri = fetched.uri !== null && /^https:\/\/[^\s]+$/.test(fetched.uri) ? fetched.uri : null;
-        return { text, uri, hash: proofHashHex, verified: true, files };
+        const textTruncated = !fullText && text !== null && text.length > MAX_RESULT_TEXT;
+        return {
+          text: textTruncated ? text!.slice(0, MAX_RESULT_TEXT) : text,
+          textTruncated, uri, hash: proofHashHex, verified: true, files,
+        };
       }
     } catch (error) {
       this.#log(`delivery fetch: ${describeError(error)}`);
     }
-    return { text: null, uri: null, hash: proofHashHex, verified: false, files: [] };
+    return null;
   }
 
   /** done: collect what can come back and free the provider's slot. */
   async #stepTidy(job: JobRecord): Promise<void> {
+    // Downloads still retry after payment, including records made by older builds.
+    if (job.outcome === "paid" && !job.result?.verified) {
+      if (job.deliveryPointer === undefined && job.task !== null) {
+        const seen = await inspectJob(this.#chain, job.task as Address, this.#provider(job));
+        if (seen?.submission) {
+          this.#patchJob(job.id, (entry) => {
+            entry.deliveryPointer = {
+              hash: seen.submission!.proofHashHex,
+              dataBase64: Buffer.from(seen.submission!.resultData).toString("base64"),
+            };
+          });
+        }
+      }
+      await this.#recoverPaidDelivery(this.#jobRecord(job.id));
+      await this.#refreshDelivery(this.#jobRecord(job.id));
+      // Do not destroy the last on-chain pointer before retaining the delivery.
+      if (!this.#jobRecord(job.id).result?.verified) return;
+    }
     if (job.tidied || job.task === null) return;
     // A paid hire stays open for a while so it can be rated. A request has
     // no service to rate, so it is tidied at once.
@@ -3003,12 +3067,33 @@ export class AgencWallet {
       if (provider === null) continue;
       for (const entry of waiting) {
         const seen = await inspectJob(this.#chain, entry.task as Address, provider);
-        if (seen === null || seen.status !== "reject_frozen" || seen.turnDown === null) continue;
+        if (seen === null) {
+          if (this.#frozenWork.has(entry.task)) seenNow.add(entry.task);
+          continue;
+        }
+        const jobId = `earn_${agent.id}_${entry.task}`;
+        if (seen.status !== "reject_frozen" || seen.turnDown === null) {
+          if (this.#frozenWork.has(entry.task)) {
+            this.#store.update((draft) => {
+              const record = (draft.workRecords ??= {})[jobId] ??= {};
+              record.updatedAt = this.#now();
+              delete record.turnDown;
+              delete record.reviewDeadlineAt;
+            });
+          }
+          continue;
+        }
         seenNow.add(entry.task);
         const previous = this.#frozenWork.get(entry.task);
         const deadline = seen.turnDown.rulingUntil ?? seen.turnDown.disputeUntil;
         const turnDown = turnDownRecord(seen.turnDown);
         if (previous?.reviewDeadlineAt !== deadline || !sameTurnDown(previous.turnDown, turnDown)) {
+          this.#store.update((draft) => {
+            const record = (draft.workRecords ??= {})[jobId] ??= {};
+            record.updatedAt = this.#now();
+            record.reviewDeadlineAt = deadline;
+            if (turnDown !== undefined) record.turnDown = turnDown;
+          });
           this.#frozenWork.set(entry.task, {
             reviewDeadlineAt: deadline,
             attemptAt: previous?.attemptAt ?? null,
@@ -3111,6 +3196,7 @@ export class AgencWallet {
     if (view === undefined) {
       throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
     }
+    await this.#workDelivery(view);
     return this.#jobView(view, isOwner);
   }
 
@@ -3129,14 +3215,14 @@ export class AgencWallet {
       id: `earn_${agentId}_${entry.task}`,
       role: "working" as const,
       agentId,
-      createdAt: entry.at,
-      updatedAt: entry.at,
+      createdAt: entry.createdAt,
+      updatedAt: Math.max(entry.at, this.#store.state.workRecords?.[`earn_${agentId}_${entry.task}`]?.updatedAt ?? 0),
       idempotencyKey: null,
       listing: entry.listing !== null && own.has(entry.listing) ? entry.listing : "",
       providerAgent: "",
       title: agent === undefined ? "Job from the marketplace" : this.#earnedJobName(agent, entry),
-      request: "",
-      acceptance: [],
+      request: entry.request || this.#store.state.workRecords?.[`earn_${agentId}_${entry.task}`]?.request || "",
+      acceptance: entry.acceptance.length > 0 ? entry.acceptance : this.#store.state.workRecords?.[`earn_${agentId}_${entry.task}`]?.acceptance ?? [],
       priceLamports: (entry.earnedLamports ?? entry.rewardLamports).toString(),
       expectedVersion: "0",
       listingSpecHashHex: "",
@@ -3175,10 +3261,13 @@ export class AgencWallet {
       autoRefundAt: null,
       outcome: entry.state === "paid" ? "paid" : entry.state === "not_paid" ? "refunded" : null,
       changesRequested: false,
-      result:
-        entry.resultHashHex === null
-          ? null
-          : { text: null, uri: null, hash: entry.resultHashHex, verified: false, files: [] },
+      result: this.#store.state.workRecords?.[`earn_${agentId}_${entry.task}`]?.result?.hash === entry.resultHashHex
+        ? this.#store.state.workRecords![`earn_${agentId}_${entry.task}`]!.result!
+        : null,
+      ...(entry.resultHashHex !== null ? { deliveryPointer: {
+        hash: entry.resultHashHex,
+        dataBase64: Buffer.from(entry.resultUri ?? "").toString("base64"),
+      } } : {}),
       rating: null,
       tidied: true,
       signatures: entry.settlementSignature === null ? {} : { accept: entry.settlementSignature },
@@ -3187,8 +3276,48 @@ export class AgencWallet {
     }));
   }
 
+  /** Hydrate a seller record without losing evidence on a transient fetch failure. */
+  async #workDelivery(job: JobRecord): Promise<void> {
+    await this.#lock(`work-evidence:${job.id}`, async () => {
+      const cached = this.#store.state.workRecords?.[job.id];
+      if (!job.request && cached?.request) {
+        job.request = cached.request;
+        job.acceptance = cached.acceptance ?? [];
+      }
+      if (!job.request && job.task !== null) {
+        try {
+          const verified = await fetchAndVerifyJobSpec({
+            task: job.task as Address,
+            readAccount: this.#chain.readAccount,
+            ...(this.#services.resolveAgencUri ? { resolveAgencUri: this.#services.resolveAgencUri } : {}),
+          });
+          const spec = JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
+          const request = [spec.instructions, spec.details, spec.summary].find((value) => typeof value === "string");
+          const acceptance = spec.acceptance ?? spec.acceptanceCriteria;
+          job.request = typeof request === "string" ? request : "";
+          job.acceptance = Array.isArray(acceptance) ? acceptance.filter((value): value is string => typeof value === "string") : [];
+        } catch (error) {
+          this.#log(`work request fetch: ${describeError(error)}`);
+        }
+      }
+      const pointer = job.deliveryPointer;
+      if (pointer !== undefined && (!job.result?.verified || job.result.hash !== pointer.hash)) {
+        job.result = cached?.result?.verified && cached.result.hash === pointer.hash
+          ? cached.result
+          : await this.#loadResult(pointer.hash, Buffer.from(pointer.dataBase64, "base64"));
+      }
+      if ((job.result !== null && job.result !== cached?.result) || (job.request && job.request !== cached?.request)) {
+        this.#store.update((draft) => {
+          const record = (draft.workRecords ??= {})[job.id] ??= {};
+          if (job.result !== null) record.result = job.result;
+          if (job.request) { record.request = job.request; record.acceptance = job.acceptance; }
+        });
+      }
+    });
+  }
+
   async listJobs(
-    params: { role?: "buying" | "working"; agentId?: string; limit?: number },
+    params: { role?: "buying" | "working"; agentId?: string; limit?: number; before?: string },
     isOwner: boolean,
   ): Promise<JobView[]> {
     const state = this.#store.state;
@@ -3205,9 +3334,15 @@ export class AgencWallet {
         if (state.agents[agentId] !== undefined) records.push(...this.#earnJobs(agentId));
       }
     }
-    records.sort((a, b) => b.createdAt - a.createdAt);
+    records.sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
     const limit = Math.min(200, Math.max(1, Math.trunc(params.limit ?? 50)));
-    const shown = records.slice(0, limit);
+    const cursor = params.before === undefined ? -1 : records.findIndex((job) => job.id === params.before);
+    if (params.before !== undefined && cursor === -1) {
+      throw new WalletError("NOT_FOUND", "That job cursor no longer exists. Refresh the list.");
+    }
+    const shown = records.slice(cursor + 1, cursor + 1 + limit);
+    await Promise.all(shown.filter((job) => job.role === "working").map((job) => this.#workDelivery(job)));
+
     const context = {
       usdPerSol: await this.#displayRate(),
       now: this.#now(),
@@ -3227,10 +3362,14 @@ export class AgencWallet {
   /** The job, refreshed from the chain first when it is still running. */
   async getJob(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     if (jobId.startsWith("earn_")) {
-      const all = await this.listJobs({ role: "working", ...(agentId ? { agentId } : {}) }, isOwner);
-      const found = all.find((job) => job.id === jobId);
+      const match = /^earn_(.+)_([1-9A-HJ-NP-Za-km-z]{32,44})$/u.exec(jobId);
+      if (match === null || this.#store.state.agents[match[1]!] === undefined || (agentId !== undefined && match[1] !== agentId)) {
+        throw new WalletError("NOT_FOUND", "That job does not exist.");
+      }
+      const found = this.#earnJobs(match[1]!).find((job) => job.id === jobId);
       if (found === undefined) throw new WalletError("NOT_FOUND", "That job does not exist.");
-      return found;
+      await this.#workDelivery(found);
+      return this.#jobView(found, isOwner);
     }
     const job = this.#jobRecord(jobId);
     if (agentId !== undefined && job.agentId !== agentId) {
@@ -3242,6 +3381,20 @@ export class AgencWallet {
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
 
+  /** Read the complete delivery without storing an oversized list preview. */
+  async jobDelivery(jobId: string, isOwner: boolean, agentId?: string): Promise<NonNullable<JobRecord["result"]>> {
+    const view = await this.getJob(jobId, isOwner, agentId);
+    const job = view.role === "buying" ? this.#jobRecord(jobId) : this.#earnJobs(view.agentId).find((entry) => entry.id === jobId)!;
+    const hash = job.deliveryPointer?.hash ?? view.result?.hash;
+    if (hash == null) throw new WalletError("NOT_FOUND", "This job has no delivery yet.");
+    const pointer = job.deliveryPointer !== undefined
+      ? Buffer.from(job.deliveryPointer.dataBase64, "base64")
+      : new TextEncoder().encode(view.result?.uri ?? "");
+    const result = await this.#loadResult(hash, pointer, true);
+    if (result === null) throw new WalletError("NETWORK", "The delivery could not be fetched right now. Try again in a moment.");
+    return result;
+  }
+
   /**
    * One file of a job's delivery. It is fetched from the delivery store by
    * the fingerprint the delivery lists for it, and handed over only when it
@@ -3249,7 +3402,7 @@ export class AgencWallet {
    * its name says.
    */
   async jobFile(jobId: string, sha256: string): Promise<DeliveryFile & { base64: string }> {
-    const job = this.#jobRecord(jobId);
+    const job = await this.getJob(jobId, true);
     const listed = (job.result?.files ?? []).find((file) => file.sha256 === sha256);
     if (listed === undefined) {
       throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
@@ -3687,6 +3840,9 @@ export class AgencWallet {
         const agent = draft.agents[agentId];
         if (agent === undefined) return;
         if (notice.type === "paid") {
+          const credited = agent.earn.creditedTasks ??= {};
+          if (credited[notice.task]) return;
+          credited[notice.task] = true;
           agent.earnedLamports = (BigInt(agent.earnedLamports) + notice.earnedLamports).toString();
           agent.earn.jobsDone += 1;
           this.#note(draft, {
@@ -4573,10 +4729,19 @@ export class AgencWallet {
           job.phase === "hiring" ||
           job.phase === "hired" ||
           job.phase === "active" ||
-          (job.phase === "done" && !job.tidied)),
+          (job.phase === "done" && (!job.tidied || (job.outcome === "paid" && !job.result?.verified)))),
     );
     await Promise.all(open.map((job) => this.#advance(job.id)));
 
+    for (const agent of Object.values(this.#store.state.agents)) {
+      if (!agent.earn.enabled && agent.earn.retiredAt == null) {
+        await this.#earn.tidyUp({
+          agentId: agent.id,
+          signer: await this.#vault.signer(agent.keyId),
+          minRewardLamports: 0n,
+        }).catch((error) => this.#log(`earn upkeep ${agent.id}: ${describeError(error)}`));
+      }
+    }
     await this.#watchFrozenWork().catch((error) => {
       this.#log(`turned-down work check: ${describeError(error)}`);
     });

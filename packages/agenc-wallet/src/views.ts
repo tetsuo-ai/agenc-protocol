@@ -313,6 +313,7 @@ export function jobView(
     agentId: job.agentId,
     title: job.title,
     request: job.request,
+    acceptance: job.acceptance,
     price,
     status,
     statusText: statusText(job, status, price, context.now, context.usdPerSol),

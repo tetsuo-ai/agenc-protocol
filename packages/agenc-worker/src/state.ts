@@ -71,8 +71,12 @@ export type SubmissionIntent = {
   transactionSignature?: string;
 };
 
+/** Display evidence from the verified job spec. Never interpreted as instructions. */
+export type JobEvidence = { request: string; acceptance: string[] };
+
 /** A claim/execution/submission transaction that still needs reconciliation. */
 export type OpenClaim = {
+  jobEvidence?: JobEvidence;
   /** Task PDA (base58). */
   task: string;
   /** ISO timestamp at which claiming this task began. */
@@ -161,6 +165,9 @@ export type WorkerPause = {
 
 /** One submitted result awaiting (or past) settlement. */
 export type SubmissionRecord = {
+  jobEvidence?: JobEvidence;
+  /** Durable outbox flag. Cleared only after the settlement consumer returns. */
+  settlementEventPending?: boolean;
   /** Task PDA (base58). */
   task: string;
   /** Submission transaction signature, or null when recovered from chain. */
@@ -380,6 +387,17 @@ function submissionIntent(value: unknown, label: string): SubmissionIntent {
   };
 }
 
+function jobEvidence(value: unknown, label: string): JobEvidence {
+  const parsed = record(value, label);
+  exactKeys(parsed, label, ["request", "acceptance"]);
+  if (!Array.isArray(parsed.acceptance) || !parsed.acceptance.every((item) => typeof item === "string")) {
+    fail(`${label}.acceptance must be an array of strings`);
+  }
+  const evidence = { request: string(parsed.request, `${label}.request`), acceptance: parsed.acceptance as string[] };
+  if (Buffer.byteLength(JSON.stringify(evidence), "utf8") > 128 * 1024) fail(`${label} is too large`);
+  return evidence;
+}
+
 function openClaim(value: unknown, label: string): OpenClaim {
   const parsed = record(value, label);
   exactKeys(
@@ -387,6 +405,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
     label,
     ["task", "claimedAt", "phase"],
     [
+      "jobEvidence",
       "claimTransactionSignature",
       "revisionSubmissionCount",
       "execution",
@@ -454,6 +473,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
     ...(execution !== undefined ? { execution } : {}),
     ...(submission !== undefined ? { submission } : {}),
     ...jobLabels(parsed, label),
+    ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
     ...(parsed.failures !== undefined
       ? { failures: count(parsed.failures, `${label}.failures`, 1) }
       : {}),
@@ -557,6 +577,8 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       "settled",
     ],
     [
+      "jobEvidence",
+      "settlementEventPending",
       "outcome",
       "terminalEvidence",
       "earnedLamports",
@@ -574,6 +596,10 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
   }
   if (typeof parsed.settled !== "boolean")
     fail(`${label}.settled must be boolean`);
+  if (parsed.settlementEventPending !== undefined && typeof parsed.settlementEventPending !== "boolean") {
+    fail(`${label}.settlementEventPending must be boolean`);
+  }
+  if (parsed.settlementEventPending && !parsed.settled) fail(`${label} pending events require settlement`);
   const outcome = parsed.outcome;
   if (
     outcome !== undefined &&
@@ -640,6 +666,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
     rewardAmount: decimal(parsed.rewardAmount, `${label}.rewardAmount`),
     submittedAt: iso(parsed.submittedAt, `${label}.submittedAt`),
     settled: parsed.settled,
+    ...(parsed.settlementEventPending !== undefined ? { settlementEventPending: parsed.settlementEventPending as boolean } : {}),
     ...(outcome !== undefined ? { outcome } : {}),
     ...(parsed.terminalEvidence !== undefined
       ? {
@@ -657,6 +684,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       ? { settledAt: iso(parsed.settledAt, `${label}.settledAt`) }
       : {}),
     ...jobLabels(parsed, label),
+    ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
   };
 }
 
@@ -816,14 +844,14 @@ export function pruneSettledSubmissions(
   let settledToRemove = Math.max(
     0,
     state.submissions.reduce(
-      (count, submission) => count + (submission.settled ? 1 : 0),
+      (count, submission) => count + (submission.settled && !submission.settlementEventPending ? 1 : 0),
       0,
     ) - retention,
   );
   if (settledToRemove === 0) return 0;
   const originalLength = state.submissions.length;
   state.submissions = state.submissions.filter((submission) => {
-    if (!submission.settled || settledToRemove === 0) return true;
+    if (!submission.settled || submission.settlementEventPending || settledToRemove === 0) return true;
     settledToRemove -= 1;
     return false;
   });

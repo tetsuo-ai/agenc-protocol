@@ -155,6 +155,9 @@ function handlers(wallet: AgencWallet): Handlers {
     "jobs.get": async (params, session) => ({
       job: await wallet.getJob(text(params.jobId, "job"), owner(session), scope(session)),
     }),
+    "jobs.delivery": async (params, session) => ({
+      result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session)),
+    }),
     "jobs.file": async (params) => ({
       file: await wallet.jobFile(text(params.jobId, "job"), text(params.sha256, "file")),
     }),
