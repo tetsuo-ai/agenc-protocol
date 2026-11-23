@@ -946,6 +946,42 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "assertReviewDelivery",
+      "docs": [
+        "Assert the delivery reviewed by the signer in the same transaction as the decision."
+      ],
+      "discriminator": [
+        139,
+        103,
+        176,
+        41,
+        240,
+        95,
+        186,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "taskSubmission"
+        }
+      ],
+      "args": [
+        {
+          "name": "proofHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "submissionCount",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "assignDisputeResolver",
       "docs": [
         "Assign a wallet to the dispute-resolver roster. The protocol authority proposes",

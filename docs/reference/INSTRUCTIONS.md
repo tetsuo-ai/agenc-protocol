@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**106 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**107 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -15,6 +15,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`accept_task_result`](#accept_task_result)
 - [`apply_dispute_slash`](#apply_dispute_slash)
 - [`apply_initiator_slash`](#apply_initiator_slash)
+- [`assert_review_delivery`](#assert_review_delivery)
 - [`assign_dispute_resolver`](#assign_dispute_resolver)
 - [`assign_moderation_attestor`](#assign_moderation_attestor)
 - [`auto_accept_task_result`](#auto_accept_task_result)
@@ -224,6 +225,23 @@ initiators are slashed for frivolous disputes.
 ### Args (0)
 
 _None._
+
+## assert_review_delivery
+
+Assert the delivery reviewed by the signer in the same transaction as the decision.
+
+### Accounts (1)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task_submission` |  |  |  |  |  |
+
+### Args (2)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `proof_hash` | `[u8; 32]` |
+| 2 | `submission_count` | `u16` |
 
 ## assign_dispute_resolver
 

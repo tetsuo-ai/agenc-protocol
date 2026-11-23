@@ -26,6 +26,11 @@ use anchor_lang::prelude::*;
 pub const MAX_REVISION_ROUNDS: u16 = 3;
 
 #[derive(Accounts)]
+pub struct AssertReviewDelivery<'info> {
+    pub task_submission: Account<'info, TaskSubmission>,
+}
+
+#[derive(Accounts)]
 pub struct RequestChanges<'info> {
     #[account(
         mut,
@@ -180,6 +185,14 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
         task.deadline = min_resubmit_deadline;
     }
 
+    // Keep the original event decodable by older clients. The effective deadline
+    // in this receipt remains available after later rounds and account closure.
+    let due = [task.deadline, claim.expires_at]
+        .into_iter()
+        .filter(|d| *d > 0)
+        .min()
+        .unwrap_or(0);
+    msg!("Revision deadline {} {} {}", claim_key, round, due);
     emit!(TaskChangesRequested {
         task: task.key(),
         claim: claim_key,
