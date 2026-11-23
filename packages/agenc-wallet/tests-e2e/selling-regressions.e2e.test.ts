@@ -54,7 +54,7 @@ it("pauses a legacy unlimited listing with two hires across restart and rejects 
   // Model the pre-upgrade unlimited policy, then fund two real hires.
   sandbox.market.svm.setAccount({ ...raw, data: new Uint8Array(getServiceListingEncoder().encode({ ...account, maxOpenJobs: 0 })) } as never);
   await wallet.fundAgent(buyer.id, { usdCents: 1000 });
-  await wallet.setPolicy(buyer.id, { askAboveCents: 500, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  await wallet.setPolicy(buyer.id, { askAboveCents: 500, refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 } });
   const first = (await wallet.hire({ agentId: buyer.id, listing, request: "One" })).job;
   const second = (await wallet.hire({ agentId: buyer.id, listing, request: "Two" })).job;
   expect((await readListing(sandbox.chain, listing))!.openJobs).toBe(2);

@@ -27,7 +27,7 @@ const WORKS = "process.stdout.write('Here is the finished work.')";
 const FAILS = "process.exit(3)";
 const LINES = { name: "Line Writer", summary: "One friendly line about anything you name.", price: { usdCents: 30 } };
 const HAIKU = { name: "Haiku Smith", summary: "A haiku about anything you name.", price: { usdCents: 40 } };
-const NO_REFILL = { enabled: false, topUpToCents: 0, perDayCents: 0 };
+const NO_REFILL = { enabled: false, topUpToCents: 0, perDayCents: 10_000 };
 const ACTIVE = 0;
 const PAUSED = 1;
 

@@ -17,6 +17,16 @@ import type {
 /** An amount a caller names either in US cents or in lamports. */
 export type AmountInput = { usdCents: number } | { lamports: string };
 
+/** The program accepts listing deadlines up to one year. */
+export const MAX_LISTING_DELIVERY_SECS = 31_536_000;
+
+export interface ServiceOfferInput {
+  name: string;
+  summary: string;
+  price: AmountInput;
+  deliverySecs?: number;
+}
+
 export interface WalletMethods {
   /**
    * Balances, agents, counts and service `capabilities` on every response.
@@ -81,8 +91,13 @@ export interface WalletMethods {
       request: string;
       /** Refuse if the service costs more than this. */
       maxPriceCents?: number;
+      expectedPriceLamports?: string;
+      expectedSpecHash?: string;
       /** Checks the delivery must pass, written for the provider to read. */
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       /** Makes a retried call return the same job instead of hiring twice. */
       idempotencyKey?: string;
     };
@@ -105,30 +120,52 @@ export interface WalletMethods {
       reward: AmountInput;
       /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
       deadlineDays?: number;
+      minReputation?: number;
+      /** Nonzero unsigned 64-bit mask, encoded as decimal text. */
+      requiredCapabilities?: string;
       /** Checks the delivery must pass. */
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       /** Makes a retried call return the same job instead of posting twice. */
       idempotencyKey?: string;
     };
     result: { job: JobView; approval: ApprovalView | null };
   };
   /**
-   * The person posts a request from the main balance. Owner only: asking is
-   * the yes, so nothing waits for approval. `overview.postCost` says what it
-   * costs on top of the reward.
+   * Legacy owner method. Direct creation is refused. Use wallet.quotePost and confirm its ID.
    */
   "wallet.post": {
     params: {
       request: string;
       reward: AmountInput;
       deadlineDays?: number;
+      minReputation?: number;
+      /** Nonzero unsigned 64-bit mask, encoded as decimal text. */
+      requiredCapabilities?: string;
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       idempotencyKey?: string;
     };
     result: { job: JobView };
   };
 
-  "approvals.list": { params: Record<string, never>; result: { approvals: ApprovalView[] } };
+  /** Owner previews. These always wait for a separate approvals.decide. */
+  "wallet.quoteHire": WalletMethods["market.hire"];
+  "wallet.quotePost": { params: WalletMethods["wallet.post"]["params"]; result: WalletMethods["market.post"]["result"] };
+
+  "jobs.callOutcome": { params: { agentId: string; kind: "hire" | "request"; key: string }; result: WalletMethods["market.hire"]["result"] };
+  "approvals.page": {
+    params: { after?: string };
+    result: { entries: { id: string; jobId: string }[]; next: string | null };
+  };
+  "approvals.get": { params: { approvalId: string }; result: { approval: ApprovalView; status: "pending" | "approved" | "expired" | "declined" } };
+  "approvals.outcome": { params: { approvalId: string }; result: { job: JobView; status: "pending" | "approved" | "expired" | "declined"; approval?: ApprovalView } };
+  "approvals.refresh": { params: { approvalId: string }; result: { approval: ApprovalView } };
+  "approvals.list": { params: { after?: string }; result: { approvals: ApprovalView[]; next?: string | null } };
   "approvals.decide": {
     params: { approvalId: string; approve: boolean };
     result: { job: JobView };
@@ -190,7 +227,7 @@ export interface WalletMethods {
   };
   /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
   "earn.quote": {
-    params: { agentId: string; offerId?: string; offer?: { name: string; summary: string; price: AmountInput } };
+    params: { agentId: string; offerId?: string; offer?: ServiceOfferInput };
     result: import("./types.js").EarnFundingQuote;
   };
   /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
@@ -210,7 +247,7 @@ export interface WalletMethods {
     params: {
       agentId: string;
       offerId?: string;
-      offer: { name: string; summary: string; price: AmountInput } | null;
+      offer: ServiceOfferInput | null;
     };
     result: AgentView;
   };
@@ -257,6 +294,7 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "market.hire",
   "market.post",
   "approvals.wait",
+  "jobs.callOutcome",
   "jobs.list",
   "jobs.get",
   "jobs.delivery",

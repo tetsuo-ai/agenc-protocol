@@ -101,7 +101,7 @@ describe("the wallet under a service manager", () => {
     expect(opened).toEqual({ socket: service.walletSocket, ownerToken: line.ownerToken, unlocked: true });
     const owner = await connectWallet({ socketPath: opened.socket, token: opened.ownerToken });
     const overview = await owner.call("overview", {});
-    expect(overview.capabilities).toEqual(["earn-finishing"]);
+    expect(overview.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes"]);
     expect(overview.main.balance.usdCents).toBe(5_000);
     const agent = await owner.call("agents.create", { name: "Worker" });
     owner.close();
@@ -117,7 +117,7 @@ describe("the wallet under a service manager", () => {
     expect(again).toEqual({ socket: service.walletSocket, ownerToken: line.ownerToken, unlocked: false });
     const back = await connectWallet({ socketPath: again.socket, token: again.ownerToken });
     const reconnected = await back.call("overview", {});
-    expect(reconnected.capabilities).toEqual(["earn-finishing"]);
+    expect(reconnected.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes"]);
     expect(reconnected.agents.map((entry) => entry.id)).toContain(agent.id);
     back.close();
 

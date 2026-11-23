@@ -1,3 +1,4 @@
+import type { JobTerms } from "./client/types.js";
 // The wallet's journal: agents, jobs, approvals and the activity list, in one
 // private JSON file that is rewritten atomically on every change.
 //
@@ -50,6 +51,8 @@ export interface OfferRecord {
   priceLamports: string;
   /** Seconds the agent gets to deliver a hired job. */
   deliverySecs: number;
+  /** An explicit seller edit, retained until the same listing confirms it. */
+  pendingDeliverySecs?: number | undefined;
   /** The advertised description, and the hash of it the listing commits to. */
   spec: Record<string, unknown>;
   specHashHex: string;
@@ -98,6 +101,7 @@ export interface AgentRecord {
   earnedLamports: string;
   /** Automatic top-ups in the last day, for the per-day rule. */
   refills: AllowanceCharge[];
+  jobSpends?: { id: string; at: number; microcents: string | null }[];
   earn: {
     enabled: boolean;
     minPayCents: number;
@@ -162,6 +166,15 @@ export type ChainTaskStatus =
   | "reject_frozen";
 
 export interface JobRecord {
+  terms?: JobTerms;
+  inputFingerprint?: string;
+  /** Null when the buyer left the maximum to the quote. Older journals omit this field. */
+  buyerMaxPriceCents?: number | null;
+  maxPriceCents?: number;
+  /** Costs and expiry of the exact quote authorized for this job. */
+  ownerApproved?: boolean;
+  approvalId?: string;
+  approvedCosts?: { networkFees?: string; cancellationRent?: string; total: string; kept: string; protocolFeeBps: number; expiresAt: number };
   id: string;
   role: "buying" | "working";
   /**
@@ -189,7 +202,7 @@ export interface JobRecord {
   deliverWithinSecs?: number;
   /**
    * A request only: unix seconds by which the work must be delivered, fixed
-   * when posting starts. Nobody can take it after that.
+   * when the brief is prepared. Nobody can take it after that.
    */
   requestDeadline?: number | null;
 
@@ -327,6 +340,15 @@ export interface JobRecord {
 }
 
 export interface ApprovalRecord {
+  networkFees?: string;
+  retainedRent?: string;
+  cancellationRent?: string;
+  protocolFeeBps?: number;
+  terms?: JobTerms;
+  acceptance?: string[];
+  maxPriceCents?: number;
+  /** Rate used when displaying this quote, fixed until it expires. */
+  quoteRate?: number | null;
   id: string;
   jobId: string;
   agentId: string;
@@ -366,11 +388,14 @@ export interface WalletState {
     result?: JobResult;
     request?: string;
     acceptance?: string[];
+    terms?: JobTerms;
     updatedAt?: number;
     reviewDeadlineAt?: number;
     turnDown?: JobRecord["turnDown"];
   }>;
 
+  /** Final keyed outcomes outlive the activity feed and finished-job list. */
+  callReceipts?: Record<string, JobRecord>;
   approvals: Record<string, ApprovalRecord>;
   activity: ActivityRecord[];
   /** Last known dollars-per-SOL, kept so an offline start can still estimate. */
@@ -444,6 +469,12 @@ function prune(state: WalletState): void {
     .filter(isFinished)
     .sort((a, b) => a.updatedAt - b.updatedAt);
   for (const job of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED_JOBS))) {
+    if (job.idempotencyKey) {
+      const key = JSON.stringify([job.agentId, job.kind ?? "hire", job.idempotencyKey]);
+      (state.callReceipts ??= {})[key] = {
+        ...job, jobSpec: {}, result: null, changes: [], request: "", acceptance: [],
+      };
+    }
     delete state.jobs[job.id];
   }
   const liveJobs = new Set(Object.keys(state.jobs));
@@ -556,6 +587,15 @@ export class StateStore {
     // An agent from a journal written before several services keeps its one
     // service as the first of its list.
     for (const agent of Object.values(parsed.agents)) {
+      if (agent.jobSpends === undefined) {
+        // Older journals did not record the dollar rate at signing. Keep
+        // those jobs in the window and leave new spending to the owner.
+        agent.jobSpends = Object.values(parsed.jobs).flatMap(job => {
+          const at = job.hireAttemptAt ?? job.hiredAt;
+          return job.agentId === agent.id && job.role === "buying" && job.payer === "agent" &&
+            at != null && at > now - 86_400_000 ? [{ id: job.id, at, microcents: null }] : [];
+        });
+      }
       if (agent.earn.offers === undefined) {
         agent.earn.offers = agentOffers(agent);
         delete agent.earn.offer;

@@ -1,3 +1,4 @@
+import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // Chain-facing marketplace steps for the buyer side: read a listing, resolve
 // the moderation gate, hire, activate, review, cancel, tidy up.
 //
@@ -417,7 +418,7 @@ export async function findTaskGate(
 export function purchaseDeposits(
   chain: Chain,
   buyer: Address,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   return jobDeposits(chain, buyer, true);
 }
 
@@ -428,7 +429,7 @@ export function purchaseDeposits(
 export function requestDeposits(
   chain: Chain,
   creator: Address,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   return jobDeposits(chain, creator, false);
 }
 
@@ -436,7 +437,7 @@ async function jobDeposits(
   chain: Chain,
   payer: Address,
   hired: boolean,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
   const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent, markerRent] =
     await Promise.all([
@@ -468,11 +469,9 @@ async function jobDeposits(
     total += once;
     kept += once;
   }
-  // A paying wallet's first turn-down or cancel (a refund included) also
-  // starts its record of those, paid then, before the refund. That is not set
-  // aside here: it is shown on the job (`creatorRecordCost`), kept back when
-  // everything is taken out of the wallet, and asked for when it is missing.
-  return { total, kept };
+  const cancellationRent = await creatorRecordCost(chain, payer);
+  const networkFees = jobNetworkFees(chain.transferFeeLamports);
+  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent };
 }
 
 /**
@@ -637,6 +636,8 @@ export async function hireLanded(
 // door a wallet with no registered agent uses.
 
 export interface RequestIntent {
+  minReputation: number;
+  requiredCapabilities: bigint;
   taskId: Uint8Array;
   /** Canonical hash of the published request. The task commits to it. */
   jobSpecHash: Uint8Array;
@@ -667,11 +668,11 @@ export async function sendRequest(
     await facade.createTaskHumanless({
       creator,
       taskId: intent.taskId,
-      requiredCapabilities: 1n,
+      requiredCapabilities: intent.requiredCapabilities,
       description: requestDescription(intent.jobSpecHash),
       rewardAmount: intent.rewardLamports,
       deadline: intent.deadline,
-      minReputation: 0,
+      minReputation: intent.minReputation,
       reviewWindowSecs: intent.reviewWindowSecs,
     }),
   ]);
@@ -687,14 +688,16 @@ export async function requestLanded(
   chain: Chain,
   creator: Address,
   task: Address,
-  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash">,
+  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline">,
 ): Promise<boolean> {
   const account = await readTask(chain, task);
   if (account === null) return false;
   const mismatch = (): never => {
     throw new WalletError("INTERNAL", "A job on the marketplace does not match the wallet's records.");
   };
-  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports) mismatch();
+  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports ||
+      account.minReputation !== intent.minReputation || account.requiredCapabilities !== intent.requiredCapabilities ||
+      account.deadline !== intent.deadline) mismatch();
   if (!bytesEqual(new Uint8Array(account.description), requestDescription(intent.jobSpecHash))) mismatch();
   if ((await readHireRecord(chain, task)) !== null) mismatch();
   return true;
@@ -1544,6 +1547,7 @@ export async function sendUpdateListing(
     providerAgent: Address;
     priceLamports: bigint;
     spec: { hash: Uint8Array; uri: string } | null;
+    deliverySecs?: number | undefined;
   },
 ): Promise<string> {
   return withListingOperation({ kind: "update", listings: [input.listing], lamports: "0" }, async () => {
@@ -1558,7 +1562,7 @@ export async function sendUpdateListing(
           : { specHash: input.spec.hash, specUri: input.spec.uri }),
         tags: null,
         requiredCapabilities: null,
-        defaultDeadlineSecs: null,
+        defaultDeadlineSecs: input.deliverySecs === undefined ? null : BigInt(input.deliverySecs),
         maxOpenJobs: 1,
         operator: null,
         operatorFeeBps: null,

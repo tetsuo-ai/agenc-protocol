@@ -1,4 +1,5 @@
 // Turn the journal's records into what a person reads.
+import { fractionalQuoteUsd } from "./job-money.js";
 import { formatMoney, formatUsd, formatWait } from "./client/format.js";
 import type {
   ActivityView,
@@ -313,7 +314,9 @@ export function jobView(
     agentId: job.agentId,
     title: job.title,
     request: job.request,
-    acceptance: job.acceptance,
+    acceptance: [...job.acceptance],
+    ...(job.terms && { terms: structuredClone(job.terms) }),
+    ...(job.deadline && job.deadline > 0 ? { marketplaceDeadline: job.deadline } : {}),
     price,
     status,
     statusText: statusText(job, status, price, context.now, context.usdPerSol),
@@ -378,6 +381,7 @@ function savedService(
   const saved: Partial<NonNullable<ApprovalRecord["service"]>> = service;
   return {
     ...service,
+    summary: saved.details === "unavailable" || saved.details === "loading" ? null : service.summary,
     description: saved.description ?? null,
     tags: saved.tags ?? [],
     inputs: saved.inputs ?? [],
@@ -399,7 +403,22 @@ export function approvalView(
   usdPerSol: number | null,
 ): ApprovalView {
   const kind = approval.kind ?? "hire";
+  if (approval.quoteRate !== undefined) usdPerSol = approval.quoteRate;
+  const quotedMoney = (lamports: string | bigint): Money => {
+    const amount = money(lamports, usdPerSol);
+    const exact = usdPerSol === null ? undefined : fractionalQuoteUsd(BigInt(lamports), usdPerSol);
+    return exact === undefined ? amount : { ...amount, quotedUsd: exact };
+  };
   return {
+    ...(approval.terms && { terms: structuredClone(approval.terms), acceptance: [...(approval.acceptance ?? [])] }),
+    ...(approval.protocolFeeBps !== undefined && { marketFee: {
+      bps: approval.protocolFeeBps,
+      amount: quotedMoney(BigInt(approval.priceLamports) * BigInt(approval.protocolFeeBps) / 10_000n),
+    } }),
+    ...(approval.maxPriceCents !== undefined && { maxPriceCents: approval.maxPriceCents }),
+    ...(approval.networkFees !== undefined && { networkFees: quotedMoney(approval.networkFees) }),
+    ...(approval.retainedRent !== undefined && { retainedRent: quotedMoney(approval.retainedRent) }),
+    ...(approval.cancellationRent !== undefined && { cancellationRent: quotedMoney(approval.cancellationRent) }),
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,
@@ -408,10 +427,12 @@ export function approvalView(
     service:
       kind === "request" || approval.service === null ? null : savedService(approval.service, usdPerSol),
     request: approval.request,
-    price: money(approval.priceLamports, usdPerSol),
-    deposits: money(approval.depositsLamports, usdPerSol),
-    fees: money(approval.keptLamports, usdPerSol),
-    fromMain: money(approval.fromMainLamports, usdPerSol),
+    refundableDeposit: quotedMoney(BigInt(approval.depositsLamports) - BigInt(approval.keptLamports)),
+    total: quotedMoney(BigInt(approval.priceLamports) + BigInt(approval.depositsLamports)),
+    price: quotedMoney(approval.priceLamports),
+    deposits: quotedMoney(approval.depositsLamports),
+    fees: quotedMoney(approval.keptLamports),
+    fromMain: quotedMoney(approval.fromMainLamports),
     createdAt: approval.createdAt,
     expiresAt: approval.expiresAt,
   };

@@ -10,7 +10,7 @@ import type { Chain } from "./chain.js";
 
 export interface PriceSource {
   /** Dollars per SOL, or null when no trustworthy price is available. */
-  solUsd(): Promise<number | null>;
+  solUsd(options?: { fresh?: boolean }): Promise<number | null>;
 }
 
 /** A constant price (sandbox play money, tests). */
@@ -67,15 +67,15 @@ export function decodePythPrice(
 
 /** Read SOL/USD from the Pyth price account on `chain`. */
 export function pythPrice(
-  chain: Chain,
+  chain: Pick<Chain, "readRawAccount">,
   options: { account?: Address; now?: () => number } = {},
 ): PriceSource {
   const account = options.account ?? PYTH_SOL_USD_ACCOUNT;
   const now = options.now ?? Date.now;
   let cached: { at: number; value: number | null } | null = null;
   return {
-    async solUsd() {
-      if (cached !== null && now() - cached.at < CACHE_MS) return cached.value;
+    async solUsd(read) {
+      if (!read?.fresh && cached !== null && now() - cached.at < CACHE_MS) return cached.value;
       let value: number | null = null;
       try {
         const raw = await chain.readRawAccount(account);

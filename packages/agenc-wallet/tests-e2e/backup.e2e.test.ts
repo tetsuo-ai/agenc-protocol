@@ -75,7 +75,7 @@ describe("backing the wallet up", () => {
     world = await startWorld({ chain: asLocalnet });
     const { wallet, sandbox, listing } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setBudget(agent.id, 200);
+    await wallet.setBudget(agent.id, 300);
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku about backups." });
     await sandbox.workOnce();
     expect((await wallet.getJob(job.id, true)).status).toBe("delivered");

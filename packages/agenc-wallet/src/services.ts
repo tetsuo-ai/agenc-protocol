@@ -1,3 +1,5 @@
+import { briefDeliverable as jobDeliverable, parseJobBrief } from "@tetsuo-ai/agenc-worker";
+import type { JobTerms } from "./client/types.js";
 // Everything the wallet needs from OUTSIDE the chain, behind one interface:
 // the catalog of services, moderation attestations, job-spec hosting and
 // delivery storage. The hosted implementation talks to the public AgenC
@@ -94,6 +96,7 @@ export interface PublishListingInput {
 }
 
 export interface PublishJobInput {
+  terms?: JobTerms;
   /** The name of the service being hired, or a posted request's own short title. */
   title: string;
   /** What the buyer wants done, in their words. */
@@ -931,10 +934,23 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
           summary: input.request,
           ...(input.request.length > JOB_SUMMARY_MAX ? { details: input.request } : {}),
           ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
-          deliverables: [JOB_DELIVERABLE],
+          deliverables: [jobDeliverable(input.terms)],
         },
         "The marketplace would not publish this request.",
       );
+      if (input.terms) {
+        const spec = published.payload;
+        let brief;
+        try { brief = parseJobBrief(spec); }
+        catch (cause) { throw new WalletError("NOT_AVAILABLE", "The published brief conflicts with the quote.", { cause }); }
+        const description = brief.request;
+        if (spec.title !== jobTitle(input) || description !== input.request ||
+            spec.shortDescription !== input.request.slice(0, JOB_SUMMARY_MAX) ||
+            JSON.stringify(brief.acceptance) !== JSON.stringify(input.acceptance) ||
+            JSON.stringify(spec.deliverables) !== JSON.stringify([jobDeliverable(input.terms)])) {
+          throw new WalletError("NOT_AVAILABLE", "The published brief differs from the quote. Request a new quote.");
+        }
+      }
       return { spec: published.payload, hashHex: published.hashHex, uri: published.uri };
     },
 
@@ -1115,9 +1131,6 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
   });
 }
 
-/** What every job asks the provider to hand in. */
-const JOB_DELIVERABLE =
-  "Put the complete result in your submission. The buyer reads exactly what you submit.";
 /** The marketplace keeps this much of a request as its summary; the rest goes in the details. */
 const JOB_SUMMARY_MAX = 240;
 
@@ -1133,6 +1146,7 @@ function jobTitle(input: { title: string; listing: Address | null }): string {
  * and the marketplace's own shape is used instead.
  */
 export function buildJobSpec(input: {
+  terms?: JobTerms;
   title: string;
   request: string;
   acceptance: readonly string[];
@@ -1144,7 +1158,7 @@ export function buildJobSpec(input: {
     title: jobTitle(input),
     instructions: input.request,
     ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
-    deliverable: JOB_DELIVERABLE,
+    deliverable: jobDeliverable(input.terms),
     ...(input.listing !== null ? { sourceListing: input.listing } : {}),
   };
 }

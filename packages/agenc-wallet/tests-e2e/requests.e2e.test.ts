@@ -1,3 +1,4 @@
+import { approvedPost } from "./harness.js";
 // Posting a request for anyone to take, on practice money: the person posts
 // from the main balance, or an agent from its own money within its budget; a
 // stranger (a house provider of the sandbox) takes it and delivers; the
@@ -98,7 +99,7 @@ describe("posting a request", () => {
     const quote = await postCost(world);
     const before = await world.balance(wallet.mainAddress);
 
-    const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 } });
+    const posted = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 } });
     expect(posted).toMatchObject({
       kind: "request",
       role: "buying",
@@ -175,7 +176,7 @@ describe("posting a request", () => {
   it("turns a delivered request down: the reward is held, and the buyer pays the fee and starts its record once", async () => {
     world = await startWorld();
     const { wallet, sandbox } = world;
-    const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 } });
+    const posted = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 } });
     await sandbox.workOnce();
     const delivered = await wallet.getJob(posted.id, true);
     expect(delivered.status).toBe("delivered");
@@ -232,7 +233,7 @@ describe("posting a request", () => {
     const { wallet, sandbox } = world;
     const quote = await postCost(world);
     const before = await world.balance(wallet.mainAddress);
-    const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 } });
+    const posted = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 } });
     const cancelled = await wallet.refundJob(posted.id, true);
     expect(cancelled.status).toBe("refunded");
     expect(cancelled.statusText).toBe("Cancelled. The reward came back.");
@@ -253,7 +254,7 @@ describe("posting a request", () => {
     world = await startWorld();
     const { wallet, sandbox } = world;
     // Too small for any house provider, so nobody takes it.
-    const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 5 }, deadlineDays: 1 });
+    const posted = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 5 }, deadlineDays: 1 });
     expect(posted.status).toBe("waiting");
     expect(posted.statusText).toMatch(/comes back in 24 hours\.$/);
     await sandbox.workOnce();
@@ -291,7 +292,7 @@ describe("posting a request", () => {
       sandbox.fund(wallet.mainAddress, 5n * SOL);
       const quote = await eventually(async () => (await wallet.overview()).postCost);
       const before = await sandbox.chain.getBalance(wallet.mainAddress);
-      const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 1 });
+      const posted = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 1 });
       await sandbox.workOnce();
       const taken = await wallet.getJob(posted.id, true);
       expect(taken.status).toBe("working");
@@ -382,7 +383,7 @@ describe("posting a request", () => {
     const { wallet, sandbox } = world;
     const quote = await postCost(world);
     const before = await world.balance(wallet.mainAddress);
-    const posted = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 } });
+    const posted = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 } });
     // The request went out and its answer did not come back: still starting.
     expect(state.lost).toBe(1);
     expect(posted.status).toBe("starting");
@@ -403,23 +404,23 @@ describe("posting a request", () => {
   it("posts once for a call made twice, and refuses what it cannot post", async () => {
     world = await startWorld({ mainLamports: 1_000_000_000n });
     const { wallet } = world;
-    const first = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 }, idempotencyKey: "form-1" });
-    const again = await wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 }, idempotencyKey: "form-1" });
+    const first = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 }, idempotencyKey: "form-1" });
+    const again = await approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 }, idempotencyKey: "form-1" });
     expect(again.id).toBe(first.id);
     expect((await wallet.listJobs({}, true)).filter((job) => job.kind === "request")).toHaveLength(1);
 
-    await expect(wallet.postFromBalance({ request: "  ", reward: { usdCents: 30 } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    await expect(wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 0 } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(approvedPost(wallet, { request: "  ", reward: { usdCents: 30 } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(approvedPost(wallet, { request: REQUEST, reward: { usdCents: 0 } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(
-      wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 31 }),
+      approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 31 }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(
-      wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 2.5 }),
+      approvedPost(wallet, { request: REQUEST, reward: { usdCents: 30 }, deadlineDays: 2.5 }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     // More than the balance holds: nothing is posted and nothing is spent.
     const before = await world.balance(wallet.mainAddress);
     await expect(
-      wallet.postFromBalance({ request: REQUEST, reward: { usdCents: 1_000_000 } }),
+      approvedPost(wallet, { request: REQUEST, reward: { usdCents: 1_000_000 } }),
     ).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY", message: expect.stringMatching(/^There is not enough in your balance\./) });
     expect(await world.balance(wallet.mainAddress)).toBe(before);
   });

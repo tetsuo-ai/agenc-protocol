@@ -302,7 +302,7 @@ describe("selling money safety", () => {
     await wallet.fundAgent(buyer.id, { lamports: (2n * SOL).toString() });
     await wallet.setPolicy(buyer.id, {
       askAboveCents: 20_000,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 100_000 },
     });
     const { job } = await wallet.hire({
       agentId: buyer.id,
@@ -334,7 +334,7 @@ describe("selling money safety", () => {
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, {
       askAboveCents: 500,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     const { job } = await wallet.hire({
       agentId: buyer.id,

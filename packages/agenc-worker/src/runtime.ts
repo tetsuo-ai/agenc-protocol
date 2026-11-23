@@ -1,3 +1,4 @@
+import { parseJobBrief } from "./job-brief.js";
 // The worker runtime: ensureRegistered → find claim candidates (ONE at a time — the
 // worker never holds more than one open claim) → verify the job spec against
 // its on-chain hash → claim → execute via the operator's own coding-agent CLI
@@ -578,6 +579,18 @@ export function buildPrompt(
       spec = new TextDecoder("utf-8", { fatal: true }).decode(jobSpecContent);
     } catch {
       spec = `(binary job spec, ${jobSpecContent.length} bytes, sha256 ${sha256Hex(jobSpecContent)})`;
+    }
+    if (spec.trimStart().startsWith("{")) {
+      let document: unknown;
+      try { document = JSON.parse(spec); } catch { /* A plain-text spec can begin with a brace. */ }
+      if (document && typeof document === "object" && !Array.isArray(document)) {
+        const fields = document as Record<string, unknown>;
+        const brief = parseJobBrief(fields);
+        if (brief.terms) {
+          for (const key of ["instructions", "details", "summary", "shortDescription", "fullDescription", "acceptance", "acceptanceCriteria"]) delete fields[key];
+          spec = JSON.stringify({ ...fields, instructions: brief.request, acceptance: brief.acceptance });
+        }
+      }
     }
     lines.push(
       "",
@@ -1797,14 +1810,10 @@ async function executeAndSubmit(
   // Retain what the seller agreed to before running the work. This survives
   // submission, settlement, and removal of the public job-spec account.
   const payload = JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
-  const request = [payload.instructions, payload.details, payload.summary].find((value) => typeof value === "string");
-  const criteria = payload.acceptance ?? payload.acceptanceCriteria;
+  const brief = parseJobBrief(payload);
   const evidenceState = loadState(ctx.stateDir);
   if (evidenceState.openClaim?.task === task) {
-    evidenceState.openClaim.jobEvidence = {
-      request: typeof request === "string" ? request : "",
-      acceptance: Array.isArray(criteria) ? criteria.filter((value): value is string => typeof value === "string") : [],
-    };
+    evidenceState.openClaim.jobEvidence = { ...brief, ...(decodedTask.deadline > 0n && { marketplaceDeadline: Number(decodedTask.deadline) }) };
     saveState(ctx.stateDir, evidenceState);
   }
   let stdout: Buffer;

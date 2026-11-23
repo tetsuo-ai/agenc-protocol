@@ -1,3 +1,4 @@
+import { approvedPost } from "./harness.js";
 import { setEarnWithApproval } from "./harness.js";
 // Taking money back, or sending it all out, leaves nothing of the person's
 // behind where it can never be used. A wallet that is not empty must keep the
@@ -34,7 +35,7 @@ async function agentWith(current: World, cents: number) {
   const agent = await current.wallet.createAgent("My assistant");
   await current.wallet.setPolicy(agent.id, {
     askAboveCents: 1_000,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: { enabled: false, topUpToCents: 0, perDayCents: 100_000 },
   });
   await current.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;
@@ -117,7 +118,7 @@ describe("taking everything back", () => {
   it("keeps what a request posted from the balance still needs, so it can be cancelled", async () => {
     world = await startWorld();
     const { wallet } = world;
-    const posted = await wallet.postFromBalance({
+    const posted = await approvedPost(wallet, {
       request: "Write a haiku about a lighthouse.",
       reward: { usdCents: 5 },
     });

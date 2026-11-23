@@ -65,7 +65,7 @@ describe("approvals", () => {
     await wallet.fundAgent(agent.id, { usdCents: 500 });
     await wallet.setPolicy(agent.id, {
       askAboveCents: 10,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     const { job, approval } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     expect(job.status).toBe("needs_approval");
