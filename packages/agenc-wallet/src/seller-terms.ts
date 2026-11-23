@@ -1,5 +1,12 @@
 import { address } from "@solana/kit";
-import { values } from "@tetsuo-ai/marketplace-sdk";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  getServiceListingDecoder,
+  getServiceListingDiscriminatorBytes,
+  values,
+} from "@tetsuo-ai/marketplace-sdk";
+import type { Chain } from "./chain.js";
+import type { CatalogRow } from "./services.js";
 import {
   DEFAULT_SELLER_TERMS,
   sellerTermsProblem,
@@ -96,4 +103,59 @@ export function sellerProceeds(
             rate,
           ),
   };
+}
+
+/** Older catalog responses omit the operator and capacity. Read the displayed page in one batch. */
+export async function fillCatalogTerms(
+  chain: Chain,
+  rows: CatalogRow[],
+): Promise<CatalogRow[]> {
+  const missing = rows.filter(
+    (row) =>
+      row.maxOpenJobs === undefined ||
+      row.operatorFeeBps === undefined ||
+      (row.operatorFeeBps > 0 && !row.operator),
+  );
+  if (missing.length === 0) return rows;
+  const accounts = await chain
+    .readRawAccounts(missing.map((row) => row.listing))
+    .catch(() => []);
+  const prefix = getServiceListingDiscriminatorBytes();
+  const terms = new Map<string, CatalogRow>();
+  for (const [index, row] of missing.entries()) {
+    const raw = accounts[index];
+    if (
+      !raw ||
+      raw.owner !== AGENC_COORDINATION_PROGRAM_ADDRESS ||
+      !Array.from(prefix).every((byte, i) => raw.data[i] === byte)
+    )
+      continue;
+    try {
+      const account = getServiceListingDecoder().decode(raw.data);
+      if (
+        account.providerAgent !== row.providerAgent ||
+        account.price !== row.priceLamports ||
+        (row.specHashHex !== null &&
+          values.bytesToHex(new Uint8Array(account.specHash)) !==
+            row.specHashHex)
+      )
+        continue;
+      terms.set(row.listing, {
+        ...row,
+        maxOpenJobs: account.maxOpenJobs,
+        operatorFeeBps: account.operatorFeeBps,
+        deliverySecs:
+          account.defaultDeadlineSecs > 0n
+            ? Number(account.defaultDeadlineSecs)
+            : null,
+        operator:
+          account.operator === "11111111111111111111111111111111"
+            ? null
+            : account.operator,
+      });
+    } catch {
+      // An unreadable listing cannot supply a payout estimate.
+    }
+  }
+  return rows.map((row) => terms.get(row.listing) ?? row);
 }

@@ -7,7 +7,7 @@
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
-import { resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
+import { fillCatalogTerms, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
 import type { SellerOfferInput } from "./client/protocol.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
@@ -1776,8 +1776,9 @@ export class AgencWallet {
         compareRecords(recordOf(a.row), recordOf(b.row)) ||
         (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
     );
+    const page = await fillCatalogTerms(this.#chain, scored.slice(offset, offset + limit).map((entry) => entry.row));
     return {
-      services: scored.slice(offset, offset + limit).map((entry) => this.#serviceView(entry.row, context)),
+      services: page.map((row) => this.#serviceView(row, context)),
       total: scored.length,
     };
   }

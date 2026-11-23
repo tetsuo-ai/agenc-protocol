@@ -28,7 +28,23 @@ afterEach(async () => {
 });
 
 it("quotes, publishes and reconciles the exact terms buyers see, including after restart", async () => {
-  world = await startWorld({ earn });
+  world = await startWorld({
+    earn,
+    services: (services) => ({
+      ...services,
+      async listServices() {
+        const rows = await services.listServices();
+        return rows.map(
+          ({
+            operatorFeeBps: _fee,
+            maxOpenJobs: _capacity,
+            operator: _operator,
+            ...row
+          }) => row,
+        );
+      },
+    }),
+  });
   let wallet = world.wallet;
   const seller = await wallet.createAgent();
   const operator = await wallet.createAgent();
