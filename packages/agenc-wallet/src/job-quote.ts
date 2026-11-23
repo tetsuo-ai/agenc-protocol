@@ -1,4 +1,6 @@
 import { ceilingLamports, microcents, type JobDeposits } from "./job-money.js";
+import type { HirePayoutQuote } from "./client/hire-quote.js";
+import { sellerProceeds } from "./seller-terms.js";
 import { money } from "./views.js";
 import { jobIdentity } from "./job-terms.js";
 import { FEE_HEADROOM_LAMPORTS } from "./market.js";
@@ -42,10 +44,27 @@ export function buildJobQuote(record: JobRecord, input: {
   now: number;
   expiresAt: number;
 }): { job: JobRecord; approval: ApprovalRecord } {
-  const { approvalId, payer, service, deposits, protocolFeeBps, rate, now, expiresAt } = input;
+  const { approvalId, payer, deposits, protocolFeeBps, rate, now, expiresAt } = input;
   const cost = jobCosts(deposits);
+  let { service } = input;
+  let hire: HirePayoutQuote | undefined;
+  if (service) {
+    if (!service.listingVersion || service.operator === undefined || service.operatorFeeBps === undefined) {
+      throw new WalletError("NOT_AVAILABLE", "The listing terms are incomplete. Request a fresh hire quote.");
+    }
+    const price = BigInt(record.priceLamports);
+    const proceeds = sellerProceeds(price, service.operatorFeeBps, protocolFeeBps, rate);
+    hire = {
+      listingVersion: service.listingVersion, price: money(price, rate),
+      operator: service.operator, operatorFeeBps: service.operatorFeeBps, operatorFee: proceeds.operatorFee,
+      marketplaceFeeBps: protocolFeeBps, maximumMarketplaceFee: proceeds.marketFee!,
+      minimumSellerNet: proceeds.sellerNet!, minimumSellerNetIfOperatorCannotReceive: proceeds.sellerNetIfForfeited!,
+    };
+    service = { ...service, proceeds };
+  }
   const job = {
     ...record, payer, approvalId,
+    ...(hire && record.terms && { terms: { ...record.terms, hire } }),
     ...(rate !== null && { maxPriceCents: record.maxPriceCents ?? Number(microcents(BigInt(record.priceLamports), rate)) / 1_000_000 }),
     approvedCosts: { networkFees: deposits.networkFees.toString(), cancellationRent: deposits.cancellationRent.toString(), total: deposits.total.toString(), kept: deposits.kept.toString(), protocolFeeBps, expiresAt },
   };

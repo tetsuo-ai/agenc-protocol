@@ -406,7 +406,7 @@ function hireFailureText(
   if (/Price|Version|ListingChanged|Mismatch/i.test(name)) {
     return {
       code: "PRICE_CHANGED",
-      message: "The service changed its terms while the order was being placed. Nothing was spent.",
+      message: "The listing terms changed. The hire price stayed in your balance. Request a fresh quote. A network fee may apply.",
     };
   }
   if (/insufficient (funds|lamports)|InsufficientFunds/i.test(`${name} ${text}`)) {
@@ -1740,7 +1740,7 @@ export class AgencWallet {
     // Without a price the limit cannot be checked, so a person decides.
     const withinLimit = priceCents !== null && priceCents <= agent.policy.askAboveCents;
     const covered = agentBalance >= need;
-    const autonomous = !quoteOnly && withinLimit && covered;
+    const autonomous = !quoteOnly && withinLimit && covered && terms.operatorFeeBps === 0;
     const taskId = values.randomId32();
     await checkHireOperator(terms.operator, terms.operatorFeeBps, covered ? agent.address as Address : this.mainAddress, taskId);
 
@@ -2221,11 +2221,21 @@ export class AgencWallet {
       const cap = old.buyerMaxPriceCents === undefined
         ? legacyRefreshLimit(old)
         : old.buyerMaxPriceCents ?? undefined;
-      checkPriceLimit(BigInt(old.priceLamports), cap, rate);
+      if (isRequest(old)) checkPriceLimit(BigInt(old.priceLamports), cap, rate);
       const replacement = { ...old };
       if (cap === undefined) delete replacement.maxPriceCents;
       else replacement.maxPriceCents = cap;
-      const result = await this.#queueJob(replacement, old.payer, entry.service, rate, false, id);
+      let service = entry.service;
+      if (!isRequest(old)) {
+        const listing = await readHireableListing(this.#chain, old.listing as Address);
+        if (listing.priceLamports.toString() !== old.priceLamports || values.bytesToHex(listing.specHash) !== old.listingSpecHashHex || listing.deliverySecs !== old.terms?.listingDurationSecs) {
+          throw new WalletError("PRICE_CHANGED", "The service price, description or delivery period changed. Start a new hire.");
+        }
+        checkPriceLimit(listing.priceLamports, cap, rate);
+        replacement.expectedVersion = listing.version.toString();
+        service = this.#discovery.describeHire(listing, rate, null);
+      }
+      const result = await this.#queueJob(replacement, old.payer, service, rate, false, id);
       return { approval: result.approval! };
     });
   }
@@ -2287,6 +2297,11 @@ export class AgencWallet {
     await this.#checkJobQuote(job, deposits);
     if (!isRequest(job)) {
       const terms = await readHireableListing(this.#chain, job.listing as Address);
+      const split = job.terms.hire;
+      if (!split || terms.version.toString() !== split.listingVersion || terms.priceLamports.toString() !== split.price.lamports ||
+          terms.operator !== split.operator || terms.operatorFeeBps !== split.operatorFeeBps) {
+        throw new WalletError("PRICE_CHANGED", "The listing or its payout terms changed. Request a fresh hire quote.");
+      }
       await checkHireOperator(terms.operator, terms.operatorFeeBps, address, values.hexToBytes(job.taskIdHex));
     }
     if (job.terms.contest) {
@@ -2335,7 +2350,7 @@ export class AgencWallet {
     if (job.terms && await this.#chain.clusterTime() >= job.terms.deadline) {
       throw new WalletError("NOT_AVAILABLE", "The delivery deadline has passed.");
     }
-    if (!quote?.networkFees || job.maxPriceCents === undefined) {
+    if (!quote?.networkFees || job.maxPriceCents === undefined || (!isRequest(job) && !job.terms?.hire)) {
       throw new WalletError("NOT_AVAILABLE", "Refresh the quote to get the current costs.");
     }
     if (quote.expiresAt <= this.#now()) throw new WalletError("NOT_AVAILABLE", "This quote has expired.");

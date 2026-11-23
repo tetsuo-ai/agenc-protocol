@@ -164,11 +164,12 @@ it("quotes, publishes and reconciles the exact terms buyers see, including after
     askAboveCents: 100,
     refill: REVIEW_ALLOWANCE,
   });
-  const { job } = await wallet.hire({
+  const { approval } = await wallet.hire({
     agentId: customer.id,
     listing,
     request: "Edit this paragraph.",
   });
+  const job = await wallet.decideApproval(approval!.id, true);
   const task = (await readTask(world.sandbox.chain, job.task as Address))!;
   expect(task).toMatchObject({
     rewardAmount: 3000999n,
@@ -357,7 +358,12 @@ it("funds concurrent deliveries and reports both possible operator credits from 
   const before = await world.balance(wallet.mainAddress);
   const jobs = [];
   for (let i = 0; i < 6; i++) {
-    const { job } = await wallet.hire({ agentId: buyer.id, listing, request: "Edit paragraph " + i });
+    const { approval } = await wallet.hire({ agentId: buyer.id, listing, request: "Edit paragraph " + i });
+    expect(approval?.terms?.hire).toMatchObject({
+      operator: operator.address, operatorFeeBps: 123, operatorFee: { lamports: "36912" },
+      minimumSellerNet: { lamports: "2814038" }, minimumSellerNetIfOperatorCannotReceive: { lamports: "2850950" },
+    });
+    const job = await wallet.decideApproval(approval!.id, true);
     jobs.push(job.id);
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered");
   }
@@ -446,7 +452,8 @@ it("keeps the rounded-zero operator split in the preview and paid receipt after 
   expect(preview).toMatchObject({ operator: operator.address, operatorFeeBps: 1, proceeds });
   await wallet.fundAgent(buyer.id, { lamports: "500000000" });
   await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: { ...REVIEW_ALLOWANCE, perDayCents: 10_000 } });
-  const { job } = await wallet.hire({ agentId: buyer.id, listing, request: "Edit my paragraph." });
+  const { approval } = await wallet.hire({ agentId: buyer.id, listing, request: "Edit my paragraph." });
+  const job = await wallet.decideApproval(approval!.id, true);
   await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered");
   const before = await world.balance(operator.address);
   const paid = await confirmPayout(wallet, job.id);

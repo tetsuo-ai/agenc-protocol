@@ -111,7 +111,11 @@ it("bounds a first automatic refund with configured priority fees and live cance
 });
 
 it("funds exactly the quoted price on an operator listing within the quoted main contribution", async () => {
-  world = await startWorld();
+  const transactionFee = 5_250n;
+  world = await startWorld({ chain: (base, sandbox) => ({
+    ...base, transferFeeLamports: transactionFee,
+    clientFor: signer => createMarketplaceClient({ signer, transport: sandbox.market.transport, computeUnitPrice: 1000n, computeUnitLimit: 250_000 }),
+  }) });
   const { wallet, sandbox, listing } = world;
   const buyer = await wallet.createAgent("Buyer");
   const operator = await wallet.createAgent("Operator");
@@ -122,12 +126,14 @@ it("funds exactly the quoted price on an operator listing within the quoted main
     ...row, operator: operator.address as Address, operatorFeeBps: 100,
   })) });
   const quote = (await wallet.hire({ agentId: buyer.id, listing, request }, true)).approval!;
+  expect(quote.networkFees!.lamports).toBe((4n * transactionFee + 10_000n).toString());
   const before = await world.balance(wallet.mainAddress);
   const funded = await wallet.decideApproval(quote.id, true);
   expect(funded.status).toBe("waiting");
   const task = getTaskDecoder().decode((await sandbox.chain.readAccount(funded.task as Address))!);
   expect(task.rewardAmount).toBe(BigInt(quote.price.lamports));
   expect(task.operatorFeeBps).toBe(100);
+  expect(task.operator).toBe(quote.terms!.hire!.operator);
   expect(before - await world.balance(wallet.mainAddress)).toBeLessThanOrEqual(BigInt(quote.fromMain.lamports));
 });
 
@@ -176,7 +182,7 @@ it("refuses stale search prices, cached descriptions and a changed listing after
   const raw = sandbox.market.svm.getAccount(listing);
   sandbox.market.svm.setAccount({ ...raw, data: new Uint8Array(getServiceListingEncoder().encode({ ...row, price: 21n * CENT })) } as never);
   const before = await world.balance(wallet.mainAddress);
-  expect((await wallet.decideApproval(quote.id, true)).status).toBe("failed");
+  await expect(wallet.decideApproval(quote.id, true)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
   expect(await world.balance(wallet.mainAddress)).toBe(before);
 });
 

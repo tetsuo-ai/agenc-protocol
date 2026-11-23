@@ -250,6 +250,8 @@ describe("the wallet service", () => {
     const hired = await hiring;
     expect(hired.ok).toBe(true);
     expect(hired.job!.status).toBe("waiting");
+    expect(hired.job?.terms?.hire).toEqual(approval.terms?.hire);
+    expect(hired.job?.terms?.hire?.price.lamports).toBe(approval.price.lamports);
 
     const waiting = runMarketTool(agent, agentView.id, "market_status", {
       job_id: hired.job!.job_id,

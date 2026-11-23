@@ -588,6 +588,7 @@ export interface ContestQuote {
 }
 
 export interface JobTerms {
+  hire?: import("./hire-quote.js").HirePayoutQuote;
   contest?: { maxEntries: number; entryDepositLamports: string; releaseAt: number };
   /** Exact delivery deadline in Unix seconds. For a hire this is part of its signed brief. */
   deadline: number;
