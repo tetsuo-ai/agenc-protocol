@@ -119,6 +119,14 @@ fn releasable_task_status(status: TaskStatus) -> bool {
 }
 
 pub fn handler(ctx: Context<ReleaseClaim>) -> Result<()> {
+    release(ctx, None)
+}
+
+pub fn release_to(ctx: Context<ReleaseClaim>, recipient: Pubkey) -> Result<()> {
+    release(ctx, Some(recipient))
+}
+
+fn release(ctx: Context<ReleaseClaim>, recipient: Option<Pubkey>) -> Result<()> {
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let now = Clock::get()?.unix_timestamp;
     // Create a missing record first: the create is a CPI, and a CPI made after
@@ -189,6 +197,10 @@ pub fn handler(ctx: Context<ReleaseClaim>) -> Result<()> {
     // record still counts the late release).
     let late = !release_refunds_deposit(ctx.accounts.claim.claimed_at, now);
     let deposit_refunded = !late || ctx.accounts.task.dispute_filed();
+    if let Some(approved) = recipient {
+        let actual = if deposit_refunded { ctx.accounts.authority.key() } else { ctx.accounts.creator.key() };
+        require_keys_eq!(approved, actual, CoordinationError::ClaimNotReleasable);
+    }
     let claim_info = ctx.accounts.claim.to_account_info();
     if late {
         count_agent_stats(

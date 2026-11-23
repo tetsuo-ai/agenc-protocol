@@ -251,6 +251,7 @@ import {
   getRejectAndFreezeInstructionAsync,
   getRejectTaskResultInstructionAsync,
   getReleaseClaimInstructionAsync,
+  getReleaseClaimToInstructionAsync,
   getRepairDisputeInitiatorCounterInstructionAsync,
   getRequestAttestorExitInstruction,
   getRequestChangesInstructionAsync,
@@ -357,6 +358,7 @@ import {
   parseRejectAndFreezeInstruction,
   parseRejectTaskResultInstruction,
   parseReleaseClaimInstruction,
+  parseReleaseClaimToInstruction,
   parseRepairDisputeInitiatorCounterInstruction,
   parseRequestAttestorExitInstruction,
   parseRequestChangesInstruction,
@@ -511,6 +513,7 @@ import {
   type ParsedRejectAndFreezeInstruction,
   type ParsedRejectTaskResultInstruction,
   type ParsedReleaseClaimInstruction,
+  type ParsedReleaseClaimToInstruction,
   type ParsedRepairDisputeInitiatorCounterInstruction,
   type ParsedRequestAttestorExitInstruction,
   type ParsedRequestChangesInstruction,
@@ -569,6 +572,7 @@ import {
   type RejectAndFreezeAsyncInput,
   type RejectTaskResultAsyncInput,
   type ReleaseClaimAsyncInput,
+  type ReleaseClaimToAsyncInput,
   type RepairDisputeInitiatorCounterAsyncInput,
   type RequestAttestorExitInput,
   type RequestChangesAsyncInput,
@@ -1345,6 +1349,7 @@ export enum AgencCoordinationInstruction {
   RejectAndFreeze,
   RejectTaskResult,
   ReleaseClaim,
+  ReleaseClaimTo,
   RepairDisputeInitiatorCounter,
   RequestAttestorExit,
   RequestChanges,
@@ -2141,6 +2146,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       getFixedBytesEncoder(8).encode(
+        new Uint8Array([217, 41, 210, 45, 9, 116, 112, 175]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ReleaseClaimTo;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([225, 75, 211, 96, 189, 248, 128, 146]),
       ),
       0,
@@ -2769,6 +2785,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ReleaseClaim;
     } & ParsedReleaseClaimInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.ReleaseClaimTo;
+    } & ParsedReleaseClaimToInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.RepairDisputeInitiatorCounter;
     } & ParsedRepairDisputeInitiatorCounterInstruction<TProgram>)
   | ({
@@ -3364,6 +3383,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ReleaseClaim,
         ...parseReleaseClaimInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.ReleaseClaimTo: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.ReleaseClaimTo,
+        ...parseReleaseClaimToInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.RepairDisputeInitiatorCounter: {
@@ -4022,6 +4048,10 @@ export type AgencCoordinationPluginInstructions = {
   releaseClaim: (
     input: ReleaseClaimAsyncInput,
   ) => ReturnType<typeof getReleaseClaimInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  releaseClaimTo: (
+    input: ReleaseClaimToAsyncInput,
+  ) => ReturnType<typeof getReleaseClaimToInstructionAsync> &
     SelfPlanAndSendFunctions;
   repairDisputeInitiatorCounter: (
     input: RepairDisputeInitiatorCounterAsyncInput,
@@ -4739,6 +4769,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getReleaseClaimInstructionAsync(input),
+            ),
+          releaseClaimTo: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getReleaseClaimToInstructionAsync(input),
             ),
           repairDisputeInitiatorCounter: (input) =>
             addSelfPlanAndSendFunctions(
