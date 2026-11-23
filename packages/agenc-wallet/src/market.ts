@@ -9,7 +9,7 @@ import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
 import { withListingOperation } from "./transport-scope.js";
-import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
+import { getAddressEncoder, type Address, type KeyPairSigner, type TransactionSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
@@ -27,6 +27,7 @@ import {
   findModerationAttestorPda,
   findModerationConfigPda,
   findProtocolConfigPda,
+  findTaskAttestorConfigPda, getTaskAttestorConfigDiscriminatorBytes,
   findTaskJobSpecPda,
   findTaskModerationPda,
   findTaskPda,
@@ -1378,6 +1379,11 @@ export async function sendTidy(
   task: Address,
   providerAgent: Address | null,
 ): Promise<string | null> {
+  const instruction = await prepareTidy(chain, buyer, task, providerAgent);
+  return instruction ? (await chain.clientFor(buyer).send([instruction])).signature : null;
+}
+
+export async function prepareTidy(chain: Chain, buyer: TransactionSigner, task: Address, providerAgent: Address | null) {
   const read = await facade.readTask(snapshotReader(chain), task);
   if (read.kind === "missing") return null;
   if (read.kind === "task") {
@@ -1422,6 +1428,11 @@ export async function sendTidy(
     }
   }
 
+  const [attestor] = await findTaskAttestorConfigPda({ task });
+  const attestorInfo = await chain.readAccountInfo(attestor);
+  if (attestorInfo?.owner === AGENC_COORDINATION_PROGRAM_ADDRESS && startsWith(attestorInfo.data, getTaskAttestorConfigDiscriminatorBytes())) {
+    children.push({ kind: "creatorFunded", account: attestor });
+  }
   for (const record of await buyerPaidModerationRecords(chain, task, buyer.address)) {
     children.push({ kind: "namedRecipient", account: record, recipient: buyer.address });
   }
@@ -1437,8 +1448,7 @@ export async function sendTidy(
     task,
     creator: buyer.address,
   });
-  const client = chain.clientFor(buyer);
-  const result = await client.closeTask({
+  return facade.closeTask({
     task,
     authority: buyer,
     creatorCompletionBond,
@@ -1446,7 +1456,6 @@ export async function sendTidy(
     ...(activated ? {} : { taskJobSpec: null }),
     children,
   });
-  return result.signature;
 }
 
 /** What leaving a rating costs: the record's deposit (never returned) plus a fee. */

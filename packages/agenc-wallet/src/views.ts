@@ -1,4 +1,5 @@
 // Turn the journal's records into what a person reads.
+import { contestPage } from "./contest-page.js";
 import { fractionalQuoteUsd } from "./job-money.js";
 import { formatMoney, formatUsd, formatWait } from "./client/format.js";
 import type {
@@ -180,7 +181,7 @@ function statusText(
   const amount = formatMoney(price);
   if (
     job.role === "buying" &&
-    job.refundBlockedLamports !== undefined &&
+    !job.terms?.contest && job.refundBlockedLamports !== undefined &&
     (status === "waiting" || status === "working")
   ) {
     return blockedRefundText(job, job.refundBlockedLamports, usdPerSol);
@@ -188,6 +189,7 @@ function statusText(
   if (job.terms?.contest && status === "delivered") return job.contestReleaseOpen
     ? "The selection window has closed. Remaining submitters can collect their shares."
     : "Contest entries are ready to review.";
+  if (job.terms?.contest && status === "waiting") return "Waiting for contest entries. You can review a refund quote in Jobs.";
   if (job.terms?.contest && status === "paid") return "The contest prize was paid.";
   if (job.role === "buying" && job.kind === "request") return requestText(job, status, amount, now);
   if (job.role === "working") {
@@ -310,6 +312,7 @@ export function jobView(
   // Only a hired service can be rated: a rating is kept on its listing.
   const canRate = buying && kind === "hire" && status === "paid" && job.rating === null && !job.tidied;
   // Turning a delivery down is a person's call.
+  const page = job.terms?.contest ? contestPage(job) : null;
   const canTurnDown = !job.terms?.contest && buying && status === "delivered" && context.isOwner;
   return {
     id: job.id,
@@ -319,7 +322,9 @@ export function jobView(
     title: job.title,
     request: job.request,
     acceptance: [...job.acceptance],
-    ...(job.terms?.contest && { contestEntries: structuredClone((job.contestEntries ?? []).map(({ commitment, observedEvent, ...entry }) => entry)), contestReleaseOpen: job.contestReleaseOpen ?? false }),
+    ...(page && { contestEntries: page.entries, contestNext: page.next, contestReleaseOpen: job.contestReleaseOpen ?? false,
+      contestCancel: job.contestCancel ?? false, contestCleanup: job.contestCleanup ?? false, contestClaims: job.contestClaims ?? [],
+      ...(job.contestSettlements?.length && { contestReceipt: job.contestSettlements.at(-1)! }) }),
     ...(job.contestQuote && { contestQuote: structuredClone(job.contestQuote) }),
     ...(job.terms && { terms: structuredClone(job.terms) }),
     ...(job.deadline && job.deadline > 0 ? { marketplaceDeadline: job.deadline } : {}),
@@ -336,8 +341,8 @@ export function jobView(
     result: job.result === null || (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked)
       ? null : { ...job.result, files: job.result.files ?? [] },
     autoApproveAt:
-      status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
-    autoRefundAt: status === "waiting" ? job.autoRefundAt : null,
+      !job.terms?.contest && status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
+    autoRefundAt: !job.terms?.contest && status === "waiting" ? job.autoRefundAt : null,
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     turnDown: status === "in_review" ? turnDownView(job, context.usdPerSol) : null,
@@ -356,7 +361,7 @@ export function jobView(
     // delivery back with a request the provider can never read.
     canAskChanges: !job.terms?.contest && buying && status === "delivered" && context.changesCanBeSent,
     canRefund:
-      buying &&
+      buying && (!job.terms?.contest || status === "needs_approval") &&
       (status === "needs_approval" ||
         status === "waiting" ||
         // Turning down a delivery is a person's call, not an agent's.
@@ -415,6 +420,8 @@ export function approvalView(
     return exact === undefined ? amount : { ...amount, quotedUsd: exact };
   };
   return {
+    ...(approval.contestOverage && { contestOverage: approval.contestOverage }),
+    ...(approval.contestOverBudget && { contestOverBudget: true }),
     ...(approval.terms?.contest && { contestCosts: {
       entryRent: money(approval.entryRentLamports ?? "0", usdPerSol),
       firstWorkerRecord: money(approval.workerRecordLamports ?? "0", usdPerSol),

@@ -177,6 +177,15 @@ export interface WalletMethods {
     params: { role?: "buying" | "working"; agentId?: string; limit?: number; before?: string };
     result: { jobs: JobView[] };
   };
+  "jobs.contestPage": {
+    params: { jobId: string; after?: string }; result: { entries: import("./types.js").ContestEntry[]; next: string | null };
+  };
+  "jobs.contestReceipts": {
+    params: { jobId: string; after?: string }; result: { receipts: import("./types.js").ContestReceipt[]; next: string | null };
+  };
+  "jobs.contestQuote": {
+    params: { jobId: string; quoteId: string }; result: { quote: import("./types.js").ContestQuote };
+  };
   "jobs.quoteContest": {
     params: { jobId: string; entryId: string; action: import("./types.js").ContestAction; reason?: string };
     result: { job: JobView };
@@ -302,6 +311,7 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "approvals.wait",
   "jobs.callOutcome",
   "jobs.list",
+  "jobs.contestPage", "jobs.contestReceipts", "jobs.contestQuote",
   "jobs.quoteContest",
   "jobs.get",
   "jobs.delivery",

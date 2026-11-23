@@ -51,7 +51,7 @@ export function buildJobQuote(record: JobRecord, input: {
     fromMainLamports: payer === "main" ? (BigInt(job.priceLamports) + cost.extra).toString() : "0",
     protocolFeeBps,
     networkFees: deposits.networkFees.toString(),
-    retainedRent: (deposits.kept - deposits.cancellationRent).toString(),
+    retainedRent: (deposits.kept - deposits.cancellationRent - BigInt(record.contestRegistration?.rent ?? "0") - BigInt(record.contestRegistration?.stake ?? "0")).toString(),
     cancellationRent: deposits.cancellationRent.toString(),
     quoteRate: rate,
     createdAt: now,

@@ -54,6 +54,8 @@ export function jobListPreview(job: JobView): JobView {
       result,
     };
     delete preview.contestQuote;
+    delete preview.contestReceipt;
+    delete preview.contestClaims;
     preview.previewTruncated = JSON.stringify(preview) !== JSON.stringify(job);
     if (bytes(preview) <= MAX_JOB_PREVIEW_BYTES) return preview;
     // IDs, addresses, enum values, hashes and numeric amounts are schema bounded.

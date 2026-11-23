@@ -164,6 +164,8 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       additionalProperties: false,
       properties: {
         job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
+        entry_id: { type: "string", maxLength: 64, description: "Read this contest entry in full." },
+        after_entry: { type: "string", maxLength: 64, description: "Read the next page of contest entries." },
         wait: {
           type: "boolean",
           description: "Wait for the job to be delivered or to end.",
@@ -225,6 +227,11 @@ export interface MarketToolResult {
   ok: boolean;
   /** One or two plain sentences: what happened and what to do next. */
   message: string;
+  job_id?: string;
+  entry_id?: string;
+  delivery?: Omit<import("./types.js").JobResult, "text"> & { untrusted_content: string | null };
+  submissions?: import("./types.js").ContestEntry[];
+  next_entry?: string | null;
   services?: ReturnType<typeof describeService>[];
   job?: ReturnType<typeof describeJob>;
   jobs?: ReturnType<typeof describeJob>[];
@@ -345,7 +352,7 @@ function describeJob(job: JobView, now: number) {
     price: formatMoney(job.price),
     request: job.request,
     acceptance: job.acceptance,
-    ...(job.contestEntries && { submissions: job.contestEntries, shares_available: job.contestReleaseOpen }),
+    ...(job.contestEntries && { submissions: job.contestEntries, next_entry: job.contestNext, shares_available: job.contestReleaseOpen }),
     ...(job.contestQuote && { owner_review_quote: job.contestQuote }),
     ...(job.terms && { terms: job.terms }),
     ...(job.marketplaceDeadline !== undefined && { marketplace_deadline: new Date(job.marketplaceDeadline * 1000).toISOString() }),
@@ -593,6 +600,16 @@ export async function runMarketTool(
           message: jobs.length === 0 ? "You have no jobs yet." : `Your ${jobs.length} most recent jobs.`,
           jobs: jobs.map((job) => describeJob(job, now())),
         };
+      }
+      if (args.entry_id !== undefined) {
+        const entryId = text(args.entry_id, "entry_id", 64, true)!;
+        const { result } = await client.call("jobs.delivery", { jobId, entryId }, callOptions);
+        const { text: untrusted_content, ...evidence } = result;
+        return { ok: true, message: "Contest entry delivery.", job_id: jobId, entry_id: entryId, delivery: { ...evidence, untrusted_content } };
+      }
+      if (args.after_entry !== undefined) {
+        const page = await client.call("jobs.contestPage", { jobId, after: text(args.after_entry, "after_entry", 64, true)! }, callOptions);
+        return { ok: true, message: "Contest entries.", submissions: page.entries, next_entry: page.next };
       }
       const job =
         args.wait === true

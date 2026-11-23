@@ -393,6 +393,11 @@ export interface JobResult {
 
 export interface JobView {
   contestEntries?: ContestEntry[];
+  contestNext?: string | null;
+  contestClaims?: { claim: string; workerAuthority: string }[];
+  contestCleanup?: boolean;
+  contestCancel?: boolean;
+  contestReceipt?: ContestReceipt;
   contestQuote?: ContestQuote;
   contestReleaseOpen?: boolean;
   /** Deadline observed on the marketplace after funding, in Unix seconds. */
@@ -506,12 +511,36 @@ export interface ContestEntry {
   text: string | null;
   uri: string | null;
   reason?: string;
+  settlement?: { signature: string; prize?: string; fee?: string; changes?: { address: string; lamports: string }[] };
 }
 
-export type ContestAction = "winner" | "reject" | "release";
+export type ContestAction = "winner" | "reject" | "release" | "cancel" | "reclaim" | "cleanup";
+export interface ContestTransfer {
+  label: string;
+  recipient: string;
+  amount: Money;
+}
+export interface ContestReceipt {
+  quoteId: string;
+  action: ContestAction;
+  entryId: string;
+  signature: string;
+  transfers: ContestTransfer[];
+  proof?: string;
+  reason?: string;
+  networkFee?: Money;
+  recordCost?: Money;
+}
 
 export interface ContestQuote {
   id: string;
+  stateHash?: string;
+  chainExpiry?: number;
+  rate?: number;
+  proof?: string;
+  transfers?: ContestTransfer[];
+  allowanceExceeded?: boolean;
+  overageMicrocents?: string;
   claimGeneration: string;
   entryId: string;
   action: ContestAction;
@@ -541,6 +570,8 @@ export interface JobTerms {
 }
 
 export interface ApprovalView {
+  contestOverBudget?: boolean;
+  contestOverage?: string;
   contestCosts?: { entryDeposit: Money; entryRent: Money; firstWorkerRecord: Money; registrationRent: Money; registrationStake: Money };
   networkFees?: Money;
   retainedRent?: Money;
