@@ -545,7 +545,7 @@ async function requireBalanceFor(
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
+      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again.`,
     );
   }
 }
@@ -1211,7 +1211,7 @@ export async function sendDisputeTurnDown(
   if (turnDown.providerSuspended) {
     throw new WalletError(
       "NOT_ALLOWED",
-      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. Nothing changed. If nobody disputes it in time, the price goes back to the buyer.",
+      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. If nobody disputes it in time, the price goes back to the buyer.",
     );
   }
   if ((await chain.clusterTime()) > turnDown.disputeUntil) {
@@ -1227,7 +1227,7 @@ export async function sendDisputeTurnDown(
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
+      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again.`,
     );
   }
   const client = chain.clientFor(provider);

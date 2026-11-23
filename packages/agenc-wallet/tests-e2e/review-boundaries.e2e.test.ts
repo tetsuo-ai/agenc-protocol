@@ -42,6 +42,30 @@ it("refuses a cancel clicked after delivery and reads current terms while histor
   expect(await world.wallet.reviewRecord(job.id)).toMatchObject({ termsAvailable: true, historyAvailable: false });
 }, 15000);
 
+it("reports public evidence and an unsent rejection after the balance drops", async () => {
+  world = await startWorld({ services: (services, sandbox) => ({ ...services,
+    async postChangeRequest(envelope, signer) {
+      await services.postChangeRequest!(envelope, signer);
+      const account = sandbox.market.svm.getAccount(signer.address)!;
+      sandbox.market.svm.setAccount({ ...account, lamports: 0n } as never);
+    },
+  }) });
+  const job = await hire((await buyer()).id);
+  await world.sandbox.workOnce();
+  const draft = await world.wallet.draftReview(job.id, "reject", "The title is missing.");
+  const error = await world.wallet.confirmReview(job.id, draft, true).then(() => null, cause => cause);
+  const record = await world.wallet.reviewRecord(job.id);
+  expect(record.publication?.published).toHaveLength(1);
+  expect(record.publication?.signature).toBeUndefined();
+  expect(error.code).toBe("NOT_ENOUGH_MONEY");
+  expect(error.message).not.toMatch(/nothing changed|may already be public/i);
+  expect(error.message).toMatch(/evidence is public/i);
+  expect(error.message).toMatch(/rejection was not sent/i);
+  // A retry can hit the same shortfall in preflight, before publication is attempted again.
+  await expect(world.wallet.confirmReview(job.id, draft, true)).rejects.toThrow(/evidence is public.*rejection was not sent/i);
+  expect((await world.wallet.getJob(job.id, true)).status).toBe("delivered");
+});
+
 it("uses the quoted rent shortfall and fee when the payer has exactly the displayed total", async () => {
   world = await startWorld();
   const agent = await buyer();

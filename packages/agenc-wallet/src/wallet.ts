@@ -3645,7 +3645,7 @@ export class AgencWallet {
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
         this.#records.invalidate();
-      });
+      }).catch(cause => { throw this.#reviewError(jobId, quote.id, "approve", cause); });
     });
     // A request was not hired from a service, so there is nothing to rate.
     if (rating !== undefined && !isRequest(this.#jobRecord(jobId))) {
@@ -3849,38 +3849,47 @@ export class AgencWallet {
           createdAt: prior?.quoteId === quote.id ? prior.createdAt : this.#now(),
           hashes: prior && !prior.confirmed ? prior.hashes : [], published: prior && !prior.confirmed ? prior.published ?? [] : [] };
       });
-      try {
-        await inTransportScope({
-          signal: AbortSignal.timeout(60_000),
-          sending: receipt => {
-            checkRoom();
-            this.#store.update(state => {
-              const intent = state.reviewIntents![jobId]!;
-              if (intent.receipt) throw new WalletError("NETWORK", "The review transaction is awaiting confirmation.");
-              intent.receipt = receipt;
-              if (agentId !== null && rate !== null) {
-                this.#reserveCharge(state.agents[agentId]!, { id: "review:" + jobId + ":" + receipt.signature,
-                  ts: this.#now(), lamports: String(cost),
-                  usdCents: reviewChargeCents(cost, rate),
-                }, receipt.signature);
-              }
-            });
-          },
-          confirmed: signature => this.#store.update(state => {
+      await inTransportScope({
+        signal: AbortSignal.timeout(60_000),
+        sending: receipt => {
+          checkRoom();
+          this.#store.update(state => {
             const intent = state.reviewIntents![jobId]!;
-            if (intent.receipt?.signature === signature) intent.confirmed = true;
-          }),
-        }, () => work(payer));
-        await this.#reconcileReview(jobId);
-      } catch (cause) {
-        const intent = this.#store.state.reviewIntents![jobId]!;
-        if (intent.confirmed) throw new WalletError("NETWORK", "The review was confirmed. Its final cost is awaiting reconciliation in the job record.", { cause });
-        const evidence = intent.hashes.length ? " Evidence may already be public. Its fingerprints are in the job record." : "";
-        if (intent.receipt) throw new WalletError("NETWORK", "Check the review transaction in the job record before retrying." + evidence, { cause });
-        if (cause instanceof WalletError) throw evidence ? new WalletError(cause.code, cause.message + evidence, { cause }) : cause;
-        throw new WalletError("NETWORK", "The review was not sent." + evidence, { cause });
-      }
+            if (intent.receipt) throw new WalletError("NETWORK", "The review transaction is awaiting confirmation.");
+            intent.receipt = receipt;
+            if (agentId !== null && rate !== null) {
+              this.#reserveCharge(state.agents[agentId]!, { id: "review:" + jobId + ":" + receipt.signature,
+                ts: this.#now(), lamports: String(cost),
+                usdCents: reviewChargeCents(cost, rate),
+              }, receipt.signature);
+            }
+          });
+        },
+        confirmed: signature => this.#store.update(state => {
+          const intent = state.reviewIntents![jobId]!;
+          if (intent.receipt?.signature === signature) intent.confirmed = true;
+        }),
+      }, () => work(payer));
+      await this.#reconcileReview(jobId);
     });
+  }
+
+  #reviewError(jobId: string, quoteId: string, action: ReviewAction | "approve", cause: unknown) {
+    const intent = this.#store.state.reviewIntents?.[jobId];
+    if (!intent || intent.quoteId !== quoteId || intent.action !== action) return cause;
+    const evidence = intent.published?.length ? "The verified evidence is public. Its fingerprints are in the job record."
+      : intent.hashes.length ? "Evidence may already be public. Its fingerprints are in the job record." : "";
+    if (intent.confirmed || intent.receipt) {
+      const status = intent.confirmed
+        ? (intent.reconciled ? "The review was confirmed." : "The review was confirmed. Its final cost is awaiting reconciliation in the job record.")
+        : "Check the review transaction in the job record before retrying.";
+      return new WalletError(intent.reconciled ? "NOT_ALLOWED" : "NETWORK", [status, evidence].filter(Boolean).join(" "), { cause });
+    }
+    if (!evidence && cause instanceof WalletError) return cause;
+    const decision = { approve: "payment", change: "change request", reject: "rejection", dispute: "dispute" }[action];
+    const reason = cause instanceof WalletError ? cause.message : "";
+    return new WalletError(cause instanceof WalletError ? cause.code : "NETWORK",
+      [evidence, `The ${decision} was not sent.`, reason].filter(Boolean).join(" "), { cause });
   }
 
   async confirmReview(jobId: string, input: ReviewConfirmation, isOwner: boolean): Promise<JobView> {
@@ -3935,7 +3944,7 @@ export class AgencWallet {
           }
         }
       });
-    });
+    }).catch(cause => { throw this.#reviewError(jobId, review.quoteId, review.action, cause); });
     if (review.action === "dispute") {
       this.#frozenWork.delete(initial.task as Address);
       await this.#watchFrozenWork();
