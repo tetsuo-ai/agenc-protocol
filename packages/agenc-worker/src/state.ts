@@ -1,3 +1,4 @@
+import { isBriefTerms, type BriefTerms } from "./job-brief.js";
 // Persistent worker state under `stateDir` (default is an RPC+wallet-namespaced
 // child of `~/.local/state/agenc-worker`): agent identity, the in-flight WAL,
 // and the submission ledger. State is private (0700 directory / 0600 file),
@@ -72,7 +73,7 @@ export type SubmissionIntent = {
 };
 
 /** Display evidence from the verified job spec. Never interpreted as instructions. */
-export type JobEvidence = { request: string; acceptance: string[] };
+export type JobEvidence = { request: string; acceptance: string[]; terms?: BriefTerms; marketplaceDeadline?: number };
 
 /** A durable authorization ledger. Unknown spend consumes the reservation. */
 export type ModelBudget = { totalCents: number; remainingCents: number };
@@ -396,11 +397,19 @@ function submissionIntent(value: unknown, label: string): SubmissionIntent {
 
 function jobEvidence(value: unknown, label: string): JobEvidence {
   const parsed = record(value, label);
-  exactKeys(parsed, label, ["request", "acceptance"]);
+  exactKeys(parsed, label, ["request", "acceptance"], ["terms", "marketplaceDeadline"]);
   if (!Array.isArray(parsed.acceptance) || !parsed.acceptance.every((item) => typeof item === "string")) {
     fail(`${label}.acceptance must be an array of strings`);
   }
-  const evidence = { request: string(parsed.request, `${label}.request`), acceptance: parsed.acceptance as string[] };
+  const evidence: JobEvidence = { request: string(parsed.request, `${label}.request`), acceptance: parsed.acceptance as string[] };
+  if (parsed.terms !== undefined) {
+    if (!isBriefTerms(parsed.terms)) fail(`${label}.terms is invalid`);
+    evidence.terms = parsed.terms;
+  }
+  if (parsed.marketplaceDeadline !== undefined) {
+    if (typeof parsed.marketplaceDeadline !== "number" || !Number.isSafeInteger(parsed.marketplaceDeadline)) fail(`${label}.marketplaceDeadline is invalid`);
+    evidence.marketplaceDeadline = parsed.marketplaceDeadline;
+  }
   if (Buffer.byteLength(JSON.stringify(evidence), "utf8") > 128 * 1024) fail(`${label} is too large`);
   return evidence;
 }
