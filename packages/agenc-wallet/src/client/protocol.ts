@@ -178,7 +178,7 @@ export interface WalletMethods {
     result: { activity: ActivityView[] };
   };
 
-  /** Switch "take jobs while idle" on or off for one agent. */
+  /** Switch taking jobs on or off. Off replies while an existing job is still finishing. */
   "earn.set": {
     params: { agentId: string; enabled: boolean; minPayCents?: number };
     result: AgentView;

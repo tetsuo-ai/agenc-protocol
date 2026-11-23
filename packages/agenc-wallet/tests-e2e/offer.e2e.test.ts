@@ -306,7 +306,12 @@ describe("offering a service", () => {
     const buyer = await current.wallet.createAgent("Buyer");
 
     const off = await setEarnWithApproval(current.wallet, worker.id, false);
-    expect(off.earn.offer).toMatchObject({
+    // The switch replies before the background marketplace pause finishes.
+    const paused = await eventually(async () => {
+      const view = (await current.wallet.overview()).agents.find((agent) => agent.id === worker.id)!;
+      return view.earn.offer?.status === "paused" ? view : null;
+    });
+    expect(paused.earn.offer).toMatchObject({
       status: "paused",
       statusText: "Off offer while taking jobs is switched off.",
     });

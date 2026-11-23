@@ -246,6 +246,12 @@ export class EarnHost {
       : { state: running.state, lastError: running.lastError };
   }
 
+  /** Include a claim awaiting upload/submission recovery, even after its loop ends. */
+  hasUnfinishedJob(agentId: string): boolean {
+    return this.#running.get(agentId)?.state === "working" ||
+      this.jobs(agentId).some((job) => job.state === "working");
+  }
+
   /**
    * Lamports the agent's wallet needs before it can register and take its
    * first job: the marketplace's stake, the deposits behind its registration
