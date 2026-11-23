@@ -543,6 +543,7 @@ export class AgencWallet {
   readonly #releaseLock: () => void;
   readonly #listeners = new Set<(event: WalletEvent) => void>();
   readonly #locks = new Map<string, Promise<unknown>>();
+  readonly #jobCalls = new Map<string, Promise<unknown>>();
   readonly #now: () => number;
   readonly #log: (line: string) => void;
   #balances: BalanceSnapshot | null = null;
@@ -679,6 +680,27 @@ export class AgencWallet {
     void settled.then(() => {
       if (this.#locks.get(key) === settled) this.#locks.delete(key);
     });
+    return run;
+  }
+
+  /** Share the whole call, including preparation, before a job has been recorded. */
+  #singleJobCall<T>(
+    agentId: string,
+    kind: "hire" | "post" | "postFromBalance",
+    key: string | undefined,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const requestKey = key?.trim();
+    if (!requestKey) return work();
+    const scope = JSON.stringify([agentId, kind, requestKey]);
+    const pending = this.#jobCalls.get(scope);
+    if (pending !== undefined) return pending as Promise<T>;
+    // Install the promise before work starts or yields. Later retries consult
+    // #sameCall's durable record, never advance a possibly sent job again.
+    const run = Promise.resolve().then(work);
+    this.#jobCalls.set(scope, run);
+    const clear = () => { this.#jobCalls.delete(scope); };
+    void run.then(clear, clear);
     return run;
   }
 
@@ -1702,6 +1724,10 @@ export class AgencWallet {
     acceptance?: string[];
     idempotencyKey?: string;
   }): Promise<{ job: JobView; approval: ApprovalView | null }> {
+    return this.#singleJobCall(params.agentId, "hire", params.idempotencyKey, () => this.#hire(params));
+  }
+
+  async #hire(params: Parameters<AgencWallet["hire"]>[0]): Promise<{ job: JobView; approval: ApprovalView | null }> {
     const agent = this.#agentRecord(params.agentId);
     const request = typeof params.request === "string" ? params.request.trim() : "";
     if (request.length === 0 || request.length > 4_000) {
@@ -1984,6 +2010,10 @@ export class AgencWallet {
     acceptance?: string[];
     idempotencyKey?: string;
   }): Promise<{ job: JobView; approval: ApprovalView | null }> {
+    return this.#singleJobCall(params.agentId, "post", params.idempotencyKey, () => this.#post(params));
+  }
+
+  async #post(params: Parameters<AgencWallet["post"]>[0]): Promise<{ job: JobView; approval: ApprovalView | null }> {
     const agent = this.#agentRecord(params.agentId);
     const key = params.idempotencyKey?.trim() || null;
     const again = await this.#sameCall(agent.id, key, "request");
@@ -2055,6 +2085,10 @@ export class AgencWallet {
     acceptance?: string[];
     idempotencyKey?: string;
   }): Promise<JobView> {
+    return this.#singleJobCall("", "postFromBalance", params.idempotencyKey, () => this.#postFromBalance(params));
+  }
+
+  async #postFromBalance(params: Parameters<AgencWallet["postFromBalance"]>[0]): Promise<JobView> {
     const key = params.idempotencyKey?.trim() || null;
     const again = await this.#sameCall("", key, "request");
     if (again !== null) return again.job;
