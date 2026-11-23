@@ -22,6 +22,7 @@ import { isNetworkTrouble, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
+import { WALLET_CAPABILITIES } from "./client/types.js";
 import type {
   ActivityKind,
   ActivityView,
@@ -1153,6 +1154,7 @@ export class AgencWallet {
     const facts = await Promise.all(ordered.map((agent) => this.#registrationFacts(agent)));
     const costs = await this.#serviceCosts();
     return {
+      capabilities: [...WALLET_CAPABILITIES],
       network: this.#chain.network,
       main: {
         address: this.mainAddress,

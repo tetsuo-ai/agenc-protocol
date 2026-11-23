@@ -184,7 +184,18 @@ export interface AgentView {
   createdAt: number;
 }
 
+/** Capabilities advertised by this service on every overview. */
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing"] as const);
+
 export interface WalletOverview {
+  /**
+   * Supported service contracts, present on every overview. Currently:
+   * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
+   *   the agent takes no new job. While its job is still in progress,
+   *   `earn.state` is "finishing", never "off".
+   * Clients may ignore this field and any capability they do not recognize.
+   */
+  capabilities: string[];
   network: WalletNetwork;
   /**
    * The main balance. Money is added here and handed out to agents. `spent`
