@@ -20,12 +20,15 @@ export type AmountInput = { usdCents: number } | { lamports: string };
 /** The program accepts listing deadlines up to one year. */
 export const MAX_LISTING_DELIVERY_SECS = 31_536_000;
 
-export interface ServiceOfferInput {
+export interface SellerOfferInput {
   name: string;
   summary: string;
   price: AmountInput;
+  terms?: Partial<import("./seller-terms.js").SellerTerms>;
   deliverySecs?: number;
 }
+
+export type ServiceOfferInput = SellerOfferInput;
 
 export interface WalletMethods {
   /**
@@ -246,12 +249,12 @@ export interface WalletMethods {
 
   /** Switch taking jobs on or off. Off replies while an existing job is still finishing. */
   "earn.set": {
-    params: { agentId: string; enabled: boolean; minPayCents?: number };
+    params: { agentId: string; enabled: boolean; minPayCents?: number; fundingQuoteId?: string };
     result: AgentView;
   };
   /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
   "earn.quote": {
-    params: { agentId: string; offerId?: string; offer?: ServiceOfferInput };
+    params: { agentId: string; offerId?: string; minPayCents?: number; offer?: SellerOfferInput };
     result: import("./types.js").EarnFundingQuote;
   };
   /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
@@ -271,7 +274,8 @@ export interface WalletMethods {
     params: {
       agentId: string;
       offerId?: string;
-      offer: ServiceOfferInput | null;
+      offer: SellerOfferInput | null;
+      fundingQuoteId?: string;
     };
     result: AgentView;
   };

@@ -45,6 +45,13 @@ export type EarnState = "off" | "starting" | "watching" | "working" | "finishing
 
 /** Readonly upper bound for enabling earning and preparing the agent's offers. */
 export interface EarnFundingQuote {
+  capacity?: { open: number; proposed: number; pausing: boolean };
+  /** Supports consuming this quote together with its exact action. */
+  confirmAction?: boolean;
+  /** Additional main balance needed, leaving its network reserve intact. */
+  shortfall?: Money;
+  sellerTerms?: import("./seller-terms.js").SellerTerms;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   quoteId: string;
   agentId: string;
   expiresAt: number;
@@ -78,6 +85,8 @@ export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" 
 export interface OfferView {
   /** Null for an unset period. Older wallet services omit this field. */
   deliverySecs?: number | null;
+  terms?: import("./seller-terms.js").SellerTerms;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   /** Names this service in `earn.offer`; it stays the same for as long as the service is kept. */
   id: string;
   /** The listing address once it exists. */
@@ -252,6 +261,11 @@ export interface WalletOverview {
 export interface ServiceView {
   maxPriceCents?: number;
   specHashHex?: string;
+  listingVersion?: string;
+  maxOpenJobs?: number;
+  operatorFeeBps?: number;
+  operator?: string | null;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;
@@ -495,6 +509,7 @@ export interface JobView {
    * Null once that record exists, or when not known.
    */
   firstRecordCost: Money | null;
+  operatorPayment?: { address: string; paid: Money; forfeited: Money; sellerNet: Money };
   receiptUrl: string | null;
   error: string | null;
 }

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { getSignatureFromTransaction, type RpcTransport } from "@solana/kit";
+import type { SellerDecision } from "./seller-decision.js";
+import { getBase64EncodedWireTransaction, getSignatureFromTransaction, type RpcTransport } from "@solana/kit";
 import type { Transport } from "@tetsuo-ai/marketplace-sdk";
 
 export const LISTING_TRANSPORT_TIMEOUT_MS = 30_000;
@@ -13,10 +14,16 @@ export interface AllowanceCharge {
 }
 
 export type ListingOperation =
-  | { kind: "funding"; lamports: string; text: string; charge?: AllowanceCharge; mainBalance: string; priorObservation: string | null }
+  | { kind: "funding"; decision?: SellerDecision; lamports: string; text: string; charge?: AllowanceCharge; mainBalance: string; priorObservation: string | null }
   | { kind: "create"; listing: string; name: string; lamports: string }
   | { kind: "state"; state: "Active" | "Paused" | "Retired"; listings: readonly string[]; lamports: string }
   | { kind: "update" | "approval"; listings: readonly string[]; lamports: string };
+
+/** The offer a signed funding decision will save if the transfer lands. */
+export function fundedOfferId(operation: ListingOperation | undefined): string | undefined {
+  const effect = operation?.kind === "funding" ? operation.decision?.effect : undefined;
+  return effect && "offer" in effect ? effect.offer.id : undefined;
+}
 
 export type ListingSendOutcome = "landed" | "failed" | "pending";
 
@@ -24,6 +31,7 @@ export type ListingSendOutcome = "landed" | "failed" | "pending";
 export interface PendingListingSend {
   signature: string;
   lastValidBlockHeight: string;
+  signedTransaction?: string;
   /** Absent on receipts written before operation bookkeeping. */
   operation?: ListingOperation;
 }
@@ -152,6 +160,7 @@ export function scopedSendTransport(base: Transport): Transport {
       const signature = getSignatureFromTransaction(transaction);
       context.sending({
         signature,
+        ...(context.operation?.kind === "funding" && context.operation.decision && { signedTransaction: getBase64EncodedWireTransaction(transaction) }),
         lastValidBlockHeight: transaction.lifetimeConstraint.lastValidBlockHeight.toString(),
         ...(context.operation && { operation: context.operation }),
       });

@@ -695,9 +695,14 @@ the paid result; a later exact-job read retries.
 
 Upgrades pause unlimited listings before repairing their finite cap. Existing
 hires can finish or refund while admissions are paused; resumption requires a
-successful `maxOpenJobs: 1` update. Open legacy jobs reconcile their displayed
+successful update to the seller's funded capacity. A saved zero selects five funded slots. An older offer with no capacity field keeps its one-slot default. Open legacy jobs reconcile their displayed
 refund time to the chain deadline, retaining an explicitly configured earlier
 timeout separately from that display value.
+
+## Outstanding seller controls (wiring audit rows 34 and 35)
+
+* Row 34. The wallet generates the listing ID. Caller-selected deterministic IDs still need ownership, collision and replay checks. Public links and work samples still need a validated metadata schema and buyer display.
+* Row 35. Listings still require capability bit 1. Seller-selected capabilities need validation against the provider registration and the worker capabilities used to admit hires.
 
 ## Develop
 

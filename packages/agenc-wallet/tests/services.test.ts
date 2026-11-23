@@ -163,6 +163,7 @@ describe("the catalog", () => {
     expect(rows).toEqual([
       {
         listing: LISTING,
+        listingVersion: "8",
         providerAgent: PROVIDER,
         name: "Managed Repo Repair",
         category: null,
@@ -178,6 +179,7 @@ describe("the catalog", () => {
         ratingCount: 2,
         jobsDone: 1,
         deliverySecs: 86_400,
+        maxOpenJobs: 4, operator: null, operatorFeeBps: 0,
         specHashHex: LIVE_ITEM.specHash,
       },
     ]);
@@ -389,6 +391,27 @@ describe("the catalog", () => {
     });
     const rows = await services.listServices();
     expect(rows.map((row) => row.listing)).toEqual([addressOf(12), addressOf(13), addressOf(14)]);
+  });
+
+  it("keeps listings on later legacy catalog pages when the fee or capacity is missing", async () => {
+    const pages: number[] = [];
+    const addressOf = (n: number) => getAddressDecoder().decode(new Uint8Array(32).fill(n));
+    const services = createHostedServices({
+      fetchImpl: fakeFetch({ "GET https://agenc.ag/api/listings": ({ url }) => {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        const items = Array.from({ length: page === 1 ? 100 : 2 }, (_, i) => ({
+          ...LIVE_ITEM, pda: addressOf((page - 1) * 100 + i + 1),
+          maxOpenJobs: undefined, operatorFeeBps: undefined, operator: undefined,
+        }));
+        return json({ total: 102, items });
+      } }).fetch,
+      publicFetcher: fakeHosts({}).fetcher,
+    });
+    const rows = await services.listServices();
+    expect(rows).toHaveLength(102);
+    expect(rows.slice(100).map((row) => row.listing)).toEqual([addressOf(101), addressOf(102)]);
+    expect(pages).toEqual([1, 2]);
   });
 
   it("uses words the list itself carries only when the description gives none", async () => {

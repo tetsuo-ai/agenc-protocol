@@ -124,7 +124,7 @@ export interface Chain {
   findSettlement?(
     task: Address,
     creator: Address,
-    options?: { listing?: boolean },
+    options?: { listing?: boolean; includeFrozen?: boolean },
   ): Promise<SettlementFacts | null>;
 }
 

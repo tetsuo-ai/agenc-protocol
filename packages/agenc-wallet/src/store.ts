@@ -33,6 +33,9 @@ const MAX_WORK_RECORDS = 1_000;
  * in line one step at a time, so a crash between steps loses nothing.
  */
 export interface OfferRecord {
+  /** Until live, reconciliation cannot debit the owner again for this approved offer. */
+  fundingConfirmed?: true;
+  terms?: import("./client/seller-terms.js").SellerTerms;
   /**
    * Stable for as long as the person keeps this service, while its listing
    * may be replaced (a retired listing starts over under a new id).
@@ -109,6 +112,7 @@ export interface AgentRecord {
     listingReconciliationRequired?: boolean;
     /** Signed sends whose outcome is unknown, persisted before dispatch. */
     pendingListingSends?: PendingListingSend[];
+    sellerDecisions?: Record<string, { action: string; landed: boolean; signature?: string }>;
     jobsDone: number;
     /** Idempotency receipts for replayed worker settlements. */
     creditedTasks?: Record<string, true>;
