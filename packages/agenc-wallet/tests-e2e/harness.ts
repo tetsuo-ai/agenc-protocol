@@ -8,7 +8,7 @@ import type { Address } from "@solana/kit";
 import { APPROVAL_FEE_LAMPORTS, approvalCost } from "../src/approval.js";
 import type { Chain } from "../src/chain.js";
 import type { EarnOptions } from "../src/earn.js";
-import { startSandbox, type HouseService, type Sandbox } from "../src/sandbox.js";
+import { startSandbox, type HouseService, type Sandbox, type StartSandboxOptions } from "../src/sandbox.js";
 import type { MarketServices } from "../src/services.js";
 import { AgencWallet, type WalletConfig } from "../src/wallet.js";
 
@@ -58,6 +58,7 @@ export interface World {
 
 export async function startWorld(options: {
   mainLamports?: bigint;
+  transport?: StartSandboxOptions["transport"];
   earn?: EarnOptions;
   /** Disable the fixture host self-test to exercise the configured probe. */
   hostReady?: boolean;
@@ -66,7 +67,7 @@ export async function startWorld(options: {
   services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
   config?: Partial<WalletConfig>;
 } = {}): Promise<World> {
-  const sandbox = await startSandbox({ followWallClock: false });
+  const sandbox = await startSandbox({ followWallClock: false, ...(options.transport === undefined ? {} : { transport: options.transport }) });
   const listing = await sandbox.addService(HAIKU);
   const dataDir = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-"));
   const secret = randomBytes(32);

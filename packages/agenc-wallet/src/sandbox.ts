@@ -65,6 +65,7 @@ import {
   transferInstruction,
   type Chain,
 } from "./chain.js";
+import { scopedSendTransport } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
@@ -265,6 +266,8 @@ export interface StartSandboxOptions {
   followWallClock?: boolean;
   /** Folder for the house providers' ledgers. Default a fresh temp folder. */
   workDir?: string;
+  /** Inject a transport fault around local execution (tests). */
+  transport?: (base: Transport) => Transport;
 }
 
 /** Boot a sandbox marketplace. */
@@ -446,11 +449,14 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     };
   };
 
+  const sending = scopedSendTransport(options.transport?.(transport) ?? transport);
   const chain: Chain = {
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
-    clientFor: (signer) => createMarketplaceClient({ transport, signer }),
-    sendSigned: (transaction) => sendThroughTransport(transport, transaction),
+    // Local sends execute atomically; no broadcast can arrive after cancellation.
+    listingSendSettled: async () => true,
+    clientFor: (signer) => createMarketplaceClient({ transport: sending, signer }),
+    sendSigned: (transaction) => sendThroughTransport(sending, transaction),
     readAccount: async (account) => readInfo(account)?.data ?? null,
     readRawAccount: async (account) => {
       const info = readInfo(account);

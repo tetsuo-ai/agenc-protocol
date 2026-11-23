@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
 import { createPublicUriFetcher, type UriFetcher } from "@tetsuo-ai/agenc-worker";
 import { taskThread, values } from "@tetsuo-ai/marketplace-sdk";
+import { abortableTransport, transportSignal } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import {
   NO_DETAILS,
@@ -271,9 +272,12 @@ async function requestJson(
       : init.body !== undefined
         ? JSON.stringify(init.body)
         : undefined;
+  const parent = transportSignal();
+  const timeout = AbortSignal.timeout(limits.timeoutMs);
+  const signal = parent === undefined ? timeout : AbortSignal.any([parent, timeout]);
   let response: Response;
   try {
-    response = await fetchImpl(url, {
+    response = await abortableTransport(signal, () => fetchImpl(url, {
       method: init.method,
       redirect: "error",
       headers: {
@@ -282,8 +286,8 @@ async function requestJson(
         ...init.headers,
       },
       ...(payload !== undefined ? { body: payload } : {}),
-      signal: AbortSignal.timeout(limits.timeoutMs),
-    });
+      signal,
+    }));
   } catch (error) {
     throw new WalletError("NETWORK", "The marketplace could not be reached. Try again in a moment.", {
       cause: error,
@@ -294,11 +298,11 @@ async function requestJson(
   let total = 0;
   if (reader) {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await abortableTransport(signal, () => reader.read());
       if (done) break;
       total += value.byteLength;
       if (total > limits.maxBytes) {
-        await reader.cancel();
+        await abortableTransport(signal, () => reader.cancel());
         throw new WalletError("NETWORK", "The marketplace sent an answer that was too large.");
       }
       chunks.push(value);

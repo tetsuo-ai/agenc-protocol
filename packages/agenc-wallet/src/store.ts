@@ -13,6 +13,7 @@ import type {
   JobResult,
   ServiceView,
 } from "./client/types.js";
+import type { PendingListingSend } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 
@@ -98,6 +99,10 @@ export interface AgentRecord {
   earn: {
     enabled: boolean;
     minPayCents: number;
+    /** Interrupted listing work must read the chain before admitting jobs. */
+    listingReconciliationRequired?: boolean;
+    /** Signed sends whose outcome is unknown, persisted before dispatch. */
+    pendingListingSends?: PendingListingSend[];
     jobsDone: number;
     /** Idempotency receipts for replayed worker settlements. */
     creditedTasks?: Record<string, true>;

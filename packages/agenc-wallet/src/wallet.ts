@@ -6,6 +6,7 @@
 // An agent can never name a destination, an amount to send, or a transaction.
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
+import { inTransportScope, LISTING_TRANSPORT_TIMEOUT_MS } from "./transport-scope.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
@@ -18,7 +19,7 @@ import {
   values,
 } from "@tetsuo-ai/marketplace-sdk";
 import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
-import { isNetworkTrouble, transferInstruction, type Chain } from "./chain.js";
+import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
@@ -349,6 +350,8 @@ export interface WalletConfig {
   reviewWindowSecs?: bigint;
   /** How long a paid job stays open for a rating before it is tidied. Default 1 hour. */
   rateWindowMs?: number;
+  /** Deadline for one listing reconciliation pass, including every RPC and HTTP wait. Default 30 seconds. */
+  listingTimeoutMs?: number;
 }
 
 interface BalanceSnapshot {
@@ -562,6 +565,7 @@ export class AgencWallet {
   #closed = false;
   #closePromise: Promise<void> | null = null;
   readonly #background = new Set<Promise<unknown>>();
+  readonly #listingAbort = new AbortController();
   /** Set while closing: every service comes off offer, since nobody will do the work. */
   #closing = false;
   /** Agents being stopped earning for good right now. */
@@ -585,7 +589,7 @@ export class AgencWallet {
     releaseLock: () => void,
   ) {
     this.#config = config;
-    this.#chain = config.chain;
+    this.#chain = scopedChainReads(config.chain);
     this.#services = config.services;
     this.#vault = vault;
     this.#store = store;
@@ -4666,34 +4670,72 @@ export class AgencWallet {
    * offer. Each step reads the chain first and sends at most one transaction,
    * so it can be repeated or interrupted anywhere. Never throws.
    */
-  #advanceOffer(agentId: string): Promise<boolean> {
-    if (this.#closed && !this.#closing) return Promise.resolve(false);
+  #advanceOffer(agentId: string, shutdown = false): Promise<boolean> {
+    if (this.#closed && !shutdown) return Promise.resolve(false);
     // One agent's services one after another: they share its wallet.
     return this.#lock(`offer:${agentId}`, async () => {
-      let reconciled = true;
+      if (this.#closed && !shutdown) return false;
+      const deadline = new AbortController();
+      const timeout = setTimeout(() => deadline.abort(new DOMException("Listing transport timed out", "TimeoutError")),
+        this.#config.listingTimeoutMs ?? LISTING_TRANSPORT_TIMEOUT_MS);
+      const signal = shutdown ? deadline.signal : AbortSignal.any([this.#listingAbort.signal, deadline.signal]);
+      this.#store.update((draft) => { draft.agents[agentId]!.earn.listingReconciliationRequired = true; });
       try {
-        await this.#offerStatesTogether(agentId);
-      } catch (error) {
-        reconciled = false;
-        // The steps below do the same one at a time.
-        this.#log(`offer ${agentId}: ${describeError(error)}`);
-      }
-      const agent = this.#store.state.agents[agentId];
-      const ids = agent === undefined ? [] : agentOffers(agent).map((offer) => offer.id);
-      for (const offerId of ids) {
-        for (let step = 0; step < OFFER_STEPS_PER_PASS; step += 1) {
-          let again: boolean;
+        return await inTransportScope({
+          signal,
+          sending: (receipt) => this.#store.update((draft) => {
+            const pending = draft.agents[agentId]!.earn.pendingListingSends ??= [];
+            if (!pending.some((entry) => entry.signature === receipt.signature)) pending.push(receipt);
+          }),
+          confirmed: (signature) => this.#store.update((draft) => {
+            const earn = draft.agents[agentId]!.earn;
+            earn.pendingListingSends = earn.pendingListingSends?.filter((entry) => entry.signature !== signature) ?? [];
+          }),
+        }, async () => {
+          // A cancelled HTTP request may already have broadcast. Never admit
+          // jobs or send a conflicting listing change while it can still land.
+          for (const receipt of this.#store.state.agents[agentId]!.earn.pendingListingSends ?? []) {
+            if (!await this.#chain.listingSendSettled?.(receipt)) return false;
+            this.#store.update((draft) => {
+              const earn = draft.agents[agentId]!.earn;
+              earn.pendingListingSends = earn.pendingListingSends?.filter((entry) => entry.signature !== receipt.signature) ?? [];
+            });
+          }
+          let reconciled = true;
           try {
-            again = await this.#offerStep(agentId, offerId);
+            await this.#offerStatesTogether(agentId);
           } catch (error) {
             reconciled = false;
-            this.#offerFailed(agentId, offerId, error);
-            break;
+            if (signal.aborted || this.#store.state.agents[agentId]!.earn.pendingListingSends?.length) return false;
+            this.#log(`offer ${agentId}: ${describeError(error)}`);
           }
-          if (!again) break;
-        }
+          const agent = this.#store.state.agents[agentId];
+          const ids = agent === undefined ? [] : agentOffers(agent).map((offer) => offer.id);
+          for (const offerId of ids) {
+            for (let step = 0; step < OFFER_STEPS_PER_PASS; step += 1) {
+              signal.throwIfAborted();
+              let again: boolean;
+              try {
+                again = await this.#offerStep(agentId, offerId);
+              } catch (error) {
+                reconciled = false;
+                if (signal.aborted || this.#store.state.agents[agentId]!.earn.pendingListingSends?.length) return false;
+                this.#offerFailed(agentId, offerId, error);
+                break;
+              }
+              if (!again) break;
+            }
+          }
+          signal.throwIfAborted();
+          if (reconciled) this.#store.update((draft) => { draft.agents[agentId]!.earn.listingReconciliationRequired = false; });
+          return reconciled;
+        });
+      } catch (error) {
+        this.#log(`offer ${agentId}: ${describeError(error)}`);
+        return false;
+      } finally {
+        clearTimeout(timeout);
       }
-      return reconciled;
     });
   }
 
@@ -5206,6 +5248,7 @@ export class AgencWallet {
     if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
     this.#closing = true;
+    this.#listingAbort.abort(new DOMException("Wallet closing", "AbortError"));
     this.#closePromise = this.#finishClose();
     return this.#closePromise;
   }
@@ -5215,15 +5258,15 @@ export class AgencWallet {
     this.#timer = null;
     await this.#earn.stopAll();
     if (this.#ticking !== null) await this.#ticking.catch(() => undefined);
-    // A timeout cannot revoke a transaction already sent. Keep ownership until
-    // every continuation and listing mutation has actually settled.
+    // Cancellation reaches the transports first. Join their wallet continuations
+    // before fencing the store; never release a live writer on a timeout race.
     while (this.#background.size > 0 || this.#locks.size > 0) {
       await Promise.allSettled([...this.#background, ...this.#locks.values()]);
     }
     const offering = Object.values(this.#store.state.agents).filter(
       (agent) => agentOffers(agent).some((offer) => offer.listed),
     );
-    await Promise.all(offering.map((agent) => this.#advanceOffer(agent.id)));
+    await Promise.all(offering.map((agent) => this.#advanceOffer(agent.id, true)));
     this.#store.close();
     this.#closing = false;
     this.#releaseLock();

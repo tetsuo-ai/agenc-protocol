@@ -340,3 +340,52 @@ it("keeps the consumed model reservation when a stopped execution drains across 
   expect(loadState(stateDir).failedJobs.find((entry) => entry.task === job.task)).toMatchObject({ claimReleased: true, cause: "attempts" });
   expect(readFileSync(attempts, "utf8")).toBe("50\n");
 }, 30000);
+
+
+it("keeps the 60-second cleanup retry guard across disabled recovery's 100 ms polls", async () => {
+  const upload = gate();
+  let failSends = false;
+  const attempts: number[] = [];
+  world = await startWorld({ earn: EARN,
+    services: (base) => ({ ...base, resultUploader(signer) {
+      const uploader = base.resultUploader(signer)!;
+      return { ...uploader, fetch: async () => { await upload.wait(); throw new Error("upload unavailable"); } };
+    } }),
+    chain: (base) => ({ ...base, clientFor(signer) {
+      const original = base.clientFor(signer);
+      return Object.create(original, { send: { value: async (...args: Parameters<typeof original.send>) => {
+        if (failSends) { attempts.push(await base.clusterTime()); throw new Error("persistent release transaction failure"); }
+        return original.send(...args);
+      } } }) as typeof original;
+    } }),
+  });
+  const agent = await world.wallet.createAgent();
+  await setEarnWithApproval(world.wallet, agent.id, true, 10);
+  const job = await post("Expire then drain");
+  await upload.entered;
+  await world.wallet.setEarn(agent.id, false);
+  const close = world.wallet.close();
+  upload.release();
+  await close;
+  world.sandbox.advanceClock(8 * 86400);
+  world.clock.now += 8 * 86400_000;
+  failSends = true;
+  world.wallet = await world.reopen();
+  await eventually(async () => attempts.length === 1);
+  const stateDir = path.join(world.dataDir, "earn", agent.id);
+  expect(loadState(stateDir).failedJobs.find((entry) => entry.task === job.task)).toMatchObject({ cause: "expired", claimReleased: false });
+  await delay(650);
+  expect(attempts).toHaveLength(1);
+  world.sandbox.advanceClock(59);
+  await delay(350);
+  expect(attempts).toHaveLength(1);
+  world.sandbox.advanceClock(1);
+  await eventually(async () => attempts.length === 2);
+  expect(attempts[1]! - attempts[0]!).toBe(60);
+  await delay(350);
+  expect(attempts).toHaveLength(2);
+  failSends = false;
+  world.sandbox.advanceClock(60);
+  await eventually(async () => loadState(stateDir).failedJobs.find((entry) => entry.task === job.task)?.claimReleased);
+  await eventually(async () => (await view(agent.id)).earn.state === "off");
+});

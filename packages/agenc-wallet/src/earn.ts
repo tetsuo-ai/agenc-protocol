@@ -32,6 +32,7 @@ import {
   runExecutor,
   runUpkeep,
   type ExecutorMode,
+  type UpkeepMemory,
   type WorkerAgent,
   type WorkerContext,
   type WorkerLogEvent,
@@ -768,11 +769,12 @@ export class EarnHost {
       const agentId = hexToBytes(agentIdHex);
       const [agentPda] = await findAgentPda({ agentId });
       const worker: WorkerAgent = { agentId, agentPda, registered: true, justRegistered: false };
+      const upkeepMemory: UpkeepMemory = new Map();
       while (!signal.aborted) {
         try {
           await checkSettlements(ctx, worker);
           await resumeOpenClaim(ctx, worker);
-          await runUpkeep(ctx, worker);
+          await runUpkeep(ctx, worker, upkeepMemory);
           await checkSettlements(ctx, worker);
         } catch (error) {
           this.#log(`earn ${agent.agentId}: recovering: ${describeError(error)}`);

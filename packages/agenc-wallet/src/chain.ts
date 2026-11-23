@@ -1,6 +1,7 @@
 // The one seam between the wallet and a Solana cluster. Everything above this
 // file asks for bytes, balances and a signing client; nothing above it knows
 // whether the cluster is mainnet over RPC or the in-process sandbox.
+import { setTimeout as delay } from "node:timers/promises";
 import {
   AccountRole,
   address,
@@ -14,6 +15,7 @@ import {
   type Instruction,
   type RpcTransport,
   type Transaction,
+  type Signature,
   type TransactionSigner,
 } from "@solana/kit";
 import {
@@ -38,6 +40,7 @@ import {
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
+import { abortableTransport, scopedRpcTransport, scopedSendTransport, transportSignal, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
 const CLOCK_SYSVAR_ADDRESS = address("SysvarC1ock11111111111111111111111111111111");
@@ -66,6 +69,8 @@ export interface Chain {
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
+  /** True only after confirmation, failure, or verified expiry of an interrupted listing send. */
+  listingSendSettled?(receipt: PendingListingSend): Promise<boolean>;
   /**
    * Refuse, with a retryable `NOT_AVAILABLE` that names the revision, unless
    * the marketplace program is on the revision this service signs for (see
@@ -117,6 +122,22 @@ export interface Chain {
     creator: Address,
     options?: { listing?: boolean },
   ): Promise<SettlementFacts | null>;
+}
+
+/** Bound read-only adapters too. Mutation continuations are always joined. */
+export function scopedChainReads(chain: Chain): Chain {
+  const reads = new Set<PropertyKey>([
+    "readAccount", "readRawAccount", "readRawAccounts", "readAccountInfo", "getBalance", "getBalances",
+    "getMinimumBalanceForRentExemption", "clusterTime", "assertSigningRevision", "listingSendSettled",
+  ]);
+  return new Proxy({} as Chain, {
+    get(_target, property) {
+      const value: unknown = Reflect.get(chain, property, chain);
+      if (typeof value !== "function") return value;
+      if (!reads.has(property)) return value.bind(chain);
+      return (...args: unknown[]) => abortableTransport(transportSignal(), () => value.apply(chain, args));
+    },
+  });
 }
 
 /** A System Program transfer, built by hand so no extra package is needed. */
@@ -234,19 +255,22 @@ export function politeTransport(
     jitter?: () => number;
   },
 ): RpcTransport {
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = (ms: number, signal?: AbortSignal) => options.sleep === undefined
+    ? delay(ms, undefined, signal === undefined ? {} : { signal })
+    : abortableTransport(signal, () => options.sleep!(ms));
   const now = options.now ?? Date.now;
   const jitter = options.jitter ?? Math.random;
   const retries = options.retries ?? BUSY_RETRIES;
   let nextStart = 0;
   let quietUntil = 0;
 
-  async function turn(): Promise<void> {
+  async function turn(signal?: AbortSignal): Promise<void> {
     for (;;) {
       const at = Math.max(now(), nextStart, quietUntil);
       nextStart = at + options.minGapMs;
       const wait = at - now();
-      if (wait > 0) await sleep(wait);
+      signal?.throwIfAborted();
+      if (wait > 0) await sleep(wait, signal);
       // Somebody else may have been told to back off while this one waited.
       if (now() >= quietUntil) return;
     }
@@ -254,7 +278,8 @@ export function politeTransport(
 
   return (async (config: Parameters<RpcTransport>[0]) => {
     for (let attempt = 0; ; attempt += 1) {
-      await turn();
+      await turn(config.signal);
+      config.signal?.throwIfAborted();
       try {
         return await base(config);
       } catch (error) {
@@ -316,9 +341,9 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     throw new WalletError("BAD_REQUEST", "The network address is not a valid URL.");
   }
   const rpc = createSolanaRpcFromTransport(
-    politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
+    scopedRpcTransport(politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
       minGapMs: options.minRequestGapMs ?? (PUBLIC_RPC_HOSTS.has(host) ? PUBLIC_RPC_MIN_GAP_MS : 0),
-    }),
+    })),
   );
   const fetchInfo = async (account: Address) => {
     const { value } = await rpc
@@ -327,7 +352,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     return value;
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
-  const transport = createRpcTransport({ rpc });
+  const transport = scopedSendTransport(createRpcTransport({ rpc }));
   // Read every time: the stamp changes once, at a release, and a send never
   // goes out on an old answer.
   const signingRevision = () =>
@@ -348,7 +373,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     clientFor(signer) {
       return revisionGatedClient(
         createMarketplaceClient({
-          rpc,
+          transport,
           signer,
           ...(options.computeUnitPrice !== undefined
             ? {
@@ -364,6 +389,20 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       // Only a marketplace call reaches here (a job's safety check).
       await signingRevision();
       return sendThroughTransport(transport, transaction);
+    },
+    async listingSendSettled(receipt) {
+      const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
+        searchTransactionHistory: true,
+      }).send()).value[0];
+      const confirmed = (value: Awaited<ReturnType<typeof status>>) =>
+        value?.confirmationStatus === "confirmed" || value?.confirmationStatus === "finalized";
+      const first = await status();
+      if (confirmed(first)) return true;
+      const epoch = await rpc.getEpochInfo({ commitment: "confirmed" }).send();
+      if (epoch.blockHeight <= BigInt(receipt.lastValidBlockHeight)) return false;
+      // Recheck after the expiry read, since the status view can lag the height.
+      const last = await status();
+      return confirmed(last) || (first == null && last == null);
     },
     assertSigningRevision: signingRevision,
     readAccount: (account) => network(() => readAccount(account)),
