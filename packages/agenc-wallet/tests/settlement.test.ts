@@ -102,8 +102,8 @@ function answer(
 
 describe("a settlement's instruction", () => {
   it("names the job and the agent an approval, a late approval or a job without review paid", () => {
-    for (const instruction of [accept(), autoAccept(), complete()]) {
-      expect(settlementOf(instruction)).toEqual({ task: TASK, worker: WORKER });
+    for (const [instruction, operator] of [[accept(), at(111)], [autoAccept(), at(111)], [complete(), at(115)]] as const) {
+      expect(settlementOf(instruction)).toEqual({ task: TASK, worker: WORKER, operator });
     }
   });
 
@@ -250,6 +250,20 @@ describe("what a settlement paid (revision 9)", () => {
       feeLamports: 100_000n,
       listing: null,
     });
+  });
+
+  it("reads a zero operator leg only with a named settlement account and complete logs", async () => {
+    const reward = eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(TASK_ID, WORKER, 8550n, 450n));
+    const logs = byProgram(reward);
+    const facts = (lines: string[]) => settlementFactsIn(paidAnswer(lines), PAID_TASK, "settled", BUYER);
+    expect((await facts(logs))?.unpaidOperator).toEqual({ address: at(111), sellerNet: 8550n });
+    expect((await facts([...byProgram(), ...logs.slice(0, -1)]))?.unpaidOperator).toBeUndefined();
+    expect((await facts([...logs, "Log truncated"]))?.unpaidOperator).toBeUndefined();
+    const instruction = accept(PAID_TASK);
+    const absent = { ...instruction, accounts: instruction.accounts.map((a, i) => i === 11 ? PROGRAM : a) };
+    const tx = answer([asSent(absent)]) as { meta: Record<string, unknown> };
+    tx.meta.logMessages = logs;
+    expect((await settlementFactsIn(tx, PAID_TASK, "settled", BUYER))?.unpaidOperator).toBeUndefined();
   });
 
   it("counts nothing another program logged, nor an event of another job or another agent", async () => {

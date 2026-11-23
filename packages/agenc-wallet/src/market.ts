@@ -869,7 +869,20 @@ export async function settledOperatorPayment(chain: Chain, task: Address) {
   const read = await facade.readTask(snapshotReader(chain), task);
   if (read.kind === "missing") return null;
   const creator = read.kind === "closed" ? read.marker.creator : read.task.creator;
-  return (await chain.findSettlement?.(task, creator, { includeFrozen: true }))?.operatorPayment ?? null;
+  const facts = await chain.findSettlement?.(task, creator, { includeFrozen: true });
+  if (facts?.operatorPayment) return facts.operatorPayment;
+  if (!facts?.unpaidOperator) return null;
+  const { address, sellerNet } = facts.unpaidOperator;
+  // The task pins the operator at hire. After cleanup the marker has no terms,
+  // so require the original hire and the operator slot of its paid settlement.
+  if (read.kind === "closed") {
+    const hire = await chain.findSettlement?.(task, creator, { includeFrozen: true, listing: true });
+    if (!hire?.listing || hire.unpaidOperator?.address !== address || hire.unpaidOperator.sellerNet !== sellerNet) return null;
+  } else if (
+    read.task.operator !== address || read.task.operatorFeeBps === 0 || read.task.rewardAmount !== facts.priceLamports ||
+    read.task.rewardAmount * BigInt(read.task.operatorFeeBps) >= 10_000n
+  ) return null;
+  return { address, paid: 0n, forfeited: 0n, sellerNet };
 }
 
 /**

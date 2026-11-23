@@ -72,7 +72,7 @@ import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
 import { settledDeliveryFromLogs } from "./delivery-history.js";
-import { hiredListingFromLogs, settlementFactsFromLogs, settlementOf } from "./settlement.js";
+import { hiredListingFromLogs, settlementFactsFromLogs, settlementOf, type Settlement } from "./settlement.js";
 import {
   buildJobSpec,
   decodeResultPointer,
@@ -382,8 +382,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
   // The agent each settled job paid, and the log of the transaction that
   // settled it: the history the live network keeps and litesvm does not.
-  const frozenReceipts = new Map<Address, { worker: Address; logs: readonly string[] }>();
-  const settledBy = new Map<Address, Address>();
+  const frozenReceipts = new Map<Address, { worker: Address; operator?: Address; logs: readonly string[] }>();
+  const settlements = new Map<Address, Settlement>();
   const settledLogs = new Map<Address, readonly string[]>();
   // The log of the transaction that hired each job, which names its service.
   const hireLogs = new Map<Address, readonly string[]>();
@@ -433,10 +433,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           const settled = settlementOf(sent);
           if (!settled) {
             const exit = settlementOf(sent, true);
-            if (exit) frozenReceipts.set(exit.task, { worker: exit.worker, logs: result.logs });
+            if (exit) frozenReceipts.set(exit.task, { ...exit, logs: result.logs });
           }
           if (settled !== null) {
-            settledBy.set(settled.task, settled.worker);
+            settlements.set(settled.task, settled);
             settledLogs.set(settled.task, result.logs);
           }
         }
@@ -495,18 +495,19 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return Number(svm.getClock().unixTimestamp);
     },
     gpa,
-    findSettlementWorker: async (task) => settledBy.get(task) ?? null,
+    findSettlementWorker: async (task) => settlements.get(task)?.worker ?? null,
     findSettledDelivery: async (task, creator) => {
-      const worker = settledBy.get(task);
+      const worker = settlements.get(task)?.worker;
       const logs = settledLogs.get(task);
       return worker === undefined || logs === undefined ? null : settledDeliveryFromLogs(logs, task, creator, worker);
     },
     findSettlement: async (task, creator, options) => {
       const exit = options?.includeFrozen ? frozenReceipts.get(task) : undefined;
-      const worker = exit?.worker ?? settledBy.get(task);
+      const settlement = exit ?? settlements.get(task);
       const logs = exit?.logs ?? settledLogs.get(task);
-      if (worker === undefined || logs === undefined) return null;
-      const facts = await settlementFactsFromLogs(logs, task, worker, creator);
+      if (settlement === undefined || logs === undefined) return null;
+      const { worker, operator } = settlement;
+      const facts = await settlementFactsFromLogs(logs, task, worker, creator, operator);
       if (facts === null || options?.listing !== true) return facts;
       return { ...facts, listing: hiredListingFromLogs(hireLogs.get(task) ?? [], task, creator, worker) };
     },

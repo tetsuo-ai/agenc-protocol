@@ -3,6 +3,7 @@ import { getBase64EncodedWireTransaction, getSignatureFromTransaction, type Addr
 import { StateStore } from "../src/store.js";
 import { findEscrowPda, findTaskPda, values } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it } from "vitest";
+import { fixedPrice } from "../src/pricing.js";
 import { checkHireOperator } from "../src/payable-operator.js";
 import { readListing, readTask } from "../src/market.js";
 import {
@@ -422,3 +423,38 @@ it("requires new approval on a changed transfer even within the allowance", asyn
   expect(await world.balance(wallet.mainAddress)).toBe(before);
   expect((await wallet.overview()).agents[0]!.earn.offers).toHaveLength(0);
 });
+
+it("keeps the rounded-zero operator split in the preview and paid receipt after cleanup", async () => {
+  world = await startWorld({ earn, config: { prices: fixedPrice(2000) } });
+  const { wallet } = world;
+  const seller = await wallet.createAgent("Seller");
+  const operator = await wallet.createAgent("Operator");
+  const buyer = await wallet.createAgent("Buyer");
+  const input = { ...service, price: { lamports: "9000" }, terms: { operator: operator.address, operatorFeeBps: 1 } };
+  const quote = await wallet.quoteEarn(seller.id, input);
+  const proceeds = { operatorFee: { lamports: "0" }, marketFee: { lamports: "450" }, sellerNet: { lamports: "8550" } };
+  expect(quote.proceeds).toMatchObject(proceeds);
+  await wallet.setOffer(seller.id, input, undefined, quote.quoteId);
+  const startup = await wallet.quoteEarn(seller.id);
+  await wallet.setEarn(seller.id, true, undefined, startup.quoteId);
+  const listing = await eventually(async () => {
+    await wallet.tick();
+    const offer = (await wallet.overview()).agents.find(a => a.id === seller.id)?.earn.offer;
+    return offer?.status === "live" && offer.listing;
+  });
+  const preview = (await wallet.find({ query: service.name })).services.find(row => row.listing === listing);
+  expect(preview).toMatchObject({ operator: operator.address, operatorFeeBps: 1, proceeds });
+  await wallet.fundAgent(buyer.id, { lamports: "500000000" });
+  await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  const { job } = await wallet.hire({ agentId: buyer.id, listing, request: "Edit my paragraph." });
+  await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered");
+  const before = await world.balance(operator.address);
+  const paid = await wallet.approveJob(job.id, undefined, true);
+  expect(await world.balance(operator.address)).toBe(before);
+  const receipt = { address: operator.address, paid: { lamports: "0" }, forfeited: { lamports: "0" }, sellerNet: { lamports: "8550" } };
+  expect(paid.operatorPayment).toMatchObject(receipt);
+  world.clock.now += 2 * 3600_000;
+  await wallet.tick();
+  expect(await readTask(world.sandbox.chain, job.task as Address)).toBeNull();
+  expect((await wallet.getJob(job.id, true)).operatorPayment).toMatchObject(receipt);
+}, 30_000);
