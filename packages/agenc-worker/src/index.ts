@@ -106,6 +106,7 @@ export {
   couldBeWaitingPay,
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   workerStatus,
+  type WorkSimulation,
   type WorkerDispatch,
   type VerifiedCandidate,
   type ClaimCandidate,
@@ -172,3 +173,5 @@ export {
 } from "./wallet.js";
 
 export * from "./chosen.js";
+
+export { decodeHostedBrief } from "./hosted-brief.js";

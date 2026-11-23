@@ -355,6 +355,7 @@ export async function releaseOwnClaims(
       ctx.log({ event: "claim.released", task, how: "closed" });
       continue;
     }
+    if (job.chosen) continue; // Only the owner may spend to close this claim.
     const decoded = await readTask(ctx, task);
     if (decoded === null) continue;
     now ??= await clusterNowSeconds(ctx);
