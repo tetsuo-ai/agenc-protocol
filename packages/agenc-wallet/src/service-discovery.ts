@@ -113,7 +113,8 @@ export function serviceView(row: CatalogRow, context: ServiceContext, publicNetw
     ...(row.state ? { state: row.state } : {}),
     ...(publicNetwork ? { listingUrl: `https://agenc.ag/listings/${row.listing}` } : {}),
     name: row.name,
-    summary: row.summary,
+    summary: row.details === "ready" ? row.summary : null,
+    ...(row.details === "ready" && row.fulfilment?.supplier && { supplier: row.fulfilment.supplier }),
     description: row.description,
     category: row.category,
     tags: row.tags,
@@ -168,6 +169,7 @@ export class ServiceDiscovery {
   private readonly recentRows = new Map<string, { row: CatalogRow; view: ServiceView }>();
   constructor(private readonly source: {
     rate: () => Promise<number | null>;
+    availability?: (row: CatalogRow) => Promise<ServiceView["availability"]>;
     fillTerms: (page: CatalogRow[]) => Promise<CatalogRow[]>;
     listServices: MarketServices["listServices"];
     ownServices: (listed: CatalogRow[]) => Promise<CatalogRow[]>;
@@ -203,6 +205,11 @@ export class ServiceDiscovery {
     return { ...result, rating, ratingCount, jobsDone, paid, buyers, offeredBy, record };
   }
 
+  currentCatalogRow(terms: ListingTerms) {
+    const row = this.recentRows.get(terms.listing)?.row;
+    return row?.specHashHex === Buffer.from(terms.specHash).toString("hex") && row.providerAgent === terms.providerAgent ? row : undefined;
+  }
+
   async search(params: DiscoveryQuery): Promise<{ page: Omit<DiscoveryPage, "networkFee">; rate: number | null }> {
     const offset = Math.max(0, Math.trunc(params.offset ?? 0));
     const limit = Math.min(MAX_FIND_LIMIT, Math.max(1, Math.trunc(params.limit ?? 8)));
@@ -232,6 +239,11 @@ export class ServiceDiscovery {
       if (context.rate !== null) view.maxPriceCents = params.maxPriceCents ?? Number(microcents(row.priceLamports, context.rate)) / 1_000_000;
       return view;
     });
+    const selected = slice[0];
+    if (selected && services[0] && selected.listing === params.query?.trim() && this.source.availability) {
+      const availability = await this.source.availability(selected).catch(() => undefined);
+      if (availability) services[0].availability = availability;
+    }
     return { rate: context.rate, page: {
       services,
       total: rows.length,

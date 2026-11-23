@@ -449,7 +449,7 @@ describe("the catalog", () => {
     expect(pages).toEqual([1, 2, 1, 2]); // Discovery verifies the complete ordered snapshot.
   });
 
-  it("uses words the list itself carries only when the description gives none", async () => {
+  it("suppresses the index summary until the current description is verified", async () => {
     const listed = {
       ...LIVE_ITEM,
       category: "research",
@@ -462,7 +462,7 @@ describe("the catalog", () => {
     expect((await offline.listServices())[0]).toMatchObject({
       details: "unavailable",
       category: "research",
-      summary: "A summary the list carried.",
+      summary: null,
       description: null,
     });
 

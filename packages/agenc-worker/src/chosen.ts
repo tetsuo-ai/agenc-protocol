@@ -4,7 +4,7 @@ import {
   facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
   getTaskClaimDecoder, getTaskSubmissionDecoder, getTaskValidationConfigDecoder,
-  listDirectClaimableTasks, SubmissionStatus, TaskStatus, TaskType, ValidationMode, values, type Task,
+  directClaimState, listDirectClaimableTasks, SubmissionStatus, TaskStatus, TaskType, ValidationMode, values, type Task,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   FEE_HEADROOM_LAMPORTS, claimFundingRequirement, claimDepositFor, expectedWorkerPayout, jobTitle, processCandidate,
@@ -81,12 +81,53 @@ async function openTerms(ctx: WorkerContext, agent: WorkerAgent, task: Address, 
 }
 export type OpenWork = NonNullable<Awaited<ReturnType<typeof openTerms>>>;
 
+const eligibilityReasons = {
+  available: ["This worker can request a claim.", false],
+  missing: ["No task exists at this address. Check the task ID.", false],
+  closed: ["This task no longer accepts direct claims.", false],
+  expired: ["The claim deadline has passed.", false],
+  occupied: ["All claim slots are occupied. Check again if a worker releases one.", true],
+  bid_only: ["This task requires an accepted bid.", false],
+  capability: ["This worker lacks a required capability. Choose a worker that supports the task.", false],
+  reputation: ["This worker's current reputation is below the task minimum.", false],
+  registration: ["Register this worker before requesting a claim.", false],
+  held: ["Finish or release the worker's current job before choosing another.", true],
+  policy: ["This task does not meet the worker's verified job or spending requirements.", false],
+  unavailable: ["Market could not verify this task or simulate the claim. Try again.", true],
+} as const;
+
+export function workEligibility(task: string, code: keyof typeof eligibilityReasons) {
+  const [message, retryable] = eligibilityReasons[code];
+  return { task, code, message, retryable };
+}
+
 async function inspect(ctx: WorkerContext, agent: WorkerAgent, task: Address) {
-  const read = await readTaskAccount(ctx, task);
-  if (read.kind !== "task") return null;
-  let verified: VerifiedCandidate | undefined;
-  await processCandidate({ ...ctx, dryRun: true }, agent, candidate(task, read.task), { inspect: facts => { verified = facts; } });
-  return verified ? openTerms(ctx, agent, task, verified) : null;
+  const refused = (code: keyof typeof eligibilityReasons) => ({ job: null, eligibility: workEligibility(task, code) });
+  try {
+    const read = await readTaskAccount(ctx, task);
+    if (read.kind !== "task") return refused(read.kind);
+    const now = await ctx.clusterTime!();
+    const state = directClaimState(read.task, BigInt(now));
+    if (state !== "available") return refused(state);
+    const registration = await ctx.readAccount(agent.agentPda);
+    if (!registration?.length) return refused("registration");
+    const worker = getAgentRegistrationDecoder().decode(registration);
+    const effective = worker.capabilities & ctx.config.capabilities;
+    if ((read.task.requiredCapabilities & effective) !== read.task.requiredCapabilities) return refused("capability");
+    const periods = Math.max(0, Math.floor((now - Number(worker.lastActive)) / 2592000));
+    const reputation = worker.reputation > 1000 ? Math.max(1000, worker.reputation - periods * 50) : worker.reputation;
+    if (reputation < read.task.minReputation) return refused("reputation");
+    let verified: VerifiedCandidate | undefined;
+    const outcome = await processCandidate({ ...ctx, dryRun: true }, agent, candidate(task, read.task), { inspect: facts => { verified = facts; } });
+    if (!verified) {
+      return refused(outcome.status === "skipped" && (outcome.retryable || /error|unreachable/i.test(outcome.reason)) ? "unavailable" : "policy");
+    }
+    if (verified.isHire || read.task.creator === ctx.signer.address) return refused("policy");
+    const job = await openTerms(ctx, agent, task, verified);
+    return job ? { job, eligibility: workEligibility(task, "available") } : refused("unavailable");
+  } catch {
+    return refused("unavailable");
+  }
 }
 
 type Page = { addresses: Address[]; index: number; agent: Address; dir: string; created: number };
@@ -96,7 +137,7 @@ let cursor = 0;
 export async function browseOpenWork(ctx: WorkerContext, agent: WorkerAgent, offset: number, task?: Address) {
   if (task) {
     const exact = await inspect(ctx, agent, task);
-    return { jobs: exact ? [exact] : [], next: null };
+    return { jobs: exact.job ? [exact.job] : [], next: null, eligibility: exact.eligibility };
   }
   const now = Date.now();
   for (const [key, page] of pages) if (page.created < now - 300000) pages.delete(key);
@@ -116,7 +157,7 @@ export async function browseOpenWork(ctx: WorkerContext, agent: WorkerAgent, off
   pageRows: while (jobs.length < 10 && index < page.addresses.length) {
     const batch = page.addresses.slice(index, index + Math.min(4, 10 - jobs.length));
     const results = await Promise.all(batch.map(address => inspect(ctx, agent, address)));
-    for (const job of results) {
+    for (const { job } of results) {
       if (job !== null) {
         const size = Buffer.byteLength(JSON.stringify(job));
         if (jobs.length && bytes + size > 800 * 1024) break pageRows;

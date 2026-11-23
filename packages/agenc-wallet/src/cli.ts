@@ -330,6 +330,7 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
     log,
   });
   wallet.start();
+  const stopHeartbeats = wallet.startListingHeartbeats();
 
   let houseTimer: ReturnType<typeof setInterval> | null = null;
   if (sandbox !== null) {
@@ -366,6 +367,7 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
     wallet,
     socketPath: server.socketPath,
     stop: async () => {
+      stopHeartbeats();
       if (houseTimer !== null) clearInterval(houseTimer);
       await server.close();
       // Pauses this wallet's services on the marketplace: nobody is left to
@@ -599,6 +601,7 @@ async function main(): Promise<number> {
     return values.help === true ? 0 : 2;
   }
   if (command === "init") return init(values);
+  if (command === "public-discovery") return (await import("./public-discovery.js")).servePublicCatalog();
   if (command === "serve") return serve(values);
   if (command === "status") return status(values);
   if (command === "restore") return restore(values);

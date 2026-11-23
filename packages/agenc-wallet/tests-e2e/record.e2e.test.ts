@@ -55,7 +55,7 @@ describe("a service's record", () => {
         const items = url.searchParams.has("hireable") ? [active] : [active, { ...active, state: 1, pda: sibling }];
         return Response.json({ total: items.length, items });
       } });
-      return { ...local, listServices: hosted.listServices };
+      return { ...local, listServices: filters => filters?.listing ? local.listServices(filters) : hosted.listServices(filters) };
     } });
     const { wallet, listing } = world;
     const agent = await spender(world, 300);
