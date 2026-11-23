@@ -261,8 +261,6 @@ const OFFER_STEPS_PER_PASS = 4;
 const MAX_OFFERS_PER_AGENT = 10;
 /** How many earlier jobs may still wait for payment while a new hire is taken. */
 const OFFER_SPARE_JOBS = 4n;
-/** How long closing waits for services to be taken off offer. */
-const CLOSE_PAUSE_BUDGET_MS = 4_000;
 const DAY_SECS = 24 * 60 * 60;
 /** How long whoever takes a posted request has to deliver, unless it says otherwise. */
 const DEFAULT_REQUEST_DAYS = 7;
@@ -561,6 +559,8 @@ export class AgencWallet {
   #timer: ReturnType<typeof setInterval> | null = null;
   #ticking: Promise<void> | null = null;
   #closed = false;
+  #closePromise: Promise<void> | null = null;
+  readonly #background = new Set<Promise<unknown>>();
   /** Set while closing: every service comes off offer, since nobody will do the work. */
   #closing = false;
   /** Agents being stopped earning for good right now. */
@@ -633,9 +633,19 @@ export class AgencWallet {
     try {
       if (!vault.has(MAIN_KEY)) await vault.create(MAIN_KEY);
       const store = StateStore.open(path.join(config.dataDir, "state.json"), (config.now ?? Date.now)());
+      if (Object.values(store.state.jobs).some((job) => job.outcome === "paid" && !job.finalDeliveryChecked && (job.result !== null || job.deliveryPointer !== undefined))) {
+        store.update((draft) => {
+          for (const job of Object.values(draft.jobs)) {
+            if (job.outcome === "paid" && !job.finalDeliveryChecked) {
+              job.result = null;
+              delete job.deliveryPointer;
+            }
+          }
+        });
+      }
       const wallet = new AgencWallet(config, vault, store, releaseLock);
       for (const agent of Object.values(store.state.agents)) {
-        if (agent.earn.enabled) void wallet.#startEarning(agent);
+        wallet.#backgroundWork(wallet.#resumeEarning(agent.id));
       }
       return wallet;
     } catch (error) {
@@ -672,6 +682,7 @@ export class AgencWallet {
 
   /** Run `work` alone for `key`; later callers queue behind it. */
   #lock<T>(key: string, work: () => Promise<T>): Promise<T> {
+    if (this.#closed && !this.#closing) return Promise.reject(new WalletError("NOT_AVAILABLE", "This wallet is closed."));
     const previous = this.#locks.get(key) ?? Promise.resolve();
     const run = previous.then(work, work);
     const settled = run.then(
@@ -683,6 +694,32 @@ export class AgencWallet {
       if (this.#locks.get(key) === settled) this.#locks.delete(key);
     });
     return run;
+  }
+
+  /** Join detached startup, stop continuations and listing work before releasing ownership. */
+  #backgroundWork(work: Promise<unknown>): void {
+    this.#background.add(work);
+    void work.catch((error) => this.#log(`background work: ${describeError(error)}`)).finally(() => {
+      this.#background.delete(work);
+    });
+  }
+
+  async #resumeEarning(agentId: string): Promise<void> {
+    if (this.#closed) return;
+    const agent = this.#agentRecord(agentId);
+    if (agent.earn.enabled) await this.#startEarning(agent);
+    else {
+      await this.#startDrain(agent);
+      await this.#advanceOffer(agentId);
+    }
+  }
+
+  async #startDrain(agent: AgentRecord): Promise<void> {
+    if (this.#closed || agent.earn.retiredAt != null || !this.#earn.hasUnfinishedJob(agent.id)) return;
+    const signer = await this.#vault.signer(agent.keyId);
+    if (this.#closed || this.#agentRecord(agent.id).earn.enabled) return;
+    this.#earn.start({ agentId: agent.id, signer, minRewardLamports: 0n,
+      solUsd: () => this.#freshRate() }, true);
   }
 
   /** Share the whole call, including preparation, before a job has been recorded. */
@@ -3086,8 +3123,14 @@ export class AgencWallet {
   async #stepTidy(job: JobRecord): Promise<void> {
     // Downloads still retry after payment, including records made by older builds.
     if (job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified)) {
+      if (!job.finalDeliveryChecked) {
+        this.#patchJob(job.id, (entry) => { entry.result = null; delete entry.deliveryPointer; });
+      }
       if (!job.finalDeliveryChecked && job.task !== null) {
-        const seen = await inspectJob(this.#chain, job.task as Address, this.#provider(job));
+        const seen = await inspectJob(this.#chain, job.task as Address, this.#provider(job)).catch((error) => {
+          this.#log(`paid account lookup: ${describeError(error)}`);
+          return null;
+        });
         if (seen?.status === "completed" && seen.submission?.status === SubmissionStatus.Accepted) {
           this.#patchJob(job.id, (entry) => {
             entry.result = null;
@@ -3492,6 +3535,9 @@ export class AgencWallet {
   async jobDelivery(jobId: string, isOwner: boolean, agentId?: string): Promise<NonNullable<JobRecord["result"]>> {
     const view = await this.getJob(jobId, isOwner, agentId);
     const job = view.role === "buying" ? this.#jobRecord(jobId) : this.#earnJobs(view.agentId).find((entry) => entry.id === jobId)!;
+    if (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked) {
+      throw new WalletError("NOT_FOUND", "The paid delivery has not been authenticated yet.");
+    }
     const hash = job.deliveryPointer?.hash ?? view.result?.hash;
     if (hash == null) throw new WalletError("NOT_FOUND", "This job has no delivery yet.");
     const pointer = job.deliveryPointer !== undefined
@@ -4108,10 +4154,16 @@ export class AgencWallet {
     });
   }
 
-  async #startEarning(agent: AgentRecord): Promise<void> {
+  #startEarning(agent: AgentRecord): Promise<void> {
+    return this.#lock(`earn-start:${agent.id}`, () => this.#startEarningLocked(agent));
+  }
+
+  async #startEarningLocked(agent: AgentRecord): Promise<void> {
+    if (this.#closed) return;
     // A retired agent can never take a job again, whatever older records say.
     if (agent.earn.retiredAt != null) return;
     const registration = await this.#earn.registration(agent.id).catch(() => null);
+    if (this.#closed) return;
     if (registration !== null && this.#noticeRetired(agent.id, registration.account)) return;
     try {
       const signer = await this.#vault.signer(agent.keyId);
@@ -4122,6 +4174,12 @@ export class AgencWallet {
       // A switch off or shutdown may have happened while startup was waiting.
       const current = this.#agentRecord(agent.id);
       if (this.#closed || !current.earn.enabled || current.earn.retiredAt != null) return;
+      // Reconcile stored listing intent before admitting work after a restart.
+      if (!await this.#advanceOffer(agent.id)) {
+        throw new WalletError("NETWORK", "The services must be reconciled before taking jobs.");
+      }
+      if (this.#earn.isRecovering(agent.id)) await this.#earn.stop(agent.id);
+      if (this.#closed || !this.#agentRecord(agent.id).earn.enabled) return;
       this.#earn.start({
         agentId: agent.id,
         signer,
@@ -4193,6 +4251,7 @@ export class AgencWallet {
 
   /** Switch "take jobs while idle" on or off for an agent. Owner only. */
   async setEarn(agentId: string, enabled: boolean, minPayCents?: number): Promise<AgentView> {
+    if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const agent = this.#agentRecord(agentId);
     if (enabled) this.#refuseIfRetired(agent);
     if (minPayCents !== undefined && (!Number.isFinite(minPayCents) || minPayCents < 0)) {
@@ -4226,17 +4285,13 @@ export class AgencWallet {
     } else {
       // stop aborts discovery synchronously. Its promise still drains the job,
       // but the owner can turn other agents off while that work finishes.
-      void this.#earn.stop(agentId).then(async () => {
-        const current = this.#agentRecord(agentId);
-        if (!this.#closed && current.earn.enabled) await this.#startEarning(current);
-      }).catch((error) => this.#log(`earn ${agentId}: stopping: ${describeError(error)}`));
+      this.#backgroundWork(this.#earn.stop(agentId).then(() => this.#resumeEarning(agentId)));
     }
-    // A service on offer follows the switch: it leaves the marketplace while
-    // nobody is taking jobs, and comes back when someone is.
+    // A service follows the switch, while Off remains responsive to the owner.
     if (enabled) await this.#advanceOffer(agentId);
-    else void this.#advanceOffer(agentId).then(() => {
+    else this.#backgroundWork(this.#advanceOffer(agentId).then(() => {
       this.#emit({ type: "overview" });
-    }).catch((error) => this.#log(`offer ${agentId}: ${describeError(error)}`));
+    }));
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);
   }
@@ -4609,12 +4664,15 @@ export class AgencWallet {
    * offer. Each step reads the chain first and sends at most one transaction,
    * so it can be repeated or interrupted anywhere. Never throws.
    */
-  #advanceOffer(agentId: string): Promise<void> {
+  #advanceOffer(agentId: string): Promise<boolean> {
+    if (this.#closed && !this.#closing) return Promise.resolve(false);
     // One agent's services one after another: they share its wallet.
     return this.#lock(`offer:${agentId}`, async () => {
+      let reconciled = true;
       try {
         await this.#offerStatesTogether(agentId);
       } catch (error) {
+        reconciled = false;
         // The steps below do the same one at a time.
         this.#log(`offer ${agentId}: ${describeError(error)}`);
       }
@@ -4626,12 +4684,14 @@ export class AgencWallet {
           try {
             again = await this.#offerStep(agentId, offerId);
           } catch (error) {
+            reconciled = false;
             this.#offerFailed(agentId, offerId, error);
             break;
           }
           if (!again) break;
         }
       }
+      return reconciled;
     });
   }
 
@@ -4962,6 +5022,7 @@ export class AgencWallet {
 
   /** One housekeeping pass. The service calls this on a timer. */
   tick(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
     if (this.#ticking !== null) return this.#ticking;
     this.#ticking = this.#runTick().finally(() => {
       this.#ticking = null;
@@ -5000,12 +5061,13 @@ export class AgencWallet {
           job.phase === "hiring" ||
           job.phase === "hired" ||
           job.phase === "active" ||
-          (job.phase === "done" && (!job.tidied || (job.outcome === "paid" && !job.result?.verified)))),
+          (job.phase === "done" && (!job.tidied || (job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified))))),
     );
     await Promise.all(open.map((job) => this.#advance(job.id)));
 
     for (const agent of Object.values(this.#store.state.agents)) {
       if (!agent.earn.enabled && agent.earn.retiredAt == null) {
+        await this.#startDrain(agent);
         await this.#earn.tidyUp({
           agentId: agent.id,
           signer: await this.#vault.signer(agent.keyId),
@@ -5138,30 +5200,30 @@ export class AgencWallet {
   }
 
   /** Stop timers and earning loops and release the folder lock. */
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
+    this.#closing = true;
+    this.#closePromise = this.#finishClose();
+    return this.#closePromise;
+  }
+
+  async #finishClose(): Promise<void> {
     if (this.#timer !== null) clearInterval(this.#timer);
     this.#timer = null;
     await this.#earn.stopAll();
     if (this.#ticking !== null) await this.#ticking.catch(() => undefined);
-    // Nobody will be here to do the work, so services come off offer. Best
-    // effort within a short budget: the next start reads the chain and puts
-    // them back, wherever this got to.
-    this.#closing = true;
+    // A timeout cannot revoke a transaction already sent. Keep ownership until
+    // every continuation and listing mutation has actually settled.
+    while (this.#background.size > 0 || this.#locks.size > 0) {
+      await Promise.allSettled([...this.#background, ...this.#locks.values()]);
+    }
     const offering = Object.values(this.#store.state.agents).filter(
       (agent) => agentOffers(agent).some((offer) => offer.listed),
     );
-    if (offering.length > 0) {
-      let budget: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        Promise.all(offering.map((agent) => this.#advanceOffer(agent.id))),
-        new Promise<void>((resolve) => {
-          budget = setTimeout(resolve, CLOSE_PAUSE_BUDGET_MS);
-        }),
-      ]);
-      clearTimeout(budget);
-    }
+    await Promise.all(offering.map((agent) => this.#advanceOffer(agent.id)));
+    this.#store.close();
+    this.#closing = false;
     this.#releaseLock();
   }
 }

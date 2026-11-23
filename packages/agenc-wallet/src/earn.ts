@@ -11,6 +11,7 @@
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Address, KeyPairSigner } from "@solana/kit";
 import { findAgentPda, values, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
@@ -26,6 +27,7 @@ import {
   readClaimAccountRentMinimums,
   readMinAgentStake,
   registrationFundingRequirement,
+  resumeOpenClaim,
   runUp,
   runExecutor,
   runUpkeep,
@@ -177,6 +179,7 @@ export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
+  recoveryOnly: boolean;
   controller: AbortController;
   done: Promise<void>;
   state: EarnState;
@@ -249,8 +252,15 @@ export class EarnHost {
 
   /** Include a claim awaiting upload/submission recovery, even after its loop ends. */
   hasUnfinishedJob(agentId: string): boolean {
-    return this.#running.get(agentId)?.state === "working" ||
-      this.jobs(agentId).some((job) => job.state === "working");
+    if (this.#running.get(agentId)?.state === "working") return true;
+    try {
+      const state = loadState(this.stateDir(agentId));
+      return state.openClaim !== null || state.failedJobs.some((job) => !job.claimReleased);
+    } catch (error) {
+      this.#log(`earn ${agentId}: reading unfinished work: ${describeError(error)}`);
+      // An unreadable journal cannot establish that all work is finished.
+      return true;
+    }
   }
 
   /**
@@ -491,12 +501,18 @@ export class EarnHost {
     }
   }
 
-  /** Start (or keep) the loop for one agent. */
-  start(agent: EarnAgent): void {
+  /** Whether this agent is only draining persisted work. */
+  isRecovering(agentId: string): boolean {
+    return this.#running.get(agentId)?.recoveryOnly === true;
+  }
+
+  /** Start (or keep) one loop. Recovery never enters the discovery path. */
+  start(agent: EarnAgent, recoveryOnly = false): void {
     const executor = this.#options.executor;
-    if (executor === null || this.#running.has(agent.agentId)) return;
+    if (this.#shutdown.signal.aborted || (!recoveryOnly && executor === null) || this.#running.has(agent.agentId)) return;
     const controller = new AbortController();
     const entry: Running = {
+      recoveryOnly,
       controller,
       done: Promise.resolve(),
       state: "starting",
@@ -513,7 +529,11 @@ export class EarnHost {
       entry.lastError = pausedText(entry.paused);
     }
     this.#running.set(agent.agentId, entry);
-    entry.done = this.#loop(agent, executor, entry).finally(() => {
+    entry.done = this.#loop(agent, executor ?? {
+      argv: [], mode: "sandboxed", envAllowlist: [], timeoutMs: 60_000,
+    }, entry).catch((error) => {
+      this.#log(`earn ${agent.agentId}: ${describeError(error)}`);
+    }).finally(() => {
       if (this.#running.get(agent.agentId) === entry) this.#running.delete(agent.agentId);
       this.#notify(agent.agentId, { type: "state" });
     });
@@ -670,6 +690,11 @@ export class EarnHost {
         : {}),
     };
 
+    if (entry.recoveryOnly) {
+      await this.#drain(agent, ctx, entry);
+      return;
+    }
+
     const refreshMs = this.#options.serviceRefreshMs ?? DEFAULT_SERVICE_REFRESH_MS;
     while (!signal.aborted) {
       // One run of the stock watcher. It ends when earning stops, or early
@@ -730,6 +755,34 @@ export class EarnHost {
         clearInterval(refresh);
         signal.removeEventListener("abort", endRun);
       }
+    }
+  }
+
+  /** Only persisted work: no registration, discovery or new claims. */
+  async #drain(agent: EarnAgent, ctx: WorkerContext, entry: Running): Promise<void> {
+    const release = acquireStateLock(ctx.stateDir);
+    const signal = entry.controller.signal;
+    try {
+      const agentIdHex = loadState(ctx.stateDir).agentIdHex;
+      if (agentIdHex === null) return;
+      const agentId = hexToBytes(agentIdHex);
+      const [agentPda] = await findAgentPda({ agentId });
+      const worker: WorkerAgent = { agentId, agentPda, registered: true, justRegistered: false };
+      while (!signal.aborted) {
+        try {
+          await checkSettlements(ctx, worker);
+          await resumeOpenClaim(ctx, worker);
+          await runUpkeep(ctx, worker);
+          await checkSettlements(ctx, worker);
+        } catch (error) {
+          this.#log(`earn ${agent.agentId}: recovering: ${describeError(error)}`);
+        }
+        const state = loadState(ctx.stateDir);
+        if (state.openClaim === null && state.failedJobs.every((job) => job.claimReleased)) return;
+        await delay(ctx.config.pollIntervalMs, undefined, { signal }).catch(() => undefined);
+      }
+    } finally {
+      release();
     }
   }
 

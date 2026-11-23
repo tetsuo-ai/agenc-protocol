@@ -512,6 +512,7 @@ export function acquireServiceLock(directory: string): () => void {
 export class StateStore {
   readonly #file: string;
   #state: WalletState;
+  #closed = false;
 
   private constructor(file: string, state: WalletState) {
     this.#file = file;
@@ -561,11 +562,17 @@ export class StateStore {
     return this.#state;
   }
 
+  /** Permanently fence this owner before its directory lock is released. */
+  close(): void {
+    this.#closed = true;
+  }
+
   /**
    * Apply a change and persist it before returning. The mutator works on a
    * copy; if it throws or the write fails, memory keeps the previous state.
    */
   update<T>(mutator: (draft: WalletState) => T): T {
+    if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const draft = structuredClone(this.#state);
     const result = mutator(draft);
     prune(draft);

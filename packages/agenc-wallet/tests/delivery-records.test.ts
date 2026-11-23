@@ -370,6 +370,51 @@ describe("bounded evidence and offline upgrades", () => {
     expect((await reopened.getJob("job_test", true)).result?.text).toBe("Complete work.");
   });
 
+  it.each(["available", "missing", "throw"])("hides unchecked paid evidence on throwing RPC reads and recovers history (%s)", async (history) => {
+    const old = { text: "First revision", uri: URI, hash: HASH, verified: true, files: [] };
+    const f = await fixture([job({ phase: "done", outcome: "paid", tidied: true, result: old,
+      deliveryPointer: { hash: HASH, dataBase64: Buffer.from(URI).toString("base64") } })]);
+    mocks.inspect.mockRejectedValue(new Error("temporary RPC read outage"));
+    const finalHash = "cd".repeat(32);
+    const finalUri = "https://artifacts.example/final";
+    f.chain.findSettledDelivery = vi.fn(async () => {
+      if (history === "throw") throw new Error("history unavailable");
+      return history === "available" ? {
+        worker: TASK as never, proofHashHex: finalHash, resultData: Buffer.from(finalUri),
+      } : null;
+    });
+    f.fetchResult.mockResolvedValue({ bytes: Buffer.from("Final revision"), uri: finalUri });
+    // Listing must also hide the legacy evidence before any chain refresh.
+    expect((await f.wallet.listJobs({ role: "buying" }, true))[0]!.result).toBeNull();
+    const view = await f.wallet.getJob("job_test", true);
+    expect(view.status).toBe("paid");
+    if (history === "available") {
+      expect(view.result).toMatchObject({ hash: finalHash, text: "Final revision", verified: true });
+      expect(await f.wallet.jobDelivery("job_test", true)).toMatchObject({ hash: finalHash, text: "Final revision", verified: true });
+      expect(StateStore.open(path.join(f.dataDir, "state.json")).state.jobs.job_test?.finalDeliveryChecked).toBe(true);
+    } else {
+      expect(view.result).toBeNull();
+      await expect(f.wallet.jobDelivery("job_test", true)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(f.fetchResult).not.toHaveBeenCalled();
+      const record = StateStore.open(path.join(f.dataDir, "state.json")).state.jobs.job_test!;
+      expect(record.result).toBeNull();
+      expect(record.deliveryPointer).toBeUndefined();
+      expect(record.finalDeliveryChecked).not.toBe(true);
+    }
+    expect(f.chain.findSettledDelivery).toHaveBeenCalled();
+  });
+
+  it("permanently fences a store before another owner opens it", async () => {
+    const f = await fixture();
+    const file = path.join(f.dataDir, "state.json");
+    const old = StateStore.open(file);
+    old.close();
+    const current = StateStore.open(file);
+    current.update((draft) => { draft.lastMainLamports = "123"; });
+    expect(() => old.update((draft) => { draft.lastMainLamports = "0"; })).toThrow("closed");
+    expect(StateStore.open(file).state.lastMainLamports).toBe("123");
+  });
+
   it.each([undefined, 5 * 60_000, 2 * 3600_000])("reconciles a reopened legacy refund time (configured timeout: %s)", async (timeout) => {
     const stale = timeout === undefined ? NOW - 1000 : NOW + 5 * 60_000;
     const f = await fixture([job({ chainStatus: "open", autoRefundAt: stale })]);
