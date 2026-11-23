@@ -458,3 +458,63 @@ it("keeps the rounded-zero operator split in the preview and paid receipt after 
   expect(await readTask(world.sandbox.chain, job.task as Address)).toBeNull();
   expect((await wallet.getJob(job.id, true)).operatorPayment).toMatchObject(receipt);
 }, 30_000);
+
+it("switches Earns off and withdraws an unrelated live offer while an offer transfer is pending", async () => {
+  let loseNextReply = false;
+  let heldSignature: string | undefined;
+  world = await startWorld({
+    earn,
+    transport: base => ({
+      ...base,
+      async sendAndConfirm(tx) {
+        if (!loseNextReply) return base.sendAndConfirm(tx);
+        loseNextReply = false;
+        heldSignature = getSignatureFromTransaction(tx);
+        await base.sendAndConfirm(tx);
+        throw new Error("Lost the funding confirmation");
+      },
+    }),
+    chain: base => ({
+      ...base,
+      listingSendOutcome: receipt => receipt.signature === heldSignature ? Promise.resolve("pending") : base.listingSendOutcome!(receipt),
+    }),
+  });
+  const { wallet } = world;
+  const seller = await wallet.createAgent();
+  const startup = await wallet.quoteEarn(seller.id);
+  await wallet.setEarn(seller.id, true, undefined, startup.quoteId);
+  await eventually(async () => {
+    await wallet.tick();
+    return (await wallet.overview()).agents[0]!.earn.state === "watching";
+  });
+  const publish = async (name: string) => {
+    const input = { ...service, name };
+    const quote = await wallet.quoteEarn(seller.id, input);
+    await wallet.setOffer(seller.id, input, undefined, quote.quoteId);
+    return eventually(async () => {
+      await wallet.tick();
+      return (await wallet.overview()).agents[0]!.earn.offers.find(o => o.name === name && o.status === "live");
+    });
+  };
+  const editing = await publish("Editing");
+  const proof = await publish("Proofreading");
+  const edit = { ...service, terms: { maxOpenJobs: 6 } };
+  const quote = await wallet.quoteEarn(seller.id, edit, editing.id);
+  expect(BigInt(quote.fromMain.lamports)).toBeGreaterThan(0n);
+  loseNextReply = true;
+  await expect(wallet.setOffer(seller.id, edit, editing.id, quote.quoteId)).rejects.toMatchObject({ code: "NETWORK" });
+  await expect(wallet.setOffer(seller.id, null, editing.id)).rejects.toMatchObject({ code: "NETWORK" });
+  const spent = await world.balance(wallet.mainAddress);
+  const withdrawn = await wallet.setOffer(seller.id, null, proof.id);
+  expect(withdrawn.earn.offers.find(o => o.id === proof.id)).toMatchObject({ wanted: false, status: "paused" });
+  expect(await readListing(world.sandbox.chain, proof.listing as Address)).toMatchObject({ state: 1 });
+  expect((await wallet.setEarn(seller.id, false)).earn.enabled).toBe(false);
+  await expect(wallet.setOffer(seller.id, edit, editing.id, quote.quoteId)).rejects.toMatchObject({ code: "NETWORK" });
+  heldSignature = undefined;
+  await wallet.tick();
+  const recovered = await wallet.setOffer(seller.id, edit, editing.id, quote.quoteId);
+  expect(recovered.earn.enabled).toBe(false);
+  expect(recovered.earn.offers.find(o => o.id === proof.id)).toMatchObject({ wanted: false });
+  expect(recovered.earn.offers.find(o => o.id === editing.id)).toMatchObject({ terms: { maxOpenJobs: 6 } });
+  expect(await world.balance(wallet.mainAddress)).toBe(spent);
+}, 30_000);

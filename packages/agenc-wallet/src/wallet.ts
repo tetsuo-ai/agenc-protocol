@@ -6,7 +6,7 @@
 // An agent can never name a destination, an amount to send, or a transaction.
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
-import { inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
+import { fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
 import { applySellerDecision, saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
 import { checkHireOperator, checkOperator } from "./payable-operator.js";
 import { fillCatalogTerms, reducesListingCapacity, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
@@ -4311,8 +4311,13 @@ export class AgencWallet {
     return this.#oneAgentView(agent.id);
   }
 
-  #checkPendingFunding(agentId: string): void {
-    if (this.#agentRecord(agentId).earn.pendingListingSends?.some((r) => r.operation?.kind === "funding"))
+  #checkPendingFunding(agentId: string, stopping?: { offerId?: string | undefined }): void {
+    const pending = this.#agentRecord(agentId).earn.pendingListingSends ?? [];
+    if (pending.some(({ operation }) => {
+      if (operation?.kind !== "funding") return false;
+      const target = fundedOfferId(operation);
+      return !stopping || target === undefined || target === stopping.offerId;
+    }))
       throw new WalletError("NETWORK", "Market is checking an earlier funding transfer. Wait for its outcome.");
   }
 
@@ -4495,7 +4500,7 @@ export class AgencWallet {
   async #setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string): Promise<AgentView> {
     if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const agent = this.#agentRecord(agentId);
-    this.#checkPendingFunding(agentId);
+    this.#checkPendingFunding(agentId, enabled ? undefined : {});
     if (!enabled && fundingQuoteId !== undefined) throw new WalletError("BAD_REQUEST", "Turning off Earns does not use a funding quote.");
     if (enabled) this.#refuseIfRetired(agent);
     if (minPayCents !== undefined && (!Number.isFinite(minPayCents) || minPayCents < 0)) {
@@ -4783,8 +4788,10 @@ export class AgencWallet {
 
   async #setOffer(agentId: string, input: SellerOfferInput | null, offerId?: string, fundingQuoteId?: string): Promise<AgentView> {
     const agent = this.#agentRecord(agentId);
-    if (input !== null) this.#refuseIfRetired(agent);
-    this.#checkPendingFunding(agentId);
+    if (input !== null) {
+      this.#refuseIfRetired(agent);
+      this.#checkPendingFunding(agentId);
+    }
     const offers = agentOffers(agent);
     if (input === null) {
       if (fundingQuoteId !== undefined) throw new WalletError("BAD_REQUEST", "Taking a service off offer does not use a funding quote.");
@@ -4795,6 +4802,7 @@ export class AgencWallet {
           : wanted.length === 1
             ? wanted[0]
             : undefined;
+      this.#checkPendingFunding(agentId, { offerId: target?.id ?? offerId });
       if (offerId !== undefined && target === undefined) {
         throw new WalletError("NOT_FOUND", "That service does not exist.");
       }
@@ -4955,15 +4963,25 @@ export class AgencWallet {
     }, work);
   }
 
-  async #reconcileListingSends(agentId: string): Promise<boolean> {
+  async #reconcileListingSends(agentId: string): Promise<Set<string> | null> {
+    const pendingOffers = new Set<string>();
     // A cancelled HTTP request may already have broadcast. Never admit
     // jobs or send a conflicting listing change while it can still land.
     for (const receipt of this.#store.state.agents[agentId]!.earn.pendingListingSends ?? []) {
-      let outcome = await this.#chain.listingSendOutcome?.(receipt);
+      const offerId = fundedOfferId(receipt.operation);
+      let outcome = await this.#chain.listingSendOutcome?.(receipt).catch((error) => {
+        if (offerId === undefined) throw error;
+        this.#log(`funding ${offerId}: ${describeError(error)}`);
+        return "pending" as const;
+      });
       // Older adapters know only that a send is terminal. That suffices
       // for legacy receipts, whose listing state is read back below.
       if (!outcome && !receipt.operation && await this.#chain.listingSendSettled?.(receipt)) outcome = "failed";
-      if (!outcome || outcome === "pending") return false;
+      if (!outcome || outcome === "pending") {
+        if (offerId === undefined) return null;
+        pendingOffers.add(offerId);
+        continue;
+      }
       this.#finishListingSend(agentId, receipt.signature, outcome === "landed");
       if (outcome === "landed") {
         this.#dropBalances();
@@ -4971,7 +4989,7 @@ export class AgencWallet {
         if (receipt.operation?.kind === "funding" || receipt.operation?.kind === "create") this.#emit({ type: "activity" });
       }
     }
-    return true;
+    return pendingOffers;
   }
 
   /**
@@ -4988,13 +5006,19 @@ export class AgencWallet {
       this.#store.update((draft) => { draft.agents[agentId]!.earn.listingReconciliationRequired = true; });
       try {
         return await this.#withListingTransport(agentId, signal, async () => {
-          if (!await this.#reconcileListingSends(agentId)) return false;
+          const pendingOffers = await this.#reconcileListingSends(agentId);
+          if (pendingOffers === null) return false;
+          // Only an additional uncertain send needs to interrupt this pass.
+          const interrupted = () => shutdown || signal.aborted || this.#agentRecord(agentId).earn.pendingListingSends?.some(
+            ({ operation }) => !pendingOffers.has(fundedOfferId(operation) ?? ""),
+          );
           const agent = this.#agentRecord(agentId);
-          const remaining = agentOffers(agent).filter((offer) => this.#offerNeedsStep(agent, offer));
+          const remaining = agentOffers(agent).filter((offer) =>
+            !pendingOffers.has(offer.id) && this.#offerNeedsStep(agent, offer));
           try {
             await this.#offerStatesTogether(agentId, remaining);
           } catch (error) {
-            if (shutdown || signal.aborted || this.#agentRecord(agentId).earn.pendingListingSends?.length) throw error;
+            if (interrupted()) throw error;
             // Batching saves a fee. Individual steps can still make progress.
             this.#log(`offer batch ${agentId}: ${describeError(error)}`);
           }
@@ -5014,11 +5038,12 @@ export class AgencWallet {
                 });
               }
             } catch (error) {
-              if (shutdown || signal.aborted || this.#agentRecord(agentId).earn.pendingListingSends?.length) throw error;
+              if (interrupted()) throw error;
               this.#offerFailed(agentId, offer, error);
             }
           }
           signal.throwIfAborted();
+          if (pendingOffers.size > 0) return false;
           const current = this.#agentRecord(agentId);
           if (agentOffers(current).some((offer) => this.#offerNeedsStep(current, offer))) return false;
           this.#store.update((draft) => {

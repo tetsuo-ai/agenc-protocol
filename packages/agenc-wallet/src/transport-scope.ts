@@ -19,6 +19,12 @@ export type ListingOperation =
   | { kind: "state"; state: "Active" | "Paused" | "Retired"; listings: readonly string[]; lamports: string }
   | { kind: "update" | "approval"; listings: readonly string[]; lamports: string };
 
+/** The offer a signed funding decision will save if the transfer lands. */
+export function fundedOfferId(operation: ListingOperation | undefined): string | undefined {
+  const effect = operation?.kind === "funding" ? operation.decision?.effect : undefined;
+  return effect && "offer" in effect ? effect.offer.id : undefined;
+}
+
 export type ListingSendOutcome = "landed" | "failed" | "pending";
 
 /** Written before dispatch; an interrupted send is unresolved until chain reconciliation. */
