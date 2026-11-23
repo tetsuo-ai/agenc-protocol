@@ -328,7 +328,7 @@ describe("e2e: one worker tick against the real program", () => {
     // falls back to earnings + task PDA.
     expect(reports[0]!.receiptUrl).toBeNull();
     const settledEvent = events.find((e) => e.event === "settlement.observed");
-    expect(settledEvent?.message).toBe(`earned 0.00198 SOL — task ${task}`);
+    expect(settledEvent?.message).toBe(`earned 0.00198 SOL. task ${task}`);
 
     const after = loadState(stateDir);
     expect(after.submissions[0]!.settled).toBe(true);

@@ -8,6 +8,7 @@ import type {
   ApprovalView,
   JobStatus,
   JobView,
+  JobResult,
   Money,
   ServiceView,
   WalletOverview,
@@ -17,7 +18,12 @@ import type {
 export type AmountInput = { usdCents: number } | { lamports: string };
 
 export interface WalletMethods {
-  /** Balances, agents and counts: everything the panel's first screen needs. */
+  /**
+   * Balances, agents, counts and service `capabilities` on every response.
+   * "earn-finishing" means disabling earning replies once the agent takes
+   * no new job; an in-progress job stays "finishing", never "off".
+   * Clients may ignore capabilities they do not recognize.
+   */
   overview: { params: Record<string, never>; result: WalletOverview };
 
   /**
@@ -134,10 +140,12 @@ export interface WalletMethods {
   };
 
   "jobs.list": {
-    params: { role?: "buying" | "working"; agentId?: string; limit?: number };
+    params: { role?: "buying" | "working"; agentId?: string; limit?: number; before?: string };
     result: { jobs: JobView[] };
   };
   "jobs.get": { params: { jobId: string }; result: { job: JobView } };
+  /** Complete verified delivery, including text beyond the list preview. */
+  "jobs.delivery": { params: { jobId: string }; result: { result: JobResult } };
   /**
    * One file of a job's delivery, fetched from the delivery store by its
    * fingerprint and checked against it. Owner only: a file's bytes are for a
@@ -175,9 +183,19 @@ export interface WalletMethods {
     result: { activity: ActivityView[] };
   };
 
-  /** Switch "take jobs while idle" on or off for one agent. */
+  /** Switch taking jobs on or off. Off replies while an existing job is still finishing. */
   "earn.set": {
     params: { agentId: string; enabled: boolean; minPayCents?: number };
+    result: AgentView;
+  };
+  /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
+  "earn.quote": {
+    params: { agentId: string; offerId?: string; offer?: { name: string; summary: string; price: AmountInput } };
+    result: import("./types.js").EarnFundingQuote;
+  };
+  /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
+  "earn.approveFunding": {
+    params: { quoteId: string };
     result: AgentView;
   };
   /**
@@ -241,6 +259,7 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "approvals.wait",
   "jobs.list",
   "jobs.get",
+  "jobs.delivery",
   "jobs.wait",
   "jobs.approve",
   "jobs.askChanges",

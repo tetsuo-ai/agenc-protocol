@@ -1,3 +1,4 @@
+import { setEarnWithApproval } from "./harness.js";
 // Taking money back, or sending it all out, leaves nothing of the person's
 // behind where it can never be used. A wallet that is not empty must keep the
 // network's minimum, so "all" keeps it only while a job or earning may still
@@ -88,7 +89,7 @@ describe("taking everything back", () => {
     world = await startWorld({ earn: EARN });
     const { wallet } = world;
     const agent = await agentWith(world, 300);
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     // Once it is registered and watching for jobs, nothing else moves its money.
     await eventually(async () => {
       const earn = (await wallet.overview()).agents[0]!.earn;
@@ -98,7 +99,7 @@ describe("taking everything back", () => {
     expect(await world.balance(agent.address)).toBe(
       await world.sandbox.chain.getMinimumBalanceForRentExemption(0),
     );
-    await wallet.setEarn(agent.id, false, 10);
+    await setEarnWithApproval(wallet, agent.id, false, 10);
   });
 
   it("sends everything out of the balance when nothing needs it", async () => {

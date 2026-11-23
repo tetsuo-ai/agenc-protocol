@@ -14,12 +14,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { address } from "@solana/kit";
+import { address, getAddressDecoder } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 import {
   acquireStateLock,
   emptyState,
   loadState,
+  readJobEvidence,
   MAX_WORKER_STATE_BYTES,
   pruneFailedJobs,
   pruneSettledSubmissions,
@@ -181,6 +182,17 @@ describe("versioned fail-closed worker state", () => {
         .map(({ task }) => task),
     ).toEqual(["pending-a", "pending-b"]);
     expect(state.submissions[0]?.task).toBe("5");
+  });
+
+  it("never prunes an unacknowledged settlement event", () => {
+    const state = emptyState();
+    state.submissions = [{
+      ...pendingSubmission(), settled: true, outcome: "accepted", earnedLamports: "1",
+      settlementSignature: null, settledAt: "2026-07-18T00:00:00.000Z", settlementEventPending: true,
+    }];
+    expect(pruneSettledSubmissions(state, 0)).toBe(0);
+    state.submissions[0]!.settlementEventPending = false;
+    expect(pruneSettledSubmissions(state, 0)).toBe(1);
   });
 
   it("rejects an oversized state file before reading or parsing it", () => {
@@ -513,5 +525,57 @@ describe("given-up jobs in the state file", () => {
     expect(state.failedJobs.filter((job) => !job.claimReleased)).toHaveLength(5);
     expect(state.failedJobs.filter((job) => job.claimReleased)).toHaveLength(200);
     expect(state.failedJobs.at(-1)?.failedAt).toBe("2026-11-19T00:04:09.000Z");
+  });
+});
+
+describe("archived job evidence", () => {
+  it("keeps 300 large requests through submission, settlement, outbox replay and restart", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "worker-large-history-"));
+    const state = emptyState();
+    const evidence = { request: "é".repeat(30000), acceptance: ['"\\\n'.repeat(2000)] };
+    for (let i = 0; i < 300; i++) {
+      const bytes = Buffer.alloc(32);
+      bytes.writeUInt32LE(i + 1);
+      state.submissions.push({ ...pendingSubmission(), task: getAddressDecoder().decode(bytes), jobEvidence: { ...evidence, request: `${i}${evidence.request}` } });
+    }
+    state.openClaim = { task: TASK, phase: "claimed", claimedAt: "2026-07-18T00:00:00.000Z", jobEvidence: evidence };
+    saveState(stateDir, state);
+    let reopened = loadState(stateDir);
+    expect(statSync(path.join(stateDir, "state.json")).size).toBeLessThan(MAX_WORKER_STATE_BYTES);
+    expect(reopened.submissions).toHaveLength(300);
+    expect(reopened.submissions[0]?.jobEvidence).toBeUndefined();
+    expect(readJobEvidence(stateDir, reopened.openClaim!)).toEqual(evidence);
+    for (const record of reopened.submissions.slice(0, 299)) {
+      Object.assign(record, { settled: true, outcome: "accepted", earnedLamports: "1", settlementSignature: null, settledAt: "2026-07-19T00:00:00.000Z", settlementEventPending: true });
+    }
+    saveState(stateDir, reopened);
+    reopened = loadState(stateDir);
+    expect(reopened.submissions.filter((record) => record.settlementEventPending)).toHaveLength(299);
+    expect(pruneSettledSubmissions(reopened, 0)).toBe(0);
+    for (let i = 0; i < 300; i++) {
+      expect(readJobEvidence(stateDir, reopened.submissions[i]!)).toEqual({ ...evidence, request: `${i}${evidence.request}` });
+    }
+    const pendingRef = reopened.submissions[0]!.jobEvidenceRef;
+    for (const record of reopened.submissions.slice(1, 299)) record.settlementEventPending = false;
+    expect(pruneSettledSubmissions(reopened, 0)).toBe(298);
+    saveState(stateDir, reopened);
+    reopened = loadState(stateDir);
+    expect(reopened.submissions).toHaveLength(2);
+    expect(reopened.submissions[0]?.jobEvidenceRef).toBe(pendingRef);
+    expect(reopened.submissions[1]?.settled).toBe(false);
+    expect(readJobEvidence(stateDir, reopened.submissions[0]!)).toEqual({ ...evidence, request: `0${evidence.request}` });
+    expect(statSync(path.join(stateDir, "state.json")).size).toBeLessThan(MAX_WORKER_STATE_BYTES);
+  });
+
+  it("rejects changed evidence and malformed references", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "worker-evidence-integrity-"));
+    const state = emptyState();
+    state.submissions = [{ ...pendingSubmission(), jobEvidence: { request: "Original", acceptance: [] } }];
+    saveState(stateDir, state);
+    const entry = loadState(stateDir).submissions[0]!;
+    const file = path.join(stateDir, `evidence-${entry.jobEvidenceRef}.json`);
+    writeFileSync(file, JSON.stringify({ request: "Changed", acceptance: [] }));
+    expect(() => readJobEvidence(stateDir, entry)).toThrow("hash mismatch");
+    expect(() => readJobEvidence(stateDir, { jobEvidenceRef: "../../outside" })).toThrow();
   });
 });

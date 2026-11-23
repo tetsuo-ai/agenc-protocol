@@ -1,6 +1,7 @@
 // The one seam between the wallet and a Solana cluster. Everything above this
 // file asks for bytes, balances and a signing client; nothing above it knows
 // whether the cluster is mainnet over RPC or the in-process sandbox.
+import { setTimeout as delay } from "node:timers/promises";
 import {
   AccountRole,
   address,
@@ -14,6 +15,7 @@ import {
   type Instruction,
   type RpcTransport,
   type Transaction,
+  type Signature,
   type TransactionSigner,
 } from "@solana/kit";
 import {
@@ -31,12 +33,14 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
+import { readSettledDelivery, type SettledDelivery } from "./delivery-history.js";
 import { assertSigningRevision, revisionGatedClient } from "./revision.js";
 import {
   readSettlementFacts,
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
+import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
 const CLOCK_SYSVAR_ADDRESS = address("SysvarC1ock11111111111111111111111111111111");
@@ -65,6 +69,10 @@ export interface Chain {
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
+  /** Distinguish successful execution from a failed or expired transaction. */
+  listingSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome>;
+  /** True only after confirmation, failure, or verified expiry of an interrupted listing send. */
+  listingSendSettled?(receipt: PendingListingSend): Promise<boolean>;
   /**
    * Refuse, with a retryable `NOT_AVAILABLE` that names the revision, unless
    * the marketplace program is on the revision this service signs for (see
@@ -96,6 +104,8 @@ export interface Chain {
   readonly transferFeeLamports: bigint;
   /** Most recent verified settlement transaction for a task, when known. */
   findSettlementSignature?(task: Address): Promise<string | null>;
+  /** Delivery commitment from a settled task's authenticated transaction history. */
+  findSettledDelivery?(task: Address, creator: Address): Promise<SettledDelivery | null>;
   /**
    * The agent the transaction that settled a finished task paid, read from
    * the task's history on the chain; null when none of it settles the task.
@@ -114,6 +124,14 @@ export interface Chain {
     creator: Address,
     options?: { listing?: boolean },
   ): Promise<SettlementFacts | null>;
+}
+
+/** Bound read-only adapters too. Mutation continuations are always joined. */
+export function scopedChainReads(chain: Chain): Chain {
+  return scopeAdapterRequests(chain, [
+    "readAccount", "readRawAccount", "readRawAccounts", "readAccountInfo", "getBalance", "getBalances",
+    "getMinimumBalanceForRentExemption", "clusterTime", "assertSigningRevision", "listingSendSettled", "listingSendOutcome",
+  ]);
 }
 
 /** A System Program transfer, built by hand so no extra package is needed. */
@@ -231,19 +249,22 @@ export function politeTransport(
     jitter?: () => number;
   },
 ): RpcTransport {
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = (ms: number, signal?: AbortSignal) => options.sleep === undefined
+    ? delay(ms, undefined, signal === undefined ? {} : { signal })
+    : abortableTransport(signal, () => options.sleep!(ms));
   const now = options.now ?? Date.now;
   const jitter = options.jitter ?? Math.random;
   const retries = options.retries ?? BUSY_RETRIES;
   let nextStart = 0;
   let quietUntil = 0;
 
-  async function turn(): Promise<void> {
+  async function turn(signal?: AbortSignal): Promise<void> {
     for (;;) {
       const at = Math.max(now(), nextStart, quietUntil);
       nextStart = at + options.minGapMs;
       const wait = at - now();
-      if (wait > 0) await sleep(wait);
+      signal?.throwIfAborted();
+      if (wait > 0) await sleep(wait, signal);
       // Somebody else may have been told to back off while this one waited.
       if (now() >= quietUntil) return;
     }
@@ -251,7 +272,8 @@ export function politeTransport(
 
   return (async (config: Parameters<RpcTransport>[0]) => {
     for (let attempt = 0; ; attempt += 1) {
-      await turn();
+      await turn(config.signal);
+      config.signal?.throwIfAborted();
       try {
         return await base(config);
       } catch (error) {
@@ -313,9 +335,9 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     throw new WalletError("BAD_REQUEST", "The network address is not a valid URL.");
   }
   const rpc = createSolanaRpcFromTransport(
-    politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
+    scopedRpcTransport(politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
       minGapMs: options.minRequestGapMs ?? (PUBLIC_RPC_HOSTS.has(host) ? PUBLIC_RPC_MIN_GAP_MS : 0),
-    }),
+    })),
   );
   const fetchInfo = async (account: Address) => {
     const { value } = await rpc
@@ -324,7 +346,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     return value;
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
-  const transport = createRpcTransport({ rpc });
+  const transport = scopedSendTransport(createRpcTransport({ rpc }));
   // Read every time: the stamp changes once, at a release, and a send never
   // goes out on an old answer.
   const signingRevision = () =>
@@ -339,13 +361,32 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     options.computeUnitPrice === undefined
       ? 0n
       : (options.computeUnitPrice * BigInt(PRICED_COMPUTE_UNIT_LIMIT) + 999_999n) / 1_000_000n;
-  return {
+  async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
+    const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
+      searchTransactionHistory: true,
+    }).send()).value[0];
+    const outcome = (value: Awaited<ReturnType<typeof status>>): ListingSendOutcome => {
+      if (value?.confirmationStatus !== "confirmed" && value?.confirmationStatus !== "finalized") return "pending";
+      return value.err === null ? "landed" : "failed";
+    };
+    const first = await status();
+    const observed = outcome(first);
+    if (observed !== "pending") return observed;
+    const epoch = await rpc.getEpochInfo({ commitment: "confirmed" }).send();
+    if (epoch.blockHeight <= BigInt(receipt.lastValidBlockHeight)) return "pending";
+    // The status view can lag the height. Recheck after verified expiry.
+    const last = await status();
+    return first == null && last == null ? "failed" : outcome(last);
+  }
+  return usesScopedRequests<Chain>({
+    listingSendOutcome,
+    listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
     network: options.network,
     transferFeeLamports: BASE_FEE_LAMPORTS + priorityFee,
     clientFor(signer) {
       return revisionGatedClient(
         createMarketplaceClient({
-          rpc,
+          transport,
           signer,
           ...(options.computeUnitPrice !== undefined
             ? {
@@ -440,10 +481,11 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
+    findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>
       network(() => readSettlementFacts(rpc, task, creator, options)),
-  };
+  });
 }
 
 /** Default public endpoints. A dedicated RPC is faster and less rate-limited. */

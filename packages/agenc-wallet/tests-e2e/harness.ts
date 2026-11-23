@@ -8,13 +8,32 @@ import type { Address } from "@solana/kit";
 import { APPROVAL_FEE_LAMPORTS, approvalCost } from "../src/approval.js";
 import type { Chain } from "../src/chain.js";
 import type { EarnOptions } from "../src/earn.js";
-import { startSandbox, type HouseService, type Sandbox } from "../src/sandbox.js";
+import { startSandbox, type HouseService, type Sandbox, type StartSandboxOptions } from "../src/sandbox.js";
 import type { MarketServices } from "../src/services.js";
 import { AgencWallet, type WalletConfig } from "../src/wallet.js";
 
 /** Play money: one cent is exactly this many lamports in the sandbox. */
 export const CENT = 100_000n;
 export const SOL = 1_000_000_000n;
+
+/** Simulate the owner reviewing and approving any above-budget startup funding. */
+export async function setEarnWithApproval(wallet: AgencWallet, agentId: string, enabled: boolean, minPayCents?: number) {
+  if (enabled) {
+    const quote = await wallet.quoteEarn(agentId);
+    if (quote.requiresApproval) await wallet.approveEarnFunding(quote.quoteId);
+  }
+  return wallet.setEarn(agentId, enabled, minPayCents);
+}
+
+/** Simulate the owner approving the complete offer quote before saving the service. */
+export async function setOfferWithApproval(wallet: AgencWallet, ...args: Parameters<AgencWallet["setOffer"]>) {
+  const [agentId, offer, offerId] = args;
+  if (offer !== null) {
+    const quote = await wallet.quoteEarn(agentId, offer, offerId);
+    if (quote.requiresApproval) await wallet.approveEarnFunding(quote.quoteId);
+  }
+  return wallet.setOffer(...args);
+}
 
 export const HAIKU: HouseService = {
   name: "Haiku Writer",
@@ -39,13 +58,16 @@ export interface World {
 
 export async function startWorld(options: {
   mainLamports?: bigint;
+  transport?: StartSandboxOptions["transport"];
   earn?: EarnOptions;
+  /** Disable the fixture host self-test to exercise the configured probe. */
+  hostReady?: boolean;
   chain?: (chain: Chain) => Chain;
   /** Stand between the wallet and the marketplace's services (a faulty or dishonest one). */
   services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
   config?: Partial<WalletConfig>;
 } = {}): Promise<World> {
-  const sandbox = await startSandbox({ followWallClock: false });
+  const sandbox = await startSandbox({ followWallClock: false, ...(options.transport === undefined ? {} : { transport: options.transport }) });
   const listing = await sandbox.addService(HAIKU);
   const dataDir = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-"));
   const secret = randomBytes(32);
@@ -58,7 +80,7 @@ export async function startWorld(options: {
     services: options.services ? options.services(sandbox.services, sandbox) : sandbox.services,
     prices: sandbox.prices,
     now: () => clock.now,
-    ...(options.earn ? { earn: options.earn } : {}),
+    ...(options.earn ? { earn: { ...(options.hostReady === false ? {} : { checkExecutionReady: async () => {} }), ...options.earn } } : {}),
     ...options.config,
   };
   const wallet = await AgencWallet.open(config);

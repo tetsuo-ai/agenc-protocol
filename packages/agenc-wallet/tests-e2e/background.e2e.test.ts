@@ -100,7 +100,9 @@ describe("the wallet under a service manager", () => {
     const opened = await openBackgroundWallet({ socketPath: service.unlockSocket, unlockSecret: secret, startup: () => line });
     expect(opened).toEqual({ socket: service.walletSocket, ownerToken: line.ownerToken, unlocked: true });
     const owner = await connectWallet({ socketPath: opened.socket, token: opened.ownerToken });
-    expect((await owner.call("overview", {})).main.balance.usdCents).toBe(5_000);
+    const overview = await owner.call("overview", {});
+    expect(overview.capabilities).toEqual(["earn-finishing"]);
+    expect(overview.main.balance.usdCents).toBe(5_000);
     const agent = await owner.call("agents.create", { name: "Worker" });
     owner.close();
 
@@ -114,7 +116,9 @@ describe("the wallet under a service manager", () => {
     });
     expect(again).toEqual({ socket: service.walletSocket, ownerToken: line.ownerToken, unlocked: false });
     const back = await connectWallet({ socketPath: again.socket, token: again.ownerToken });
-    expect((await back.call("overview", {})).agents.map((entry) => entry.id)).toContain(agent.id);
+    const reconnected = await back.call("overview", {});
+    expect(reconnected.capabilities).toEqual(["earn-finishing"]);
+    expect(reconnected.agents.map((entry) => entry.id)).toContain(agent.id);
     back.close();
 
     // The secret is in no command line, environment or log of the service.

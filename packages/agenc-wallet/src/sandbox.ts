@@ -65,10 +65,12 @@ import {
   transferInstruction,
   type Chain,
 } from "./chain.js";
+import { scopedSendTransport, transportSignal } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
+import { settledDeliveryFromLogs } from "./delivery-history.js";
 import { hiredListingFromLogs, settlementFactsFromLogs, settlementOf } from "./settlement.js";
 import {
   buildJobSpec,
@@ -264,6 +266,8 @@ export interface StartSandboxOptions {
   followWallClock?: boolean;
   /** Folder for the house providers' ledgers. Default a fresh temp folder. */
   workDir?: string;
+  /** Inject a transport fault around local execution (tests). */
+  transport?: (base: Transport) => Transport;
 }
 
 /** Boot a sandbox marketplace. */
@@ -396,13 +400,18 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return out;
     },
   };
+  // LiteSVM history is disabled so identical sandbox transactions can be replayed.
+  const landedListingSends = new Set<string>();
   const base = market.transport;
   const transport: Transport = {
     ...base,
     getLatestBlockhash: () => base.getLatestBlockhash(),
     async sendAndConfirm(signedTx) {
+      const signal = transportSignal();
+      signal?.throwIfAborted();
       syncClock();
       const result = await base.sendAndConfirm(signedTx);
+      if (signal) landedListingSends.add(result.signature);
       try {
         const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
         for (const account of message.staticAccounts) {
@@ -445,11 +454,15 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     };
   };
 
+  const sending = scopedSendTransport(options.transport?.(transport) ?? transport);
   const chain: Chain = {
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
-    clientFor: (signer) => createMarketplaceClient({ transport, signer }),
-    sendSigned: (transaction) => sendThroughTransport(transport, transaction),
+    // Local sends execute atomically; no broadcast can arrive after cancellation.
+    listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
+    listingSendSettled: async () => true,
+    clientFor: (signer) => createMarketplaceClient({ transport: sending, signer }),
+    sendSigned: (transaction) => sendThroughTransport(sending, transaction),
     readAccount: async (account) => readInfo(account)?.data ?? null,
     readRawAccount: async (account) => {
       const info = readInfo(account);
@@ -476,6 +489,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     gpa,
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
+    findSettledDelivery: async (task, creator) => {
+      const worker = settledBy.get(task);
+      const logs = settledLogs.get(task);
+      return worker === undefined || logs === undefined ? null : settledDeliveryFromLogs(logs, task, creator, worker);
+    },
     findSettlement: async (task, creator, options) => {
       const worker = settledBy.get(task);
       const logs = settledLogs.get(task);
@@ -872,6 +890,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const listingId = values.randomId32();
       const metadata = { name: service.name, summary: service.summary };
       const specHash = (await values.canonicalJobSpecHash(metadata)).bytes;
+      jobSpecs.set(values.bytesToHex(specHash), envelopeBytes(metadata, values.bytesToHex(specHash)));
       await chain.clientFor(provider.signer).createServiceListing({
         providerAgent: provider.agent,
         authority: provider.signer,

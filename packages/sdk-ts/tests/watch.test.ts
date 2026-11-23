@@ -1943,3 +1943,36 @@ describe("watchClaimableTasks: failed-sweep backoff + resilient onError (#7)", (
     }
   });
 });
+
+
+describe("idle discovery RPC budget", () => {
+  it("bounds a day of idle discovery, including the wallet's periodic refresh", async () => {
+    vi.useFakeTimers();
+    const transport = makeGpaTransport([]);
+    let watch: ReturnType<typeof watchClaimableTasks> | undefined;
+    try {
+      // Production wallet defaults: 60-second base, five-minute idle cap,
+      // fifteen-minute refresh. Execute every timer and real query path.
+      for (let run = 0; run < 96; run += 1) {
+        watch = watchClaimableTasks({
+          rpc: transport, pollIntervalMs: 60_000, maxIdlePollIntervalMs: 300_000,
+          onTask: () => {},
+        });
+        await vi.advanceTimersByTimeAsync(900_000 - 1);
+        await watch.stop();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      const weightedUnits = transport.calls * 5;
+      expect(transport.calls).toBe(1536);
+      expect(weightedUnits).toBe(7680);
+      expect(weightedUnits).toBeLessThan(10_000);
+    } finally {
+      await watch?.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an idle ceiling below the base interval", () => {
+    expect(() => watchClaimableTasks({ rpc: makeGpaTransport([]), pollIntervalMs: 100, maxIdlePollIntervalMs: 99, onTask: () => {} })).toThrow(/maxIdlePollIntervalMs/);
+  });
+});

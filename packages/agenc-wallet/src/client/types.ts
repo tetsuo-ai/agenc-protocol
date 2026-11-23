@@ -38,7 +38,31 @@ export interface AgentPolicy {
   };
 }
 
-export type EarnState = "off" | "starting" | "watching" | "working" | "error";
+/** "finishing" takes no new jobs while an existing job still needs the agent. */
+export type EarnState = "off" | "starting" | "watching" | "working" | "finishing" | "error";
+
+/** Readonly upper bound for enabling earning and preparing the agent's offers. */
+export interface EarnFundingQuote {
+  quoteId: string;
+  agentId: string;
+  expiresAt: number;
+  /** Fixed SOL price to use in earn.offer when the input was in dollars. */
+  offerPrice: Money | null;
+  registration: Money;
+  listings: Money;
+  checks: Money;
+  workingReserve: Money;
+  networkReserve: Money;
+  agentBalance: Money;
+  /** Total required in the agent wallet, including money already there. */
+  requiredBalance: Money;
+  fromMain: Money;
+  transferFee: Money;
+  /** fromMain + transferFee. This is the most approval can move. */
+  totalFromMain: Money;
+  dailyRemaining: Money;
+  requiresApproval: boolean;
+}
 
 /**
  * Where a service the agent offers stands.
@@ -160,7 +184,18 @@ export interface AgentView {
   createdAt: number;
 }
 
+/** Capabilities advertised by this service on every overview. */
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing"] as const);
+
 export interface WalletOverview {
+  /**
+   * Supported service contracts, present on every overview. Currently:
+   * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
+   *   the agent takes no new job. While its job is still in progress,
+   *   `earn.state` is "finishing", never "off".
+   * Clients may ignore this field and any capability they do not recognize.
+   */
+  capabilities: string[];
   network: WalletNetwork;
   /**
    * The main balance. Money is added here and handed out to agents. `spent`
@@ -334,7 +369,9 @@ export type JobStatus =
 export interface JobResult {
   /** The delivered text, when it could be fetched and is text. */
   text: string | null;
-  /** Where the delivery lives, when the provider published a link. */
+  /** True when text is a preview. Read jobs.delivery for the complete text. */
+  textTruncated?: boolean;
+  /** Original artifact link. Hosts should show it even when text is present. */
   uri: string | null;
   /** sha-256 of the delivery, as recorded with the job. */
   hash: string | null;
@@ -348,6 +385,8 @@ export interface JobResult {
 }
 
 export interface JobView {
+  /** List evidence was shortened or omitted. Use jobs.get/jobs.delivery for details. */
+  previewTruncated?: boolean;
   id: string;
   /** "buying": this agent is paying. "working": this agent is doing the job. */
   role: "buying" | "working";
@@ -363,6 +402,8 @@ export interface JobView {
   title: string;
   /** What was asked for. */
   request: string;
+  /** The buyer's criteria for accepting the work. */
+  acceptance: string[];
   price: Money;
   status: JobStatus;
   /** One plain sentence describing `status`. */
@@ -495,6 +536,7 @@ export type WalletErrorCode =
   | "BAD_REQUEST"
   | "NOT_ALLOWED"
   | "NOT_ENOUGH_MONEY"
+  | "APPROVAL_REQUIRED"
   | "PRICE_CHANGED"
   | "NOT_AVAILABLE"
   | "NEEDS_APPROVAL"

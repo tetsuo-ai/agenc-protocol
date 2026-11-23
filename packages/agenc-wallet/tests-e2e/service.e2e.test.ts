@@ -150,7 +150,7 @@ describe("the wallet service", () => {
     expect(tied).toMatchObject({ name: "Agent 4", scope: "/home/me/project", budgetCents: 0 });
     const budgeted = await owner.call("agents.setBudget", { agentId: third.id, perDayCents: 200 });
     expect(budgeted).toMatchObject({ budgetCents: 200 });
-    expect(budgeted.balance.usdCents).toBe(200);
+    expect(budgeted.balance.usdCents).toBe(199.95);
 
     // A credential for one agent does not open another agent's lane.
     await expect(

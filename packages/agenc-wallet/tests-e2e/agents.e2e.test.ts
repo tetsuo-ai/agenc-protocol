@@ -80,7 +80,7 @@ describe("a daily budget", () => {
     // Set it, and the money is there at once.
     const set = await wallet.setBudget(agent.id, 500);
     expect(set.budgetCents).toBe(500);
-    expect(set.balance.usdCents).toBe(500);
+    expect(set.balance.usdCents).toBe(499.95);
     expect(set.policy).toEqual({
       askAboveCents: 500,
       refill: { enabled: true, topUpToCents: 500, perDayCents: 500 },

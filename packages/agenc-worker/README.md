@@ -385,3 +385,60 @@ against malformed canonical accounts.
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+
+### Settlement consumer recovery
+
+`settlement.observed` uses a durable pending flag in each submission record.
+It can replay after a crash, even when there are no unsettled submissions left.
+A consumer of `WorkerContext.log` must persist synchronously before returning
+and deduplicate this event by task. Throwing leaves the event pending. The wallet
+host applies the credit and its task receipt in one atomic journal write.
+Pending events are never removed by settled-record retention.
+
+Complete `JobEvidence = { request: string; acceptance: string[] }` is written to
+private content-addressed files before the hot journal stores a bounded
+`jobEvidenceRef`. `readJobEvidence(stateDir, entry)` loads and verifies it on
+demand. Legacy inline evidence is archived on the next save. Unsettled work and
+pending settlement events remain in the journal; large request histories no
+longer consume its 16 MiB budget. Archive files are retained independently of hot
+record retention. Older strict readers cannot read these new optional fields.
+
+Hosts may provide `WorkerContext.modelBudgetForTask(task, address)` to fix a
+whole-task authorization in cents before claiming. `OpenClaim.modelBudget` and
+`SubmissionRecord.modelBudget` persist the total and remaining cents across
+recovery and revisions. The runtime reserves remaining cents durably before
+calling `executorForTask(task, address, reservedCents)` and starting work. The
+wallet uses this hook for `{pay}`. There is no trusted host usage receipt yet,
+so a reservation is not refunded after success, failure, timeout or interruption.
+Unknown legacy spend and exhausted budgets prevent automatic re-execution;
+upload/submission retries still use saved output.
+
+### Host readiness and service context
+
+Embedders can set `WorkerContext.checkExecutionReady` with this shape:
+
+```ts
+(input: { task: Address; signal?: AbortSignal }) => Promise<void>
+```
+
+Resolve only after the host's job room is available and its self-test passes.
+Reject to defer the candidate. The hook runs before every fresh claim, before
+its journal write or transaction. It receives no buyer content. A stopped
+watch aborts this check without interrupting an already running executor.
+Readiness failures emit `task.execution-not-ready` and return a skipped outcome
+with `retryable: true`. The long-running loop retries deferred work using
+canonical task reads. Existing claim recovery and settlement remain available.
+
+Hired jobs now fetch the advertised listing payload and verify it against the
+listing hash frozen in the task. The executor receives it in a separate
+`UNTRUSTED ADVERTISED SERVICE` section. The buyer request remains in
+`UNTRUSTED JOB SPEC`. Both are data. Updated listings use the original content
+address through `resolveAgencUri`; unavailable or mismatched metadata fails
+closed. This also applies to resumed claims and revision attempts.
+
+`WorkerRuntimeConfig.maxIdlePollIntervalMs?: number` opts discovery into idle
+backoff. It must be at least `pollIntervalMs`. Omitting it preserves the fixed
+cadence for existing worker embedders. The wallet sets a five-minute ceiling.
+The worker supplies its scan transport as the SDK's `indexer` read source so a
+full RPC object cannot silently enable separate signature polling.

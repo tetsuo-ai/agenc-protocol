@@ -1,3 +1,4 @@
+import { setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // "Stop earning for good": an agent that took jobs locked a deposit with the
 // marketplace when it registered. Retiring it there brings that deposit back,
 // to the lamport, once its services are off the marketplace for good. It is
@@ -73,8 +74,8 @@ describe("stopping an agent's earning for good", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const provider = await providerOf(world, live.earn.offers[0]!);
     const before = (await readAgent(sandbox.chain, provider))!;
@@ -99,11 +100,11 @@ describe("stopping an agent's earning for good", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
-    await wallet.setOffer(worker.id, HAIKU);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
+    await setOfferWithApproval(wallet, worker.id, HAIKU);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     const paused = await servicesReach(world, worker.id, (offer) => offer.status === "paused");
     expect(await listingStates(world, paused.earn.offers)).toEqual([PAUSED, PAUSED]);
 
@@ -164,12 +165,12 @@ describe("stopping an agent's earning for good", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const { job } = await wallet.hire({ agentId: buyer.id, listing: live.earn.offers[0]!.listing!, request: "A line about tea." });
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     await servicesReach(world, worker.id, (offer) => offer.status === "paused");
 
     const provider = await providerOf(world, live.earn.offers[0]!);
@@ -203,12 +204,12 @@ describe("stopping an agent's earning for good", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const { job } = await wallet.hire({ agentId: buyer.id, listing: live.earn.offers[0]!.listing!, request: "A line about tea." });
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "waiting", 30_000);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
 
     const provider = await providerOf(world, live.earn.offers[0]!);
     const stake = (await readAgent(sandbox.chain, provider))!.stake;
@@ -227,10 +228,10 @@ describe("stopping an agent's earning for good", () => {
     expect(view.earn.offers[0]!.wanted).toBe(true);
 
     // As it says: with Earns on the hire is done and paid, and then it can stop.
-    await wallet.setEarn(worker.id, true, 10);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
     await wallet.approveJob(job.id, undefined, true);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     const retired = await wallet.retireAgent(worker.id);
     expect(retired.earn).toMatchObject({ retired: true, jobsDone: 1 });
     expect(await listingStates(world, live.earn.offers)).toEqual([RETIRED]);
@@ -243,25 +244,25 @@ describe("stopping an agent's earning for good", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const { job } = await wallet.hire({ agentId: buyer.id, listing: live.earn.offers[0]!.listing!, request: "A line about tea." });
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "waiting", 30_000);
     // The person takes the service off offer, then switches Earns off.
-    await wallet.setOffer(worker.id, null, live.earn.offers[0]!.id);
-    await wallet.setEarn(worker.id, false);
+    await setOfferWithApproval(wallet, worker.id, null, live.earn.offers[0]!.id);
+    await setEarnWithApproval(wallet, worker.id, false);
     await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
 
     // A stranger's job paying more than the hire but less than the smallest pay.
     const stranger = await world.sandbox.postOpenJob({ title: "A line", instructions: "Write one line.", rewardLamports: 40n * CENT });
     // Earns on with a smallest pay above the service's price: the hire it owes is still done.
-    await wallet.setEarn(worker.id, true, 50);
+    await setEarnWithApproval(wallet, worker.id, true, 50);
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
     // The smallest pay still holds for every other job.
     expect(Number((await readTask(world.sandbox.chain, stranger.task))!.status)).toBe(TaskStatus.Open);
     await wallet.approveJob(job.id, undefined, true);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     expect((await wallet.retireAgent(worker.id)).earn.retired).toBe(true);
   }, 180_000);
 
@@ -272,12 +273,12 @@ describe("stopping an agent's earning for good", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const { job } = await wallet.hire({ agentId: buyer.id, listing: live.earn.offers[0]!.listing!, request: "A line about tea." });
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "waiting", 30_000);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     await expect(wallet.retireAgent(worker.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
 
     // Nobody can do it once its time is over (its buyer gets the price back).
@@ -291,13 +292,13 @@ describe("stopping an agent's earning for good", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox, clock } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({ title: "Write a line", instructions: "Write one friendly line.", rewardLamports: 50n * CENT });
     await eventually(async () => {
       const jobs = await wallet.listJobs({ role: "working" }, true);
       return jobs.some((entry) => entry.task === open.task && entry.status === "delivered");
     }, 30_000);
-    await wallet.setEarn(agent.id, false);
+    await setEarnWithApproval(wallet, agent.id, false);
 
     // The buyer never looks at it, and Earns is off: nothing else would collect it.
     await expect(wallet.retireAgent(agent.id)).rejects.toMatchObject({
@@ -316,14 +317,14 @@ describe("stopping an agent's earning for good", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox, dataDir } = world;
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const provider = await providerOf(world, live.earn.offers[0]!);
     // Records from while it earned, with its service wanted on offer.
     const journal = path.join(dataDir, "state.json");
     const beforeStopping = readFileSync(journal);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     await wallet.retireAgent(worker.id);
     await wallet.close();
     writeFileSync(journal, beforeStopping);

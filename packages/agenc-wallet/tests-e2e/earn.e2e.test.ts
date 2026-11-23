@@ -1,7 +1,8 @@
+import { setEarnWithApproval } from "./harness.js";
 // "Take jobs while idle": the stock worker loop runs for an agent, signs with
 // the agent's own wallet, delivers a public job, and the pay shows up.
 import { values } from "@tetsuo-ai/marketplace-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CENT, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
@@ -11,6 +12,45 @@ afterEach(async () => {
 });
 
 describe("earning", () => {
+  it.each(["missing", "failed", "passing"])("checks the host probe before claiming (%s)", async (mode) => {
+    const claim = vi.fn();
+    world = await startWorld({
+      hostReady: false,
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
+          mode: "sandboxed", envAllowlist: [], timeoutMs: 30_000,
+          ...(mode === "missing" ? {} : { readiness: {
+            // A probe receives exactly its argv. Buyer text is never appended.
+            argv: [process.execPath, "-e", mode === "passing" ? "process.exit(process.argv.length === 1 ? 0 : 9)" : "process.exit(3)"],
+            timeoutMs: 1_000,
+          } }),
+        },
+        pollIntervalMs: 100,
+      },
+      chain: (base) => ({ ...base, clientFor: (signer) => {
+        const client = base.clientFor(signer);
+        return new Proxy(client, { get(target, key) {
+          if (key === "claimTaskWithJobSpec") return (...args: Parameters<typeof client.claimTaskWithJobSpec>) => {
+            claim(); return target.claimTaskWithJobSpec(...args);
+          };
+          return Reflect.get(target, key);
+        } });
+      } }),
+    });
+    const agent = await world.wallet.createAgent("Seller");
+    await setEarnWithApproval(world.wallet, agent.id, true, 10);
+    await world.sandbox.postOpenJob({ title: "Job", instructions: "Untrusted buyer words", rewardLamports: 50n * CENT });
+    if (mode === "passing") {
+      await eventually(async () => world!.sandbox.deliveries.size === 1);
+      expect(claim).toHaveBeenCalledOnce();
+    } else {
+      await eventually(async () => (await world!.wallet.overview()).agents[0]!.earn.state === "error");
+      expect(claim).not.toHaveBeenCalled();
+      expect(world.sandbox.deliveries.size).toBe(0);
+    }
+  }, 30_000);
+
   it("is refused on a host that cannot run jobs", async () => {
     world = await startWorld();
     const agent = await world.wallet.createAgent("My assistant");
@@ -35,7 +75,7 @@ describe("earning", () => {
     const agent = await wallet.createAgent("My assistant");
     const mainBefore = await world.balance(wallet.mainAddress);
 
-    const switchedOn = await wallet.setEarn(agent.id, true, 10);
+    const switchedOn = await setEarnWithApproval(wallet, agent.id, true, 10);
     expect(switchedOn.earn.enabled).toBe(true);
     // Switching on set aside what registering on the marketplace needs.
     expect(mainBefore - (await world.balance(wallet.mainAddress))).toBeGreaterThan(10_000_000n);
@@ -67,7 +107,7 @@ describe("earning", () => {
     expect(paid.earn.setAside.lamports).toBe("10000000");
     expect((await wallet.listActivity()).map((entry) => entry.kind)).toContain("earned");
 
-    const off = await wallet.setEarn(agent.id, false);
+    const off = await setEarnWithApproval(wallet, agent.id, false);
     expect(off.earn.enabled).toBe(false);
     expect(off.earn.state).toBe("off");
   }, 90_000);
@@ -86,17 +126,17 @@ describe("earning", () => {
     });
     const { wallet } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     // The worker registers on its first pass.
     await eventually(async () => (await wallet.overview()).agents[0]!.earn.setAside.lamports === "10000000", 30_000);
-    await wallet.setEarn(agent.id, false);
+    await setEarnWithApproval(wallet, agent.id, false);
 
     // Its deposit is locked already; taking jobs again needs only what a job
     // needs. At most a little for fees moves from the balance, never another
     // deposit (before, it moved the deposit and the registration's rent again).
     const main = await world.balance(wallet.mainAddress);
     const seen = (await wallet.listActivity(500)).length;
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const moved = main - (await world.balance(wallet.mainAddress));
     expect(moved).toBeLessThan(100_000n);
     const since = (await wallet.listActivity(500)).slice(0, -seen || undefined).map((entry) => entry.text);
@@ -117,7 +157,7 @@ describe("earning", () => {
     });
     const { wallet, sandbox, clock } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -182,7 +222,7 @@ describe("earning", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -253,7 +293,7 @@ describe("earning", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     await wallet.fundAgent(agent.id, { usdCents: 200 });
     const open = await sandbox.postOpenJob({
       title: "Write a line",

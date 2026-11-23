@@ -313,6 +313,7 @@ export function jobView(
     agentId: job.agentId,
     title: job.title,
     request: job.request,
+    acceptance: job.acceptance,
     price,
     status,
     statusText: statusText(job, status, price, context.now, context.usdPerSol),
@@ -322,7 +323,9 @@ export function jobView(
     listing: job.listing || null,
     provider: job.providerAgent || null,
     // A delivery saved before files could come with one has no list.
-    result: job.result === null ? null : { ...job.result, files: job.result.files ?? [] },
+    // A verified earlier revision is not evidence of the paid commitment.
+    result: job.result === null || (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked)
+      ? null : { ...job.result, files: job.result.files ?? [] },
     autoApproveAt:
       status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     autoRefundAt: status === "waiting" ? job.autoRefundAt : null,

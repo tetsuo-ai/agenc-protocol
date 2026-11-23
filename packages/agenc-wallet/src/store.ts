@@ -13,6 +13,7 @@ import type {
   JobResult,
   ServiceView,
 } from "./client/types.js";
+import type { AllowanceCharge, PendingListingSend } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 
@@ -20,6 +21,8 @@ export const STATE_VERSION = 1;
 const MAX_STATE_BYTES = 32 * 1024 * 1024;
 const MAX_ACTIVITY = 1_000;
 const MAX_FINISHED_JOBS = 500;
+export const MAX_WORK_RECORD_CACHE_BYTES = 4 * 1024 * 1024;
+const MAX_WORK_RECORDS = 1_000;
 
 /**
  * A service an earning agent offers for others to hire.
@@ -55,8 +58,8 @@ export interface OfferRecord {
   /** False once the person withdrew the offer; the listing is then kept paused. */
   wanted: boolean;
   /** What the last housekeeping pass found. */
-  status: "getting_ready" | "being_checked" | "live" | "paused" | "problem";
-  /** A plain sentence when `status` is "problem". */
+  status: "getting_ready" | "being_checked" | "live" | "paused" | "problem" | "awaiting_approval";
+  /** The reason for a problem or a funding approval request. */
   error: string | null;
   /** When the marketplace's safety check was last asked, to space out retries. */
   lastCheckAt: number | null;
@@ -70,6 +73,8 @@ export interface OfferRecord {
    * payment that may still be on its way is not made a second time.
    */
   approvalAttemptAt?: number | null;
+  /** Completed intent during an interrupted pass. Cleared after the full pass. */
+  reconciledForLive?: boolean;
   signatures: { create?: string; update?: string; state?: string; approval?: string };
 }
 
@@ -92,11 +97,17 @@ export interface AgentRecord {
   /** Lifetime lamports earned as a provider. */
   earnedLamports: string;
   /** Automatic top-ups in the last day, for the per-day rule. */
-  refills: { ts: number; lamports: string }[];
+  refills: AllowanceCharge[];
   earn: {
     enabled: boolean;
     minPayCents: number;
+    /** Interrupted listing work must read the chain before admitting jobs. */
+    listingReconciliationRequired?: boolean;
+    /** Signed sends whose outcome is unknown, persisted before dispatch. */
+    pendingListingSends?: PendingListingSend[];
     jobsDone: number;
+    /** Idempotency receipts for replayed worker settlements. */
+    creditedTasks?: Record<string, true>;
     lastError: string | null;
     /**
      * The services this agent offers, oldest first. A journal from before an
@@ -226,9 +237,16 @@ export interface JobRecord {
   reviewDeadlineAt: number | null;
   /** Unix ms: when a job nobody started is refunded by itself. */
   autoRefundAt: number | null;
+  /** Explicit local timeout, separate from the chain-derived display timestamp. */
+  autoRefundTimeoutAt?: number;
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
+  /** Durable download pointer, retained even when a fetch fails or the job is paid. */
+  deliveryPointer?: { hash: string; dataBase64: string };
+  /** The pointer was authenticated against the final paid commitment. */
+  finalDeliveryChecked?: boolean;
+
   /**
    * Whether the provider has a marketplace record of turn-downs, read while
    * the job is delivered until it has one (a record is never removed). Since
@@ -343,6 +361,16 @@ export interface WalletState {
   createdAt: number;
   agents: Record<string, AgentRecord>;
   jobs: Record<string, JobRecord>;
+  /** Seller delivery cache and durable review-change timestamps. */
+  workRecords?: Record<string, {
+    result?: JobResult;
+    request?: string;
+    acceptance?: string[];
+    updatedAt?: number;
+    reviewDeadlineAt?: number;
+    turnDown?: JobRecord["turnDown"];
+  }>;
+
   approvals: Record<string, ApprovalRecord>;
   activity: ActivityRecord[];
   /** Last known dollars-per-SOL, kept so an offline start can still estimate. */
@@ -389,6 +417,26 @@ function isFinished(job: JobRecord): boolean {
 
 /** Keep the file bounded: old finished jobs and old activity fall off. */
 function prune(state: WalletState): void {
+  // Complete worker request evidence lives in its archive. These are disposable
+  // display caches; retain compact review metadata while a dispute is unresolved.
+  const records = state.workRecords ?? {};
+  const ordered = Object.entries(records).sort((a, b) => (a[1].updatedAt ?? 0) - (b[1].updatedAt ?? 0));
+  let size = Buffer.byteLength(JSON.stringify(records));
+  let count = ordered.length;
+  for (const [id, record] of ordered) {
+    if (size <= MAX_WORK_RECORD_CACHE_BYTES && count <= MAX_WORK_RECORDS) break;
+    const before = Buffer.byteLength(JSON.stringify({ [id]: record }));
+    if (record.turnDown !== undefined || record.reviewDeadlineAt !== undefined) {
+      delete record.result;
+      delete record.request;
+      delete record.acceptance;
+      size -= before - Buffer.byteLength(JSON.stringify({ [id]: record }));
+    } else {
+      delete records[id];
+      count -= 1;
+      size -= before - 1;
+    }
+  }
   if (state.activity.length > MAX_ACTIVITY) {
     state.activity = state.activity.slice(state.activity.length - MAX_ACTIVITY);
   }
@@ -471,6 +519,7 @@ export function acquireServiceLock(directory: string): () => void {
 export class StateStore {
   readonly #file: string;
   #state: WalletState;
+  #closed = false;
 
   private constructor(file: string, state: WalletState) {
     this.#file = file;
@@ -520,11 +569,17 @@ export class StateStore {
     return this.#state;
   }
 
+  /** Permanently fence this owner before its directory lock is released. */
+  close(): void {
+    this.#closed = true;
+  }
+
   /**
    * Apply a change and persist it before returning. The mutator works on a
    * copy; if it throws or the write fails, memory keeps the previous state.
    */
   update<T>(mutator: (draft: WalletState) => T): T {
+    if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const draft = structuredClone(this.#state);
     const result = mutator(draft);
     prune(draft);
@@ -540,6 +595,10 @@ export class StateStore {
   }
 
   #save(): void {
-    writePrivateFileAtomic(this.#file, JSON.stringify(this.#state));
+    const serialized = JSON.stringify(this.#state);
+    if (Buffer.byteLength(serialized) > MAX_STATE_BYTES) {
+      throw new WalletError("INTERNAL", "The wallet's records exceed the storage limit.");
+    }
+    writePrivateFileAtomic(this.#file, serialized);
   }
 }

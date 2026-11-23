@@ -11,6 +11,8 @@ import { formatDuration, formatMoney, formatWait } from "./format.js";
 import { WalletClientError, type WalletClient } from "./socket-client.js";
 import type { JobView, ServiceView } from "./types.js";
 
+const MAX_MARKET_ID_LENGTH = 128;
+
 export type MarketToolName =
   | "market_find"
   | "market_hire"
@@ -79,7 +81,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
         service: {
           type: "string",
           minLength: 32,
-          maxLength: 44,
+          maxLength: MAX_MARKET_ID_LENGTH,
           description: "The service id returned by market_find.",
         },
         request: {
@@ -154,7 +156,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       type: "object",
       additionalProperties: false,
       properties: {
-        job_id: { type: "string", minLength: 1, maxLength: 64 },
+        job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
         wait: {
           type: "boolean",
           description: "Wait for the job to be delivered or to end.",
@@ -172,7 +174,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       additionalProperties: false,
       required: ["job_id", "action"],
       properties: {
-        job_id: { type: "string", minLength: 1, maxLength: 64 },
+        job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
         action: { type: "string", enum: ["approve", "ask_changes", "refund"] },
         note: {
           type: "string",
@@ -438,7 +440,7 @@ export async function runMarketTool(
     }
 
     if (name === "market_hire") {
-      const listing = text(args.service, "service", 44, true)!;
+      const listing = text(args.service, "service", MAX_MARKET_ID_LENGTH, true)!;
       const request = text(args.request, "request", 4000, true)!;
       const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd");
       const acceptance = acceptanceOf(args.acceptance);
@@ -538,7 +540,7 @@ export async function runMarketTool(
     }
 
     if (name === "market_status") {
-      const jobId = text(args.job_id, "job_id", 64, false);
+      const jobId = text(args.job_id, "job_id", MAX_MARKET_ID_LENGTH, false);
       if (jobId === undefined) {
         const { jobs } = await client.call("jobs.list", { agentId, limit: 10 }, callOptions);
         return {
@@ -564,7 +566,7 @@ export async function runMarketTool(
       return { ok: true, message: job.statusText, job: describeJob(job, now()) };
     }
 
-    const jobId = text(args.job_id, "job_id", 64, true)!;
+    const jobId = text(args.job_id, "job_id", MAX_MARKET_ID_LENGTH, true)!;
     const action = args.action;
     if (action === "approve") {
       const rating =

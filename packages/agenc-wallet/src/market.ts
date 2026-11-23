@@ -7,6 +7,7 @@
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
+import { withListingOperation } from "./transport-scope.js";
 import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -1505,10 +1506,9 @@ export interface ListingOffer {
 }
 
 /**
- * Create the listing. Hires are not capped: the marketplace only lowers a
- * listing's open-job count when a buyer tidies the finished job, so a cap
- * would let one buyer who never tidies block every later hire. The worker
- * still takes one job at a time.
+ * Admit one open hire per listing. The program enforces this atomically,
+ * including concurrent buyers. close_task frees the slot after settlement.
+ * A delayed close conservatively keeps the service busy.
  */
 export async function sendCreateListing(
   chain: Chain,
@@ -1528,7 +1528,7 @@ export async function sendCreateListing(
     priceMint: null,
     requiredCapabilities: 1n,
     defaultDeadlineSecs: BigInt(offer.deliverySecs),
-    maxOpenJobs: 0,
+    maxOpenJobs: 1,
     operator: null,
     operatorFeeBps: 0,
   });
@@ -1546,24 +1546,26 @@ export async function sendUpdateListing(
     spec: { hash: Uint8Array; uri: string } | null;
   },
 ): Promise<string> {
-  const result = await chain.clientFor(provider).send([
-    await facade.updateServiceListing({
-      listing: input.listing,
-      providerAgent: input.providerAgent,
-      authority: provider,
-      price: input.priceLamports,
-      ...(input.spec === null
-        ? { specHash: null, specUri: null }
-        : { specHash: input.spec.hash, specUri: input.spec.uri }),
-      tags: null,
-      requiredCapabilities: null,
-      defaultDeadlineSecs: null,
-      maxOpenJobs: null,
-      operator: null,
-      operatorFeeBps: null,
-    }),
-  ]);
-  return result.signature;
+  return withListingOperation({ kind: "update", listings: [input.listing], lamports: "0" }, async () => {
+    const result = await chain.clientFor(provider).send([
+      await facade.updateServiceListing({
+        listing: input.listing,
+        providerAgent: input.providerAgent,
+        authority: provider,
+        price: input.priceLamports,
+        ...(input.spec === null
+          ? { specHash: null, specUri: null }
+          : { specHash: input.spec.hash, specUri: input.spec.uri }),
+        tags: null,
+        requiredCapabilities: null,
+        defaultDeadlineSecs: null,
+        maxOpenJobs: 1,
+        operator: null,
+        operatorFeeBps: null,
+      }),
+    ]);
+    return result.signature;
+  });
 }
 
 /**
@@ -1575,15 +1577,8 @@ export async function sendListingState(
   provider: KeyPairSigner,
   input: { listing: Address; providerAgent: Address; state: "Active" | "Paused" | "Retired" },
 ): Promise<string> {
-  const result = await chain.clientFor(provider).send([
-    await facade.setServiceListingState({
-      listing: input.listing,
-      authority: provider,
-      providerAgent: input.providerAgent,
-      state: input.state,
-    }),
-  ]);
-  return result.signature;
+  const sent = await sendListingStates(chain, provider, input.providerAgent, [input.listing], input.state);
+  return sent.get(input.listing)!;
 }
 
 /**
@@ -1611,7 +1606,8 @@ export async function sendListingStates(
     const instructions = await Promise.all(
       batch.map((listing) => facade.setServiceListingState({ listing, authority: provider, providerAgent, state })),
     );
-    const { signature } = await chain.clientFor(provider).send(instructions);
+    const signature = await withListingOperation({ kind: "state", state, listings: batch, lamports: "0" },
+      async () => (await chain.clientFor(provider).send(instructions)).signature);
     for (const listing of batch) sent.set(listing, signature);
   }
   return sent;

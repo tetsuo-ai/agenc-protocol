@@ -155,6 +155,9 @@ function handlers(wallet: AgencWallet): Handlers {
     "jobs.get": async (params, session) => ({
       job: await wallet.getJob(text(params.jobId, "job"), owner(session), scope(session)),
     }),
+    "jobs.delivery": async (params, session) => ({
+      result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session)),
+    }),
     "jobs.file": async (params) => ({
       file: await wallet.jobFile(text(params.jobId, "job"), text(params.sha256, "file")),
     }),
@@ -199,6 +202,8 @@ function handlers(wallet: AgencWallet): Handlers {
     "activity.list": async (params) => ({ activity: await wallet.listActivity(params.limit) }),
     "earn.set": (params) =>
       wallet.setEarn(text(params.agentId, "agent"), params.enabled === true, params.minPayCents),
+    "earn.quote": (params) => wallet.quoteEarn(text(params.agentId, "agent"), params.offer, params.offerId),
+    "earn.approveFunding": (params) => wallet.approveEarnFunding(text(params.quoteId, "quote")),
     "earn.offer": (params) =>
       wallet.setOffer(
         text(params.agentId, "agent"),

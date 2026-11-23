@@ -62,6 +62,7 @@ const KNOWN_CODES: readonly WalletErrorCode[] = [
   "PRICE_CHANGED",
   "NOT_AVAILABLE",
   "NEEDS_APPROVAL",
+  "APPROVAL_REQUIRED",
   "NETWORK",
   "BUSY",
   "INTERNAL",
