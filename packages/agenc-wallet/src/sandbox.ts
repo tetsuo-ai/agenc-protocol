@@ -5,9 +5,9 @@
 //
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
-import { readFileSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import { fileURLToPath } from "node:url";
+import lighthouseFixture from "../testing-assets/lighthouse.so.json";
 import { LIGHTHOUSE } from "./contest-assertions.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -293,8 +293,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     unixTimestamp: BigInt(Math.floor(Date.now() / 1000)),
   });
   const svm = market.svm;
-  const dir = typeof __dirname === "string" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-  svm.addProgram(LIGHTHOUSE, gunzipSync(readFileSync(path.resolve(dir, "../testing-assets/lighthouse.so.gz"))));
+  svm.addProgram(LIGHTHOUSE, gunzipSync(Buffer.from(lighthouseFixture.gzipBase64, "base64")));
   // litesvm keeps one blockhash and refuses a byte-identical repeat, so the
   // second "give $5" would be dropped as a duplicate. Expiring the blockhash
   // after each send would fix that but break any sender who had already
