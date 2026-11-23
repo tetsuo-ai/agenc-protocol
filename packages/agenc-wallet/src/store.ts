@@ -99,6 +99,7 @@ export interface AgentRecord {
   /** Automatic top-ups in the last day, for the per-day rule. */
   refills: AllowanceCharge[];
   earn: {
+    chooseOpenJobs?: boolean;
     enabled: boolean;
     minPayCents: number;
     /** Interrupted listing work must read the chain before admitting jobs. */

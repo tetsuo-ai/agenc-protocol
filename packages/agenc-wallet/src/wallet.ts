@@ -18,7 +18,9 @@ import {
   taskThread,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
+import { workerJob, workAddress } from "./worker-jobs.js";
+import type { WorkerQuote, WorkAction } from "./client/types.js";
+import { browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
@@ -577,6 +579,7 @@ export class AgencWallet {
   #closing = false;
   /** Agents being stopped earning for good right now. */
   readonly #retiring = new Set<string>();
+  readonly #workQuotes = new Map<string, { quote: WorkerQuote; terms: string }>();
   readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; target: bigint }>();
   /**
    * An agent's waiting hires, found when stopping it for good was refused for
@@ -1014,6 +1017,7 @@ export class AgencWallet {
       policy: agent.policy,
       earn: {
         enabled: agent.earn.enabled && !retired,
+        ...(this.#earn.chosenRoom && { chooseOpenJobs: agent.earn.chooseOpenJobs === true }),
         state: agent.earn.enabled && !retired
           ? earn.state
           : this.#earn.hasUnfinishedJob(agent.id) ? "finishing" : "off",
@@ -4001,6 +4005,119 @@ export class AgencWallet {
 
   // --------------------------------------------------------------- earn
 
+  chooseWork(agentId: string, manual: boolean) {
+    this.#agentRecord(agentId);
+    if (!this.#earn.chosenRoom || typeof manual !== "boolean")
+      throw new WalletError("NOT_AVAILABLE", "Choosing jobs needs an enabled job room.");
+    this.#store.update((draft) => { draft.agents[agentId]!.earn.chooseOpenJobs = manual; });
+    this.#emit({ type: "overview" });
+    return { manual };
+  }
+
+  async #workRate() {
+    const rate = await this.#freshRate();
+    if (rate === null) throw new WalletError("NETWORK", "A current dollar price is needed for this job.");
+    return rate;
+  }
+
+  #workLane(agentId: string) {
+    if (!this.#agentRecord(agentId).earn.enabled || this.#closed || this.#closing)
+      throw new WalletError("NOT_ALLOWED", "Turn on Earns for this agent to choose work.");
+    return this.#earn.workerLane(agentId);
+  }
+
+  async openWork(agentId: string, offset = 0, task?: string) {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new WalletError("BAD_REQUEST", "That page is not available.");
+    const target = task === undefined ? undefined : workAddress(task);
+    const dispatch = this.#workLane(agentId);
+    const rate = await this.#workRate();
+    return dispatch(async (ctx, agent) => {
+      const held = await heldWork(ctx, agent);
+      const page = held ? { jobs: [], next: null } : await browseOpenWork(ctx, agent, offset, target);
+      const view = (job: OpenWork | HeldWork) => workerJob(job, rate, this.#chain.transferFeeLamports);
+      return { jobs: page.jobs.map(view), next: page.next, held: held ? view(held) : null };
+    });
+  }
+
+  pendingWork() {
+    for (const [id, { quote }] of this.#workQuotes) {
+      if (quote.expiresAt <= this.#now()) this.#workQuotes.delete(id);
+    }
+    return [...this.#workQuotes.values()].map(({ quote }) => quote);
+  }
+
+  async quoteWork(agentId: string, task: string, action: WorkAction) {
+    const target = workAddress(task);
+    if (action !== "claim" && action !== "submit" && action !== "release")
+      throw new WalletError("BAD_REQUEST", "Choose a worker action.");
+    const dispatch = this.#workLane(agentId);
+    const rate = await this.#workRate();
+    return dispatch(async (ctx, agent) => {
+      const job = action === "claim" ? (await browseOpenWork(ctx, agent, 0, target)).jobs[0] : await heldWork(ctx, agent);
+      if (job?.task !== task || (action === "release" && !("canRelease" in job && job.canRelease)) ||
+        (action === "submit" && !("canSubmit" in job && job.canSubmit)))
+        throw new WalletError("NOT_ALLOWED", "This job is no longer available for that action.");
+      const view = workerJob(job, rate, this.#chain.transferFeeLamports);
+      const charge = "specHash" in job ? BigInt(job.deposit) + BigInt(job.rent) + BigInt(job.recordRent) + BigInt(view.feeReserve.lamports)
+        : this.#chain.transferFeeLamports;
+      const quote: WorkerQuote = {
+        id: newId("work"), agentId, action, job: view,
+        charge: money(charge, rate), dailyRemaining: money(this.#dailyRoom(this.#agentRecord(agentId), rate), rate),
+        expiresAt: this.#now() + 5 * 60_000,
+      };
+      const terms = JSON.stringify(job);
+      for (const pending of this.pendingWork()) {
+        if (pending.agentId === agentId && pending.action === action && pending.job.task === task) {
+          if (this.#workQuotes.get(pending.id)?.terms === terms && pending.charge.usdCents === quote.charge.usdCents &&
+            pending.dailyRemaining.lamports === quote.dailyRemaining.lamports) return pending;
+          this.#workQuotes.delete(pending.id);
+        }
+      }
+      if (this.#workQuotes.size >= 24) throw new WalletError("NOT_ALLOWED", "Too many job requests are waiting.");
+      this.#workQuotes.set(quote.id, { quote, terms });
+      this.#emit({ type: "overview" });
+      return quote;
+    });
+  }
+
+  async decideWork(id: string, approve: boolean) {
+    const entry = this.#workQuotes.get(id);
+    this.#workQuotes.delete(id);
+    this.#emit({ type: "overview" });
+    if (!entry || entry.quote.expiresAt <= this.#now()) throw new WalletError("NOT_ALLOWED", "That job quote has expired.");
+    if (!approve) return { approved: false };
+    const { agentId, action, job, charge } = entry.quote;
+    const task = workAddress(job.task);
+    const dispatch = this.#workLane(agentId);
+    await dispatch(async (ctx, agent, signal) => {
+      const authorize = async (current: OpenWork | HeldWork) => {
+        const rate = await this.#workRate();
+        this.#workLane(agentId);
+        signal.throwIfAborted();
+        if (JSON.stringify(current) !== entry.terms || this.#now() >= entry.quote.expiresAt ||
+          money(charge.lamports, rate).usdCents !== charge.usdCents)
+          throw new WalletError("NOT_ALLOWED", "The job or its quote changed. Review a new quote.");
+        const amount = BigInt(charge.lamports);
+        if (amount > this.#dailyRoom(this.#agentRecord(agentId), rate))
+          throw new WalletError("NOT_ALLOWED", "This job exceeds the agent's remaining daily allowance.");
+        // Reserve synchronously before the worker writes its broadcast intent.
+        const micros = (amount * BigInt(Math.ceil(rate * 1_000_000)) + 9_999_999n) / 10_000_000n;
+        this.#store.update((draft) => this.#reserveCharge(draft.agents[agentId]!, {
+          id, lamports: charge.lamports, usdCents: Number(micros) / 1_000_000, ts: this.#now(),
+        }));
+      };
+      try {
+        if (action === "claim") await takeOpenWork(ctx, agent, signal, task, authorize);
+        else await finishChosenWork(ctx, agent, signal, task, action, authorize);
+      } catch (error) {
+        if (error instanceof WalletError) throw error;
+        throw new WalletError("NOT_AVAILABLE", "The worker could not confirm this action. Refresh the jobs before trying again.", { cause: error });
+      }
+    });
+    this.#emit({ type: "overview" });
+    return { approved: true };
+  }
+
   #checkOfferPrice(price: bigint): void {
     if (price < MIN_OFFER_PRICE_LAMPORTS) throw new WalletError("BAD_REQUEST", "That price is too low to offer.");
     const maximum = maximumOfferPrice(this.#config.earn ?? { executor: null });
@@ -4240,6 +4357,7 @@ export class AgencWallet {
         agentId: agent.id,
         signer,
         minRewardLamports,
+        chooseOpenJobs: () => this.#agentRecord(agent.id).earn.chooseOpenJobs === true,
         reconcileBeforeOpenJobs: agentOffers(current).some((offer) => offer.wanted && offer.listed),
         ...(owed !== undefined ? { owed } : {}),
         solUsd: () => this.#freshRate(),
@@ -5364,6 +5482,7 @@ function earnFailureWords(failure: EarnedJob["failure"] & object): string {
   switch (failure.cause) {
     case "expired":
       return "the time to deliver ran out";
+    case "released": return "the agent gave the job back";
     case "cancelled":
       return "the buyer cancelled it first";
     case "attempts":
@@ -5376,6 +5495,7 @@ function earnFailureSentence(failure: EarnedJob["failure"] & object): string {
   switch (failure.cause) {
     case "expired":
       return "Your agent ran out of time to deliver this job.";
+    case "released": return "Your agent gave this job back.";
     case "cancelled":
       return "The buyer cancelled this job before your agent delivered it.";
     case "attempts":

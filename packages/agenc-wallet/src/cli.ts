@@ -100,6 +100,8 @@ interface Bootstrap {
     maxRewardLamports?: string | null;
     /** Take jobs only from this wallet's own addresses. */
     ownJobsOnly?: boolean;
+    /** Path of Desktop's non-secret earning preference, supplied only at bootstrap. */
+    chosenRoomSetting?: string;
   } | null;
   hosted?: {
     siteUrl?: string;
@@ -201,6 +203,7 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
     throw new WalletError("BAD_REQUEST", "The readiness self-test needs an argv list and a timeout of at most 120 seconds.");
   }
   const maxReward = bootstrap.earn?.maxRewardLamports;
+  const chosenRoomSetting = bootstrap.earn?.chosenRoomSetting;
   return {
     executor: {
       argv: executor.argv,
@@ -212,6 +215,12 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
     ...(maxReward === undefined
       ? {}
       : { maxRewardLamports: maxReward === null ? null : BigInt(maxReward) }),
+    ...(typeof chosenRoomSetting === "string" && path.isAbsolute(chosenRoomSetting)
+      ? { chosenRoomEnabled: () => {
+        try {
+          return JSON.parse(readFileSync(chosenRoomSetting, "utf8"))?.takeJobsFromOthers === true;
+        } catch { return false; }
+      } } : {}),
     ...(bootstrap.earn?.ownJobsOnly === true ? { ownJobsOnly: true } : {}),
   };
 }

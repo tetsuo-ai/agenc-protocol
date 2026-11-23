@@ -18,6 +18,17 @@ import type {
 export type AmountInput = { usdCents: number } | { lamports: string };
 
 export interface WalletMethods {
+  "work.list": {
+    params: { agentId: string; offset?: number; task?: string };
+    result: { jobs: import("./types.js").WorkerJobView[]; next: number | null; held: import("./types.js").WorkerJobView | null };
+  };
+  "work.quote": {
+    params: { agentId: string; task: string; action: import("./types.js").WorkAction };
+    result: import("./types.js").WorkerQuote;
+  };
+  "work.pending": { params: Record<string, never>; result: import("./types.js").WorkerQuote[] };
+  "work.decide": { params: { id: string; approve: boolean }; result: { approved: boolean } };
+  "work.choose": { params: { agentId: string; manual: boolean }; result: { manual: boolean } };
   /**
    * Balances, agents, counts and service `capabilities` on every response.
    * "earn-finishing" means disabling earning replies once the agent takes
@@ -253,6 +264,8 @@ export type MethodResult<M extends WalletMethod> = WalletMethods[M]["result"];
  * wallets, change its own rules, approve its own request, or withdraw.
  */
 export const AGENT_METHODS: readonly WalletMethod[] = [
+  "work.list",
+  "work.quote",
   "market.find",
   "market.hire",
   "market.post",

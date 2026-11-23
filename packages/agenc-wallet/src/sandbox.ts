@@ -158,6 +158,7 @@ export interface Sandbox {
     title: string;
     instructions: string;
     rewardLamports: bigint;
+    deadlineSeconds?: number;
   }): Promise<OpenJob>;
   /** Move the sandbox clock forward. */
   advanceClock(seconds: number): void;
@@ -969,7 +970,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           description,
           rewardAmount: job.rewardLamports,
           maxWorkers: 1,
-          deadline: now + 3_600n,
+          deadline: now + BigInt(job.deadlineSeconds ?? 3_600),
           taskType: 0,
           constraintHash: null,
           minReputation: 0,

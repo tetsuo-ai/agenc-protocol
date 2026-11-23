@@ -93,6 +93,8 @@ export interface OfferView {
 }
 
 export interface EarnView {
+  /** Present only when the host offers an isolated room for chosen jobs. */
+  chooseOpenJobs?: boolean;
   /** The person switched earning on for this agent. */
   enabled: boolean;
   state: EarnState;
@@ -555,4 +557,42 @@ export interface WalletErrorShape {
    * needed). Absent when the service does not say.
    */
   retryable?: boolean;
+}
+
+export type WorkAction = "claim" | "submit" | "release";
+
+export interface WorkerJobView {
+  task: string;
+  title: string;
+  request: string;
+  criteria: string[];
+  reward: Money;
+  payout: Money;
+  deposit: Money;
+  deadline: number;
+  reviewSeconds: number;
+  rent: Money;
+  recordRent: Money;
+  feeReserve: Money;
+  modelBudgetCents: number | null;
+  networkFee: Money;
+  contest: boolean;
+  depositReturns: boolean | null;
+  releaseBy: number | null;
+  expiresAt: number | null;
+  resultHash: string | null;
+  resultBytes: number | null;
+  preview: string | null;
+  canSubmit: boolean;
+  canRelease: boolean;
+}
+
+export interface WorkerQuote {
+  id: string;
+  agentId: string;
+  action: WorkAction;
+  job: WorkerJobView;
+  expiresAt: number;
+  charge: Money;
+  dailyRemaining: Money;
 }

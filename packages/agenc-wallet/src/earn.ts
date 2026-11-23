@@ -34,12 +34,13 @@ import {
   type ExecutorMode,
   type UpkeepMemory,
   type WorkerAgent,
+  type WorkerDispatch,
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
-import { describeError } from "./errors.js";
+import { WalletError, describeError } from "./errors.js";
 import { readAgent } from "./market.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import type { MarketServices } from "./services.js";
@@ -77,6 +78,8 @@ export interface EarnExecutor {
 }
 
 export interface EarnOptions {
+  /** The host selected its isolated open-job room under the operator switch. */
+  chosenRoomEnabled?: () => boolean;
   /** Null when this host cannot run jobs (earning is then unavailable). */
   executor: EarnExecutor | null;
   /**
@@ -113,6 +116,7 @@ export interface EarnOptions {
 }
 
 export interface EarnAgent {
+  chooseOpenJobs?: () => boolean;
   agentId: string;
   signer: KeyPairSigner;
   /** Skip jobs that pay less than this. */
@@ -128,7 +132,7 @@ export interface EarnAgent {
 /** Why the worker gave a job up, as its ledger records it. */
 export interface EarnFailure {
   /** "attempts": it kept failing. "expired": time ran out. "cancelled": the job ended first. */
-  cause: "attempts" | "expired" | "cancelled";
+  cause: "attempts" | "expired" | "cancelled" | "released";
   /** The worker's own words (a technical line, not for a person). */
   reason: string;
   attempts: number;
@@ -182,6 +186,7 @@ export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
+  dispatch?: WorkerDispatch | null;
   recoveryOnly: boolean;
   discovering: boolean;
   firstDiscovery: Promise<void>;
@@ -509,6 +514,20 @@ export class EarnHost {
     }
   }
 
+  get chosenRoom(): boolean {
+    return this.#options.chosenRoomEnabled?.() === true && !this.ownJobsOnly &&
+      this.#options.executor?.mode === "sandboxed" &&
+      !!(this.#options.executor.readiness || this.#options.checkExecutionReady);
+  }
+
+  workerLane(agentId: string): WorkerDispatch {
+    const dispatch = this.#running.get(agentId)?.dispatch;
+    if (!this.chosenRoom || !dispatch || !this.canTakeJobs(agentId)) {
+      throw new WalletError("NOT_AVAILABLE", "Turn on Take jobs from other agents and Earns with a ready job room.");
+    }
+    return dispatch;
+  }
+
   canTakeJobs(agentId: string): boolean {
     const entry = this.#running.get(agentId);
     return entry?.discovering === true && !entry.controller.signal.aborted && entry.paused === null;
@@ -647,7 +666,7 @@ export class EarnHost {
           const cause = event.cause;
           if (
             typeof event.task === "string" &&
-            (cause === "attempts" || cause === "expired" || cause === "cancelled")
+            (cause === "attempts" || cause === "expired" || cause === "cancelled" || cause === "released")
           ) {
             this.#notify(agent.agentId, {
               type: "failed",
@@ -706,6 +725,18 @@ export class EarnHost {
 
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
+      ...(!entry.recoveryOnly && !this.ownJobsOnly && executor.mode === "sandboxed" &&
+        this.#options.chosenRoomEnabled && (executor.readiness || this.#options.checkExecutionReady) ? {
+        onWorkerReady: (dispatch: WorkerDispatch | null) => { entry.dispatch = dispatch; },
+        checkChosenRoom: async () => {
+          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          signal.throwIfAborted();
+          await checkReady(signal);
+          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          signal.throwIfAborted();
+        },
+      } : {}),
       acceptServiceHiresBelowMinReward: true,
       modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
       executorForTask: async (task, _address, reservedCents) => {
@@ -750,9 +781,11 @@ export class EarnHost {
       const endRun = (): void => run.abort();
       signal.addEventListener("abort", endRun, { once: true });
       const startedAt = Date.now();
+      const choosing = agent.chooseOpenJobs?.();
       const refresh = setInterval(
         () => {
           // An own-jobs loop also starts afresh, to learn of agents added since.
+          if (choosing !== agent.chooseOpenJobs?.()) run.abort();
           const due = this.#serves(agent.agentId) || this.ownJobsOnly;
           if (due && Date.now() - startedAt >= refreshMs) run.abort();
         },
