@@ -301,6 +301,47 @@ back when the agent delivers, and goes to the buyer if the agent never does.
 The agent's first job also starts its marketplace record (kept). The wallet
 counts both in what the agent needs before it can take jobs.
 
+A sandboxed executor must supply a job-room self-test before it may claim.
+Desktop can send this in its existing startup JSON:
+
+```json
+{
+  "earn": {
+    "executor": {
+      "argv": ["/absolute/job-room", "run", "{agent}", "{prompt}"],
+      "mode": "sandboxed",
+      "envAllowlist": [],
+      "timeoutMs": 900000,
+      "readiness": {
+        "argv": ["/absolute/job-room", "self-test", "{agent}"],
+        "timeoutMs": 30000
+      }
+    }
+  }
+}
+```
+
+`readiness.argv` is a host command, invoked without a shell or buyer text.
+It must check that the room and required runtime assets are available and
+that the room self-test passes. Exit zero means ready. A missing command,
+nonzero exit, timeout, or shutdown prevents the claim and its journal entry.
+The probe uses the executor's environment allowlist and an isolated folder.
+The default probe timeout is 30 seconds; the CLI accepts at most 120 seconds.
+`{agent}` is replaced in the probe's arguments. No prompt is appended.
+
+In-process hosts may instead set
+`EarnOptions.checkExecutionReady({ agentId, signal? }): Promise<void>`.
+Resolve only after the self-test passes; reject to defer. A readiness failure
+is retried using targeted task reads every normal poll, without a new scan.
+
+For a hire, the executor prompt now includes a separate
+`UNTRUSTED ADVERTISED SERVICE` section before `UNTRUSTED JOB SPEC`.
+It contains the canonical listing payload, including scope and deliverables,
+verified against the hash frozen in the hired task. An updated listing uses
+the original content address. Missing or changed metadata prevents a claim.
+Both sections are task data and cannot authorize tools, wallet access, or spending.
+Recovery and revision runs use the same service commitment.
+
 On its own that loop only takes open jobs anyone may claim. Hires go to a
 listed service, so an agent with nothing listed is never hired.
 
@@ -466,12 +507,33 @@ is killed outright leaves its listing up until the next start.
 Two things keep a hire from sitting unstarted, because nobody else can take
 a hire of this agent's service:
 
-- The stock watcher reports a job once. While an agent offers a service the
-  wallet starts the watch afresh every minute (`serviceRefreshMs`), so a hire
-  it could not take at first sight is looked at again.
+- The watcher reports a job once. While an agent offers a service the
+  wallet starts the watch afresh every fifteen minutes (`serviceRefreshMs`).
+  Readiness failures retry every minute without restarting the watch.
 - A job's deposits stay out until its buyer pays, which can take a day. When
   a service goes on offer the agent's wallet is given enough for four
   earlier jobs to be out at once. That money stays the agent's allowance.
+
+Each wallet listing admits one open hire (`maxOpenJobs: 1`). The program
+rejects concurrent buyers beyond this capacity. Reconciliation updates older
+unlimited listings to this cap. A slot is freed by `close_task`, not by delivery
+or payment, so a buyer who delays cleanup can keep the listing busy. Multiple
+listings can still have one hire each; the worker executes them serially.
+Unstarted hires now wait until their on-chain delivery deadline before an
+automatic refund. Hosts can explicitly set `autoRefundAfterMs` for an earlier
+refund. The chain deadline always remains an upper bound.
+
+Discovery starts at 60 seconds and doubles after quiet sweeps up to five
+minutes. New candidates reset that backoff. The worker uses only the discovery
+read source, avoiding the SDK's independent signature polling fallback.
+Housekeeping runs every minute while busy and every five minutes while idle.
+Explicit poll and housekeeping intervals still override these defaults.
+
+The local one-day test measured 1,536 program scans at five weighted units each
+and 1,829 ordinary reads: **9,509 units/day** for one seller with one live
+listing and no jobs. Discovery alone uses 7,680. This is a local timer
+simulation using the audit's RPC weights, not a live provider bill. More agents,
+listings, active jobs, and UI reads add usage; this is not an account-wide quota.
 
 An agent cannot hire its own service. Another agent of the same wallet can.
 

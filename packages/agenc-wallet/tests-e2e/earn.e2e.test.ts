@@ -2,7 +2,7 @@ import { setEarnWithApproval } from "./harness.js";
 // "Take jobs while idle": the stock worker loop runs for an agent, signs with
 // the agent's own wallet, delivers a public job, and the pay shows up.
 import { values } from "@tetsuo-ai/marketplace-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CENT, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
@@ -12,6 +12,45 @@ afterEach(async () => {
 });
 
 describe("earning", () => {
+  it.each(["missing", "failed", "passing"])("checks the host probe before claiming (%s)", async (mode) => {
+    const claim = vi.fn();
+    world = await startWorld({
+      hostReady: false,
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
+          mode: "sandboxed", envAllowlist: [], timeoutMs: 30_000,
+          ...(mode === "missing" ? {} : { readiness: {
+            // A probe receives exactly its argv. Buyer text is never appended.
+            argv: [process.execPath, "-e", mode === "passing" ? "process.exit(process.argv.length === 1 ? 0 : 9)" : "process.exit(3)"],
+            timeoutMs: 1_000,
+          } }),
+        },
+        pollIntervalMs: 100,
+      },
+      chain: (base) => ({ ...base, clientFor: (signer) => {
+        const client = base.clientFor(signer);
+        return new Proxy(client, { get(target, key) {
+          if (key === "claimTaskWithJobSpec") return (...args: Parameters<typeof client.claimTaskWithJobSpec>) => {
+            claim(); return target.claimTaskWithJobSpec(...args);
+          };
+          return Reflect.get(target, key);
+        } });
+      } }),
+    });
+    const agent = await world.wallet.createAgent("Seller");
+    await setEarnWithApproval(world.wallet, agent.id, true, 10);
+    await world.sandbox.postOpenJob({ title: "Job", instructions: "Untrusted buyer words", rewardLamports: 50n * CENT });
+    if (mode === "passing") {
+      await eventually(async () => world!.sandbox.deliveries.size === 1);
+      expect(claim).toHaveBeenCalledOnce();
+    } else {
+      await eventually(async () => (await world!.wallet.overview()).agents[0]!.earn.state === "error");
+      expect(claim).not.toHaveBeenCalled();
+      expect(world.sandbox.deliveries.size).toBe(0);
+    }
+  }, 30_000);
+
   it("is refused on a host that cannot run jobs", async () => {
     world = await startWorld();
     const agent = await world.wallet.createAgent("My assistant");

@@ -26,6 +26,7 @@ import {
   readMinAgentStake,
   registrationFundingRequirement,
   runUp,
+  runExecutor,
   runUpkeep,
   type ExecutorMode,
   type WorkerAgent,
@@ -67,6 +68,8 @@ export interface EarnExecutor {
   envAllowlist: string[];
   /** Wall-clock limit for one job. */
   timeoutMs: number;
+  /** Host self-test, run without buyer data before every claim. Exit 0 means ready. */
+  readiness?: { argv: string[]; timeoutMs?: number };
 }
 
 export interface EarnOptions {
@@ -78,6 +81,9 @@ export interface EarnOptions {
    */
   maxRewardLamports?: bigint | null;
   pollIntervalMs?: number;
+  maxIdlePollIntervalMs?: number;
+  /** In-process equivalent of executor.readiness. Throw when the job room is unavailable. */
+  checkExecutionReady?: (input: { agentId: string; signal?: AbortSignal }) => Promise<void>;
   /** Endpoint recorded with the agent's registration. */
   endpoint?: string;
   /**
@@ -91,7 +97,7 @@ export interface EarnOptions {
    * service. The stock watcher reports a job once. A hire of the agent's own
    * service that could not be taken at that moment (its wallet was short
    * while another job's deposits were out, the network hiccuped) would never
-   * be looked at again, and nobody else can take it. Default one minute.
+   * be looked at again, and nobody else can take it. Default fifteen minutes.
    */
   serviceRefreshMs?: number;
   /** Attempts a failing job gets before it is given up (worker default 3). */
@@ -165,7 +171,9 @@ export function jobPayCents(reward: bigint, rate: number | null): number {
   return cents;
 }
 const RESTART_DELAY_MS = 20_000;
-const DEFAULT_SERVICE_REFRESH_MS = 60_000;
+export const DEFAULT_SERVICE_REFRESH_MS = 15 * 60_000;
+export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
+export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
   controller: AbortController;
@@ -539,6 +547,10 @@ export class EarnHost {
         case "task.resuming-submission":
           setState("working");
           break;
+        case "task.execution-not-ready":
+          this.#log(`earn ${agent.agentId}: job room not ready: ${String(event.reason ?? "")}`);
+          setState("error", "The job room is not ready. No job was taken.");
+          break;
         case "task.execution-failed":
         case "task.claim-failed":
         case "task.upload-failed":
@@ -585,6 +597,7 @@ export class EarnHost {
           break;
         case "task.processing-error":
         case "task.job-spec-rejected":
+        case "task.service-spec-rejected":
         case "task.prompt-rejected":
           // A job it could not take. Said once, so the log explains a hire
           // that sat unstarted.
@@ -612,6 +625,21 @@ export class EarnHost {
         executorTimeoutMs: executor.timeoutMs,
       },
       log,
+      checkExecutionReady: async ({ signal }) => {
+        if (this.#options.checkExecutionReady !== undefined) {
+          await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
+        } else if (executor.readiness !== undefined) {
+          await runExecutor({
+            argv: executor.readiness.argv.map(fill),
+            timeoutMs: executor.readiness.timeoutMs ?? 30_000,
+            envAllowlist: executor.envAllowlist,
+            maxStdoutBytes: 64 * 1024,
+            ...(signal === undefined ? {} : { signal }),
+          });
+        } else if (executor.mode === "sandboxed") {
+          throw new Error("The host must configure a job room readiness self-test before taking jobs.");
+        }
+      },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
         : {}),
@@ -706,7 +734,10 @@ export class EarnHost {
       allowAnyCreator: true,
       endpoint: this.#options.endpoint ?? DEFAULT_ENDPOINT,
       executorTimeoutMs: executor?.timeoutMs ?? 60_000,
-      pollIntervalMs: this.#options.pollIntervalMs ?? 15_000,
+      pollIntervalMs: this.#options.pollIntervalMs ?? DEFAULT_EARN_POLL_INTERVAL_MS,
+      maxIdlePollIntervalMs: this.#options.maxIdlePollIntervalMs ??
+        Math.max(this.#options.pollIntervalMs ?? DEFAULT_EARN_POLL_INTERVAL_MS,
+          this.#options.pollIntervalMs === undefined ? DEFAULT_EARN_IDLE_POLL_INTERVAL_MS : this.#options.pollIntervalMs),
       ...(this.#options.maxJobAttempts !== undefined
         ? { maxJobAttempts: this.#options.maxJobAttempts }
         : {}),

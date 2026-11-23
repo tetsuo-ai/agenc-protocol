@@ -59,6 +59,8 @@ export interface World {
 export async function startWorld(options: {
   mainLamports?: bigint;
   earn?: EarnOptions;
+  /** Disable the fixture host self-test to exercise the configured probe. */
+  hostReady?: boolean;
   chain?: (chain: Chain) => Chain;
   /** Stand between the wallet and the marketplace's services (a faulty or dishonest one). */
   services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
@@ -77,7 +79,7 @@ export async function startWorld(options: {
     services: options.services ? options.services(sandbox.services, sandbox) : sandbox.services,
     prices: sandbox.prices,
     now: () => clock.now,
-    ...(options.earn ? { earn: options.earn } : {}),
+    ...(options.earn ? { earn: { ...(options.hostReady === false ? {} : { checkExecutionReady: async () => {} }), ...options.earn } } : {}),
     ...options.config,
   };
   const wallet = await AgencWallet.open(config);

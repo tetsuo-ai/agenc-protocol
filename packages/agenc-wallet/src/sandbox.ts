@@ -878,6 +878,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const listingId = values.randomId32();
       const metadata = { name: service.name, summary: service.summary };
       const specHash = (await values.canonicalJobSpecHash(metadata)).bytes;
+      jobSpecs.set(values.bytesToHex(specHash), envelopeBytes(metadata, values.bytesToHex(specHash)));
       await chain.clientFor(provider.signer).createServiceListing({
         providerAgent: provider.agent,
         authority: provider.signer,

@@ -171,6 +171,8 @@ export type WatchClaimableTasksOptions = {
    * sweep runs immediately; subsequent sweeps run every `pollIntervalMs`.
    */
   pollIntervalMs?: number;
+  /** Double the interval after sweeps with no new candidates, up to this ceiling. Opt-in. */
+  maxIdlePollIntervalMs?: number;
   /** Commitment for the underlying reads (default `"confirmed"`). */
   commitment?: Commitment;
   /**
@@ -517,6 +519,7 @@ export function watchClaimableTasks(
     onError,
     signal,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+    maxIdlePollIntervalMs = pollIntervalMs,
     commitment = "confirmed",
     maxSeen = DEFAULT_MAX_SEEN,
     maxQueue = DEFAULT_MAX_QUEUE,
@@ -571,6 +574,9 @@ export function watchClaimableTasks(
       "watchClaimableTasks: maxBackoffMs must be a safe timer interval " +
         `between pollIntervalMs and ${MAX_TIMER_MS - pollIntervalMs} (got ${maxBackoffMs})`,
     );
+  }
+  if (!Number.isSafeInteger(maxIdlePollIntervalMs) || maxIdlePollIntervalMs < pollIntervalMs || maxIdlePollIntervalMs > MAX_TIMER_MS - maxBackoffMs) {
+    throw new Error("watchClaimableTasks: maxIdlePollIntervalMs must be a safe timer interval at least pollIntervalMs");
   }
   if (
     !Number.isSafeInteger(operationTimeoutMs) ||
@@ -911,6 +917,7 @@ export function watchClaimableTasks(
     if (catchUpSource === undefined) return;
     // Backoff added ON TOP OF pollIntervalMs after consecutive failures.
     let failBackoffMs = 0;
+    let idleIntervalMs = pollIntervalMs;
     while (!controller.signal.aborted) {
       let sweptOk = false;
       try {
@@ -986,6 +993,7 @@ export function watchClaimableTasks(
         // evict active entries within a sweep: that caused oversized backlogs
         // to be delivered again on every poll.
         seen.retainTasks(candidateAddresses, successfulSweep);
+        let emitted = 0;
         for (const { claimable, marker } of deliveries) {
           if (controller.signal.aborted) return;
           const account = claimable.account;
@@ -1000,9 +1008,13 @@ export function watchClaimableTasks(
             continue;
           }
           if (admit(claimable, marker, successfulSweep)) {
+            emitted += 1;
             await deliver(claimable);
           }
         }
+        idleIntervalMs = emitted === 0
+          ? Math.min(maxIdlePollIntervalMs, idleIntervalMs * 2)
+          : pollIntervalMs;
       } catch (error) {
         handlePumpError(error);
       }
@@ -1015,9 +1027,9 @@ export function watchClaimableTasks(
             ? pollIntervalMs
             : Math.min(failBackoffMs * 2, maxBackoffMs);
       }
-      // Sleep between sweeps (pollIntervalMs + any failure backoff), resolving
+      // Sleep between sweeps (idle interval + any failure backoff), resolving
       // early on abort.
-      const sleepMs = pollIntervalMs + failBackoffMs;
+      const sleepMs = idleIntervalMs + failBackoffMs;
       await new Promise<void>((resolve) => {
         if (controller.signal.aborted) return resolve();
         const onSweepAbort = () => {

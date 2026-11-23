@@ -96,7 +96,7 @@ interface Bootstrap {
   unlockSecret: string;
   ownerToken: string;
   earn?: {
-    executor: { argv: string[]; mode: string; envAllowlist?: string[]; timeoutMs?: number } | null;
+    executor: { argv: string[]; mode: string; envAllowlist?: string[]; timeoutMs?: number; readiness?: { argv: string[]; timeoutMs?: number } } | null;
     maxRewardLamports?: string | null;
     /** Take jobs only from this wallet's own addresses. */
     ownJobsOnly?: boolean;
@@ -191,6 +191,15 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
   if (executor.mode !== "sandboxed" && executor.mode !== "safe" && executor.mode !== "unsafe") {
     throw new WalletError("BAD_REQUEST", "The earn executor mode is not valid.");
   }
+  const readiness = executor.readiness;
+  if (readiness !== undefined && (
+    readiness === null || typeof readiness !== "object" ||
+    !Array.isArray(readiness.argv) || readiness.argv.length === 0 ||
+    readiness.argv.some((part) => typeof part !== "string" || part.includes("{prompt}")) ||
+    (readiness.timeoutMs !== undefined && (!Number.isSafeInteger(readiness.timeoutMs) || readiness.timeoutMs <= 0 || readiness.timeoutMs > 120_000))
+  )) {
+    throw new WalletError("BAD_REQUEST", "The readiness self-test needs an argv list and a timeout of at most 120 seconds.");
+  }
   const maxReward = bootstrap.earn?.maxRewardLamports;
   return {
     executor: {
@@ -198,6 +207,7 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
       mode: executor.mode,
       envAllowlist: executor.envAllowlist ?? [],
       timeoutMs: executor.timeoutMs ?? 15 * 60_000,
+      ...(readiness === undefined ? {} : { readiness }),
     },
     ...(maxReward === undefined
       ? {}

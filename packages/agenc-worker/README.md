@@ -400,3 +400,32 @@ New submission records retain `jobEvidence: { request: string; acceptance: strin
 from the verified job spec so sellers can inspect their agreed work after payment.
 These optional fields are read by this build. Older builds with strict state
 validation cannot read a ledger once it contains the new fields.
+
+### Host readiness and service context
+
+Embedders can set `WorkerContext.checkExecutionReady` with this shape:
+
+```ts
+(input: { task: Address; signal?: AbortSignal }) => Promise<void>
+```
+
+Resolve only after the host's job room is available and its self-test passes.
+Reject to defer the candidate. The hook runs before every fresh claim, before
+its journal write or transaction. It receives no buyer content. A stopped
+watch aborts this check without interrupting an already running executor.
+Readiness failures emit `task.execution-not-ready` and return a skipped outcome
+with `retryable: true`. The long-running loop retries deferred work using
+canonical task reads. Existing claim recovery and settlement remain available.
+
+Hired jobs now fetch the advertised listing payload and verify it against the
+listing hash frozen in the task. The executor receives it in a separate
+`UNTRUSTED ADVERTISED SERVICE` section. The buyer request remains in
+`UNTRUSTED JOB SPEC`. Both are data. Updated listings use the original content
+address through `resolveAgencUri`; unavailable or mismatched metadata fails
+closed. This also applies to resumed claims and revision attempts.
+
+`WorkerRuntimeConfig.maxIdlePollIntervalMs?: number` opts discovery into idle
+backoff. It must be at least `pollIntervalMs`. Omitting it preserves the fixed
+cadence for existing worker embedders. The wallet sets a five-minute ceiling.
+The worker supplies its scan transport as the SDK's `indexer` read source so a
+full RPC object cannot silently enable separate signature polling.

@@ -280,8 +280,8 @@ function killExecutor(child: ReturnType<typeof spawn>): void {
 export async function runExecutor(options: {
   /** Argv template (element `"{prompt}"` is replaced; see buildExecutorArgv). */
   argv: readonly string[];
-  /** The untrusted prompt (job-spec content + task description). */
-  prompt: string;
+  /** Untrusted job data. Omit for a host readiness probe with exact argv. */
+  prompt?: string;
   /** Wall-clock budget in ms. */
   timeoutMs: number;
   /** stdout byte cap (default 10 MiB). */
@@ -317,8 +317,8 @@ export async function runExecutor(options: {
   }
   const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES;
   const maxStderrBytes = options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES;
-  assertExecutorPromptFits(prompt);
-  const [command, ...args] = buildExecutorArgv(argv, prompt);
+  if (prompt !== undefined) assertExecutorPromptFits(prompt);
+  const [command, ...args] = prompt === undefined ? [...argv] : buildExecutorArgv(argv, prompt);
   const resolvedCommand = executablePath(command!);
   if (resolvedCommand === null) throw missingExecutable(command!);
   const unsafe = options.unsafeInheritProcessContext === true;

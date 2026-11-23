@@ -60,6 +60,45 @@ async function startOffering(): Promise<{ current: World; worker: AgentView }> {
 }
 
 describe("offering a service", () => {
+  it("admits one hire, waits past ten minutes, then runs the verified service and buyer request", async () => {
+    let ready = false;
+    let probes = 0;
+    world = await startWorld({ earn: {
+      ...EARN,
+      executor: { ...EARN.executor, argv: [process.execPath, "-e", "process.stdout.write(process.argv[1])", "{prompt}"] },
+      checkExecutionReady: async () => { probes += 1; if (!ready) throw new Error("Job room self-test failed"); },
+    } });
+    const { wallet, sandbox, clock } = world;
+    const worker = await wallet.createAgent("Worker");
+    const buyer = await wallet.createAgent("Buyer");
+    await wallet.fundAgent(buyer.id, { usdCents: 500 });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
+    const live = await offerReaches(world, worker.id, "live");
+    const listing = live.earn.offer!.listing as Address;
+    const { job } = await wallet.hire({ agentId: buyer.id, listing, request: "Your advertised service about tea." });
+    await eventually(async () => probes > 0);
+    expect((await readListing(sandbox.chain, listing))!.openJobs).toBe(1);
+    const before = await world.balance(buyer.address);
+    await expect(wallet.hire({ agentId: buyer.id, listing, request: "Another one." })).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+    expect(await world.balance(buyer.address)).toBe(before);
+    clock.now += 13 * 60_000;
+    sandbox.advanceClock(13 * 60);
+    await wallet.tick();
+    expect((await wallet.getJob(job.id, true)).status).toBe("waiting");
+    ready = true;
+    const delivered = await eventually(async () => {
+      const view = await wallet.getJob(job.id, true);
+      return view.status === "delivered" ? view : null;
+    }, 30_000);
+    expect(probes).toBeGreaterThan(1);
+    expect(delivered.result?.text).toContain("BEGIN UNTRUSTED ADVERTISED SERVICE");
+    expect(delivered.result?.text).toContain(LINE_WRITER.summary);
+    expect(delivered.result?.text).toContain("Your advertised service about tea.");
+    expect(delivered.result?.text).toContain("BEGIN UNTRUSTED JOB SPEC");
+  }, 90_000);
+
   it("is hired by another agent, done by the worker loop, and paid", async () => {
     world = await startWorld({ earn: EARN });
     const { wallet, sandbox } = world;
@@ -87,7 +126,7 @@ describe("offering a service", () => {
     const onChain = (await readListing(sandbox.chain, listing))!;
     expect(onChain.price).toBe(30n * CENT);
     expect(onChain.authority).toBe(worker.address);
-    expect(onChain.maxOpenJobs).toBe(0);
+    expect(onChain.maxOpenJobs).toBe(1);
     expect((await wallet.listActivity()).map((entry) => entry.text)).toContain(
       "Worker now offers “Line Writer”.",
     );
