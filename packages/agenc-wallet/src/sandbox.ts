@@ -65,6 +65,7 @@ import {
   transferInstruction,
   type Chain,
 } from "./chain.js";
+import { contestEvents } from "./contest-history.js";
 import { scopedSendTransport, transportSignal } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
@@ -401,6 +402,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
   };
   // LiteSVM history is disabled so identical sandbox transactions can be replayed.
+  const contestLogs = new Map<Address, Array<{ signature: string; logs: readonly string[] }>>();
   const landedListingSends = new Set<string>();
   const base = market.transport;
   const transport: Transport = {
@@ -433,7 +435,17 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             settledLogs.set(settled.task, result.logs);
           }
         }
+        const recorded = new Set<Address>();
         for (const event of parseAgencCoordinationEvents(result.logs)) {
+          if (["TaskResultSubmitted", "GhostShareDistributed", "TaskResultRejected", "TaskResultAccepted"].includes(event.eventName) && "task" in event.data) {
+            const task = event.data.task as Address;
+            if (!recorded.has(task)) {
+              const log = contestLogs.get(task) ?? [];
+              log.push({ signature: result.signature, logs: result.logs });
+              contestLogs.set(task, log);
+              recorded.add(task);
+            }
+          }
           if (event.eventName === "ServiceListingHired") hireLogs.set(event.data.task, result.logs);
         }
       } catch {
@@ -488,6 +500,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return Number(svm.getClock().unixTimestamp);
     },
     gpa,
+    contestHistory: async (task, since) => {
+      const log = contestLogs.get(task) ?? [];
+      const fresh = log.slice(log.findIndex(item => item.signature === since) + 1);
+      return { cursor: fresh.at(-1)?.signature ?? since, events: fresh.flatMap(item => contestEvents(task, item.logs)) };
+    },
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
     findSettledDelivery: async (task, creator) => {
       const worker = settledBy.get(task);

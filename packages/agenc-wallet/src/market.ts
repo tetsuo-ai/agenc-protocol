@@ -113,7 +113,7 @@ function startsWith(data: Uint8Array, prefix: ArrayLike<number>): boolean {
  * Read and decode one program account. Returns null when the account is
  * absent, owned by another program, closed (tombstoned) or of another type.
  */
-async function readProgramAccount<T>(
+export async function readProgramAccount<T>(
   chain: Chain,
   account: Address,
   discriminator: ArrayLike<number>,
@@ -507,7 +507,7 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
 }
 
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
-function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
+export function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
   return async (account) => {
     const info = await chain.readAccountInfo(account);
     return info === null ? null : { owner: info.owner, data: info.data };
@@ -637,6 +637,7 @@ export async function hireLanded(
 // door a wallet with no registered agent uses.
 
 export interface RequestIntent {
+  maxEntries?: number;
   minReputation: number;
   requiredCapabilities: bigint;
   taskId: Uint8Array;
@@ -689,7 +690,7 @@ export async function requestLanded(
   chain: Chain,
   creator: Address,
   task: Address,
-  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline">,
+  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline" | "maxEntries">,
 ): Promise<boolean> {
   const account = await readTask(chain, task);
   if (account === null) return false;
@@ -698,7 +699,8 @@ export async function requestLanded(
   };
   if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports ||
       account.minReputation !== intent.minReputation || account.requiredCapabilities !== intent.requiredCapabilities ||
-      account.deadline !== intent.deadline) mismatch();
+      account.deadline !== intent.deadline || account.maxWorkers !== (intent.maxEntries ?? 1) ||
+      Number(account.taskType) !== (intent.maxEntries === undefined ? 0 : 2)) mismatch();
   if (!bytesEqual(new Uint8Array(account.description), requestDescription(intent.jobSpecHash))) mismatch();
   if ((await readHireRecord(chain, task)) !== null) mismatch();
   return true;
@@ -969,10 +971,15 @@ export async function sendApproval(
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  approvedPayees?: Pick<Payees, "workerAuthority" | "treasury">,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
   const payees = await settlementPayees(chain, account, providerAgent);
+  if (approvedPayees && (payees.workerAuthority !== approvedPayees.workerAuthority || payees.treasury !== approvedPayees.treasury ||
+      payees.operator !== null || payees.referrer !== null)) {
+    throw new WalletError("PRICE_CHANGED", "The payout recipients changed. Review a new quote.");
+  }
   const [hireRecord] = await findHireRecordPda({ task });
   const [creatorCompletionBond] = await findCreatorCompletionBondPda({
     task,

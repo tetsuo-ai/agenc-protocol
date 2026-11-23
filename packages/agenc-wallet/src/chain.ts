@@ -33,6 +33,7 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
+import { readContestHistory } from "./contest-history.js";
 import { readSettledDelivery, type SettledDelivery } from "./delivery-history.js";
 import { assertSigningRevision, revisionGatedClient } from "./revision.js";
 import {
@@ -55,6 +56,7 @@ export interface RawAccount {
 }
 
 export interface Chain {
+  contestHistory?(task: Address, since: string | null): Promise<import("./contest-history.js").ContestHistory>;
   readonly network: WalletNetwork;
   /**
    * A client that signs and pays fees with `signer`. On a real network it
@@ -480,6 +482,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       });
     },
     gpa: rpc,
+    contestHistory: (task, since) => network(() => readContestHistory(rpc, task, since)),
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),

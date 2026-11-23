@@ -101,6 +101,7 @@ export interface WalletMethods {
    */
   "market.post": {
     params: {
+      contestEntries?: number;
       agentId: string;
       /** What is wanted, in plain words, written for whoever takes it. */
       request: string;
@@ -127,6 +128,7 @@ export interface WalletMethods {
    */
   "wallet.post": {
     params: {
+      contestEntries?: number;
       request: string;
       reward: AmountInput;
       deadlineDays?: number;
@@ -142,6 +144,11 @@ export interface WalletMethods {
     result: { job: JobView };
   };
 
+  /** Agent route that an older wallet cannot mistake for a single-worker post. */
+  "market.postContest": {
+    params: WalletMethods["market.post"]["params"] & { contestEntries: number };
+    result: WalletMethods["market.post"]["result"];
+  };
   /** Owner previews. These always wait for a separate approvals.decide. */
   "wallet.quoteHire": WalletMethods["market.hire"];
   "wallet.quotePost": { params: WalletMethods["wallet.post"]["params"]; result: WalletMethods["market.post"]["result"] };
@@ -161,9 +168,17 @@ export interface WalletMethods {
     params: { role?: "buying" | "working"; agentId?: string; limit?: number; before?: string };
     result: { jobs: JobView[] };
   };
+  "jobs.quoteContest": {
+    params: { jobId: string; entryId: string; action: import("./types.js").ContestAction; reason?: string };
+    result: { job: JobView };
+  };
+  "jobs.decideContest": {
+    params: { jobId: string; quoteId: string; approve: boolean };
+    result: { job: JobView };
+  };
   "jobs.get": { params: { jobId: string }; result: { job: JobView } };
   /** Complete verified delivery, including text beyond the list preview. */
-  "jobs.delivery": { params: { jobId: string }; result: { result: JobResult } };
+  "jobs.delivery": { params: { jobId: string; entryId?: string }; result: { result: JobResult } };
   /**
    * One file of a job's delivery, fetched from the delivery store by its
    * fingerprint and checked against it. Owner only: a file's bytes are for a
@@ -274,8 +289,10 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "market.find",
   "market.hire",
   "market.post",
+  "market.postContest",
   "approvals.wait",
   "jobs.list",
+  "jobs.quoteContest",
   "jobs.get",
   "jobs.delivery",
   "jobs.wait",

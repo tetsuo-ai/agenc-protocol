@@ -184,6 +184,10 @@ function statusText(
   ) {
     return blockedRefundText(job, job.refundBlockedLamports, usdPerSol);
   }
+  if (job.terms?.contest && status === "delivered") return job.contestReleaseOpen
+    ? "The selection window has closed. Remaining submitters can collect their shares."
+    : "Contest entries are ready to review.";
+  if (job.terms?.contest && status === "paid") return "The contest prize was paid.";
   if (job.role === "buying" && job.kind === "request") return requestText(job, status, amount, now);
   if (job.role === "working") {
     switch (status) {
@@ -305,7 +309,7 @@ export function jobView(
   // Only a hired service can be rated: a rating is kept on its listing.
   const canRate = buying && kind === "hire" && status === "paid" && job.rating === null && !job.tidied;
   // Turning a delivery down is a person's call.
-  const canTurnDown = buying && status === "delivered" && context.isOwner;
+  const canTurnDown = !job.terms?.contest && buying && status === "delivered" && context.isOwner;
   return {
     id: job.id,
     role: job.role,
@@ -314,6 +318,8 @@ export function jobView(
     title: job.title,
     request: job.request,
     acceptance: [...job.acceptance],
+    ...(job.terms?.contest && { contestEntries: structuredClone((job.contestEntries ?? []).map(({ commitment, observedEvent, ...entry }) => entry)), contestReleaseOpen: job.contestReleaseOpen ?? false }),
+    ...(job.contestQuote && { contestQuote: structuredClone(job.contestQuote) }),
     ...(job.terms && { terms: structuredClone(job.terms) }),
     ...(job.deadline && job.deadline > 0 ? { marketplaceDeadline: job.deadline } : {}),
     price,
@@ -344,10 +350,10 @@ export function jobView(
       revision9TurnDown(job)!.rulingUntil === null &&
       revision9TurnDown(job)!.disputeOpen &&
       revision9TurnDown(job)!.providerSuspended !== true,
-    canApprove: buying && status === "delivered",
+    canApprove: !job.terms?.contest && buying && status === "delivered",
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.
-    canAskChanges: buying && status === "delivered" && context.changesCanBeSent,
+    canAskChanges: !job.terms?.contest && buying && status === "delivered" && context.changesCanBeSent,
     canRefund:
       buying &&
       (status === "needs_approval" ||
@@ -403,6 +409,13 @@ export function approvalView(
   const kind = approval.kind ?? "hire";
   if (approval.quoteRate !== undefined) usdPerSol = approval.quoteRate;
   return {
+    ...(approval.terms?.contest && { contestCosts: {
+      entryRent: money(approval.entryRentLamports ?? "0", usdPerSol),
+      firstWorkerRecord: money(approval.workerRecordLamports ?? "0", usdPerSol),
+      entryDeposit: money(approval.terms.contest.entryDepositLamports, usdPerSol),
+      registrationRent: money(approval.contestRegistration?.rent ?? "0", usdPerSol),
+      registrationStake: money(approval.contestRegistration?.stake ?? "0", usdPerSol),
+    } }),
     ...(approval.terms && { terms: structuredClone(approval.terms), acceptance: [...(approval.acceptance ?? [])] }),
     ...(approval.protocolFeeBps !== undefined && { marketFee: {
       bps: approval.protocolFeeBps,
@@ -421,7 +434,7 @@ export function approvalView(
     total: money(BigInt(approval.priceLamports) + BigInt(approval.depositsLamports), usdPerSol),
     price: money(approval.priceLamports, usdPerSol),
     deposits: money(approval.depositsLamports, usdPerSol),
-    fees: money(approval.keptLamports, usdPerSol),
+    fees: money(BigInt(approval.keptLamports) - BigInt(approval.contestRegistration?.rent ?? 0) - BigInt(approval.contestRegistration?.stake ?? 0), usdPerSol),
     fromMain: money(approval.fromMainLamports, usdPerSol),
     createdAt: approval.createdAt,
     expiresAt: approval.expiresAt,

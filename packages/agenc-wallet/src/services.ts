@@ -1134,6 +1134,9 @@ function jobDeliverable(terms?: JobTerms): string {
   const eligibility = terms.eligibility
     ? ` Workers need reputation of at least ${terms.eligibility.minReputation} and capability mask ${terms.eligibility.requiredCapabilities}.`
     : "";
+  if (terms.contest) {
+    return `${JOB_DELIVERABLE} Up to ${terms.contest.maxEntries} simultaneous entries. Deliver by ${new Date(terms.deadline * 1000).toISOString()}. Entry deposit ${terms.contest.entryDepositLamports} lamports, returned on settlement. A no-show forfeits it. Review setting ${terms.reviewWindowSecs} seconds. The owner can choose one winner before ${new Date(terms.contest.releaseAt * 1000).toISOString()}. After that, remaining submitters share the prize.${eligibility}`;
+  }
   return `${JOB_DELIVERABLE} Deliver by ${new Date(terms.deadline * 1000).toISOString()}. The buyer has ${terms.reviewWindowSecs} seconds to review the submission.${eligibility}`;
 }
 

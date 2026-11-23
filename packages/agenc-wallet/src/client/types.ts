@@ -185,7 +185,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "contests"] as const);
 
 export interface WalletOverview {
   /**
@@ -193,6 +193,7 @@ export interface WalletOverview {
    * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
    *   the agent takes no new job. While its job is still in progress,
    *   `earn.state` is "finishing", never "off".
+   * - "contests": contest posting, entry review and quoted prize release.
    * - "job-terms": panel quotes and approvals bind the payer, costs and brief.
    * Clients may ignore this field and any capability they do not recognize.
    */
@@ -386,6 +387,9 @@ export interface JobResult {
 }
 
 export interface JobView {
+  contestEntries?: ContestEntry[];
+  contestQuote?: ContestQuote;
+  contestReleaseOpen?: boolean;
   /** Deadline observed on the marketplace after funding, in Unix seconds. */
   marketplaceDeadline?: number;
   terms?: JobTerms;
@@ -483,8 +487,46 @@ export interface JobView {
   error: string | null;
 }
 
-/** A hire, or a request an agent wants to post, waiting for a person to say yes. */
+/** A submitted contest entry, retained after its marketplace records close. */
+export interface ContestEntry {
+  id: string;
+  worker: string;
+  recipient: string;
+  hash: string;
+  dataHex: string;
+  files?: DeliveryFile[];
+  textTruncated?: boolean;
+  submittedAt: number;
+  status: "submitted" | "rejected" | "winner" | "released" | "closed";
+  text: string | null;
+  uri: string | null;
+  reason?: string;
+}
+
+export type ContestAction = "winner" | "reject" | "release";
+
+export interface ContestQuote {
+  id: string;
+  claimGeneration: string;
+  entryId: string;
+  action: ContestAction;
+  reason: string;
+  recipient: string;
+  payer: string;
+  treasury: string;
+  gross: Money;
+  grossLimit: Money;
+  feeLimit: Money;
+  prize: Money;
+  marketFee: Money;
+  entryRefund: Money;
+  networkFee: Money;
+  recordCost: Money;
+  expiresAt: number;
+}
+
 export interface JobTerms {
+  contest?: { maxEntries: number; entryDepositLamports: string; releaseAt: number };
   /** Exact delivery deadline in Unix seconds. For a hire this is part of its signed brief. */
   deadline: number;
   reviewWindowSecs: number;
@@ -494,6 +536,7 @@ export interface JobTerms {
 }
 
 export interface ApprovalView {
+  contestCosts?: { entryDeposit: Money; entryRent: Money; firstWorkerRecord: Money; registrationRent: Money; registrationStake: Money };
   /** Maximum marketplace share at settlement, included in the price. */
   marketFee?: { bps: number; amount: Money };
   refundableDeposit?: Money;

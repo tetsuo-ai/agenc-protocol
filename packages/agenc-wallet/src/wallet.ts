@@ -23,6 +23,8 @@ import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } f
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
+import { identifyEntry, entrantCosts, cancelUnsubmittedContest, archiveContestEntries, contestPostCosts, liveContestEntries, quoteContestAction, sendContestAction, sendContest, contestUnavailable } from "./contest.js";
+import type { ContestAction } from "./client/types.js";
 import { jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
 import { buildJobQuote, checkPriceLimit, jobCosts, JOB_TRANSACTION_FEES_LAMPORTS } from "./job-quote.js";
 import type { JobTerms } from "./client/types.js";
@@ -81,6 +83,7 @@ import {
   readAgent,
   readHireableListing,
   readListing,
+  readTask,
   readProtocolConfig,
   requestDeposits,
   requestLanded,
@@ -1945,10 +1948,22 @@ export class AgencWallet {
     return this.#queueJob(record, covered ? "agent" : "main", service, rate, quoteOnly);
   }
 
+  async #jobDeposits(job: JobRecord, payer: Address) {
+    if (!job.terms?.contest) return (isRequest(job) ? requestDeposits : purchaseDeposits)(this.#chain, payer);
+    const registrationId = payer !== this.mainAddress && job.agentId !== ""
+      ? this.#earn.contestRegistrationId(job.agentId, job.taskIdHex) : job.taskIdHex;
+    const costs = await contestPostCosts(this.#chain, payer, registrationId);
+    if (job.contestRegistration && JSON.stringify(job.contestRegistration) !== JSON.stringify(costs.registration)) {
+      throw new WalletError("PRICE_CHANGED", "The creator registration changed. Request a new quote.");
+    }
+    if (!job.contestRegistration) job.contestRegistration = costs.registration;
+    return costs;
+  }
+
   async #queueJob(record: JobRecord, payer: "main" | "agent", service: ServiceView | null, rate: number | null, panel: boolean) {
     const address = payer === "main" ? this.mainAddress : this.#agentRecord(record.agentId).address as Address;
     const [deposits, { protocolFeeBps }, chainNow] = await Promise.all([
-      (isRequest(record) ? requestDeposits : purchaseDeposits)(this.#chain, address),
+      this.#jobDeposits(record, address),
       readProtocolConfig(this.#chain),
       this.#chain.clusterTime(),
     ]);
@@ -1963,6 +1978,7 @@ export class AgencWallet {
     const { job, approval } = buildJobQuote(record, {
       approvalId, payer, service, deposits, protocolFeeBps, rate, now, expiresAt,
     });
+    if (record.terms.contest) Object.assign(approval, await entrantCosts(this.#chain));
     if (panel) {
       // Drafts shown while typing cannot appear as jobs or spend. A restart invalidates them.
       for (const [id, draft] of this.#panelQuotes) {
@@ -2039,6 +2055,7 @@ export class AgencWallet {
       throw new WalletError("BAD_REQUEST", "Say what the request pays.");
     }
     const rate = await this.#freshRate();
+    if (terms.contest && rate === null) throw new WalletError("NETWORK", "Dollar prices are unavailable. Refresh the contest quote.");
     const rewardLamports = await this.#toLamports(params.reward, rate);
     if (rewardLamports < MIN_OFFER_PRICE_LAMPORTS) {
       throw new WalletError("BAD_REQUEST", "That reward is too small to post.");
@@ -2138,7 +2155,8 @@ export class AgencWallet {
     if (again !== null) return again;
     const terms = await this.#requestTerms(params);
     const rate = terms.rate;
-    const deposits = await requestDeposits(this.#chain, agent.address as Address);
+    const deposits = await (terms.terms.contest
+      ? contestPostCosts(this.#chain, agent.address as Address, "") : requestDeposits(this.#chain, agent.address as Address));
     const floor = await this.#floor();
     const need = terms.rewardLamports + deposits.total + floor;
     const agentBalance = await this.#chain.getBalance(agent.address as Address);
@@ -2146,7 +2164,7 @@ export class AgencWallet {
     // Without a price the budget cannot be checked, so a person decides.
     const withinLimit = rewardCents !== null && rewardCents <= agent.policy.askAboveCents;
     const covered = agentBalance >= need;
-    const autonomous = withinLimit && covered;
+    const autonomous = !terms.terms.contest && withinLimit && covered;
     const record = await this.#requestRecord(
       agent.id,
       key,
@@ -2196,7 +2214,8 @@ export class AgencWallet {
     if (again !== null) return again;
     const terms = await this.#requestTerms(params);
     // Said at once here; checked again just before anything is sent.
-    const deposits = await requestDeposits(this.#chain, this.mainAddress);
+    if (terms.terms.contest && !quoteOnly) throw new WalletError("NOT_ALLOWED", "Review the contest quote before posting.");
+    const deposits = await (terms.terms.contest ? contestPostCosts(this.#chain, this.mainAddress, "") : requestDeposits(this.#chain, this.mainAddress));
     const floor = await this.#floor();
     const need = terms.rewardLamports + deposits.total + floor;
     const balance = await this.#chain.getBalance(this.mainAddress);
@@ -2317,10 +2336,16 @@ export class AgencWallet {
     }
     const payer = job.payer;
     const address = payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address as Address;
-    const deposits = await (isRequest(job) ? requestDeposits : purchaseDeposits)(this.#chain, address);
+    const deposits = await this.#jobDeposits(job, address);
     const need = BigInt(job.priceLamports) + deposits.total + await this.#floor();
     const available = await this.#chain.getBalance(address);
     await this.#checkJobQuote(job, deposits);
+    if (job.terms.contest) {
+      const costs = await entrantCosts(this.#chain);
+      if (costs.entryRentLamports !== approval.entryRentLamports || costs.workerRecordLamports !== approval.workerRecordLamports) {
+        throw new WalletError("PRICE_CHANGED", "The entry costs changed. Request a new quote.");
+      }
+    }
     if (panel) {
       // A yes binds the draft to a durable job, including when its payer needs more money.
       this.#store.update(draft => {
@@ -2632,6 +2657,7 @@ export class AgencWallet {
     const payer = await this.#payerSigner(job);
     const task = job.task as Address;
     const intent: RequestIntent = {
+      ...(job.terms?.contest && { maxEntries: job.terms.contest.maxEntries }),
       taskId: values.hexToBytes(job.taskIdHex),
       jobSpecHash: values.hexToBytes(job.jobSpecHashHex),
       minReputation: job.terms?.eligibility?.minReputation ?? 0,
@@ -2643,7 +2669,14 @@ export class AgencWallet {
     const landed = (): Promise<boolean> => requestLanded(this.#chain, payer.address, task, intent);
     if (await this.#reconcileCreation(job, landed, "request")) return;
     await this.#lock(this.#payerLock(job), async () => {
-      const deposits = await requestDeposits(this.#chain, payer.address);
+      let deposits;
+      try {
+        deposits = await this.#jobDeposits(job, payer.address);
+      } catch (error) {
+        if (!(error instanceof WalletError) || error.code === "NETWORK") throw error;
+        this.#failJob(job.id, error.message);
+        return;
+      }
       const floor = await this.#floor();
       const balance = await this.#chain.getBalance(payer.address);
       if (balance < intent.rewardLamports + deposits.total + floor) {
@@ -2657,7 +2690,15 @@ export class AgencWallet {
         this.#failJob(job.id, error.message);
         return;
       }
-      await this.#sendCreation(job, "request", landed, () => sendRequest(this.#chain, payer, intent));
+      if (job.payer === "agent" && job.contestRegistration && job.contestRegistration.rent !== "0") {
+        const id = this.#earn.contestRegistrationId(job.agentId, job.contestRegistration.agentId, true);
+        if (id !== job.contestRegistration.agentId) {
+          this.#failJob(job.id, "The agent registration changed. Get a new contest quote.");
+          return;
+        }
+      }
+      await this.#sendCreation(job, "request", landed, () => job.contestRegistration
+        ? sendContest(this.#chain, payer, intent, job.contestRegistration) : sendRequest(this.#chain, payer, intent));
     });
   }
 
@@ -2965,6 +3006,10 @@ export class AgencWallet {
     let seen = await inspectJob(this.#chain, task, provider);
     if (seen === null) return;
 
+    if (job.terms?.contest) {
+      await this.#trackContest(job, seen);
+      return;
+    }
     if (request) {
       // Nobody is named for a request: who took it is read from the chain.
       if (provider !== null && seen.status === "open" && seen.workers === 0) {
@@ -3162,6 +3207,138 @@ export class AgencWallet {
     });
   }
 
+  async #trackContest(job: JobRecord, seen: NonNullable<Awaited<ReturnType<typeof inspectJob>>>) {
+    const task = job.task as Address;
+    if (job.contestPending) {
+      await this.#reconcileContest(job);
+      job = this.#jobRecord(job.id);
+      if (job.phase !== "active") return;
+    }
+    const [live, clock] = await Promise.all([liveContestEntries(this.#chain, task), this.#chain.clusterTime()]);
+    // Keep live entries usable during an RPC history outage. A terminal task
+    // stays retryable until its historical submissions have been recovered.
+    const historyPage = await this.#chain.contestHistory?.(task, job.contestCursor ?? null).catch(error => {
+      this.#log(`contest history: ${describeError(error)}`);
+      return null;
+    });
+    const previous = job.contestEntries ?? [];
+    const archived = await archiveContestEntries(this.#chain, previous, historyPage?.events ?? []);
+    const entries = await Promise.all(live.map(async ({ entry: snapshot, data }) => {
+      const entry = identifyEntry(snapshot, archived);
+      if (entry.text !== null || entry.uri !== null || entry.files?.length) return entry;
+      const result = await this.#loadResult(entry.hash, data);
+      return { ...entry, text: result?.text ?? null, uri: result?.uri ?? null, textTruncated: result?.textTruncated ?? false, files: result?.files ?? [] };
+    }));
+    const history = archived.filter(e => !entries.some(l => l.id === e.id)).map(e =>
+      e.status === "submitted" ? { ...e, status: "closed" as const } : e);
+    const all = [...history, ...entries];
+    const releaseOpen = clock >= job.terms!.contest!.releaseAt;
+    if ((historyPage?.cursor && job.contestCursor !== historyPage.cursor) || JSON.stringify(previous) !== JSON.stringify(all) || job.contestReleaseOpen !== releaseOpen ||
+        job.chainStatus !== seen.status || (seen.deadline && job.deadline !== seen.deadline)) {
+      this.#patchJob(job.id, entry => {
+        if (historyPage?.cursor) entry.contestCursor = historyPage.cursor;
+        entry.contestEntries = all;
+        entry.contestReleaseOpen = releaseOpen;
+        entry.chainStatus = seen.status;
+        if (seen.deadline) entry.deadline = seen.deadline;
+        if (entry.contestQuote && !entries.some(e => e.id === entry.contestQuote!.entryId)) delete entry.contestQuote;
+      });
+    }
+    if (historyPage === null && (seen.status === "completed" || seen.status === "cancelled")) return;
+    if (seen.status === "completed") this.#recordPaid(job.id, null);
+    if (seen.status === "cancelled") this.#recordRefund(job.id, null, null);
+    const empty = seen.status === "open" && seen.workers === 0 && clock >= seen.deadline;
+    const noShows = seen.status === "in_progress" && !seen.completions && clock > seen.deadline + NO_SHOW_GRACE_SECS;
+    if (!live.length && seen.deadline > 0 && (empty || noShows)) {
+      const payer = await this.#payerSigner(job);
+      if (await this.#refundBlocked(job, payer.address)) return;
+      const signature = await cancelUnsubmittedContest(this.#chain, payer, task, seen.workers);
+      this.#recordRefund(job.id, signature, "The contest ended with no live entries. The prize was returned.");
+    }
+  }
+
+  #confirmContest(job: JobRecord, signature: string) {
+    const quote = job.contestQuote!;
+    this.#patchJob(job.id, record => {
+      const entry = record.contestEntries!.find(e => e.id === quote.entryId)!;
+      entry.status = quote.action === "release" ? "released" : quote.action === "reject" ? "rejected" : "winner";
+      if (quote.action === "reject") entry.reason = quote.reason;
+      (record.contestReceipts ??= []).push(quote.id);
+      delete record.contestPending;
+      delete record.contestQuote;
+    });
+    if (quote.action === "winner") this.#recordPaid(job.id, signature);
+  }
+
+  async #reconcileContest(job: JobRecord) {
+    if (!job.contestPending) return;
+    const outcome = await this.#chain.listingSendOutcome?.(job.contestPending);
+    if (outcome === "landed") this.#confirmContest(job, job.contestPending.signature);
+    else if (outcome === "failed") this.#patchJob(job.id, record => {
+      delete record.contestPending;
+      delete record.contestQuote;
+    });
+    else throw new WalletError("NETWORK", "Market is checking the previous contest decision.");
+  }
+
+  /** Either side of the wallet UI can draft. Only the owner RPC can confirm the exact quote. */
+  async quoteContest(jobId: string, input: { entryId: string; action: ContestAction; reason?: string }, agentId?: string) {
+    this.#ownedJob(jobId, agentId);
+    await this.#advance(jobId);
+    return this.#lock(`job:${jobId}`, async () => {
+      const job = this.#ownedJob(jobId, agentId);
+      if (job.contestPending) throw new WalletError("NETWORK", "Market is checking the previous contest decision.");
+      if (!job.terms?.contest || !job.task || job.phase !== "active") return contestUnavailable("This contest is not open for review.");
+      const payer = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address as Address;
+      const [clock, rate] = await Promise.all([this.#chain.clusterTime(), this.#freshRate()]);
+      const window = input.action === "release" ? Infinity : (job.terms.contest.releaseAt - clock) * 1000;
+      const expiry = this.#now() + Math.min(window, this.#config.approvalTtlMs ?? 30 * 60_000);
+      const entry = job.contestEntries?.find(e => e.id === input.entryId && e.status === "submitted");
+      if (!entry) return contestUnavailable("Refresh the entries before settling.");
+      const quote = await quoteContestAction(this.#chain, job.task as Address, payer, input, newId("contest"), expiry, rate, entry.commitment ?? entry.id);
+      this.#patchJob(jobId, entry => { entry.contestQuote = quote; });
+      return this.#jobView(this.#jobRecord(jobId), agentId === undefined);
+    });
+  }
+
+  async decideContest(jobId: string, quoteId: string, approve: boolean) {
+    await this.#lock(`job:${jobId}`, async () => {
+      await this.#reconcileContest(this.#ownedJob(jobId, undefined));
+      const job = this.#jobRecord(jobId);
+      if (job.contestReceipts?.includes(quoteId)) return;
+      const q = job.contestQuote;
+      if (!q || q.id !== quoteId || !job.task || !job.terms?.contest) return contestUnavailable("Refresh the contest quote.");
+      if (!approve) {
+        this.#patchJob(jobId, e => { delete e.contestQuote; });
+        return;
+      }
+      await this.#lock(this.#payerLock(job), async () => {
+        if (q.expiresAt <= this.#now()) return contestUnavailable("The contest quote expired.");
+        const payer = await this.#payerSigner(job);
+        const task = job.task as Address;
+        const entry = job.contestEntries?.find(e => e.id === q.entryId && e.status === "submitted");
+        if (!entry) return contestUnavailable("Refresh the entries before settling.");
+        const fresh = await quoteContestAction(this.#chain, task, payer.address, q, q.id, q.expiresAt, await this.#freshRate(), entry.commitment ?? entry.id);
+        const fields = ["gross", "grossLimit", "feeLimit", "prize", "marketFee", "entryRefund", "networkFee", "recordCost"] as const;
+        if (fresh.claimGeneration !== q.claimGeneration || fresh.recipient !== q.recipient || fresh.payer !== q.payer || fresh.treasury !== q.treasury ||
+            fields.some(field => fresh[field].lamports !== q[field].lamports) ||
+            fresh.networkFee.usdCents! > q.networkFee.usdCents! || fresh.recordCost.usdCents! > q.recordCost.usdCents!) {
+          throw new WalletError("PRICE_CHANGED", "The payout or fees changed. Review a new quote.");
+        }
+        const need = BigInt(q.networkFee.lamports) + BigInt(q.recordCost.lamports) + await this.#floor();
+        if (await this.#chain.getBalance(payer.address) < need) throw new WalletError("NOT_ENOUGH_MONEY", "The paying balance cannot cover these fees.");
+        const signature = await inTransportScope({
+          signal: new AbortController().signal,
+          sending: receipt => this.#patchJob(jobId, record => { record.contestPending = receipt; }),
+          confirmed: () => {},
+        }, () => sendContestAction(this.#chain, payer, task, entry, q));
+        this.#confirmContest(job, signature);
+      });
+    });
+    await this.#advance(jobId);
+    return this.#jobView(this.#jobRecord(jobId), true);
+  }
+
   /** Whether `provider` still holds its claim on the task. */
   async #holdsClaim(task: Address, provider: Address): Promise<boolean> {
     const [claim] = await findClaimPda({ task, bidder: provider });
@@ -3239,7 +3416,7 @@ export class AgencWallet {
   /** done: collect what can come back and free the provider's slot. */
   async #stepTidy(job: JobRecord): Promise<void> {
     // Downloads still retry after payment, including records made by older builds.
-    if (job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified)) {
+    if (!job.terms?.contest && job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified)) {
       if (!job.finalDeliveryChecked) {
         this.#patchJob(job.id, (entry) => { entry.result = null; delete entry.deliveryPointer; });
       }
@@ -3269,6 +3446,11 @@ export class AgencWallet {
       if (!this.#jobRecord(job.id).result?.verified) return;
     }
     if (job.tidied || job.task === null) return;
+    if (job.terms?.contest) {
+      const contest = await readTask(this.#chain, job.task as Address);
+      // Other entrants can reclaim their terminal claim. Keep the tidy retryable until all are closed.
+      if (contest && contest.currentWorkers !== 0) return;
+    }
     // A paid hire stays open for a while so it can be rated. A request has
     // no service to rate, so it is tidied at once.
     if (!isRequest(job) && job.outcome === "paid" && job.rating === null) {
@@ -3649,9 +3831,19 @@ export class AgencWallet {
   }
 
   /** Read the complete delivery without storing an oversized list preview. */
-  async jobDelivery(jobId: string, isOwner: boolean, agentId?: string): Promise<NonNullable<JobRecord["result"]>> {
+  async jobDelivery(jobId: string, isOwner: boolean, agentId?: string, entryId?: string): Promise<NonNullable<JobRecord["result"]>> {
     const view = await this.getJob(jobId, isOwner, agentId);
     const job = view.role === "buying" ? this.#jobRecord(jobId) : this.#earnJobs(view.agentId).find((entry) => entry.id === jobId)!;
+    if (entryId !== undefined) {
+      const e = job.contestEntries?.find(e => e.id === entryId);
+      if (!e) throw new WalletError("NOT_FOUND", "That entry is not part of this contest.");
+      const result = await this.#loadResult(e.hash, values.hexToBytes(e.dataHex), true);
+      if (!result) throw new WalletError("NOT_AVAILABLE", "The entry has no readable hosted delivery.");
+      if (JSON.stringify(e.files ?? []) !== JSON.stringify(result.files)) {
+        this.#patchJob(jobId, record => { record.contestEntries!.find(entry => entry.id === e.id)!.files = result.files; });
+      }
+      return result;
+    }
     if (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked) {
       throw new WalletError("NOT_FOUND", "The paid delivery has not been authenticated yet.");
     }
@@ -3673,7 +3865,8 @@ export class AgencWallet {
    */
   async jobFile(jobId: string, sha256: string): Promise<DeliveryFile & { base64: string }> {
     const job = await this.getJob(jobId, true);
-    const listed = (job.result?.files ?? []).find((file) => file.sha256 === sha256);
+    const listed = (job.result?.files ?? []).find(file => file.sha256 === sha256) ??
+      job.contestEntries?.flatMap(entry => entry.files ?? []).find(file => file.sha256 === sha256);
     if (listed === undefined) {
       throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
     }
@@ -3726,7 +3919,7 @@ export class AgencWallet {
     isOwner: boolean,
     agentId?: string,
   ): Promise<JobView> {
-    this.#ownedJob(jobId, agentId);
+    if (this.#ownedJob(jobId, agentId).terms?.contest) return contestUnavailable("Review the contest payout quote in Jobs.");
     if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
       throw new WalletError("BAD_REQUEST", "A rating is a whole number from 1 to 5.");
     }
@@ -3785,7 +3978,7 @@ export class AgencWallet {
     isOwner: boolean,
     agentId?: string,
   ): Promise<JobView> {
-    this.#ownedJob(jobId, agentId);
+    if (this.#ownedJob(jobId, agentId).terms?.contest) return contestUnavailable("Review contest entries in Jobs.");
     const body = typeof note === "string" ? note.trim() : "";
     if (body.length === 0 || body.length > 2_000) {
       throw new WalletError("BAD_REQUEST", "Say what to change, in up to 2,000 characters.");
@@ -3878,6 +4071,8 @@ export class AgencWallet {
 
   async refundJob(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
+    if (initial.terms?.contest && initial.phase !== "needs_approval" && !isOwner) return contestUnavailable("The owner can cancel this contest in Market.");
+    if (initial.terms?.contest && initial.chainStatus !== "open" && initial.phase !== "needs_approval") return contestUnavailable("Review contest entries in Jobs.");
     if (initial.phase === "needs_approval") {
       const approval = Object.values(this.#store.state.approvals).find(
         (entry) => entry.jobId === jobId && entry.status === "pending",
@@ -5255,7 +5450,7 @@ export class AgencWallet {
           job.phase === "hiring" ||
           job.phase === "hired" ||
           job.phase === "active" ||
-          (job.phase === "done" && (!job.tidied || (job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified))))),
+          (job.phase === "done" && (!job.tidied || (!job.terms?.contest && job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified))))),
     );
     await Promise.all(open.map((job) => this.#advance(job.id)));
 

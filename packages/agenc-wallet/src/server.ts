@@ -132,6 +132,9 @@ function handlers(wallet: AgencWallet): Handlers {
         // An agent can only ever hire as itself.
         agentId: session.agentId ?? text(params.agentId, "agent"),
       }),
+    "market.postContest": (params, session) => wallet.post({
+      ...params, contestEntries: params.contestEntries ?? 0, agentId: session.agentId ?? text(params.agentId, "agent"),
+    }),
     "market.post": (params, session) =>
       wallet.post({
         ...params,
@@ -154,11 +157,13 @@ function handlers(wallet: AgencWallet): Handlers {
         owner(session),
       ),
     }),
+    "jobs.quoteContest": async (params, session) => ({ job: await wallet.quoteContest(text(params.jobId, "job"), params, scope(session)) }),
+    "jobs.decideContest": async params => ({ job: await wallet.decideContest(text(params.jobId, "job"), text(params.quoteId, "quote"), params.approve === true) }),
     "jobs.get": async (params, session) => ({
       job: await wallet.getJob(text(params.jobId, "job"), owner(session), scope(session)),
     }),
     "jobs.delivery": async (params, session) => ({
-      result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session)),
+      result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session), params.entryId),
     }),
     "jobs.file": async (params) => ({
       file: await wallet.jobFile(text(params.jobId, "job"), text(params.sha256, "file")),

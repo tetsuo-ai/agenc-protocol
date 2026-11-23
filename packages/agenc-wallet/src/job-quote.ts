@@ -45,6 +45,7 @@ export function buildJobQuote(record: JobRecord, input: {
     kind: job.kind ?? "hire",
     service,
     request: job.request,
+    ...(job.contestRegistration && { contestRegistration: job.contestRegistration }),
     acceptance: job.acceptance,
     ...(job.terms && { terms: job.terms }),
     ...(job.maxPriceCents !== undefined && { maxPriceCents: job.maxPriceCents }),

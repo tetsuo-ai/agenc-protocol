@@ -162,7 +162,20 @@ export type ChainTaskStatus =
   | "disputed"
   | "reject_frozen";
 
+export interface ContestRegistration {
+  agentId: string;
+  stake: string;
+  rent: string;
+}
+
 export interface JobRecord {
+  contestRegistration?: ContestRegistration;
+  contestEntries?: Array<import("./client/types.js").ContestEntry & { commitment?: string; observedEvent?: boolean }>;
+  contestQuote?: import("./client/types.js").ContestQuote;
+  contestReceipts?: string[];
+  contestPending?: import("./transport-scope.js").PendingListingSend;
+  contestReleaseOpen?: boolean;
+  contestCursor?: string;
   terms?: JobTerms;
   inputFingerprint?: string;
   maxPriceCents?: number;
@@ -333,6 +346,9 @@ export interface JobRecord {
 }
 
 export interface ApprovalRecord {
+  entryRentLamports?: string;
+  workerRecordLamports?: string;
+  contestRegistration?: ContestRegistration;
   protocolFeeBps?: number;
   terms?: JobTerms;
   acceptance?: string[];
