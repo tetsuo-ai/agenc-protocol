@@ -1,5 +1,5 @@
 import { approvedPost } from "./harness.js";
-import { setEarnWithApproval } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // Taking money back, or sending it all out, leaves nothing of the person's
 // behind where it can never be used. A wallet that is not empty must keep the
 // network's minimum, so "all" keeps it only while a job or earning may still
@@ -35,7 +35,7 @@ async function agentWith(current: World, cents: number) {
   const agent = await current.wallet.createAgent("My assistant");
   await current.wallet.setPolicy(agent.id, {
     askAboveCents: 1_000,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 100_000 },
+    refill: REVIEW_ALLOWANCE,
   });
   await current.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;
@@ -78,7 +78,7 @@ describe("taking everything back", () => {
     // So the job still finishes: delivered, paid, and its deposits back.
     await sandbox.workOnce();
     expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
-    expect((await wallet.approveJob(job.id, undefined, true)).status).toBe("paid");
+    expect((await confirmPayout(wallet, job.id)).status).toBe("paid");
     // Once it is tidied, nothing needs the agent's money any more.
     world.clock.now += 2 * 60 * 60_000;
     await wallet.tick();

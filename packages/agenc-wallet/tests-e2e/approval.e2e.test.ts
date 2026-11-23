@@ -1,7 +1,7 @@
 // A hire the agent's allowance does not cover waits for a person. Approving
 // pays from the main balance; declining spends nothing.
 import { afterEach, describe, expect, it } from "vitest";
-import { CENT, startWorld, type World } from "./harness.js";
+import { confirmPayout, CENT, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -41,7 +41,7 @@ describe("approvals", () => {
     expect(mainBefore - (await world.balance(wallet.mainAddress))).toBeGreaterThan(20n * CENT);
 
     await sandbox.workOnce();
-    const paid = await wallet.approveJob(job.id, undefined, true);
+    const paid = await confirmPayout(wallet, job.id, undefined);
     expect(paid.status).toBe("paid");
     expect((await wallet.overview()).agents[0]!.spent.lamports).toBe((20n * CENT).toString());
   });

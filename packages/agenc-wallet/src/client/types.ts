@@ -202,7 +202,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY, "chosen-work"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY, "chosen-work", "delivery-review-v3"] as const);
 
 export interface WalletOverview {
   /**
@@ -499,6 +499,7 @@ export interface JobView {
    * done for them. False while the marketplace has the agent suspended.
    */
   canDispute: boolean;
+  approvalInMarket?: boolean;
   canApprove: boolean;
   canAskChanges: boolean;
   canRefund: boolean;

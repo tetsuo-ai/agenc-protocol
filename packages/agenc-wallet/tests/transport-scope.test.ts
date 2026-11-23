@@ -164,3 +164,51 @@ it("gives a successful RPC send and its confirmation separate deadlines", async 
   expect(result.signature).toBeTruthy();
   expect(active.pending).toEqual([]);
 });
+
+it("selects a recent hash with 16 produced blocks left and dispatches a review only once", async () => {
+  const active = scope();
+  const slots = Array.from({ length: 160 }, (_, i) => 1000 + 2 * i);
+  const tipSlot = slots.at(-1)!;
+  const selectedSlot = slots[slots.length - 1 - (150 - 16)]!;
+  const tipHash = "11111111111111111111111111111111";
+  const shortHash = "11111111111111111111111111111112";
+  let sent = 0;
+  const chain = createRpcChain({ network: "localnet", rpcUrl: "http://localhost:8899",
+    transport: (async ({ payload }) => {
+      const { method, id, params } = payload as { id: string; method: string; params: unknown[] };
+      let result: unknown;
+      switch (method) {
+        case "getLatestBlockhash":
+          result = { context: { slot: tipSlot }, value: { blockhash: tipHash, lastValidBlockHeight: 1150 } };
+          break;
+        case "getBlocks":
+          result = slots;
+          break;
+        case "getBlock":
+          expect([tipSlot, selectedSlot]).toContain(params[0]);
+          result = params[0] === tipSlot ? { blockHeight: 1000, blockhash: tipHash } : { blockHeight: 866, blockhash: shortHash };
+          break;
+        case "sendTransaction": {
+          sent++;
+          expect(params[1]).toMatchObject({ maxRetries: 0, preflightCommitment: "confirmed" });
+          const wire = Buffer.from(String(params[0]), "base64");
+          const { getTransactionDecoder, getCompiledTransactionMessageDecoder } = await import("@solana/kit");
+          const message = getCompiledTransactionMessageDecoder().decode(getTransactionDecoder().decode(wire).messageBytes);
+          expect(message.lifetimeToken).toBe(shortHash);
+          expect(active.pending[0]?.lastValidBlockHeight).toBe("1016");
+          result = active.pending[0]!.signature;
+          break;
+        }
+        case "getSignatureStatuses":
+          result = { context: { slot: tipSlot }, value: [{ confirmationStatus: "confirmed", err: null }] };
+          break;
+        default: throw new Error(method);
+      }
+      return { jsonrpc: "2.0", id, result };
+    }) as RpcTransport,
+  });
+  const signer = await generateKeyPairSigner();
+  await active.run(() => chain.clientFor(signer, { review: true }).send([transferInstruction(signer, signer.address, 1n)], { maxRetries: 0 }));
+  expect(sent).toBe(1);
+  expect(active.pending).toEqual([]);
+});

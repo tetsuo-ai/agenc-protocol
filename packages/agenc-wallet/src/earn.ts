@@ -10,6 +10,7 @@ import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // What can go wrong is bounded twice: the agent's wallet holds only what the
 // person gave it, and the executor is whatever the host configured (for the
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
+import { deliveryFileProblem } from "./client/delivery-files.js";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -50,6 +51,10 @@ import type { MarketServices } from "./services.js";
 
 /** The program the worker hands each job to. */
 export interface EarnExecutor {
+  /** Keep part of a new job’s original model allowance for its two revisions. */
+  reserveRevisionBudget?: boolean;
+  /** The trusted host selected the isolated guest adapter for this argv. */
+  isolatedJobRoom?: boolean;
   /**
    * Command and arguments; one element must be exactly "{prompt}". Wherever
    * these appear they are replaced:
@@ -94,6 +99,7 @@ export interface EarnOptions {
   pollIntervalMs?: number;
   maxIdlePollIntervalMs?: number;
   /** In-process equivalent of executor.readiness. Throw when the job room is unavailable. */
+  runReviewRoom?: typeof runExecutor;
   checkExecutionReady?: (input: { agentId: string; signal?: AbortSignal }) => Promise<void>;
   /** Endpoint recorded with the agent's registration. */
   endpoint?: string;
@@ -814,10 +820,17 @@ export class EarnHost {
         },
       } : {}),
       acceptServiceHiresBelowMinReward: true,
+      ...(executor.isolatedJobRoom && executor.mode === "sandboxed" && { reviewRoom: { fileProblem: deliveryFileProblem, execute: this.#options.runReviewRoom ?? runExecutor } }),
+      modelSpendDir: path.resolve(this.#dataDir, "..", "model-spend"),
+      reserveRevisionBudget: executor.reserveRevisionBudget === true,
       modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
       executorForTask: async (task, _address, reservedCents) => {
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
-        return executor.argv.map((part) => fill(part).replaceAll("{pay}", String(pay)));
+        const ownRequest = this.#chain.network === "sandbox" || this.#ownAddresses().includes(task.creator);
+        return executor.argv.map(part => {
+          if (part === "{requestSource}") return ownRequest ? "own" : "external";
+          return fill(part).replaceAll("{pay}", String(pay));
+        });
       },
       ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),
       config: {
@@ -838,6 +851,7 @@ export class EarnHost {
       ...(this.#services.resolveAgencUri !== undefined
         ? { resolveAgencUri: this.#services.resolveAgencUri }
         : {}),
+      ...(this.#services.fileLinkPrefix ? { readReviewArtifact: (hash: string) => this.#services.fetchFile(hash) } : {}),
       ...(this.#services.taskThreadTransport !== undefined
         ? { taskThreadTransport: this.#services.taskThreadTransport }
         : {}),

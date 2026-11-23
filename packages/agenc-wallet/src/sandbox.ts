@@ -8,6 +8,9 @@ import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // `litesvm` native module (loaded only when a sandbox is started).
 import { listingDetails } from "./listing-details.js";
 import { SERVICE_STATES } from "./client/discovery.js";
+import type { ReviewedDelivery } from "./client/reviews.js";
+import { resubmissionDeadline } from "./review.js";
+import { reviewAnchor, type ReviewAnchor } from "./review-history.js";
 import { mkdtempSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import lighthouseFixture from "../testing-assets/lighthouse.so.json";
@@ -20,12 +23,14 @@ import {
   createTransactionMessage,
   generateKeyPairSigner,
   getCompiledTransactionMessageDecoder,
+  getBase58Decoder,
   getTransactionEncoder, getSignatureFromTransaction,
   lamports,
   partiallySignTransactionMessageWithSigners,
   pipe,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
+  getSignatureFromTransaction,
   type Address,
   type Instruction,
   type KeyPairSigner,
@@ -48,6 +53,8 @@ import {
   getProtocolConfigDecoder,
   getProtocolConfigEncoder,
   getServiceListingDecoder,
+  getTaskClaimDecoder,
+  getTaskDecoder,
   getTaskModerationSize,
   parseAgencCoordinationEvents,
   taskThread,
@@ -395,6 +402,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   // settled it: the history the live network keeps and litesvm does not.
   const frozenReceipts = new Map<Address, { worker: Address; operator?: Address; logs: readonly string[] }>();
   const settlements = new Map<Address, Settlement>();
+  const submissions = new Map<Address, ReviewedDelivery>();
+  const reviewEntries = new Map<Address, ReviewAnchor[]>();
   const settledLogs = new Map<Address, readonly string[]>();
   // The log of the transaction that hired each job, which names its service.
   const hireLogs = new Map<Address, readonly string[]>();
@@ -417,6 +426,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   const contestLogs = new Map<Address, Array<{ signature: string; logs: readonly string[]; changes: import("./contest-history.js").NativeChange[] }>>();
   const landedListingSends = new Set<string>();
   const failedWorkSends = new Set<string>();
+  const failedReviewSends = new Set<string>();
+  const debits = new Map<string, { payer: Address; fee: bigint; debit: bigint }>();
   const base = market.transport;
   const transport: Transport = {
     ...base,
@@ -425,28 +436,59 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const signal = transportSignal();
       signal?.throwIfAborted();
       syncClock();
-      const keys = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes).staticAccounts;
-      const before = keys.map(key => BigInt(svm.getBalance(key) ?? 0n));
+      const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
+      const payer = message.staticAccounts[0]!;
+      const balances = new Map(message.staticAccounts.map(address => [address, BigInt(svm.getBalance(address) ?? 0)]));
+      const before = balances.get(payer)!;
       const result = await base.sendAndConfirm(signedTx).catch(error => {
-        if (signal) failedWorkSends.add(getSignatureFromTransaction(signedTx));
+        if (signal) {
+          const signature = getSignatureFromTransaction(signedTx);
+          const fee = before - BigInt(svm.getBalance(payer) ?? 0);
+          debits.set(signature, { payer, fee, debit: fee });
+          failedReviewSends.add(signature);
+          failedWorkSends.add(signature);
+        }
         throw error;
       });
-      const changes = keys.flatMap((address, i) => {
-        const delta = BigInt(svm.getBalance(address) ?? 0n) - before[i]!;
+      if (signal) {
+        landedListingSends.add(result.signature);
+        debits.set(result.signature, { payer, fee: BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length),
+          debit: before - BigInt(svm.getBalance(payer) ?? 0) });
+      }
+      const changes = message.staticAccounts.flatMap((address) => {
+        const delta = BigInt(svm.getBalance(address) ?? 0n) - balances.get(address)!;
         return delta ? [{ address, lamports: delta.toString() }] : [];
       });
-      if (signal) landedListingSends.add(result.signature);
       try {
-        const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
         for (const account of message.staticAccounts) {
           known.add(account);
           rememberHire(account);
         }
-        for (const instruction of "instructions" in message ? message.instructions : []) {
+        const instructions = "instructions" in message ? message.instructions : [];
+        for (const [index, instruction] of instructions.entries()) {
           const programAddress = message.staticAccounts[instruction.programAddressIndex];
           if (programAddress === undefined) continue;
           const accounts = (instruction.accountIndices ?? []).map((index: number) => message.staticAccounts[index]);
           if (accounts.some((account: Address | undefined) => account === undefined)) continue;
+          const subject = accounts[0];
+          const previous = instructions[index - 1];
+          const memo = previous && { programId: message.staticAccounts[previous.programAddressIndex], accounts: [],
+            data: getBase58Decoder().decode(previous.data ?? new Uint8Array()) };
+          const anchor = reviewAnchor({ programAddress, accounts: accounts as Address[], data: Uint8Array.from(instruction.data ?? []) }, result.logs, result.signature, {
+            fee: BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length),
+            balanceChange: address => BigInt(svm.getBalance(address) ?? 0) - balances.get(address)!,
+          }, memo);
+          if (anchor?.intendedDelivery && accounts[1]) anchor.appliedDelivery = submissions.get(accounts[1]);
+          const claim = accounts[1];
+          if (anchor?.action === "change" && subject && claim) {
+            const taskAccount = svm.getAccount(subject);
+            const claimAccount = svm.getAccount(claim);
+            if (taskAccount?.exists && claimAccount?.exists) {
+              const due = resubmissionDeadline(getTaskDecoder().decode(taskAccount.data).deadline, getTaskClaimDecoder().decode(claimAccount.data).expiresAt);
+              if (due !== null) anchor.deadline = due * 1000;
+            }
+          }
+          if (anchor && claim) reviewEntries.set(claim, [...(reviewEntries.get(claim) ?? []), anchor]);
           const sent = {
             programAddress,
             accounts: accounts as Address[],
@@ -473,6 +515,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
               recorded.add(task);
             }
           }
+          if (event.eventName === "TaskResultSubmitted") submissions.set(event.data.claim, {
+            submissionCount: event.data.submissionCount, deliveryHash: Buffer.from(event.data.proofHash).toString("hex"),
+          });
           if (event.eventName === "ServiceListingHired") hireLogs.set(event.data.task, result.logs);
         }
       } catch {
@@ -508,6 +553,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
     // Local sends execute atomically; no broadcast can arrive after cancellation.
+    reviewSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" :
+      failedReviewSends.has(signature) ? "failed" : "expired",
+    reviewDebit: async (signature, payer) => {
+      const paid = debits.get(signature);
+      return paid?.payer === payer ? paid : null;
+    },
     listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
     listingSendSettled: async () => true,
     workOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : failedWorkSends.has(signature) ? "failed" : inFlight.has(signature) ? "pending" : "expired",
@@ -557,6 +608,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return { cursor: fresh.at(-1)?.signature ?? since, events: fresh.flatMap(item => contestEvents(task, item.logs, item.signature, item.changes)) };
     },
     findSettlementWorker: async (task) => settlements.get(task)?.worker ?? null,
+    reviewHistory: async (_task, claim) => ({ entries: reviewEntries.get(claim) ?? [], complete: true }),
     findSettledDelivery: async (task, creator) => {
       const worker = settlements.get(task)?.worker;
       const logs = settledLogs.get(task);
@@ -839,6 +891,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     resolveAgencUri,
     async postChangeRequest(envelope) {
+      const bytes = new TextEncoder().encode(taskThread.canonicalEnvelopeJson(envelope));
+      deliveries.set(sha256Hex(bytes), bytes);
       const list = threads.get(envelope.taskPda) ?? [];
       list.push(envelope);
       threads.set(envelope.taskPda, list);
@@ -1083,6 +1137,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         jobSpecUri: `agenc://job-spec/sha256/${hash.hex}`,
         moderator: market.moderator.address,
       });
+      async function practiceDelivery(worker: Address): Promise<ReviewedDelivery> {
+        const { readSubmission } = await import("./market.js");
+        const submission = await readSubmission(chain, task, worker);
+        if (!submission) throw new Error("No practice delivery to review");
+        return { submissionCount: submission.account.submissionCount, deliveryHash: Buffer.from(submission.account.proofHash).toString("hex") };
+      }
       return {
         task,
         async delivered() {
@@ -1108,7 +1168,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .map((entry) => getTaskClaimDecoder().decode(entry.data))
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
-          await sendApproval(chain, buyer, task, claim.worker);
+          await sendApproval(chain, buyer, task, claim.worker, await practiceDelivery(claim.worker));
         },
         async turnDown() {
           const { sendRejectAndFreeze } = await import("./market.js");
@@ -1125,7 +1185,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
-          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason);
+          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason, undefined, await practiceDelivery(claim.worker));
         },
       };
     },

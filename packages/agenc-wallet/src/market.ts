@@ -8,8 +8,10 @@ import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
+import { reviewMemo } from "./review-memo.js";
+import type { ReviewedDelivery } from "./client/reviews.js";
 import { withListingOperation } from "./transport-scope.js";
-import { address, getAddressEncoder, type Address, type KeyPairSigner, type TransactionSigner } from "@solana/kit";
+import { address, getAddressEncoder, type Address, type KeyPairSigner, type Instruction, type TransactionPartialSigner, type TransactionSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
@@ -512,8 +514,7 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
 export function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
   return async (account) => {
-    const info = await chain.readAccountInfo(account);
-    return info === null ? null : { owner: info.owner, data: info.data };
+    return chain.readRawAccount(account);
   };
 }
 
@@ -539,14 +540,15 @@ async function requireBalanceFor(
   cost: bigint,
   what: string,
   words: AmountWords,
+  fee = FEE_HEADROOM_LAMPORTS,
 ): Promise<void> {
-  if (cost === 0n) return;
+  if (cost === 0n && fee === FEE_HEADROOM_LAMPORTS) return;
   const balance = await chain.getBalance(payer);
-  const needed = cost + FEE_HEADROOM_LAMPORTS;
+  const needed = cost + fee;
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
+      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again.`,
     );
   }
 }
@@ -801,6 +803,8 @@ export interface TurnDownOnChain {
 
 export interface JobOnChain {
   status: ChainTaskStatus;
+  /** Closed markers no longer carry the reward mint. */
+  tokenReward?: boolean;
   /** Unix seconds; 0 when the task has no deadline. */
   deadline: number;
   rewardLamports: bigint;
@@ -854,7 +858,7 @@ export async function readTurnDownOnChain(
   };
 }
 
-async function readSubmission(
+export async function readSubmission(
   chain: Chain,
   task: Address,
   providerAgent: Address,
@@ -941,6 +945,7 @@ export async function inspectJob(
     status,
     deadline: Number(account.deadline),
     rewardLamports: account.rewardAmount,
+    tokenReward: account.rewardMint.__option === "Some",
     workers: account.currentWorkers,
     completions: account.completions,
     activated: await isActivated(chain, task),
@@ -988,12 +993,41 @@ async function settlementPayees(
   };
 }
 
+async function sendBuyerDecision(
+  chain: Chain, payer: KeyPairSigner, task: Address, provider: Address,
+  action: "approve" | "change" | "reject", ix: Instruction, expected: ReviewedDelivery,
+) {
+  const [claim] = await findClaimPda({ task, bidder: provider });
+  let refusal: WalletError | undefined;
+  // The SDK obtains a fresh lifetime and assembles the message before calling
+  // this signer. Keep the claim read here, after uploads, quotes and RPC setup.
+  const signer: TransactionPartialSigner = {
+    address: payer.address,
+    async signTransactions(transactions, config) {
+      const current = (await readSubmission(chain, task, provider))?.account;
+      if (!current || current.claim !== claim || current.worker !== provider || current.status !== SubmissionStatus.Submitted ||
+          current.submissionCount !== expected.submissionCount || values.bytesToHex(Uint8Array.from(current.proofHash)) !== expected.deliveryHash) {
+        refusal = new WalletError("NOT_ALLOWED", "The delivery changed before signing. Open the new delivery and review it again.");
+        throw refusal;
+      }
+      return payer.signTransactions(transactions, config);
+    },
+  };
+  try {
+    return await chain.clientFor(signer, { review: true }).send([reviewMemo(action, claim, expected), ix], { maxRetries: 0 });
+  } catch (error) {
+    // The SDK wraps errors raised by a signer.
+    throw refusal ?? error;
+  }
+}
+
 /** Accept the delivery: releases the held price to the provider. */
 export async function sendApproval(
   chain: Chain,
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  expected: ReviewedDelivery,
   approvedPayees?: Pick<Payees, "workerAuthority" | "treasury">,
 ): Promise<string> {
   const account = await readTask(chain, task);
@@ -1012,8 +1046,7 @@ export async function sendApproval(
     task,
     workerAuthority: payees.workerAuthority,
   });
-  const client = chain.clientFor(buyer);
-  const result = await client.acceptTaskResult({
+  const ix = await facade.acceptTaskResult({
     task,
     worker: providerAgent,
     creator: buyer,
@@ -1025,6 +1058,7 @@ export async function sendApproval(
     ...(payees.operator !== null ? { operator: payees.operator } : {}),
     ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
   });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "approve", ix, expected);
   return result.signature;
 }
 
@@ -1035,12 +1069,11 @@ export async function sendChangesRequest(
   task: Address,
   providerAgent: Address,
   changesHash: Uint8Array,
+  expected: ReviewedDelivery,
 ): Promise<string> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
-  const client = chain.clientFor(buyer);
-  const result = await client.send([
-    await facade.requestChanges({ task, claim, creator: buyer, changesHash }),
-  ]);
+  const ix = await facade.requestChanges({ task, claim, creator: buyer, changesHash });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "change", ix, expected);
   return result.signature;
 }
 
@@ -1119,6 +1152,7 @@ export async function sendRejectAndFreeze(
   providerAgent: Address,
   rejectionHash: Uint8Array,
   words: AmountWords = SOL_AMOUNT_WORDS,
+  expected: ReviewedDelivery,
 ): Promise<{ signature: string; recordLamports: bigint }> {
   // The revision first, so a person on the wrong one is not asked for money.
   await chain.assertSigningRevision?.();
@@ -1127,16 +1161,9 @@ export async function sendRejectAndFreeze(
     (space) => chain.getMinimumBalanceForRentExemption(space),
     { creator: buyer.address, workerAgent: providerAgent },
   );
-  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words);
-  const client = chain.clientFor(buyer);
-  const result = await client.send([
-    await facade.rejectAndFreeze({
-      task,
-      worker: providerAgent,
-      creator: buyer,
-      rejectionHash,
-    }),
-  ]);
+  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words, chain.transferFeeLamports);
+  const ix = await facade.rejectAndFreeze({ task, worker: providerAgent, creator: buyer, rejectionHash });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "reject", ix, expected);
   return { signature: result.signature, recordLamports: cost.lamports };
 }
 
@@ -1182,6 +1209,15 @@ export async function sendFrozenExpiry(
   return { signature: result.signature, paidProvider: turnDown.expiryDue === "pays_provider" };
 }
 
+export async function disputeDeposit(chain: Chain, task: Address): Promise<bigint> {
+  const [rent, account] = await Promise.all([
+    chain.getMinimumBalanceForRentExemption(getDisputeBondSize()),
+    facade.findRejectionDisputeBondPda(task).then(address => chain.readRawAccount(address)),
+  ]);
+  if (account && (account.data.length || account.owner !== "11111111111111111111111111111111")) return rent;
+  return rent > (account?.lamports ?? 0n) ? rent - (account?.lamports ?? 0n) : 0n;
+}
+
 /**
  * The provider disputes a buyer's turn-down of its delivery (revision 9),
  * posting the bond: 10% of the price, at least 0.01 SOL, plus the bond
@@ -1197,6 +1233,7 @@ export async function sendDisputeTurnDown(
   task: Address,
   providerAgent: Address,
   words: AmountWords = SOL_AMOUNT_WORDS,
+  evidence?: { hash: Uint8Array; uri: string },
 ): Promise<{ signature: string; bondLamports: bigint }> {
   await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
@@ -1211,7 +1248,7 @@ export async function sendDisputeTurnDown(
   if (turnDown.providerSuspended) {
     throw new WalletError(
       "NOT_ALLOWED",
-      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. Nothing changed. If nobody disputes it in time, the price goes back to the buyer.",
+      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. If nobody disputes it in time, the price goes back to the buyer.",
     );
   }
   if ((await chain.clusterTime()) > turnDown.disputeUntil) {
@@ -1221,13 +1258,13 @@ export async function sendDisputeTurnDown(
   if (submission === null) {
     throw new WalletError("NOT_FOUND", "The turned-down delivery could not be found.");
   }
-  const bondRent = await chain.getMinimumBalanceForRentExemption(getDisputeBondSize());
-  const needed = turnDown.bondLamports + bondRent + FEE_HEADROOM_LAMPORTS;
+  const bondRent = await disputeDeposit(chain, task);
+  const needed = turnDown.bondLamports + bondRent + chain.transferFeeLamports;
   const balance = await chain.getBalance(provider.address);
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
+      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again.`,
     );
   }
   const client = chain.clientFor(provider);
@@ -1237,10 +1274,10 @@ export async function sendDisputeTurnDown(
       worker: providerAgent,
       creator: account.creator,
       authority: provider,
-      evidenceHash: new Uint8Array(submission.account.proofHash),
-      evidenceUri: "",
+      evidenceHash: evidence?.hash ?? new Uint8Array(submission.account.proofHash),
+      evidenceUri: evidence?.uri ?? "",
     }),
-  ]);
+  ], { maxRetries: 0 });
   return { signature: result.signature, bondLamports: turnDown.bondLamports };
 }
 

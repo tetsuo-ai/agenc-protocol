@@ -34,6 +34,7 @@ import {
   type WorkerConfig,
   type WorkerConfigInput,
 } from "./config.js";
+import { createPublicUriFetcher } from "./job-spec.js";
 import { createSolanaAccountReaders } from "./account-reader.js";
 import { formatDiagnosticError } from "./redact.js";
 import { findVerifiedSettlementSignature } from "./settlement.js";
@@ -192,7 +193,11 @@ async function buildContext(
       return value;
     },
   );
+  const fetchArtifact = createPublicUriFetcher({ maxBytes: 256 * 1024 });
   const ctx: WorkerContext = {
+    ...(config.taskThreadBaseUrl === "https://agenc.ag" ? {
+      readReviewArtifact: (hash: string) => fetchArtifact(`https://hppmdbethfb8gze5.public.blob.vercel-storage.com/artifacts/${hash}`),
+    } : {}),
     config,
     client,
     signer,

@@ -42,6 +42,9 @@ import {
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
+import { readProtocolConfig } from "./market.js";
+import { reviewBlockhash } from "./review-blockhash.js";
+import { readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
 import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
@@ -67,14 +70,17 @@ export interface Chain {
    * program unless the program is on the revision this service signs for
    * (`assertSigningRevision`).
    */
-  clientFor(signer: TransactionSigner): MarketplaceClient;
+  clientFor(signer: TransactionSigner, options?: { review: boolean }): MarketplaceClient;
   /**
    * Send a transaction that was built somewhere else, once it carries every
    * signature it needs. Returns its signature when it is confirmed. The
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
-  /** Distinguish successful execution from a failed or expired transaction. */
+  /** Distinguish a confirmed failure from a send never seen before verified expiry. */
+  reviewSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired">;
+  /** Actual fee and payer debit from a confirmed review receipt. */
+  reviewDebit?(signature: string, payer: Address): Promise<{ fee: bigint; debit: bigint } | null>;
   listingSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome>;
   /** True only after confirmation, failure, or verified expiry of an interrupted listing send. */
   listingSendSettled?(receipt: PendingListingSend): Promise<boolean>;
@@ -109,6 +115,8 @@ export interface Chain {
   readonly transferFeeLamports: bigint;
   /** Most recent verified settlement transaction for a task, when known. */
   findSettlementSignature?(task: Address): Promise<string | null>;
+  /** Confirmed review instructions and costs from the claim history. */
+  reviewHistory?(task: Address, claim: Address, before?: string): Promise<ReviewHistory>;
   /** Delivery commitment from a settled task's authenticated transaction history. */
   findSettledDelivery?(task: Address, creator: Address): Promise<SettledDelivery | null>;
   /**
@@ -339,8 +347,9 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   } catch {
     throw new WalletError("BAD_REQUEST", "The network address is not a valid URL.");
   }
+  const baseRpc = options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl });
   const rpc = createSolanaRpcFromTransport(
-    scopedRpcTransport(politeTransport(options.transport ?? createDefaultRpcTransport({ url: options.rpcUrl }), {
+    scopedRpcTransport(politeTransport(baseRpc, {
       minGapMs: options.minRequestGapMs ?? (PUBLIC_RPC_HOSTS.has(host) ? PUBLIC_RPC_MIN_GAP_MS : 0),
     })),
   );
@@ -352,6 +361,18 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
   const transport = scopedSendTransport(createRpcTransport({ rpc }));
+  // Dispatch buyer decisions once, directly. Keep preflight enabled and poll
+  // through the normal RPC. Neither the wallet nor the RPC should rebroadcast.
+  const direct = createSolanaRpcFromTransport(scopedRpcTransport(baseRpc));
+  const reviewTransport = scopedSendTransport({
+    ...createRpcTransport({ rpc: {
+      getEpochInfo: rpc.getEpochInfo,
+      getSignatureStatuses: rpc.getSignatureStatuses,
+      getLatestBlockhash: rpc.getLatestBlockhash,
+      sendTransaction: (wire, config) => direct.sendTransaction(wire, { ...config, encoding: "base64", maxRetries: 0n }),
+    } }),
+    getLatestBlockhash: () => reviewBlockhash(rpc),
+  });
   // Read every time: the stamp changes once, at a release, and a send never
   // goes out on an old answer.
   const signingRevision = () =>
@@ -366,7 +387,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     options.computeUnitPrice === undefined
       ? 0n
       : (options.computeUnitPrice * BigInt(PRICED_COMPUTE_UNIT_LIMIT) + 999_999n) / 1_000_000n;
-  async function workOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired"> {
+  async function reviewSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired"> {
     const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
       searchTransactionHistory: true,
     }).send()).value[0];
@@ -383,12 +404,23 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     const last = await status();
     return first == null && last == null ? "expired" : outcome(last);
   }
-  const listingSendOutcome = async (receipt: PendingListingSend) => {
-    const status = await workOutcome(receipt);
-    return status === "expired" ? "failed" : status;
-  };
-  return usesScopedRequests<Chain>({
-    workOutcome,
+  async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
+    const outcome = await reviewSendOutcome(receipt);
+    return outcome === "expired" ? "failed" : outcome;
+  }
+  const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
+  const chain: Chain = usesScopedRequests<Chain>({
+    reviewSendOutcome,
+    async reviewDebit(signature, payer) {
+      const tx = await rpc.getTransaction(signature as Signature, {
+        commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0,
+      }).send();
+      if (!tx?.meta || tx.transaction.signatures[0] !== signature ||
+          tx.transaction.message.accountKeys[0]?.pubkey !== payer) return null;
+      const debit = tx.meta.preBalances[0]! - tx.meta.postBalances[0]!;
+      return { fee: tx.meta.fee, debit: debit > 0n ? debit : 0n };
+    },
+    workOutcome: reviewSendOutcome,
     async simulateWork(payer, ix) {
       const { blockhash } = await transport.getLatestBlockhash();
       const { tx, accounts } = workSimulationMessage(payer, ix, blockhash, options.computeUnitPrice === undefined ? undefined : PRICED_COMPUTE_UNIT_LIMIT, options.computeUnitPrice);
@@ -402,10 +434,10 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
     network: options.network,
     transferFeeLamports: BASE_FEE_LAMPORTS + priorityFee,
-    clientFor(signer) {
+    clientFor(signer, sendOptions) {
       return revisionGatedClient(
         createMarketplaceClient({
-          transport,
+          transport: sendOptions?.review ? reviewTransport : transport,
           signer,
           ...(options.computeUnitPrice !== undefined
             ? {
@@ -502,11 +534,14 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     gpa: rpc,
     contestHistory: (task, since, checkpoint) => network(() => readContestHistory(rpc, task, since, checkpoint)),
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
+    reviewHistory: (task, claim, before) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions, before,
+      async () => (await readProtocolConfig(chain)).maxClaimDuration)),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>
       network(() => readSettlementFacts(rpc, task, creator, options)),
   });
+  return chain;
 }
 
 /** Default public endpoints. A dedicated RPC is faster and less rate-limited. */

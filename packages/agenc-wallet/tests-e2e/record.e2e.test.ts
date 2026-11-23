@@ -6,7 +6,7 @@ import { createHostedServices } from "../src/services.js";
 import { getAddressDecoder, type Address } from "@solana/kit";
 import { readMarketRecord } from "../src/records.js";
 import { NO_FIRST_PARTY } from "../src/trust.js";
-import { CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -27,7 +27,7 @@ async function spender(world: World, cents: number) {
   const agent = await world.wallet.createAgent("Buyer");
   await world.wallet.setPolicy(agent.id, {
     askAboveCents: cents,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 100_000 },
+    refill: REVIEW_ALLOWANCE,
   });
   await world.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;
@@ -37,7 +37,7 @@ async function spender(world: World, cents: number) {
 async function paidJob(world: World, agentId: string, listing: Address, score?: number): Promise<string> {
   const { job } = await world.wallet.hire({ agentId, listing, request: "Something small, please." });
   expect(await world.sandbox.workOnce()).toBeGreaterThanOrEqual(1);
-  const paid = await world.wallet.approveJob(job.id, score, true);
+  const paid = await confirmPayout(world.wallet, job.id, score);
   expect(paid.status).toBe("paid");
   return job.id;
 }

@@ -2,7 +2,7 @@
 // service from its own allowance, a house provider delivers, the delivery is
 // approved, rated and tidied. Money is checked at every step.
 import { afterEach, describe, expect, it } from "vitest";
-import { CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -17,7 +17,7 @@ describe("buying from an allowance", () => {
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
+      refill: REVIEW_ALLOWANCE,
     });
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const funded = await world.balance(agent.address);
@@ -47,7 +47,7 @@ describe("buying from an allowance", () => {
     expect(delivered.result?.text).toContain("A haiku about a lighthouse.");
     expect(delivered.canApprove).toBe(true);
 
-    const paid = await wallet.approveJob(job.id, 5, true);
+    const paid = await confirmPayout(wallet, job.id, 5);
     expect(paid.status).toBe("paid");
     expect(paid.rating).toBe(5);
 

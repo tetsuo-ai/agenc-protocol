@@ -179,6 +179,9 @@ function statusText(
   usdPerSol: number | null,
 ): string {
   const amount = formatMoney(price);
+  if (job.role === "buying" && status === "delivered" && job.tokenReward) {
+    return "Delivered. This wallet cannot pay token rewards.";
+  }
   if (
     job.role === "buying" &&
     !job.terms?.contest && job.refundBlockedLamports !== undefined &&
@@ -313,7 +316,7 @@ export function jobView(
   const canRate = buying && kind === "hire" && status === "paid" && job.rating === null && !job.tidied;
   // Turning a delivery down is a person's call.
   const page = job.terms?.contest ? contestPage(job) : null;
-  const canTurnDown = !job.terms?.contest && buying && status === "delivered" && context.isOwner;
+  const canTurnDown = !job.terms?.contest && buying && status === "delivered" && context.isOwner && !job.tokenReward;
   return {
     id: job.id,
     role: job.role,
@@ -341,7 +344,7 @@ export function jobView(
     result: job.result === null || (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked)
       ? null : { ...job.result, files: job.result.files ?? [] },
     autoApproveAt:
-      !job.terms?.contest && status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
+      !job.terms?.contest && !job.tokenReward && status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     autoRefundAt: !job.terms?.contest && status === "waiting" ? job.autoRefundAt : null,
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
@@ -356,7 +359,8 @@ export function jobView(
       revision9TurnDown(job)!.rulingUntil === null &&
       revision9TurnDown(job)!.disputeOpen &&
       revision9TurnDown(job)!.providerSuspended !== true,
-    canApprove: !job.terms?.contest && buying && status === "delivered",
+    approvalInMarket: buying && job.payer !== "agent",
+    canApprove: !job.terms?.contest && buying && status === "delivered" && !job.tokenReward,
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.
     canAskChanges: !job.terms?.contest && buying && status === "delivered" && context.changesCanBeSent,

@@ -17,6 +17,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
+  writeFileSync,
   constants,
   mkdtempSync,
   mkdirSync,
@@ -280,6 +281,7 @@ function killExecutor(child: ReturnType<typeof spawn>): void {
 export async function runExecutor(options: {
   /** Argv template (element `"{prompt}"` is replaced; see buildExecutorArgv). */
   argv: readonly string[];
+  reviewInputs?: readonly import("./review-artifact.js").ReviewInputFile[];
   /** Untrusted job data. Omit for a host readiness probe with exact argv. */
   prompt?: string;
   /** Wall-clock budget in ms. */
@@ -331,6 +333,19 @@ export async function runExecutor(options: {
     }
   }
 
+  if (scratchDir && options.reviewInputs?.length) {
+    try {
+      const directory = path.join(scratchDir, "inputs");
+      mkdirSync(directory, { mode: 0o700 });
+      for (const file of options.reviewInputs) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(file.name) || file.name.includes("..")) throw new Error("Invalid input name.");
+        writeFileSync(path.join(directory, file.name), file.bytes, { mode: 0o400, flag: "wx" });
+      }
+    } catch (error) {
+      rmSync(scratchDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
   return new Promise<ExecutorResult>((resolve, reject) => {
     let cleaned = false;
     const cleanup = () => {
@@ -347,7 +362,7 @@ export async function runExecutor(options: {
         ? {}
         : {
             cwd: scratchDir!,
-            env: isolatedEnvironment(scratchDir!, options.envAllowlist ?? []),
+            env: { ...isolatedEnvironment(scratchDir!, options.envAllowlist ?? []), AGENC_JOB_REVIEW_INPUTS: options.reviewInputs?.length ? "1" : "0" },
             detached: process.platform !== "win32",
           }),
     });

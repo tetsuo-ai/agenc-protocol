@@ -51,6 +51,8 @@ import {
   values,
 } from "@tetsuo-ai/marketplace-sdk";
 import { decodeHostedBrief } from "./hosted-brief.js";
+import { claimBudget, budgetForRevision, enrollClaimBudget, spendClaimRound } from "./revision-budget.js";
+import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
 import {
@@ -221,6 +223,7 @@ export type WorkerContext = {
   resolveAgencUri?: UriFetcher;
   /** Injectable fetch for the result uploader (tests). */
   uploadFetch?: typeof fetch;
+  readReviewArtifact?: (hash: string) => Promise<Uint8Array | null>;
   /** SDK content-rails transport used to resolve anchored change requests. */
   taskThreadTransport?: ReturnType<typeof taskThread.createContentTransport>;
   /**
@@ -266,6 +269,14 @@ export type WorkerContext = {
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
   executorForTask?: (task: Task, address: Address, reservedCents?: number) => Promise<string[]>;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
+  reserveRevisionBudget?: boolean;
+  /** Only the isolated job-room adapter supplies its input validator. */
+  reviewRoom?: {
+    fileProblem(name: string, bytes: Uint8Array): string | null;
+    execute: typeof runExecutor;
+  };
+  /** Kept outside the wallet backup and restore set. */
+  modelSpendDir?: string;
   modelBudgetForTask?: (task: Task, address: Address) => Promise<number>;
   /**
    * Host job-room self-test. Resolves only when execution is ready. Called
@@ -1407,7 +1418,7 @@ async function releaseWithinGraceIfUnfetchable(
  */
 function noteUnreachable(error: unknown): boolean {
   return (
-    error instanceof taskThread.ContentTransportError &&
+    error instanceof ReviewArtifactUnavailable || error instanceof taskThread.ContentTransportError &&
     (error.status < 200 || error.status >= 300) &&
     !isDefiniteHttpRefusal(error.status)
   );
@@ -1491,6 +1502,13 @@ async function resolveRevisionRequest(
   task: Address,
   rejectionHash: ArrayLike<number>,
 ): Promise<taskThread.TaskThreadEnvelope> {
+  if (ctx.readReviewArtifact) {
+    try {
+      return await readReviewEnvelope(ctx.readReviewArtifact, task, Buffer.from(Uint8Array.from(rejectionHash)).toString("hex"), "buyer");
+    } catch (error) {
+      if (!ctx.taskThreadTransport) throw error;
+    }
+  }
   if (ctx.taskThreadTransport === undefined) {
     throw new Error(
       "task-thread transport is required to resolve the anchored request_changes envelope",
@@ -1592,7 +1610,7 @@ function restoreRevisionRound(
   const priorRecord = state.submissions.find((record) => record.task === task);
   const title = priorMarker?.title ?? priorRecord?.title;
   const listing = priorMarker?.listing ?? priorRecord?.listing;
-  const modelBudget = priorMarker?.modelBudget ?? priorRecord?.modelBudget;
+  const modelBudget = budgetForRevision(priorMarker?.modelBudget ?? priorRecord?.modelBudget, submission.submissionCount);
   const jobEvidenceRef = priorMarker?.jobEvidenceRef ?? priorRecord?.jobEvidenceRef;
   state.submissions = state.submissions.filter(
     (record) => record.task !== task,
@@ -1855,6 +1873,7 @@ async function executeAndSubmit(
   decodedTask: Task,
   prompt: string,
   verified: VerifiedJobSpec,
+  reviewInputs?: ReviewInputFile[],
 ): Promise<ProcessOutcome> {
   // Retain what the seller agreed to before running the work. This survives
   // submission, settlement, and removal of the public job-spec account.
@@ -1882,14 +1901,21 @@ async function executeAndSubmit(
       // Legacy/incomplete attempts have unknown spend. Never replenish them.
       reservedCents = marker.modelBudget?.remainingCents ?? 0;
       if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
-      marker.modelBudget = { totalCents: marker.modelBudget!.totalCents, remainingCents: 0 };
+      if (ctx.modelSpendDir) {
+        const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
+        spendClaimRound(ctx.modelSpendDir, ctx.signer.address, claim, marker.revisionSubmissionCount ?? 0);
+      }
+      marker.modelBudget = { ...marker.modelBudget!, remainingCents: 0 };
       // Reserve before starting the host. Without an authenticated usage receipt,
       // success, failure, timeout and interruption all consume the reservation.
       saveState(ctx.stateDir, state);
     }
-    const result = await runExecutor({
+    const execute = reviewInputs === undefined ? runExecutor : ctx.reviewRoom?.execute;
+    if (!execute) throw new Error("This revision needs an isolated job room.");
+    const result = await execute({
       argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents),
       prompt,
+      ...(reviewInputs?.length ? { reviewInputs } : {}),
       timeoutMs: ctx.config.executorTimeoutMs,
       envAllowlist: ctx.config.executorEnvAllowlist,
       unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
@@ -2167,9 +2193,13 @@ export async function processCandidate(
     claimedAt: claimStartedAt,
     phase: "claiming",
     ...(options.authorizeChosen ? { chosen: true } : {}),
-    ...(budget !== undefined ? { modelBudget: { totalCents: budget, remainingCents: budget } } : {}),
+    ...(budget !== undefined ? { modelBudget: claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive) } : {}),
     ...labels,
   };
+  if (budget !== undefined && ctx.modelSpendDir) {
+    const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
+    enrollClaimBudget(ctx.modelSpendDir, ctx.signer.address, claim);
+  }
   saveState(ctx.stateDir, claimingState);
 
   const parentTask = reboundCandidate.parentTask ?? null;
@@ -2352,6 +2382,10 @@ export async function resumeOpenClaim(
     }
   }
 
+  if (submission && marker.revisionSubmissionCount !== undefined &&
+      submission.account.submissionCount < marker.revisionSubmissionCount) {
+    return { status: "execution-failed", task, reason: "Waiting for the current delivery round." };
+  }
   let revisionRound = false;
   if (
     submission !== null &&
@@ -2361,6 +2395,18 @@ export async function resumeOpenClaim(
   ) {
     revisionRound = true;
     if (marker.revisionSubmissionCount !== submission.account.submissionCount) {
+      if (marker.phase === "submitting" && marker.submission &&
+          (submission.account.submissionCount !== (marker.revisionSubmissionCount ?? 0) + 1 ||
+           hashHex(submission.account.proofHash) !== marker.submission.resultHashHex)) {
+        return { status: "execution-failed", task, reason: "Waiting for confirmation of the prepared delivery." };
+      }
+      const signature = marker.submission?.transactionSignature;
+      if (marker.phase === "submitting" && signature) {
+        const status = await ctx.client.transport?.getSignatureStatus?.(signature).catch(() => null);
+        if (!status || status.err !== null || !["confirmed", "finalized"].includes(status.confirmationStatus ?? "")) {
+          return { status: "execution-failed", task, reason: "Waiting for confirmation of the prepared delivery." };
+        }
+      }
       restoreRevisionRound(
         ctx,
         task,
@@ -2649,13 +2695,27 @@ export async function resumeOpenClaim(
     saveState(ctx.stateDir, claimedState);
   }
   let changesRequest: taskThread.TaskThreadEnvelope | null = null;
+  let reviewInputs: ReviewInputFile[] = [];
   if (revisionRound) {
+    if (!ctx.reviewRoom || ctx.config.executorMode === "unsafe") {
+      const reason = "This revision needs an isolated job room.";
+      ctx.log({ event: "task.revision-room-unavailable", task, reason });
+      return { status: "execution-failed", task, reason };
+    }
     try {
       changesRequest = await resolveRevisionRequest(
         ctx,
         task,
         submission!.account.rejectionHash,
       );
+      if (ctx.readReviewArtifact) {
+        reviewInputs = await readReviewInputs(changesRequest, ctx.readReviewArtifact, ctx.reviewRoom.fileProblem);
+      } else if (changesRequest.attachments.some(file => {
+        const url = new URL(file.uri);
+        return url.hash && url.pathname.endsWith("/" + file.hash);
+      })) {
+        throw new ReviewArtifactUnavailable("This job room cannot read the published input files.");
+      }
     } catch (error) {
       const reason = formatDiagnosticError(error);
       ctx.log({ event: "task.revision-feedback-unavailable", task, reason });
@@ -2706,6 +2766,11 @@ export async function resumeOpenClaim(
       new Uint8Array(decodedTask.description),
     );
     prompt = buildPrompt(description, verified.content, changesRequest, listingMetadata);
+    if (changesRequest) {
+      const limits = [decodedTask.deadline, claim.expiresAt].filter(time => time > 0n);
+      if (limits.length) prompt += "\nRevised delivery due " + new Date(Math.min(...limits.map(Number)) * 1000).toISOString();
+    }
+    if (reviewInputs.length) prompt += "\nVerified revision files are in the inputs folder.";
     assertExecutorPromptFits(prompt);
   } catch (error) {
     const reason = formatDiagnosticError(error);
@@ -2720,13 +2785,13 @@ export async function resumeOpenClaim(
     return ctx.withChosenRoom(async signal => {
       await ctx.checkChosenRoom!(signal);
       signal.throwIfAborted();
-      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified);
+      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined);
     }).catch(error => {
       ctx.log({ event: "task.execution-not-ready", task, reason: formatDiagnosticError(error) });
       return { status: "held" as const, task };
     });
   }
-  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined);
 }
 
 /** One observed settlement (or terminal outcome) for a tracked submission. */
@@ -2885,17 +2950,20 @@ export async function checkSettlements(
       if (
         claim !== null &&
         submission !== null &&
-        isRevisionRequested(decodedTask, claim, submission.account)
+        isRevisionRequested(decodedTask, claim, submission.account) &&
+        submission.account.submissionCount > (record.modelBudget?.revisionRound ?? 0) &&
+        hashHex(submission.account.proofHash) === record.resultHashHex
       ) {
         state.submissions = state.submissions.filter(
           (candidate) => candidate !== record,
         );
+        const revisionBudget = budgetForRevision(record.modelBudget, submission.account.submissionCount);
         state.openClaim = {
           task: record.task,
           claimedAt: claimTimestamp(claim, record.submittedAt),
           phase: "claimed",
           ...(record.chosen && { chosen: true }),
-          ...(record.modelBudget !== undefined ? { modelBudget: record.modelBudget } : {}),
+          ...(revisionBudget !== undefined ? { modelBudget: revisionBudget } : {}),
           ...(record.jobEvidenceRef !== undefined ? { jobEvidenceRef: record.jobEvidenceRef } : {}),
           revisionSubmissionCount: submission.account.submissionCount,
           ...(record.title !== undefined ? { title: record.title } : {}),

@@ -203,6 +203,8 @@ export interface JobRecord {
   ownerApproved?: boolean;
   approvalId?: string;
   approvedCosts?: { networkFees?: string; cancellationRent?: string; total: string; kept: string; protocolFeeBps: number; expiresAt: number };
+  revisionDeadlines?: Record<string, number>;
+  reviewDraft?: import("./client/reviews.js").ReviewDraft;
   id: string;
   role: "buying" | "working";
   /**
@@ -272,6 +274,8 @@ export interface JobRecord {
   approvalAttemptAt?: number | null;
 
   chainStatus: ChainTaskStatus | null;
+  /** Learned from the task account, including when refreshing an older record. */
+  tokenReward?: boolean;
   /** Unix seconds: the provider's deadline. */
   deadline: number | null;
   /** Unix seconds: when an unreviewed delivery pays out by itself. */
@@ -417,7 +421,15 @@ export interface WalletState {
   agents: Record<string, AgentRecord>;
   jobs: Record<string, JobRecord>;
   /** Seller delivery cache and durable review-change timestamps. */
+  reviewIntents?: Record<string, {
+    payer: string; agentId: string | null; rate: number | null; reconciled?: boolean;
+    intendedDelivery?: import("./client/reviews.js").ReviewedDelivery;
+    quoteId: string; action: string; createdAt: number; hashes: string[]; published?: string[]; confirmed: boolean;
+    receipt?: PendingListingSend;
+  }>;
   workRecords?: Record<string, {
+    revisionDeadlines?: Record<string, number>;
+    reviewDraft?: import("./client/reviews.js").ReviewDraft;
     result?: JobResult;
     request?: string;
     acceptance?: string[];
