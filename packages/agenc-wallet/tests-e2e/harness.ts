@@ -16,6 +16,25 @@ import { AgencWallet, type WalletConfig } from "../src/wallet.js";
 export const CENT = 100_000n;
 export const SOL = 1_000_000_000n;
 
+/** Simulate the owner reviewing and approving any above-budget startup funding. */
+export async function setEarnWithApproval(wallet: AgencWallet, agentId: string, enabled: boolean, minPayCents?: number) {
+  if (enabled) {
+    const quote = await wallet.quoteEarn(agentId);
+    if (quote.requiresApproval) await wallet.approveEarnFunding(quote.quoteId);
+  }
+  return wallet.setEarn(agentId, enabled, minPayCents);
+}
+
+/** Simulate the owner approving the complete offer quote before saving the service. */
+export async function setOfferWithApproval(wallet: AgencWallet, ...args: Parameters<AgencWallet["setOffer"]>) {
+  const [agentId, offer, offerId] = args;
+  if (offer !== null) {
+    const quote = await wallet.quoteEarn(agentId, offer, offerId);
+    if (quote.requiresApproval) await wallet.approveEarnFunding(quote.quoteId);
+  }
+  return wallet.setOffer(...args);
+}
+
 export const HAIKU: HouseService = {
   name: "Haiku Writer",
   category: "writing",

@@ -92,7 +92,7 @@ export interface AgentRecord {
   /** Lifetime lamports earned as a provider. */
   earnedLamports: string;
   /** Automatic top-ups in the last day, for the per-day rule. */
-  refills: { ts: number; lamports: string }[];
+  refills: { ts: number; lamports: string; usdCents?: number | null }[];
   earn: {
     enabled: boolean;
     minPayCents: number;

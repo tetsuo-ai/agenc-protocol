@@ -1,3 +1,4 @@
+import { setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // Offering a service: an earning agent lists one thing it does, another
 // agent hires it, the stock worker loop does the job, and the pay shows up.
 // The service is only on the marketplace while someone is there to do it.
@@ -53,8 +54,8 @@ async function offerReaches(
 async function startOffering(): Promise<{ current: World; worker: AgentView }> {
   world = await startWorld({ earn: EARN });
   const created = await world.wallet.createAgent("Worker");
-  await world.wallet.setEarn(created.id, true, 10);
-  await world.wallet.setOffer(created.id, LINE_WRITER);
+  await setEarnWithApproval(world.wallet, created.id, true, 10);
+  await setOfferWithApproval(world.wallet, created.id, LINE_WRITER);
   return { current: world, worker: await offerReaches(world, created.id, "live") };
 }
 
@@ -67,11 +68,11 @@ describe("offering a service", () => {
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
 
-    const before = await wallet.setEarn(worker.id, true, 10);
+    const before = await setEarnWithApproval(wallet, worker.id, true, 10);
     // The one-time cost is known before anything is spent on it.
     expect(BigInt(before.earn.offerCost!.lamports)).toBeGreaterThan(0n);
 
-    const offered = await wallet.setOffer(worker.id, LINE_WRITER);
+    const offered = await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
     expect(offered.earn.offer).toMatchObject({ name: "Line Writer", summary: LINE_WRITER.summary });
     expect(offered.earn.offer!.price.usdCents).toBe(30);
 
@@ -152,8 +153,8 @@ describe("offering a service", () => {
     const { wallet, sandbox } = world;
     expect((await wallet.overview()).earning).toBe("own-jobs");
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINE_WRITER);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
     const live = await offerReaches(world, worker.id, "live");
 
     // A stranger's public job is left alone, however long it waits.
@@ -197,8 +198,8 @@ describe("offering a service", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINE_WRITER);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
     const live = await offerReaches(world, worker.id, "live");
 
     // A public job is done and its buyer is in no hurry to pay.
@@ -234,8 +235,8 @@ describe("offering a service", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINE_WRITER);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
     const live = await offerReaches(world, worker.id, "live");
 
     // The worker's wallet is short when the hire arrives.
@@ -265,7 +266,7 @@ describe("offering a service", () => {
     const listing = worker.earn.offer!.listing as Address;
     const buyer = await current.wallet.createAgent("Buyer");
 
-    const off = await current.wallet.setEarn(worker.id, false);
+    const off = await setEarnWithApproval(current.wallet, worker.id, false);
     expect(off.earn.offer).toMatchObject({
       status: "paused",
       statusText: "Off offer while taking jobs is switched off.",
@@ -278,7 +279,7 @@ describe("offering a service", () => {
       current.wallet.hire({ agentId: buyer.id, listing, request: "Write a line." }),
     ).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
 
-    await current.wallet.setEarn(worker.id, true);
+    await setEarnWithApproval(current.wallet, worker.id, true);
     await offerReaches(current, worker.id, "live");
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(0);
     expect((await current.wallet.find({})).services.map((service) => service.listing)).toContain(listing);
@@ -288,7 +289,7 @@ describe("offering a service", () => {
     const { current, worker } = await startOffering();
     const listing = worker.earn.offer!.listing as Address;
 
-    await current.wallet.setOffer(worker.id, { ...LINE_WRITER, price: { usdCents: 45 } });
+    await setOfferWithApproval(current.wallet, worker.id, { ...LINE_WRITER, price: { usdCents: 45 } });
     const repriced = await offerReaches(current, worker.id, "live");
     expect(repriced.earn.offer!.price.usdCents).toBe(45);
     // The marketplace carries exactly the price the wallet recorded.
@@ -297,7 +298,7 @@ describe("offering a service", () => {
     );
 
     // New words are checked again before the service is back on offer.
-    const reworded = await current.wallet.setOffer(worker.id, {
+    const reworded = await setOfferWithApproval(current.wallet, worker.id, {
       ...LINE_WRITER,
       price: { usdCents: 45 },
       summary: "Two friendly lines about anything you name.",
@@ -321,14 +322,14 @@ describe("offering a service", () => {
     const { current, worker } = await startOffering();
     const listing = worker.earn.offer!.listing as Address;
 
-    const withdrawn = await current.wallet.setOffer(worker.id, null);
+    const withdrawn = await setOfferWithApproval(current.wallet, worker.id, null);
     expect(withdrawn.earn.offer).toMatchObject({ status: "paused", statusText: "Off offer." });
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(1);
     // Housekeeping leaves a withdrawn service alone.
     await current.wallet.tick();
     expect(Number((await readListing(current.sandbox.chain, listing))!.state)).toBe(1);
 
-    await current.wallet.setOffer(worker.id, LINE_WRITER);
+    await setOfferWithApproval(current.wallet, worker.id, LINE_WRITER);
     const back = await offerReaches(current, worker.id, "live");
     expect(back.earn.offer!.listing).toBe(listing);
   }, 120_000);
@@ -362,12 +363,12 @@ describe("offering a service", () => {
     const worker = await wallet.createAgent("Worker");
     const buyer = await wallet.createAgent("Buyer");
     await wallet.setBudget(buyer.id, 500);
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINE_WRITER);
+    await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
 
-    // Not on offer yet: nobody can find it.
+    // Earning is off: nobody can find it.
     expect((await wallet.find({ query: "friendly line" })).services.map((service) => service.name)).not.toContain("Line Writer");
 
+    await setEarnWithApproval(wallet, worker.id, true, 10);
     const live = await offerReaches(world, worker.id, "live");
     const listing = live.earn.offer!.listing as Address;
     const found = (await wallet.find({ query: "friendly line" })).services.filter((service) => service.name === "Line Writer");
@@ -384,7 +385,7 @@ describe("offering a service", () => {
     expect(job.status).toBe("waiting");
 
     // Off offer again, it is not offered to anyone.
-    await wallet.setOffer(worker.id, null);
+    await setOfferWithApproval(wallet, worker.id, null);
     expect((await wallet.find({ query: "friendly line" })).services.map((service) => service.name)).not.toContain("Line Writer");
   }, 120_000);
 
@@ -405,8 +406,8 @@ describe("offering a service", () => {
     });
     const current = world;
     const created = await current.wallet.createAgent("Worker");
-    await current.wallet.setEarn(created.id, true, 10);
-    await current.wallet.setOffer(created.id, LINE_WRITER);
+    await setEarnWithApproval(current.wallet, created.id, true, 10);
+    await setOfferWithApproval(current.wallet, created.id, LINE_WRITER);
     const worker = await offerReaches(current, created.id, "live");
     const listing = worker.earn.offer!.listing as Address;
     const before = (await readListing(current.sandbox.chain, listing))!;
@@ -467,8 +468,8 @@ describe("offering a service", () => {
       return attest(input);
     };
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, { ...LINE_WRITER, summary: "Something forbidden." });
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, { ...LINE_WRITER, summary: "Something forbidden." });
 
     const refused = await offerReaches(world, worker.id, "problem");
     expect(refused.earn.offer!.statusText).toBe("The description did not pass the safety check.");
@@ -479,7 +480,7 @@ describe("offering a service", () => {
     expect(asked).toBe(1);
 
     // Different words are a new question.
-    await wallet.setOffer(worker.id, LINE_WRITER);
+    await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
     await offerReaches(world, worker.id, "live");
     expect(asked).toBe(2);
   }, 120_000);
@@ -488,9 +489,11 @@ describe("offering a service", () => {
     world = await startWorld({ earn: EARN });
     const { wallet } = world;
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
     // Everything else leaves the wallet before the service is offered.
     await wallet.withdraw(world.listing, "all");
+    const quote = await wallet.quoteEarn(worker.id, LINE_WRITER);
+    await expect(wallet.approveEarnFunding(quote.quoteId)).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
     await wallet.setOffer(worker.id, LINE_WRITER);
 
     const stuck = await offerReaches(world, worker.id, "problem");
@@ -521,7 +524,7 @@ describe("offering a service", () => {
       });
     }
     // Set before taking jobs is switched on, it simply waits.
-    const waiting = await world.wallet.setOffer(worker.id, LINE_WRITER);
+    const waiting = await setOfferWithApproval(world.wallet, worker.id, LINE_WRITER);
     expect(waiting.earn.offer).toMatchObject({
       status: "paused",
       statusText: "Off offer while taking jobs is switched off.",

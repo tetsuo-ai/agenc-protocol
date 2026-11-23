@@ -244,6 +244,10 @@ export type WorkerContext = {
    * buyers paid. Every other job still has to pay at least the floor.
    */
   owedTasks?: ReadonlyMap<string, bigint>;
+  /** Discover cheap service hires, then verify their provider before waiving the open-job floor. */
+  acceptServiceHiresBelowMinReward?: boolean;
+  /** Trusted host hook. Called before claiming and before every execution, including recovery. */
+  executorForTask?: (task: Task, address: Address) => Promise<string[]>;
 };
 
 /** The worker's on-chain identity. */
@@ -697,7 +701,7 @@ function passesLocalFilters(
   ) {
     return { ok: false, reason: "capabilities" };
   }
-  if (candidate.rewardAmount < config.minRewardLamports && ctx.owedTasks?.has(candidate.task) !== true) {
+  if (candidate.rewardAmount < config.minRewardLamports && ctx.owedTasks?.has(candidate.task) !== true && !ctx.acceptServiceHiresBelowMinReward) {
     return { ok: false, reason: "below-min-reward" };
   }
   if (
@@ -1771,7 +1775,7 @@ async function executeAndSubmit(
   let stdout: Buffer;
   try {
     const result = await runExecutor({
-      argv: ctx.config.executor,
+      argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task),
       prompt,
       timeoutMs: ctx.config.executorTimeoutMs,
       envAllowlist: ctx.config.executorEnvAllowlist,
@@ -1872,6 +1876,10 @@ export async function processCandidate(
     ctx.log({ event: "task.skipped", task, reason: hireBinding.rejection });
     return { status: "skipped", task, reason: hireBinding.rejection };
   }
+  if (!hireBinding.isHire && decodedTask.rewardAmount < ctx.config.minRewardLamports && ctx.owedTasks?.has(task) !== true) {
+    ctx.log({ event: "task.skipped", task, reason: "below-min-reward" });
+    return { status: "skipped", task, reason: "below-min-reward" };
+  }
 
   let verified: VerifiedJobSpec;
   try {
@@ -1942,6 +1950,8 @@ export async function processCandidate(
   // landed claim, but cannot begin another lifecycle it cannot fund through
   // submission.
   await assertFreshClaimFunding(ctx, agent, decodedTask);
+  // A missing host spending limit must stop the claim as well as execution.
+  await ctx.executorForTask?.(decodedTask, task);
 
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
@@ -3076,7 +3086,7 @@ async function runUpLocked(
     filter: {
       capabilities: ctx.config.capabilities,
       // Low enough to see a hire it owes; the local filters keep the floor for the rest.
-      minReward: [...(ctx.owedTasks?.values() ?? [])].reduce(
+      minReward: ctx.acceptServiceHiresBelowMinReward ? 0n : [...(ctx.owedTasks?.values() ?? [])].reduce(
         (least, reward) => (reward < least ? reward : least),
         ctx.config.minRewardLamports,
       ),

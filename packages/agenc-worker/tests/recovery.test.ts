@@ -616,7 +616,7 @@ describe("transaction-boundary recovery", () => {
     });
   });
 
-  it("claims a revision-5 hire only with its exact committed task hash", async () => {
+  it.each(["normal", "cheap-own", "cheap-open", "cheap-other", "above-max", "missing-budget"])("keeps hire funding and floor boundaries: %s", async (mode) => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-revision-5-hire-"),
     );
@@ -686,6 +686,47 @@ describe("transaction-boundary recovery", () => {
     );
     const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
     ctx.fetchUri = async () => body;
+
+    const candidate = { task: TASK, creator: CREATOR, rewardAmount: REWARD, rewardMint: null, requiredCapabilities: 1n, parentTask: PARENT };
+    if (mode.startsWith("cheap")) {
+      ctx.config.minRewardLamports = REWARD + 1n;
+      ctx.acceptServiceHiresBelowMinReward = true;
+    }
+    if (mode === "cheap-open") accounts.delete(hireRecordPda);
+    if (mode === "cheap-other") {
+      accounts.set(hireRecordPda, new Uint8Array(getHireRecordEncoder().encode({
+        task: TASK, listing: LEGACY_LISTING, operator: PARENT, operatorFeeBps: 0,
+        bump: hireRecordBump, designatedProvider: CREATOR, referrer: PARENT, referrerFeeBps: 0,
+      })));
+    }
+    if (mode === "above-max") {
+      ctx.acceptServiceHiresBelowMinReward = true;
+      ctx.config.maxRewardLamports = REWARD - 1n;
+    }
+    if (mode === "missing-budget") {
+      ctx.executorForTask = async () => { throw new Error("price unavailable"); };
+      await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow("price unavailable");
+      expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+      expect(loadState(stateDir).openClaim).toBeNull();
+      return;
+    }
+    if (["cheap-open", "cheap-other", "above-max"].includes(mode)) {
+      const fetch = vi.fn(ctx.fetchUri!);
+      ctx.fetchUri = fetch;
+      await expect(processCandidate(ctx, agent, candidate)).resolves.toMatchObject({
+        status: "skipped", reason: mode === "cheap-open" ? "below-min-reward" : mode === "cheap-other" ? "not-designated-provider" : "above-max-reward-cap",
+      });
+      expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(loadState(stateDir).openClaim).toBeNull();
+      return;
+    }
+    const budget = vi.fn(async (task, taskAddress) => {
+      expect(task.rewardAmount).toBe(REWARD);
+      expect(taskAddress).toBe(TASK);
+      return ctx.config.executor;
+    });
+    ctx.executorForTask = budget;
 
     await expect(
       processCandidate(ctx, agent, {
@@ -967,7 +1008,7 @@ describe("transaction-boundary recovery", () => {
     expect(loadState(stateDir).openClaim).toBeNull();
   });
 
-  it("recovers an already-landed claim before consulting the fresh-claim funding gate", async () => {
+  it.each([false, true])("recovers landed claims with the execution budget gate (unavailable: %s)", async (unavailable) => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-funded-recovery-order-"),
     );
@@ -1038,8 +1079,23 @@ describe("transaction-boundary recovery", () => {
     ctx.getBalance = getBalance;
     ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
 
+    const budget = vi.fn(async (task, taskAddress) => {
+      expect(task.rewardAmount).toBe(REWARD);
+      expect(taskAddress).toBe(TASK);
+      if (unavailable) throw new Error("price unavailable");
+      return ctx.config.executor;
+    });
+    ctx.executorForTask = budget;
     const result = await runTickOnce(ctx);
 
+    expect(budget).toHaveBeenCalledTimes(1);
+    if (unavailable) {
+      expect(result.outcome?.status).toBe("execution-failed");
+      expect(submitTaskResult).not.toHaveBeenCalled();
+      expect(loadState(stateDir).openClaim?.phase).toBe("claimed");
+      expect(loadState(stateDir).openClaim?.execution).toBeUndefined();
+      return;
+    }
     expect(result.outcome?.status).toBe("submitted");
     expect(loadState(stateDir).submissions[0]?.jobEvidence).toEqual({
       request: payload.summary, acceptance: payload.acceptance,

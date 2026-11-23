@@ -40,6 +40,29 @@ export interface AgentPolicy {
 
 export type EarnState = "off" | "starting" | "watching" | "working" | "error";
 
+/** Readonly upper bound for enabling earning and preparing the agent's offers. */
+export interface EarnFundingQuote {
+  quoteId: string;
+  agentId: string;
+  expiresAt: number;
+  /** Fixed SOL price to use in earn.offer when the input was in dollars. */
+  offerPrice: Money | null;
+  registration: Money;
+  listings: Money;
+  checks: Money;
+  workingReserve: Money;
+  networkReserve: Money;
+  agentBalance: Money;
+  /** Total required in the agent wallet, including money already there. */
+  requiredBalance: Money;
+  fromMain: Money;
+  transferFee: Money;
+  /** fromMain + transferFee. This is the most approval can move. */
+  totalFromMain: Money;
+  dailyRemaining: Money;
+  requiresApproval: boolean;
+}
+
 /**
  * Where a service the agent offers stands.
  *
@@ -499,6 +522,7 @@ export type WalletErrorCode =
   | "BAD_REQUEST"
   | "NOT_ALLOWED"
   | "NOT_ENOUGH_MONEY"
+  | "APPROVAL_REQUIRED"
   | "PRICE_CHANGED"
   | "NOT_AVAILABLE"
   | "NEEDS_APPROVAL"
