@@ -385,3 +385,18 @@ against malformed canonical accounts.
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+
+### Settlement consumer recovery
+
+`settlement.observed` uses a durable pending flag in each submission record.
+It can replay after a crash, even when there are no unsettled submissions left.
+A consumer of `WorkerContext.log` must persist synchronously before returning
+and deduplicate this event by task. Throwing leaves the event pending. The wallet
+host applies the credit and its task receipt in one atomic journal write.
+Pending events are never removed by settled-record retention.
+
+New submission records retain `jobEvidence: { request: string; acceptance: string[] }`
+from the verified job spec so sellers can inspect their agreed work after payment.
+These optional fields are read by this build. Older builds with strict state
+validation cannot read a ledger once it contains the new fields.

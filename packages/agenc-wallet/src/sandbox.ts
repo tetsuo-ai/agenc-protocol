@@ -69,6 +69,7 @@ import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
 import { fixedPrice, type PriceSource } from "./pricing.js";
+import { settledDeliveryFromLogs } from "./delivery-history.js";
 import { hiredListingFromLogs, settlementFactsFromLogs, settlementOf } from "./settlement.js";
 import {
   buildJobSpec,
@@ -476,6 +477,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     gpa,
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
+    findSettledDelivery: async (task, creator) => {
+      const worker = settledBy.get(task);
+      const logs = settledLogs.get(task);
+      return worker === undefined || logs === undefined ? null : settledDeliveryFromLogs(logs, task, creator, worker);
+    },
     findSettlement: async (task, creator, options) => {
       const worker = settledBy.get(task);
       const logs = settledLogs.get(task);

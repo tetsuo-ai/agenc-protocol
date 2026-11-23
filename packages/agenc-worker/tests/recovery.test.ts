@@ -978,6 +978,7 @@ describe("transaction-boundary recovery", () => {
     const payload = {
       title: "landed claim recovery",
       summary: "resume before checking fresh-claim funds",
+      acceptance: ["Keep the complete evidence."],
     };
     const digest = await values.canonicalJobSpecHash(payload);
     const body = new TextEncoder().encode(
@@ -1040,6 +1041,9 @@ describe("transaction-boundary recovery", () => {
     const result = await runTickOnce(ctx);
 
     expect(result.outcome?.status).toBe("submitted");
+    expect(loadState(stateDir).submissions[0]?.jobEvidence).toEqual({
+      request: payload.summary, acceptance: payload.acceptance,
+    });
     expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(submitTaskResult).toHaveBeenCalledTimes(1);
     expect(getBalance).not.toHaveBeenCalled();
@@ -2513,6 +2517,34 @@ describe("settlement evidence coherence", () => {
     });
     saveState(stateDir, state);
   }
+
+  it("replays settlements when the consumer crashes after the durable write", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-settlement-replay-"));
+    twoPendingJobs(stateDir);
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Completed)],
+      [SECOND_TASK, taskData(TaskStatus.Completed, { rewardAmount: SECOND_REWARD })],
+      [WORKER, agentRegistrationData(50n + FIRST_PAY + SECOND_PAY)],
+    ]);
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, {}, events);
+    const consume = ctx.log;
+    ctx.log = (event) => {
+      if (event.event === "settlement.observed") throw new Error("consumer crashed");
+    };
+    await expect(checkSettlements(ctx, agent)).rejects.toThrow("consumer crashed");
+    expect(loadState(stateDir).submissions.every((record) => record.settled && record.settlementEventPending)).toBe(true);
+    const baseline = loadState(stateDir).totalEarnedBaseline;
+    ctx.log = consume;
+    // No chain accounts are needed for a durable event replay.
+    accounts.clear();
+    expect(await checkSettlements(ctx, agent)).toEqual([]);
+    expect(events.filter((event) => event.event === "settlement.observed").map((event) => event.earnedLamports)).toEqual([FIRST_PAY.toString(), SECOND_PAY.toString()]);
+    expect(loadState(stateDir).totalEarnedBaseline).toBe(baseline);
+    expect(loadState(stateDir).submissions.every((record) => record.settlementEventPending === false)).toBe(true);
+    await checkSettlements(ctx, agent);
+    expect(events.filter((event) => event.event === "settlement.observed")).toHaveLength(2);
+  });
 
   it("counts two jobs paid in one round, each with what it paid", async () => {
     const stateDir = mkdtempSync(

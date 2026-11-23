@@ -183,6 +183,17 @@ describe("versioned fail-closed worker state", () => {
     expect(state.submissions[0]?.task).toBe("5");
   });
 
+  it("never prunes an unacknowledged settlement event", () => {
+    const state = emptyState();
+    state.submissions = [{
+      ...pendingSubmission(), settled: true, outcome: "accepted", earnedLamports: "1",
+      settlementSignature: null, settledAt: "2026-07-18T00:00:00.000Z", settlementEventPending: true,
+    }];
+    expect(pruneSettledSubmissions(state, 0)).toBe(0);
+    state.submissions[0]!.settlementEventPending = false;
+    expect(pruneSettledSubmissions(state, 0)).toBe(1);
+  });
+
   it("rejects an oversized state file before reading or parsing it", () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-large-"));
     const statePath = path.join(stateDir, "state.json");
