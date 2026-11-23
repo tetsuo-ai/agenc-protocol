@@ -64,6 +64,38 @@ function wallet(answers: Record<string, unknown>) {
   return { client, calls };
 }
 
+describe("market tool IDs", () => {
+  it("passes a 68-character seller job ID through status and review", async () => {
+    // Recorded from a paid seller job in the LiteSVM wallet suite.
+    const jobId = "earn_agent_qkhtzxfpd_gf_2PuKGjGNyhUyaGoF98LUsW5JGjqRayXGyCfVQnSajAt3";
+    expect(jobId).toHaveLength(68);
+    const answer = { job: job({ id: jobId, role: "working" }) };
+    const { client, calls } = wallet({ "jobs.get": answer, "jobs.askChanges": answer });
+    await runMarketTool(client, "agent_qkhtzxfpd_gf", "market_status", { job_id: jobId });
+    await runMarketTool(client, "agent_qkhtzxfpd_gf", "market_review", {
+      job_id: jobId, action: "ask_changes", note: "Use two lines.",
+    });
+    expect(calls).toEqual([
+      ["jobs.get", { jobId }],
+      ["jobs.askChanges", { jobId, note: "Use two lines." }],
+    ]);
+  });
+
+  it.each([
+    ["market_status", "job_id", {}, "jobs.get"],
+    ["market_review", "job_id", { action: "refund" }, "jobs.refund"],
+    ["market_hire", "service", { request: "Write two lines." }, "market.hire"],
+  ] as const)("%s accepts up to 128 characters in %s", async (name, field, args, method) => {
+    const schema = MARKET_TOOLS.find((tool) => tool.name === name)!.inputSchema;
+    expect(schema.properties).toMatchObject({ [field]: { maxLength: 128 } });
+    const { client, calls } = wallet({ [method]: { job: job(), approval: null } });
+    const run = (length: number) => runMarketTool(client, "agent_1", name, { ...args, [field]: "x".repeat(length) });
+    expect((await run(128)).ok).toBe(true);
+    expect(await run(129)).toMatchObject({ ok: false, message: expect.stringContaining("128") });
+    expect(calls.map(([called]) => called)).toEqual([method]);
+  });
+});
+
 describe("market_post", () => {
   it("is one of five tools, and its arguments are spelled out", () => {
     expect(MARKET_TOOLS.map((tool) => tool.name)).toEqual([

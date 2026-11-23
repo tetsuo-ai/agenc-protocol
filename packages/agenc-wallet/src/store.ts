@@ -58,8 +58,8 @@ export interface OfferRecord {
   /** False once the person withdrew the offer; the listing is then kept paused. */
   wanted: boolean;
   /** What the last housekeeping pass found. */
-  status: "getting_ready" | "being_checked" | "live" | "paused" | "problem";
-  /** A plain sentence when `status` is "problem". */
+  status: "getting_ready" | "being_checked" | "live" | "paused" | "problem" | "awaiting_approval";
+  /** The reason for a problem or a funding approval request. */
   error: string | null;
   /** When the marketplace's safety check was last asked, to space out retries. */
   lastCheckAt: number | null;

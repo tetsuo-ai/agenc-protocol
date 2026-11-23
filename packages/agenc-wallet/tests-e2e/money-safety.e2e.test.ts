@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { EarnHost } from "../src/earn.js";
 import { connectWallet } from "../src/client/socket-client.js";
 import { serveWallet } from "../src/server.js";
 import { readListing } from "../src/market.js";
 import type { Address } from "@solana/kit";
-import { CENT, SOL, eventually, startWorld, type World } from "./harness.js";
+import { CENT, SOL, eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
 
 const EARN = {
   executor: {
@@ -128,6 +129,74 @@ describe("selling money safety", () => {
     await live(a.id);
     expect(charges(a.id).reduce((s, c) => s + c.usdCents, 0)).toBeGreaterThan(cap);
   }, 30_000);
+
+  it("tries offer funding once across ticks and restart, then once after owner approval", async () => {
+    world = await startWorld({ earn: EARN });
+    const seller = await world.wallet.createAgent();
+    const offer = { ...OFFER, price: { lamports: "3000000" } };
+    await world.wallet.setOffer(seller.id, offer);
+    await setEarnWithApproval(world.wallet, seller.id, true);
+    await live(seller.id);
+    await world.wallet.reclaimFromAgent(seller.id, { lamports: "1000000" });
+
+    // Defer the price update to housekeeping. Each funding quote reads the job deposits once.
+    using attempts = vi.spyOn(EarnHost.prototype, "jobDeposits");
+    attempts.mockRejectedValueOnce(new Error("Marketplace temporarily offline"));
+    const changed = { ...offer, price: { lamports: "5000000" } };
+    await world.wallet.setOffer(seller.id, changed);
+    attempts.mockClear();
+    for (let tick = 0; tick < 3; tick++) await world.wallet.tick();
+    const problem = { status: "problem", statusText: expect.stringMatching(/funding needs your approval/i) };
+    expect((await view(seller.id)).earn.offer).toMatchObject(problem);
+    expect(attempts).toHaveBeenCalledTimes(1);
+
+    await world.wallet.close();
+    world.wallet = await world.reopen();
+    await world.wallet.setOffer(seller.id, changed);
+    await world.wallet.tick();
+    expect((await view(seller.id)).earn.offer).toMatchObject(problem);
+    expect(attempts).toHaveBeenCalledTimes(1);
+
+    const quote = await world.wallet.quoteEarn(seller.id);
+    expect(quote.requiresApproval).toBe(true);
+    attempts.mockClear();
+    await world.wallet.approveEarnFunding(quote.quoteId);
+    const resumed = await live(seller.id);
+    for (let tick = 0; tick < 3; tick++) await world.wallet.tick();
+    expect(attempts).toHaveBeenCalledTimes(1);
+    expect(await readListing(world.sandbox.chain, resumed.earn.offer!.listing as Address)).toMatchObject({ price: 5000000n });
+  });
+
+  it("retries only the edited offer until earning is switched off and on", async () => {
+    world = await startWorld({ earn: EARN });
+    const { wallet } = world;
+    const seller = await wallet.createAgent();
+    await setEarnWithApproval(wallet, seller.id, true);
+    const first = { ...OFFER, price: { lamports: "3000000" } };
+    const second = { ...first, name: "Editor" };
+    await wallet.setOffer(seller.id, first);
+    await wallet.setOffer(seller.id, second);
+    const statuses = async () => (await view(seller.id)).earn.offers.map((offer) => offer.status);
+    await eventually(async () => {
+      await wallet.tick();
+      return (await statuses()).every((status) => status === "problem");
+    });
+
+    const quote = await wallet.quoteEarn(seller.id);
+    await wallet.fundAgent(seller.id, { lamports: quote.fromMain.lamports });
+    await wallet.tick();
+    expect(await statuses()).toEqual(["problem", "problem"]);
+    await wallet.setOffer(seller.id, { ...first, summary: "Write two lines." });
+    await wallet.tick();
+    expect(await statuses()).toEqual(["live", "problem"]);
+
+    await wallet.setEarn(seller.id, false);
+    await wallet.setEarn(seller.id, true);
+    await eventually(async () => {
+      await wallet.tick();
+      return (await statuses()).every((status) => status === "live");
+    });
+  });
 
   it("persists a reservation before an ambiguous transfer and does not retry outside the cap", async () => {
     let fail = true;

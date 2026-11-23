@@ -364,6 +364,13 @@ function newId(prefix: string): string {
   return `${prefix}_${randomBytes(9).toString("base64url")}`;
 }
 
+function clearOfferFundingWait(offer: OfferRecord): void {
+  if (offer.status !== "awaiting_approval") return;
+  offer.status = "getting_ready";
+  offer.error = null;
+  delete offer.reconciledForLive;
+}
+
 function clampName(value: string): string {
   const name = tidyText(value, 40);
   if (name === null) throw new WalletError("BAD_REQUEST", "Give the agent a name.");
@@ -957,7 +964,8 @@ export class AgencWallet {
   }
 
   #offerView(agent: AgentRecord, offer: OfferRecord, rate: number | null): OfferView {
-    const statusText: Record<OfferRecord["status"], string> = {
+    const status = offer.status === "awaiting_approval" ? "problem" : offer.status;
+    const statusText: Record<OfferView["status"], string> = {
       getting_ready: agent.earn.enabled
         ? "Getting ready to go on offer."
         : "Switch on taking jobs to put this on offer.",
@@ -972,8 +980,8 @@ export class AgencWallet {
       name: offer.name,
       summary: offer.summary,
       price: money(offer.priceLamports, rate),
-      status: offer.status,
-      statusText: statusText[offer.status],
+      status,
+      statusText: statusText[status],
       listed: offer.listed,
       wanted: offer.wanted,
     };
@@ -4185,6 +4193,11 @@ export class AgencWallet {
       if (amount > 0n)
         await this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`, { approved: true });
     });
+    // A pass that was already waiting on funding must record its result first.
+    await this.#lock(`offer:${agent.id}`, async () => {
+      this.#store.update((draft) => agentOffers(draft.agents[agent.id]!).forEach(clearOfferFundingWait));
+      this.#emit({ type: "overview" });
+    });
     return this.#oneAgentView(agent.id);
   }
 
@@ -4319,6 +4332,7 @@ export class AgencWallet {
     if (enabled) this.#refuseIfRetired(this.#agentRecord(agentId));
     this.#store.update((draft) => {
       const entry = draft.agents[agentId]!;
+      if (entry.earn.enabled !== enabled) agentOffers(entry).forEach(clearOfferFundingWait);
       entry.earn.enabled = enabled && entry.earn.retiredAt == null;
       entry.earn.lastError = null;
       if (minPayCents !== undefined) entry.earn.minPayCents = Math.round(minPayCents);
@@ -4592,6 +4606,7 @@ export class AgencWallet {
       }
       if (target !== undefined && target.wanted) {
         this.#patchOffer(agentId, target.id, (offer) => {
+          clearOfferFundingWait(offer);
           offer.wanted = false;
           delete offer.reconciledForLive;
           offer.error = null;
@@ -4654,6 +4669,7 @@ export class AgencWallet {
       const list = agentOffers(entry);
       const previous = list.find((offer) => offer.id === id) ?? null;
       const sameWords = previous !== null && previous.specHashHex === hash.hex;
+      if (previous?.status === "awaiting_approval" && sameWords && previous.priceLamports === price) return;
       const next: OfferRecord = {
         id,
         listingIdHex: previous?.listingIdHex ?? values.bytesToHex(values.randomId32()),
@@ -4764,7 +4780,7 @@ export class AgencWallet {
         return await this.#withListingTransport(agentId, signal, async () => {
           if (!await this.#reconcileListingSends(agentId)) return false;
           const agent = this.#agentRecord(agentId);
-          const remaining = agentOffers(agent).filter((offer) => offer.reconciledForLive !== this.#wantsLive(agent, offer));
+          const remaining = agentOffers(agent).filter((offer) => this.#offerNeedsStep(agent, offer));
           try {
             await this.#offerStatesTogether(agentId, remaining);
           } catch (error) {
@@ -4789,12 +4805,12 @@ export class AgencWallet {
               }
             } catch (error) {
               if (shutdown || signal.aborted || this.#agentRecord(agentId).earn.pendingListingSends?.length) throw error;
-              this.#offerFailed(agentId, offer.id, error);
+              this.#offerFailed(agentId, offer, error);
             }
           }
           signal.throwIfAborted();
           const current = this.#agentRecord(agentId);
-          if (agentOffers(current).some((offer) => offer.reconciledForLive !== this.#wantsLive(current, offer))) return false;
+          if (agentOffers(current).some((offer) => this.#offerNeedsStep(current, offer))) return false;
           this.#store.update((draft) => {
             const record = draft.agents[agentId]!;
             record.earn.listingReconciliationRequired = false;
@@ -4811,7 +4827,7 @@ export class AgencWallet {
   }
 
   /** A failed step: say so when a person has to act, otherwise try again later. */
-  #offerFailed(agentId: string, offerId: string, error: unknown): void {
+  #offerFailed(agentId: string, attempted: OfferRecord, error: unknown): void {
     this.#log(`offer ${agentId}: ${describeError(error)}`);
     const text = error instanceof Error ? error.message : String(error);
     let message: string | null = null;
@@ -4825,8 +4841,19 @@ export class AgencWallet {
     }
     if (message === null) return;
     const sentence = message;
-    this.#patchOffer(agentId, offerId, (offer) => {
-      offer.status = "problem";
+    this.#patchOffer(agentId, attempted.id, (offer) => {
+      if (offer.status === "awaiting_approval") return;
+      if (error instanceof WalletError && error.code === "APPROVAL_REQUIRED") {
+        // The owner may have edited or withdrawn the offer while funding was being checked.
+        if (
+          !this.#agentRecord(agentId).earn.enabled || !offer.wanted ||
+          offer.specHashHex !== attempted.specHashHex || offer.priceLamports !== attempted.priceLamports
+        ) return;
+        offer.status = "awaiting_approval";
+        offer.lastCheckAt = null;
+      } else {
+        offer.status = "problem";
+      }
       offer.error = sentence;
     });
     this.#emit({ type: "overview" });
@@ -4846,6 +4873,13 @@ export class AgencWallet {
     );
   }
 
+  #offerNeedsStep(agent: AgentRecord, offer: OfferRecord): boolean {
+    const wantLive = this.#wantsLive(agent, offer);
+    // A listed service must still pause when discovery stops or the wallet closes.
+    if (offer.status === "awaiting_approval" && (wantLive || !offer.listed)) return false;
+    return offer.reconciledForLive !== wantLive;
+  }
+
   /**
    * Several of an agent's services going off offer, or back on as they
    * were, go in one transaction: one fee for all of them instead of one
@@ -4855,7 +4889,8 @@ export class AgencWallet {
   async #offerStatesTogether(agentId: string, remaining: OfferRecord[]): Promise<void> {
     const agent = this.#store.state.agents[agentId];
     if (agent === undefined) return;
-    const offers = remaining.filter((offer) => offer.listed && offer.listing !== null &&
+    const offers = remaining.filter((offer) =>
+      offer.status !== "awaiting_approval" && offer.listed && offer.listing !== null &&
       (this.#wantsLive(agent, offer) || offer.status !== "paused"));
     if (offers.length < 2) return;
     const providerAgent = await this.#earn.marketplaceAgent(agentId);
@@ -4911,10 +4946,10 @@ export class AgencWallet {
   async #offerStep(agentId: string, offerId: string): Promise<boolean> {
     const agent = this.#store.state.agents[agentId];
     const offer = agent === undefined ? null : (agentOffers(agent).find((entry) => entry.id === offerId) ?? null);
-    if (agent === undefined || offer === null) return false;
+    if (agent === undefined || offer === null || !this.#offerNeedsStep(agent, offer)) return false;
     const wantLive = this.#wantsLive(agent, offer);
     const settle = (status: OfferRecord["status"], error: string | null = null): false => {
-      if (offer.status !== status || offer.error !== error) {
+      if (offer.status !== "awaiting_approval" && (offer.status !== status || offer.error !== error)) {
         this.#patchOffer(agentId, offerId, (entry) => {
           entry.status = status;
           entry.error = error;
