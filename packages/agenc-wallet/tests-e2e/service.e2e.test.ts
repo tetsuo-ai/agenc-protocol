@@ -11,7 +11,7 @@ import { connectWallet, type WalletClient } from "../src/client/socket-client.js
 import { runMarketTool } from "../src/client/tools.js";
 import { MAX_FRAME_BYTES, type WalletEvent } from "../src/client/protocol.js";
 import { agentToken, serveWallet, type WalletServer } from "../src/server.js";
-import { eventually, startWorld, type World } from "./harness.js";
+import { REVIEW_ALLOWANCE, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 let server: WalletServer | null = null;
@@ -250,21 +250,26 @@ describe("the wallet service", () => {
     expect(delivered.job!.status).toBe("delivered");
     expect(delivered.job!.delivery?.untrusted_content).toContain("A haiku about a lighthouse.");
     expect(delivered.job!.delivery?.matches_recorded_fingerprint).toBe(true);
-    expect(delivered.job!.can).toEqual(["approve", "ask_changes"]);
+    expect(delivered.job!.can).toEqual(["ask_changes", "draft_rejection", "record"]);
 
     const refused = await runMarketTool(agent, agentView.id, "market_review", {
       job_id: hired.job!.job_id,
       action: "refund",
     });
     expect(refused.ok).toBe(false);
-    expect(refused.message).toMatch(/user's decision/);
+    expect(refused.message).toMatch(/confirm.*Market/);
 
-    const paid = await runMarketTool(agent, agentView.id, "market_review", {
-      job_id: hired.job!.job_id,
-      action: "approve",
-    });
-    expect(paid.ok).toBe(true);
-    expect(paid.job!.status).toBe("paid");
+    const jobId = hired.job!.job_id;
+    const { quote } = await owner.call("jobs.reviewRecord", { jobId });
+    for (const client of [agent, owner]) {
+      await expect(client.call("jobs.approve", { jobId })).rejects.toThrow(/Market/);
+      await expect(client.call("jobs.askChanges", { jobId, note: "Change the title." })).rejects.toThrow(/Market/);
+      await expect(client.call("jobs.refund", { jobId })).rejects.toThrow(/Market/);
+      await expect(client.call("jobs.dispute", { jobId })).rejects.toThrow();
+    }
+    await expect(agent.call("jobs.approve", { jobId, quoteId: quote!.id })).rejects.toThrow(/Market/);
+    const { job: paid } = await owner.call("jobs.approve", { jobId, quoteId: quote!.id });
+    expect(paid.status).toBe("paid");
 
     const list = await runMarketTool(agent, agentView.id, "market_status", {});
     expect(list.jobs).toHaveLength(1);
@@ -281,6 +286,7 @@ describe("the wallet service", () => {
     await owner.call("agents.setBudget", { agentId: agentView.id, perDayCents: 500 });
     const agent = await connect({ actAs: agentView.id });
 
+    await owner.call("agents.setPolicy", { agentId: agentView.id, policy: { askAboveCents: 500, refill: REVIEW_ALLOWANCE } });
     const args = { request: "A haiku about a lighthouse.", reward_usd: 0.3 };
     const posted = await runMarketTool(agent, agentView.id, "market_post", args, { idempotencyKey: "call-9" });
     expect(posted.ok).toBe(true);
@@ -295,6 +301,7 @@ describe("the wallet service", () => {
     await sandbox.workOnce();
     const delivered = await waiting;
     expect(delivered.job!.status).toBe("delivered");
+    expect(delivered.job!.can).toEqual(["approve", "ask_changes", "draft_rejection", "record"]);
     expect(delivered.job!.delivery?.untrusted_content).toContain("You asked: A haiku about a lighthouse.");
     const paid = await runMarketTool(agent, agentView.id, "market_review", {
       job_id: posted.job!.job_id,

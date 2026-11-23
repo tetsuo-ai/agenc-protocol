@@ -1,3 +1,5 @@
+import { address } from "@solana/kit";
+import { enrollClaimBudget, spendClaimRound } from "../../agenc-worker/src/revision-budget.js";
 // A backup: every key and the journal in one password-locked file, and a
 // restore that never deletes the wallet it replaces.
 import { randomBytes } from "node:crypto";
@@ -53,6 +55,21 @@ async function backupOf(folder: Awaited<ReturnType<typeof walletFolder>>, now = 
 }
 
 describe("a wallet backup", () => {
+  it("restores a pre-revision backup without reopening a charged unfinished model round", async () => {
+    const folder = await walletFolder();
+    const root = path.join(folder.dataDir, "model-spend");
+    const wallet = address(folder.addresses.main!);
+    const claim = address(folder.addresses["agent:a1"]!);
+    enrollClaimBudget(root, wallet, claim);
+    const { text } = await backupOf(folder);
+    spendClaimRound(root, wallet, claim, 1);
+    for (const dataDir of [folder.dataDir, mkdtempSync(path.join(tmpdir(), "agenc-restored-spend-"))]) {
+      await restoreBackup({ dataDir, unlockSecret: folder.secret, text, password: PASSWORD, network: "mainnet", now: 2 });
+      expect(() => spendClaimRound(path.join(dataDir, "model-spend"), wallet, claim, 1)).toThrow(/exhausted or unknown/);
+    }
+    expect(() => spendClaimRound(root, wallet, claim, 2)).not.toThrow();
+  });
+
   it("says what it is without the password and holds no key in the clear", async () => {
     const folder = await walletFolder();
     const { text, header } = await backupOf(folder);

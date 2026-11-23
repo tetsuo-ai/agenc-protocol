@@ -1,4 +1,4 @@
-import { setEarnWithApproval } from "./harness.js";
+import { REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // Files with a delivery, end to end against the real program: a provider
 // leaves a picture in its outbox, the delivery lists it, and the buyer's
 // wallet reads the list, fetches the file by its fingerprint and checks it.
@@ -25,7 +25,7 @@ async function hirePostcard(started: World): Promise<string> {
   const agent = await wallet.createAgent("My assistant");
   await wallet.setPolicy(agent.id, {
     askAboveCents: 500,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   await wallet.fundAgent(agent.id, { usdCents: 400 });
   const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A postcard for my desk." });

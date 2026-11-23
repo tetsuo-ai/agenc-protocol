@@ -175,9 +175,10 @@ function handlers(wallet: AgencWallet): Handlers {
         params.rating,
         owner(session),
         scope(session),
+        params.quoteId,
       ),
     }),
-    "jobs.reviewRecord": (params, session) => wallet.reviewRecord(text(params.jobId, "job"), scope(session)),
+    "jobs.reviewRecord": (params, session) => wallet.reviewRecord(text(params.jobId, "job"), scope(session), params),
     "jobs.draftReview": async (params, session) => ({
       draft: await wallet.draftReview(text(params.jobId, "job"), params.action, params.note, params.attachments, scope(session)),
     }),
@@ -363,7 +364,9 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
             ok: false,
             error: {
               code: "NOT_ALLOWED",
-              message: "Only the person who owns this wallet can do that.",
+              message: ["jobs.askChanges", "jobs.dispute", "jobs.confirmReview"].includes(request.method)
+                ? "Review the current delivery and confirm this decision in Market."
+                : "Only the person who owns this wallet can do that.",
             },
           });
           return;

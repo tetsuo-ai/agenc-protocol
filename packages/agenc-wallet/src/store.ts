@@ -364,6 +364,11 @@ export interface WalletState {
   agents: Record<string, AgentRecord>;
   jobs: Record<string, JobRecord>;
   /** Seller delivery cache and durable review-change timestamps. */
+  reviewIntents?: Record<string, {
+    payer: string; agentId: string | null; rate: number | null; reconciled?: boolean;
+    quoteId: string; action: string; createdAt: number; hashes: string[]; published?: string[]; confirmed: boolean;
+    receipt?: PendingListingSend;
+  }>;
   workRecords?: Record<string, {
     revisionDeadlines?: Record<string, number>;
     reviewDraft?: import("./client/reviews.js").ReviewDraft;

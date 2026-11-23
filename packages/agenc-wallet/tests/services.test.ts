@@ -1102,3 +1102,12 @@ describe("the jobs a provider finished", () => {
     await expect(services.finishedJobs!(PROVIDER as Address)).rejects.toMatchObject({ code: "NETWORK" });
   });
 });
+
+it("verifies independent public dispute evidence at the submitted HTTPS address", async () => {
+  const bytes = Buffer.from("Independent receipt");
+  const uri = "https://evidence.example/seller-receipt";
+  const services = createHostedServices({ publicFetcher: async address => { expect(address).toBe(uri); return bytes; } });
+  expect(await services.fetchReviewEvidence!(uri, sha256Hex(bytes))).toEqual(bytes);
+  expect(await services.fetchReviewEvidence!(uri, "a".repeat(64))).toBeNull();
+  expect(await services.fetchReviewEvidence!("file:///untrusted", sha256Hex(bytes))).toBeNull();
+});

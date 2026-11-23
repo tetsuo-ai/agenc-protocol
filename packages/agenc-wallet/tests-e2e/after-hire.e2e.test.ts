@@ -1,4 +1,11 @@
+import { chmodSync, cpSync, mkdtempSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { address } from "@solana/kit";
+import type { WalletState } from "../src/store.js";
 import { afterEach, expect, it, vi } from "vitest";
+import { runMarketTool } from "../src/client/tools.js";
+import type { WalletClient } from "../src/client/socket-client.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
 import { createHostedServices, sha256Hex } from "../src/services.js";
 import { eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
@@ -29,20 +36,44 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
       return bytes;
     },
   });
+  const history = reviewRpc();
+  let intercept = false;
+  let rejectedLogs: readonly string[] = [];
+  let captured!: () => void;
+  let release!: () => void;
+  const capturedSend = new Promise<void>(resolve => { captured = resolve; });
+  const waitForNewDelivery = new Promise<void>(resolve => { release = resolve; });
   world = await startWorld({
-    ...reviewRpc(),
+    chain: history.chain,
+    transport: base => {
+      const indexed = history.transport(base);
+      return { ...indexed, async sendAndConfirm(signed) {
+        if (intercept) {
+          intercept = false;
+          captured();
+          await waitForNewDelivery;
+          try { return await indexed.sendAndConfirm(signed); }
+          catch (error) { rejectedLogs = (error as { logs?: string[] }).logs ?? []; throw error; }
+        }
+        return indexed.sendAndConfirm(signed);
+      } };
+    },
     services: ({ taskThreadTransport: _thread, ...base }) => ({
       ...base, postChangeRequest: hosted.postChangeRequest!.bind(hosted), resultUploader: hosted.resultUploader,
       fetchFile: hosted.fetchFile, fetchResult: hosted.fetchResult, fileLinkPrefix: hosted.fileLinkPrefix,
     }),
-    earn: { executor: { argv: [process.execPath, "-e",
-      "const fs=require('node:fs'); process.stdout.write(fs.existsSync('inputs/brief.txt') ? fs.readFileSync('inputs/brief.txt') : 'First delivery')", "{prompt}"],
-      mode: "sandboxed", reserveRevisionBudget: true, envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 100 },
+    earn: { runReviewRoom: async ({ reviewInputs }) => {
+      expect(reviewInputs?.map(f => f.name)).toEqual(["brief.txt"]);
+      return { stdout: Buffer.from(reviewInputs![0]!.bytes), exitCode: 0 };
+    }, executor: { argv: [process.execPath, "-e",
+      "process.stdout.write('First delivery')", "{prompt}"],
+      mode: "sandboxed", isolatedJobRoom: true, reserveRevisionBudget: true, envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 100 },
   });
   const { wallet } = world;
   const buyer = await wallet.createAgent("Buyer");
   const seller = await wallet.createAgent("Seller");
-  await wallet.setPolicy(buyer.id, { askAboveCents: 1000, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  await wallet.setPolicy(buyer.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 1, perDayCents: 1000 } });
+  await wallet.setPolicy(seller.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 1, perDayCents: 3000 } });
   await wallet.fundAgent(buyer.id, { usdCents: 500 });
   await setEarnWithApproval(wallet, seller.id, true, 10);
   const { job } = await wallet.post({ agentId: buyer.id, request: "Use the supplied text.", reward: { usdCents: 50 } });
@@ -52,6 +83,15 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   });
   const sellerJob = (await wallet.listJobs({ role: "working", agentId: seller.id }, true))[0]!;
   expect(sellerJob.task).toBe(delivery.task);
+  // A second owner session holds a signed decision for the first submission.
+  const peerDir = mkdtempSync(join(tmpdir(), "review-peer-"));
+  cpSync(world.dataDir, peerDir, { recursive: true });
+  chmodSync(join(peerDir, "earn", seller.id), 0o700);
+  const peer = await world.reopen({ dataDir: peerDir });
+  const staleDraft = await peer.draftReview(job.id, "reject", "First delivery has no heading.");
+  intercept = true;
+  const delayed = peer.confirmReview(job.id, staleDraft, true).then(() => null, err => err);
+  await capturedSend;
   const note = "Use the attached brief.";
   const draft = await wallet.draftReview(job.id, "change", note, [], buyer.id);
   await expect(wallet.draftReview(job.id, "reject", "x", [], seller.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -64,6 +104,9 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   serve = false;
   await expect(wallet.confirmReview(job.id, request, true)).rejects.toMatchObject({ code: "NETWORK" });
   expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
+  const partial = (await wallet.reviewRecord(job.id)).publication!;
+  expect(partial.confirmed).toBe(false);
+  expect(partial.hashes).toContain(sha256Hex(Buffer.from(contents, "base64")));
   serve = true;
   expect((await wallet.confirmReview(job.id, request, true)).status).toBe("changes_requested");
   const revision = await wallet.reviewRecord(job.id, buyer.id);
@@ -86,6 +129,11 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   vi.useRealTimers();
+  release();
+  expect(await delayed).toBeInstanceOf(Error);
+  expect(rejectedLogs.join("\n")).toMatch(/Instruction: AssertReviewDelivery[\s\S]+SubmissionNotPending/);
+  await peer.close();
+  expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
   await expect(wallet.confirmReview(job.id, request, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
   const reject = await wallet.draftReview(job.id, "reject", "The acceptance check needs a heading.", [], buyer.id);
   expect((await wallet.reviewRecord(job.id)).quote?.fee.lamports).toBe("5000");
@@ -94,6 +142,9 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   await wallet.tick();
   const held = await wallet.reviewRecord(sellerJob.id);
   expect(held.entries.at(-1)).toMatchObject({ fee: { lamports: "5000" }, rent: expect.objectContaining({ lamports: expect.any(String) }), action: "reject", note: reject.note, deadline: expect.any(Number) });
+  const scoped = { call: async (method: string) => method === "jobs.get" ? { job: await wallet.getJob(sellerJob.id, false, seller.id) } : held } as unknown as WalletClient;
+  const status = await runMarketTool(scoped, seller.id, "market_status", { job_id: sellerJob.id });
+  expect(status.job?.can).toEqual(["draft_dispute", "record"]);
   expect(held.quote).toMatchObject({ actions: ["dispute"], bond: { lamports: "10000000" } });
   expect(BigInt(held.quote!.disputeRent.lamports)).toBeGreaterThan(0n);
   const { bond, disputeRent, fee, disputeTotal } = held.quote!;
@@ -107,4 +158,23 @@ it("delivers a signed hosted revision and its file, then shares both parties' de
   expect((await wallet.reviewRecord(sellerJob.id)).entries).toEqual(buyerRecord.entries);
   expect(await wallet.jobFile(job.id, buyerRecord.entries.at(-1)!.attachments[0]!.hash)).toMatchObject({ base64: contents });
   await expect(wallet.confirmReview(sellerJob.id, dispute, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+  const state = JSON.parse(readFileSync(join(world.dataDir, "state.json"), "utf8")) as WalletState;
+  const charges = (id: string) => state.agents[id]!.refills.filter(row => row.id?.startsWith("review:")).map(row => row.lamports);
+  expect(charges(seller.id)).toEqual([disputeTotal.lamports]);
+  expect(charges(buyer.id)).toEqual(["5000", String(BigInt(held.entries.at(-1)!.rent!.lamports) + 5000n)]);
+  const due = revision.resubmitBy!;
+  await world.sandbox.ruleOnTurnedDown({ task: address(job.task!), payProvider: true });
+  await wallet.tick();
+  // The other device took its local snapshot before any change, rejection or dispute.
+  history.useLegacyReceipts();
+  const lateReader = await world.reopen({ dataDir: peerDir });
+  try {
+    for (const id of [job.id, sellerJob.id]) {
+      const late = await lateReader.reviewRecord(id);
+      expect(late.entries.map(e => [e.action, e.deadline])).toEqual([
+        ["change", due], ["reject", expect.any(Number)], ["dispute", expect.any(Number)],
+      ]);
+      expect(late.entries.at(-1)).toMatchObject({ evidenceUri: expect.stringMatching(/^agenc:/), note: dispute.note });
+    }
+  } finally { await lateReader.close(); }
 }, 60000);

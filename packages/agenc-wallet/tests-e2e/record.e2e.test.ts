@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Address } from "@solana/kit";
 import { readMarketRecord } from "../src/records.js";
 import { NO_FIRST_PARTY } from "../src/trust.js";
-import { CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
+import { REVIEW_ALLOWANCE, CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -26,7 +26,7 @@ async function spender(world: World, cents: number) {
   const agent = await world.wallet.createAgent("Buyer");
   await world.wallet.setPolicy(agent.id, {
     askAboveCents: cents,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   await world.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;

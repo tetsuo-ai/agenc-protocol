@@ -342,6 +342,7 @@ export function jobView(
       revision9TurnDown(job)!.rulingUntil === null &&
       revision9TurnDown(job)!.disputeOpen &&
       revision9TurnDown(job)!.providerSuspended !== true,
+    approvalInMarket: buying && job.payer !== "agent",
     canApprove: buying && status === "delivered",
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.

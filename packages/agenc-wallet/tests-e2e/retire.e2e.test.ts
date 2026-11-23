@@ -1,4 +1,4 @@
-import { setEarnWithApproval, setOfferWithApproval } from "./harness.js";
+import { REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // "Stop earning for good": an agent that took jobs locked a deposit with the
 // marketplace when it registered. Retiring it there brings that deposit back,
 // to the lamport, once its services are off the marketplace for good. It is
@@ -164,7 +164,7 @@ describe("stopping an agent's earning for good", () => {
     const worker = await wallet.createAgent("Worker");
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
-    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: REVIEW_ALLOWANCE });
     await setEarnWithApproval(wallet, worker.id, true, 10);
     await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
@@ -203,7 +203,7 @@ describe("stopping an agent's earning for good", () => {
     const worker = await wallet.createAgent("Worker");
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
-    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: REVIEW_ALLOWANCE });
     await setEarnWithApproval(wallet, worker.id, true, 10);
     await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
@@ -243,7 +243,7 @@ describe("stopping an agent's earning for good", () => {
     const worker = await wallet.createAgent("Worker");
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
-    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: REVIEW_ALLOWANCE });
     await setEarnWithApproval(wallet, worker.id, true, 10);
     await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");

@@ -32,6 +32,7 @@ import {
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
   findWorkerCompletionBondPda,
+  getAssertReviewDeliveryInstruction,
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
   getAgentStatsDiscriminatorBytes,
@@ -509,8 +510,7 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
 export function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
   return async (account) => {
-    const info = await chain.readAccountInfo(account);
-    return info === null ? null : { owner: info.owner, data: info.data };
+    return chain.readRawAccount(account);
   };
 }
 
@@ -536,10 +536,11 @@ async function requireBalanceFor(
   cost: bigint,
   what: string,
   words: AmountWords,
+  fee = FEE_HEADROOM_LAMPORTS,
 ): Promise<void> {
-  if (cost === 0n) return;
+  if (cost === 0n && fee === FEE_HEADROOM_LAMPORTS) return;
   const balance = await chain.getBalance(payer);
-  const needed = cost + FEE_HEADROOM_LAMPORTS;
+  const needed = cost + fee;
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
@@ -959,12 +960,22 @@ async function settlementPayees(
   };
 }
 
+export type ReviewedDelivery = { deliveryHash: string; submissionCount: number };
+
+export async function deliveryGuard(task: Address, provider: Address, expected: ReviewedDelivery) {
+  const [claim] = await findClaimPda({ task, bidder: provider });
+  const [taskSubmission] = await findTaskSubmissionPda({ claim });
+  return getAssertReviewDeliveryInstruction({ taskSubmission, proofHash: Buffer.from(expected.deliveryHash, "hex"),
+    submissionCount: expected.submissionCount });
+}
+
 /** Accept the delivery: releases the held price to the provider. */
 export async function sendApproval(
   chain: Chain,
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  expected?: ReviewedDelivery,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -979,7 +990,7 @@ export async function sendApproval(
     workerAuthority: payees.workerAuthority,
   });
   const client = chain.clientFor(buyer);
-  const result = await client.acceptTaskResult({
+  const ix = await facade.acceptTaskResult({
     task,
     worker: providerAgent,
     creator: buyer,
@@ -991,6 +1002,7 @@ export async function sendApproval(
     ...(payees.operator !== null ? { operator: payees.operator } : {}),
     ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
   });
+  const result = await client.send([...(expected ? [await deliveryGuard(task, providerAgent, expected)] : []), ix], { maxRetries: 0 });
   return result.signature;
 }
 
@@ -1001,12 +1013,14 @@ export async function sendChangesRequest(
   task: Address,
   providerAgent: Address,
   changesHash: Uint8Array,
+  expected?: ReviewedDelivery,
 ): Promise<string> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
   const client = chain.clientFor(buyer);
   const result = await client.send([
+    ...(expected ? [await deliveryGuard(task, providerAgent, expected)] : []),
     await facade.requestChanges({ task, claim, creator: buyer, changesHash }),
-  ]);
+  ], { maxRetries: 0 });
   return result.signature;
 }
 
@@ -1085,6 +1099,7 @@ export async function sendRejectAndFreeze(
   providerAgent: Address,
   rejectionHash: Uint8Array,
   words: AmountWords = SOL_AMOUNT_WORDS,
+  expected?: ReviewedDelivery,
 ): Promise<{ signature: string; recordLamports: bigint }> {
   // The revision first, so a person on the wrong one is not asked for money.
   await chain.assertSigningRevision?.();
@@ -1093,16 +1108,17 @@ export async function sendRejectAndFreeze(
     (space) => chain.getMinimumBalanceForRentExemption(space),
     { creator: buyer.address, workerAgent: providerAgent },
   );
-  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words);
+  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words, chain.transferFeeLamports);
   const client = chain.clientFor(buyer);
   const result = await client.send([
+    ...(expected ? [await deliveryGuard(task, providerAgent, expected)] : []),
     await facade.rejectAndFreeze({
       task,
       worker: providerAgent,
       creator: buyer,
       rejectionHash,
     }),
-  ]);
+  ], { maxRetries: 0 });
   return { signature: result.signature, recordLamports: cost.lamports };
 }
 
@@ -1148,6 +1164,15 @@ export async function sendFrozenExpiry(
   return { signature: result.signature, paidProvider: turnDown.expiryDue === "pays_provider" };
 }
 
+export async function disputeDeposit(chain: Chain, task: Address): Promise<bigint> {
+  const [rent, account] = await Promise.all([
+    chain.getMinimumBalanceForRentExemption(getDisputeBondSize()),
+    facade.findRejectionDisputeBondPda(task).then(address => chain.readRawAccount(address)),
+  ]);
+  if (account && (account.data.length || account.owner !== "11111111111111111111111111111111")) return rent;
+  return rent > (account?.lamports ?? 0n) ? rent - (account?.lamports ?? 0n) : 0n;
+}
+
 /**
  * The provider disputes a buyer's turn-down of its delivery (revision 9),
  * posting the bond: 10% of the price, at least 0.01 SOL, plus the bond
@@ -1188,8 +1213,8 @@ export async function sendDisputeTurnDown(
   if (submission === null) {
     throw new WalletError("NOT_FOUND", "The turned-down delivery could not be found.");
   }
-  const bondRent = await chain.getMinimumBalanceForRentExemption(getDisputeBondSize());
-  const needed = turnDown.bondLamports + bondRent + FEE_HEADROOM_LAMPORTS;
+  const bondRent = await disputeDeposit(chain, task);
+  const needed = turnDown.bondLamports + bondRent + chain.transferFeeLamports;
   const balance = await chain.getBalance(provider.address);
   if (balance < needed) {
     throw new WalletError(
@@ -1207,7 +1232,7 @@ export async function sendDisputeTurnDown(
       evidenceHash: evidence?.hash ?? new Uint8Array(submission.account.proofHash),
       evidenceUri: evidence?.uri ?? "",
     }),
-  ]);
+  ], { maxRetries: 0 });
   return { signature: result.signature, bondLamports: turnDown.bondLamports };
 }
 

@@ -205,6 +205,7 @@ export interface MarketServices {
    * from an address a delivery names.
    */
   fetchFile(sha256Hex: string): Promise<Uint8Array | null>;
+  fetchReviewEvidence?(uri: string, hash: string): Promise<Uint8Array | null>;
   /** Resolver for `agenc://` job-spec addresses the earn side may meet. */
   resolveAgencUri?: UriFetcher;
   /**
@@ -806,6 +807,11 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
   }
 
   return usesScopedRequests<MarketServices>({
+    async fetchReviewEvidence(uri, hash) {
+      if (!uri.startsWith("https://")) return null;
+      const bytes = await publicFetcher(uri);
+      return sha256Hex(bytes) === hash ? bytes : null;
+    },
     async finishedJobs(provider) {
       const fresh = (list: FinishedList | undefined): list is FinishedList =>
         list !== undefined && now() - list.at < FINISHED_TTL_MS;

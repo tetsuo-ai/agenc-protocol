@@ -18,8 +18,8 @@ import {
   taskThread,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { publishReviewFiles, quoteReview, reviewAttachments, reviewNote } from "./review.js";
-import type { ReviewAction, ReviewAttachment, ReviewConfirmation, ReviewDraft, ReviewRecord } from "./client/reviews.js";
+import { publishReviewFiles, reviewChargeCents, quoteReview, reviewRead, reviewAttachments, reviewNote } from "./review.js";
+import type { ReviewAction, ReviewAttachment, ReviewConfirmation, ReviewDraft, ReviewQuote, ReviewRecord } from "./client/reviews.js";
 import { readReviewEnvelope, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileType, deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
@@ -105,7 +105,6 @@ import {
   taskAddressFor,
   readTurnDownOnChain,
   readSubmission,
-  turnDownReason,
   waitingHires,
   type AmountWords,
   type ListingTerms,
@@ -3338,79 +3337,9 @@ export class AgencWallet {
    * bond goes to the buyer. With no ruling, the price goes back to the buyer
    * and the bond comes back. Only the person may do this.
    */
-  async disputeTurnDown(jobId: string, isOwner: boolean, agentId?: string, review?: ReviewConfirmation): Promise<JobView> {
-    if (!isOwner) {
-      throw new WalletError(
-        "NOT_ALLOWED",
-        "Disputing a turn-down puts a bond at risk, so it is the user's decision: they can do it from the Market panel.",
-      );
-    }
-    const match = /^earn_(.+)_([1-9A-HJ-NP-Za-km-z]{32,44})$/u.exec(jobId);
-    const agent = match === null ? undefined : this.#store.state.agents[match[1]!];
-    if (match === null || agent === undefined || (agentId !== undefined && agent.id !== agentId)) {
-      throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
-    }
-    const task = match[2]! as Address;
-    const provider = await this.#earn.marketplaceAgent(agent.id);
-    if (provider === null) {
-      throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
-    }
-    await this.#lock(`dispute:${task}`, async () => {
-      let sent: { signature: string; bondLamports: bigint };
-      try {
-        const payer = await this.#vault.signer(agent.keyId);
-        let evidence;
-        if (review) {
-          const job = this.#reviewJob(jobId, agentId);
-          await this.#checkReview(job, review, "dispute");
-          const submission = await readSubmission(this.#chain, task, provider);
-          if (!submission) throw new WalletError("NOT_ALLOWED", "The delivery is unavailable.");
-          evidence = await this.#publishDecision(job, payer, review, Buffer.from(submission.account.rejectionHash).toString("hex"));
-        }
-        sent = await sendDisputeTurnDown(
-          this.#chain,
-          payer,
-          task,
-          provider,
-          await this.#amountWords(),
-          evidence,
-        );
-      } catch (error) {
-        if (error instanceof WalletError) throw error;
-        throw new WalletError(
-          isNetworkTrouble(error) ? "NETWORK" : "NOT_ALLOWED",
-          isNetworkTrouble(error)
-            ? "The network was too busy to dispute this turn-down. Nothing changed. Try again in a moment."
-            : "This turn-down cannot be disputed right now. Nothing changed.",
-          { cause: error },
-        );
-      }
-      this.#store.update((draft) => {
-        this.#note(draft, {
-          kind: "note",
-          text: `${agent.name} disputed a buyer's turn-down. The marketplace's reviewers now decide.`,
-          lamports: sent.bondLamports,
-          agentId: agent.id,
-          jobId,
-          signature: sent.signature,
-        });
-      });
-      // Read the dispute back so the job shows its new clock.
-      this.#frozenWork.delete(task);
-      await this.#watchFrozenWork().catch((error) => {
-        this.#log(`reading a disputed turn-down: ${describeError(error)}`);
-      });
-      this.#dropBalances();
-      this.#emit({ type: "activity" });
-      this.#emit({ type: "overview" });
-      this.#emit({ type: "job", jobId });
-    });
-    const view = this.#earnJobs(agent.id).find((record) => record.id === jobId);
-    if (view === undefined) {
-      throw new WalletError("NOT_FOUND", "There is no job with that id that your agent worked on.");
-    }
-    await this.#workDelivery(view);
-    return this.#jobView(view, isOwner);
+  async disputeTurnDown(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
+    this.#reviewJob(jobId, agentId);
+    throw this.#reviewRequired(isOwner);
   }
 
   #earnJobs(agentId: string): JobRecord[] {
@@ -3621,8 +3550,17 @@ export class AgencWallet {
     const job = await this.getJob(jobId, true);
     const listed = (job.result?.files ?? []).find((file) => file.sha256 === sha256);
     if (listed === undefined) {
-      const record = await this.reviewRecord(jobId);
-      const reference = record.entries.flatMap(entry => entry.attachments).find(file => file.hash === sha256 && new URL(file.uri).pathname.endsWith("/" + sha256));
+      let reference: ReviewAttachment | undefined;
+      let before: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await this.reviewRecord(jobId, undefined, before ? { before } : {});
+        reference = page.entries.flatMap(entry => entry.attachments).find(file =>
+          file.hash === sha256 && new URL(file.uri).pathname.endsWith("/" + sha256));
+        before = page.continuation;
+        if (!before || seen.has(before)) break;
+        seen.add(before);
+      } while (!reference);
       if (!reference) throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
       const name = new URL(reference.uri).hash.slice(1);
       const type = deliveryFileType(name);
@@ -3681,8 +3619,10 @@ export class AgencWallet {
     rating: number | undefined,
     isOwner: boolean,
     agentId?: string,
+    quoteId?: string,
   ): Promise<JobView> {
-    this.#ownedJob(jobId, agentId);
+    const initial = this.#ownedJob(jobId, agentId);
+    if (initial.payer !== "agent" && (!isOwner || !quoteId)) throw this.#reviewRequired(isOwner);
     if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
       throw new WalletError("BAD_REQUEST", "A rating is a whole number from 1 to 5.");
     }
@@ -3694,20 +3634,13 @@ export class AgencWallet {
         throw new WalletError("NOT_ALLOWED", "There is no delivery to approve yet.");
       }
       const provider = this.#knownProvider(job);
-      const payer = await this.#payerSigner(job);
-      try {
-        const signature = await sendApproval(this.#chain, payer, job.task as Address, provider);
+      const { quote } = await this.#quoteReview(job, provider, null);
+      if (!quote?.canPay || (quoteId !== undefined && quote.id !== quoteId)) throw this.#reviewRequired(isOwner);
+      await this.#withReviewPayment(job, quote, "approve", async payer => {
+        const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
-        // The service's record now holds this job.
         this.#records.invalidate();
-      } catch (error) {
-        if (error instanceof WalletError) throw error;
-        throw new WalletError(
-          "NETWORK",
-          "The payment could not be sent right now. Nothing was paid; try again in a moment.",
-          { cause: error },
-        );
-      }
+      });
     });
     // A request was not hired from a service, so there is nothing to rate.
     if (rating !== undefined && !isRequest(this.#jobRecord(jobId))) {
@@ -3748,16 +3681,28 @@ export class AgencWallet {
     return job.role === "working" ? this.#earn.marketplaceAgent(job.agentId) : this.#provider(job);
   }
 
-  async reviewRecord(jobId: string, agentId?: string): Promise<ReviewRecord> {
+  #reviewRequired(owner: boolean): WalletError {
+    return new WalletError(owner ? "APPROVAL_REQUIRED" : "NOT_ALLOWED", "Review the current delivery and confirm this decision in Market.");
+  }
+
+  #quoteReview(job: JobRecord, provider: Address, rate: number | null) {
+    const agent = job.payer === "main" ? null : this.#agentRecord(job.agentId);
+    return quoteReview(this.#chain, job.id, job.task as Address, provider, job.role === "buying", rate, {
+      payer: agent?.address ?? this.mainAddress,
+      dailyLimitCents: agent ? (agent.policy.refill.enabled ? agent.policy.refill.perDayCents : 0) : null,
+    });
+  }
+
+  async reviewRecord(jobId: string, agentId?: string, options: { before?: string; termsOnly?: boolean } = {}): Promise<ReviewRecord> {
     const job = this.#reviewJob(jobId, agentId);
-    const provider = await this.#reviewProvider(job);
+    const provider = await reviewRead(this.#reviewProvider(job));
     const task = job.task as Address | null;
-    if (!task || !provider) return { entries: [], historyAvailable: true, termsAvailable: true, resubmitBy: null, quote: null, draft: null };
+    if (!task || !provider) return { entries: [], historyAvailable: !task, termsAvailable: !task, resubmitBy: null, quote: null, draft: null };
     const [claim] = await findClaimPda({ task, bidder: provider });
-    const rate = await this.#displayRate();
+    const rate = await reviewRead(this.#displayRate());
     const [terms, history] = await Promise.all([
-      quoteReview(this.#chain, jobId, task, provider, job.role === "buying", rate).catch(() => null),
-      this.#chain.reviewHistory?.(task, claim).catch(() => null),
+      reviewRead(this.#quoteReview(job, provider, rate)),
+      options.termsOnly || !this.#chain.reviewHistory ? null : reviewRead(this.#chain.reviewHistory(task, claim, options.before), 6000),
     ]);
     const saved = job.role === "working" ? this.#store.state.workRecords?.[jobId] : job;
     const latest = history?.entries.find(entry => entry.action === "change" && entry.round === terms?.lastRevision?.round);
@@ -3770,17 +3715,27 @@ export class AgencWallet {
     }
     const entries = await Promise.all((history?.entries ?? []).map(async ({ feeLamports, rentLamports, bondLamports, round, ...anchor }) => {
       const role = anchor.action === "dispute" ? "worker" : "buyer";
-      const envelope = await readReviewEnvelope(hash => this.#services.fetchFile(hash), task, anchor.hash, role).catch(() => null);
+      const envelope = await reviewRead(readReviewEnvelope(hash => this.#services.fetchFile(hash), task, anchor.hash, role));
+      const external = anchor.evidenceUri?.startsWith("https://") && this.#services.fetchReviewEvidence
+        ? await reviewRead(this.#services.fetchReviewEvidence(anchor.evidenceUri, anchor.hash)) : null;
       const deadline = anchor.action === "change"
-        ? (revision && round === revision.round ? revision.due : saved?.revisionDeadlines?.[anchor.hash] ?? null)
+        ? anchor.deadline ?? (revision && round === revision.round ? revision.due : saved?.revisionDeadlines?.[anchor.hash] ?? null)
         : anchor.deadline;
-      return { ...anchor, deadline, note: envelope?.body ?? null, attachments: envelope?.attachments ?? [],
+      return { ...anchor, deadline, note: envelope?.body ?? null,
+        ...(anchor.evidenceUri && { evidenceVerified: !!external || (anchor.evidenceUri === "agenc://artifact/sha256/" + anchor.hash && !!envelope) }),
+        attachments: envelope?.attachments ?? (external && anchor.evidenceUri ? [{ uri: anchor.evidenceUri, hash: anchor.hash }] : []),
         fee: feeLamports === null ? null : money(feeLamports, rate),
         rent: rentLamports === null ? null : money(rentLamports, rate),
         bond: bondLamports === null ? null : money(bondLamports, rate) };
     }));
     const draft = saved?.reviewDraft;
-    return { entries, historyAvailable: history?.complete === true, termsAvailable: terms !== null,
+    if (!options.termsOnly && this.#store.state.reviewIntents?.[jobId]?.receipt) {
+      await reviewRead(this.#lock(this.#payerLock(job), () => this.#reconcileReview(jobId)));
+    }
+    const intent = this.#store.state.reviewIntents?.[jobId];
+    return { entries, ...(history?.continuation && { continuation: history.continuation }),
+      ...(intent && { publication: { hashes: intent.hashes, published: intent.published ?? [], confirmed: intent.confirmed, ...(intent.receipt && { signature: intent.receipt.signature }) } }),
+      historyIncomplete: history?.missing === true, historyAvailable: history?.complete === true, termsAvailable: terms !== null,
       resubmitBy: terms?.resubmitBy ?? null, quote: terms?.quote ?? null,
       draft: draft && draft.quoteId === terms?.quote?.id ? draft : null };
   }
@@ -3791,7 +3746,7 @@ export class AgencWallet {
     if (!job.task || !provider) throw new WalletError("NOT_ALLOWED", "This job has no delivery to review.");
     const text = reviewNote(note);
     const files = reviewAttachments(attachments, job.task);
-    const { quote } = await quoteReview(this.#chain, job.id, job.task as Address, provider, job.role === "buying", null);
+    const { quote } = await this.#quoteReview(job, provider, null);
     if (!quote?.actions.includes(action)) throw new WalletError("NOT_ALLOWED", "That decision is unavailable for this job.");
     const draft = { action, note: text, attachments: files, quoteId: quote.id };
     this.#store.update(state => {
@@ -3806,7 +3761,7 @@ export class AgencWallet {
   async #checkReview(job: JobRecord, review: ReviewConfirmation, action: ReviewAction) {
     const provider = await this.#reviewProvider(job);
     const { quote } = provider && job.task
-      ? await quoteReview(this.#chain, job.id, job.task as Address, provider, job.role === "buying", null)
+      ? await this.#quoteReview(job, provider, null)
       : { quote: null };
     if (!quote || !quote.actions.includes(action) || review.action !== action || quote.id !== review.quoteId) {
       throw new WalletError("NOT_ALLOWED", "The delivery, deadline or costs changed. Open the job and review it again.");
@@ -3814,105 +3769,198 @@ export class AgencWallet {
     return quote;
   }
 
-  async confirmReview(jobId: string, input: ReviewConfirmation, isOwner: boolean): Promise<JobView> {
-    if (!isOwner) throw new WalletError("NOT_ALLOWED", "Only the owner can confirm a review in Market.");
-    const job = this.#reviewJob(jobId);
-    if (!job.task || !input) throw new WalletError("BAD_REQUEST", "Choose a delivery to review.");
-    const review = { ...input, note: reviewNote(input.note), attachments: reviewAttachments(input.attachments, job.task) };
-    await this.#checkReview(job, review, review.action);
-    switch (review.action) {
-      case "change": return this.askChanges(jobId, review.note, true, undefined, review);
-      case "reject": return this.refundJob(jobId, true, undefined, review);
-      case "dispute": return this.disputeTurnDown(jobId, true, undefined, review);
-      default: throw new WalletError("BAD_REQUEST", "Choose a review decision.");
+  /** Check a signed transaction before accepting a new decision for the same job. */
+  async #reconcileReview(jobId: string) {
+    const prior = this.#store.state.reviewIntents?.[jobId];
+    if (!prior?.receipt || prior.reconciled) return;
+    const receipt = prior.receipt;
+    const outcome = prior.confirmed ? "landed" : this.#chain.reviewSendOutcome
+      ? await this.#chain.reviewSendOutcome(receipt) : await this.#chain.listingSendOutcome?.(receipt);
+    if (!outcome || outcome === "pending") {
+      throw new WalletError("NETWORK", "The review transaction is awaiting confirmation. Open the record for its signature.");
     }
+    const paid = prior.agentId && this.#chain.reviewDebit
+      ? await this.#chain.reviewDebit(receipt.signature, prior.payer as Address) : null;
+    if (prior.agentId && !paid && outcome !== "expired") {
+      throw new WalletError("NETWORK", "The review receipt is unavailable. Its allowance remains reserved until it can be checked.");
+    }
+    this.#store.update(state => {
+      const intent = state.reviewIntents![jobId]!;
+      if (intent.receipt?.signature !== receipt.signature) return;
+      if (prior.agentId && outcome === "expired" && !paid) {
+        const agent = state.agents[prior.agentId];
+        if (agent) agent.refills = agent.refills.filter(entry => entry.signature !== receipt.signature);
+      } else if (prior.agentId && paid && prior.rate) {
+        const entry = state.agents[prior.agentId]?.refills.find(item => item.signature === receipt.signature);
+        if (entry) {
+          const actual = prior.action === "approve" || outcome === "failed" ? paid.fee : paid.debit;
+          entry.lamports = String(actual);
+          entry.usdCents = reviewChargeCents(actual, prior.rate);
+        }
+      }
+      if (outcome === "landed") {
+        intent.confirmed = true;
+        intent.reconciled = !prior.agentId || paid !== null;
+      } else {
+        delete intent.receipt;
+      }
+    });
+  }
+
+  /** The signed transport supplies the signature before broadcast. Persist the
+   * receipt and debit together, including when its acknowledgement never arrives. */
+  async #withReviewPayment(job: JobRecord, quote: ReviewQuote, action: ReviewAction | "approve",
+    work: (payer: KeyPairSigner) => Promise<void>): Promise<void> {
+    const jobId = job.id;
+    const cost = BigInt((action === "reject" ? quote.rejectionTotal : action === "dispute" ? quote.disputeTotal : quote.fee).lamports);
+    const payer = await this.#payerSigner(job);
+    const agentId = job.payer === "main" ? null : job.agentId;
+    await this.#lock(this.#payerLock(job), async () => {
+      await this.#reconcileReview(jobId);
+      const prior = this.#store.state.reviewIntents?.[jobId];
+      if (prior?.confirmed && prior.quoteId === quote.id) throw new WalletError("NOT_ALLOWED", "This decision is already confirmed.");
+      await this.#chain.assertSigningRevision?.();
+      const balance = await this.#chain.getBalance(payer.address);
+      if (balance < cost) {
+        const words = await this.#amountWords();
+        throw new WalletError("NOT_ENOUGH_MONEY", `This decision needs ${words.cost(cost)}. Add at least ${words.add(cost - balance)}.`);
+      }
+      const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
+      const checkRoom = () => {
+        if (agentId !== null && cost > this.#dailyRoom(this.#agentRecord(agentId), rate)) {
+          throw new WalletError("NOT_ALLOWED", "This review would exceed the agent's daily allowance.");
+        }
+      };
+      checkRoom();
+      this.#store.update(state => {
+        (state.reviewIntents ??= {})[jobId] = { quoteId: quote.id, action, confirmed: false, payer: payer.address, agentId, rate,
+          createdAt: prior?.quoteId === quote.id ? prior.createdAt : this.#now(),
+          hashes: prior && !prior.confirmed ? prior.hashes : [], published: prior && !prior.confirmed ? prior.published ?? [] : [] };
+      });
+      try {
+        await inTransportScope({
+          signal: AbortSignal.timeout(60_000),
+          sending: receipt => {
+            checkRoom();
+            this.#store.update(state => {
+              const intent = state.reviewIntents![jobId]!;
+              if (intent.receipt) throw new WalletError("NETWORK", "The review transaction is awaiting confirmation.");
+              intent.receipt = receipt;
+              if (agentId !== null && rate !== null) {
+                this.#reserveCharge(state.agents[agentId]!, { id: "review:" + jobId + ":" + receipt.signature,
+                  ts: this.#now(), lamports: String(cost),
+                  usdCents: reviewChargeCents(cost, rate),
+                }, receipt.signature);
+              }
+            });
+          },
+          confirmed: signature => this.#store.update(state => {
+            const intent = state.reviewIntents![jobId]!;
+            if (intent.receipt?.signature === signature) intent.confirmed = true;
+          }),
+        }, () => work(payer));
+        await this.#reconcileReview(jobId);
+      } catch (cause) {
+        const intent = this.#store.state.reviewIntents![jobId]!;
+        if (intent.confirmed) throw new WalletError("NETWORK", "The review was confirmed. Its final cost is awaiting reconciliation in the job record.", { cause });
+        const evidence = intent.hashes.length ? " Evidence may already be public. Its fingerprints are in the job record." : "";
+        if (intent.receipt) throw new WalletError("NETWORK", "Check the review transaction in the job record before retrying." + evidence, { cause });
+        if (!evidence && cause instanceof WalletError) throw cause;
+        throw new WalletError(cause instanceof WalletError ? cause.code : "NETWORK", "The review was not sent." + evidence, { cause });
+      }
+    });
+  }
+
+  async confirmReview(jobId: string, input: ReviewConfirmation, isOwner: boolean): Promise<JobView> {
+    if (!isOwner) throw this.#reviewRequired(false);
+    const initial = this.#reviewJob(jobId);
+    if (!initial.task || !input) throw new WalletError("BAD_REQUEST", "Choose a delivery to review.");
+    const review = { ...input, note: reviewNote(input.note), attachments: reviewAttachments(input.attachments, initial.task) };
+    await this.#lock(`job:${jobId}`, async () => {
+      await this.#reconcileReview(jobId);
+      const job = this.#reviewJob(jobId);
+      const quote = await this.#checkReview(job, review, review.action);
+      const task = job.task as Address;
+      const provider = (await this.#reviewProvider(job))!;
+      await this.#withReviewPayment(job, quote, review.action, async payer => {
+        const submission = await readSubmission(this.#chain, task, provider);
+        if (!submission) throw this.#reviewRequired(true);
+        const parent = review.action === "dispute" ? Buffer.from(submission.account.rejectionHash).toString("hex") : job.changes.at(-1)?.hashHex ?? null;
+        const reason = await this.#publishDecision(job, payer, review, parent);
+        switch (review.action) {
+          case "change": {
+            const signature = await sendChangesRequest(this.#chain, payer, task, provider, reason.hash, quote);
+            this.#patchJob(jobId, entry => {
+              entry.changesRequested = true;
+              entry.chainStatus = "in_progress";
+              entry.reviewDeadlineAt = null;
+              entry.signatures.changes = signature;
+              entry.changes.push({ note: review.note, hashHex: reason.hex, ts: this.#now() });
+            });
+            break;
+          }
+          case "reject": {
+            const { signature } = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash, await this.#amountWords(), quote);
+            this.#forgetRecordCost(job);
+            const frozen = await this.#readFreezeBack(task, provider);
+            this.#patchJob(jobId, (entry, state) => {
+              entry.chainStatus = "reject_frozen";
+              entry.signatures.reject = signature;
+              entry.providerRecorded = true;
+              entry.reviewDeadlineAt = frozen ? frozen.rulingUntil ?? frozen.disputeUntil : null;
+              const record = turnDownRecord(frozen);
+              if (record) entry.turnDown = record;
+              this.#note(state, { kind: "note", text: `You turned down ${entry.title}. The provider can dispute it within 72 hours.`,
+                agentId: entry.agentId || null, jobId, signature });
+            });
+            break;
+          }
+          case "dispute": {
+            const sent = await sendDisputeTurnDown(this.#chain, payer, task, provider, await this.#amountWords(), reason);
+            this.#store.update(state => this.#note(state, { kind: "note", text: "The seller disputed the turn-down.",
+              lamports: sent.bondLamports, agentId: job.agentId, jobId, signature: sent.signature }));
+            break;
+          }
+        }
+      });
+    });
+    if (review.action === "dispute") {
+      this.#frozenWork.delete(initial.task as Address);
+      await this.#watchFrozenWork();
+    }
+    this.#dropBalances();
+    this.#emit({ type: "job", jobId });
+    this.#emit({ type: "activity" });
+    this.#emit({ type: "overview" });
+    return this.getJob(jobId, true);
   }
 
   async #publishDecision(job: JobRecord, payer: KeyPairSigner, review: ReviewConfirmation, parentHash: string | null) {
     const post = this.#services.postChangeRequest;
     if (!post) throw new WalletError("NOT_AVAILABLE", "This network has nowhere to publish evidence.");
+    const publishing = (hash: string, verified = false) => this.#store.update(state => {
+      const intent = state.reviewIntents![job.id]!;
+      if (!intent.hashes.includes(hash)) intent.hashes.push(hash);
+      if (verified && !intent.published?.includes(hash)) (intent.published ??= []).push(hash);
+    });
     const envelope: taskThread.TaskThreadEnvelope = {
       v: 1, taskPda: job.task!, parentHash, role: review.action === "dispute" ? "worker" : "buyer",
-      body: review.note, attachments: await publishReviewFiles(this.#services, payer, review), ts: Math.floor(this.#now() / 1000),
+      body: review.note, attachments: await publishReviewFiles(this.#services, payer, review, publishing),
+      ts: Math.floor(this.#store.state.reviewIntents![job.id]!.createdAt / 1000),
     };
-    await post.call(this.#services, envelope, payer);
-    await this.#checkReview(job, review, review.action);
     const { bytes: hash, hex } = await taskThread.envelopeHash(envelope);
-    return { hash, uri: `agenc://artifact/sha256/${hex}` };
+    publishing(hex);
+    const prior = await this.#services.fetchFile(hex).catch(() => null);
+    if (!prior || createHash("sha256").update(prior).digest("hex") !== hex) await post.call(this.#services, envelope, payer);
+    publishing(hex, true);
+    await this.#checkReview(job, review, review.action);
+    return { hash, hex, uri: `agenc://artifact/sha256/${hex}` };
   }
 
   /** Send a delivery back with a note saying what to change. */
-  async askChanges(
-    jobId: string,
-    note: string,
-    isOwner: boolean,
-    agentId?: string,
-    review?: ReviewConfirmation,
-  ): Promise<JobView> {
+  async askChanges(jobId: string, _note: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     this.#ownedJob(jobId, agentId);
-    if (!isOwner) throw new WalletError("NOT_ALLOWED", "Draft the change request for the owner to confirm in Market.");
-    const body = typeof note === "string" ? note.trim() : "";
-    if (body.length === 0 || body.length > 2_000) {
-      throw new WalletError("BAD_REQUEST", "Say what to change, in up to 2,000 characters.");
-    }
-    const post = this.#services.postChangeRequest;
-    if (post === undefined) {
-      throw new WalletError(
-        "NOT_AVAILABLE",
-        "Asking for changes is not available on this network yet. You can approve the delivery or turn it down.",
-      );
-    }
-    await this.#advance(jobId);
-    await this.#lock(`job:${jobId}`, async () => {
-      const job = this.#jobRecord(jobId);
-      if (job.phase !== "active" || job.chainStatus !== "pending_validation") {
-        throw new WalletError("NOT_ALLOWED", "There is no delivery to send back yet.");
-      }
-      const payer = await this.#payerSigner(job);
-      if (review) await this.#checkReview(job, review, "change");
-      const attachments = review ? await publishReviewFiles(this.#services, payer, review) : [];
-      const previous = job.changes.at(-1)?.hashHex ?? null;
-      const envelope: taskThread.TaskThreadEnvelope = {
-        v: 1,
-        taskPda: job.task as string,
-        parentHash: previous,
-        role: "buyer",
-        body,
-        attachments,
-        ts: Math.floor(this.#now() / 1000),
-      };
-      const digest = await taskThread.envelopeHash(envelope);
-      await post.call(this.#services, envelope, payer);
-      if (review) await this.#checkReview(job, review, "change");
-      let signature: string;
-      try {
-        signature = await sendChangesRequest(
-          this.#chain,
-          payer,
-          job.task as Address,
-          this.#knownProvider(job),
-          digest.bytes,
-        );
-      } catch (error) {
-        const limit = error instanceof AgencError && /Revision|MaxRevision/i.test(error.errorName ?? "");
-        throw new WalletError(
-          limit ? "NOT_ALLOWED" : "NETWORK",
-          limit
-            ? "This job has had all the rounds of changes it allows. Approve it or turn it down."
-            : "The request could not be sent right now. Try again in a moment.",
-          { cause: error },
-        );
-      }
-
-      this.#patchJob(jobId, (entry) => {
-        entry.changesRequested = true;
-        entry.chainStatus = "in_progress";
-        entry.reviewDeadlineAt = null;
-        entry.signatures.changes = signature;
-        entry.changes.push({ note: body, hashHex: digest.hex, ts: this.#now() });
-      });
-    });
-    return this.#jobView(this.#jobRecord(jobId), isOwner);
+    throw this.#reviewRequired(isOwner);
   }
 
   /**
@@ -3943,9 +3991,8 @@ export class AgencWallet {
     return null;
   }
 
-  async refundJob(jobId: string, isOwner: boolean, agentId?: string, review?: ReviewConfirmation): Promise<JobView> {
+  async refundJob(jobId: string, isOwner: boolean, agentId?: string): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
-    if (review) await this.#checkReview(initial, review, "reject");
     if (initial.phase === "needs_approval") {
       const approval = Object.values(this.#store.state.approvals).find(
         (entry) => entry.jobId === jobId && entry.status === "pending",
@@ -3964,7 +4011,6 @@ export class AgencWallet {
     await this.#advance(jobId);
     await this.#lock(`job:${jobId}`, async () => {
       const job = this.#jobRecord(jobId);
-      if (review) await this.#checkReview(job, review, "reject");
       if (job.outcome === "refunded") return;
       if (job.phase !== "active" && job.phase !== "hired") {
         throw new WalletError("NOT_ALLOWED", "This job can no longer be cancelled.");
@@ -3977,84 +4023,9 @@ export class AgencWallet {
             : "This delivery was already turned down. Its price is on hold until it is reviewed.",
         );
       }
+      if (job.chainStatus === "pending_validation") throw this.#reviewRequired(isOwner);
       const payer = await this.#payerSigner(job);
       const task = job.task as Address;
-      if (job.chainStatus === "pending_validation") {
-        if (!isOwner) {
-          throw new WalletError(
-            "NOT_ALLOWED",
-            "The provider has delivered. Turning a delivery down is the user's decision: they can do it from the Market panel.",
-          );
-        }
-        const provider = this.#knownProvider(job);
-        // What is turned down is exactly the delivery on the chain right now.
-        const delivery =
-          job.result?.hash ?? (await inspectJob(this.#chain, task, provider))?.submission?.proofHashHex ?? null;
-        if (delivery === null) {
-          throw new WalletError("NOT_ALLOWED", "There is no delivery to turn down yet.");
-        }
-        let sent: { signature: string; recordLamports: bigint };
-        try {
-          const reason = review ? await this.#publishDecision(job, payer, review, job.changes.at(-1)?.hashHex ?? null) : await turnDownReason({
-            task,
-            deliveryHashHex: delivery,
-            requestHashHex: job.jobSpecHashHex,
-          });
-          sent = await sendRejectAndFreeze(
-            this.#chain,
-            payer,
-            task,
-            provider,
-            reason.hash,
-            await this.#amountWords(),
-          );
-        } catch (error) {
-          // The record a first turn-down starts is checked before signing,
-          // and its message says what to add.
-          if (review && error instanceof WalletError) throw error;
-          if (error instanceof WalletError && error.code === "NOT_ENOUGH_MONEY") throw error;
-          if (hireFailureText(error).code === "NOT_ENOUGH_MONEY") {
-            throw new WalletError(
-              "NOT_ENOUGH_MONEY",
-              "There is not enough money to turn this down. Nothing changed.",
-              { cause: error },
-            );
-          }
-          throw new WalletError(
-            isNetworkTrouble(error) ? "NETWORK" : "NOT_ALLOWED",
-            isNetworkTrouble(error)
-              ? "The network was too busy to turn this down. Nothing changed. Try again in a moment."
-              : "This delivery cannot be turned down right now. You can still approve it or ask for changes.",
-            { cause: error },
-          );
-        }
-        const { signature } = sent;
-        this.#forgetRecordCost(job);
-        // Read the freeze back before answering, so the answer already has
-        // its clock, its bond and its rule. If the read fails, the job reads
-        // as a revision 9 turn-down just made (no clock) until the next look.
-        const frozen = await this.#readFreezeBack(task, provider);
-        const frozenRecord = turnDownRecord(frozen);
-        this.#patchJob(jobId, (entry, draft) => {
-          entry.chainStatus = "reject_frozen";
-          entry.signatures.reject = signature;
-          entry.providerRecorded = true;
-          entry.reviewDeadlineAt = frozen === null ? null : (frozen.rulingUntil ?? frozen.disputeUntil);
-          if (frozenRecord === undefined) delete entry.turnDown;
-          else entry.turnDown = frozenRecord;
-          this.#note(draft, {
-            kind: "note",
-            text: isRequest(entry)
-              ? `You turned down ${entry.title}. Whoever did it can dispute that for 72 hours. If they do not, the reward comes back.`
-              : `You turned down ${entry.title}. The provider can dispute that for 72 hours. If it does not, the price comes back.`,
-            agentId: entry.agentId === "" ? null : entry.agentId,
-            jobId: entry.id,
-            signature,
-          });
-        });
-        this.#emit({ type: "activity" });
-        return;
-      }
       try {
         // Before anyone takes a request there is nobody to name; afterwards
         // the cancel names whoever holds it, once their deadline has passed.

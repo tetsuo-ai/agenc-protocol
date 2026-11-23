@@ -7,6 +7,7 @@ import { readReviewHistory } from "../src/review-history.js";
 import type { SettlementHistoryRpc } from "../src/settlement.js";
 
 export function reviewRpc() {
+  let legacy = false;
   let local: Chain | undefined;
   const rows = new Map<string, { accounts: readonly Address[]; tx: unknown }>();
   const rpc: SettlementHistoryRpc = {
@@ -15,12 +16,16 @@ export function reviewRpc() {
       const start = before === undefined ? 0 : keys.indexOf(before) + 1;
       return keys.slice(start, start + limit).map(signature => ({ signature, err: null }));
     } }),
-    getTransaction: signature => ({ send: async () => rows.get(signature)?.tx ?? null }),
+    getTransaction: signature => ({ send: async () => {
+      const tx = rows.get(signature)?.tx as { meta: { logMessages: string[] } } | undefined;
+      return tx && legacy ? { ...tx, meta: { ...tx.meta, logMessages: tx.meta.logMessages.filter(line => !line.startsWith("Program log: Revision deadline ")) } } : tx ?? null;
+    } }),
   };
   return {
+    useLegacyReceipts() { legacy = true; },
     chain(base: Chain): Chain {
       local = base;
-      return { ...base, reviewHistory: (task, claim) => readReviewHistory(rpc, task, claim) };
+      return { ...base, reviewHistory: (task, claim, before) => readReviewHistory(rpc, task, claim, undefined, before) };
     },
     transport(base: Transport): Transport {
       return { ...base, async sendAndConfirm(signed) {

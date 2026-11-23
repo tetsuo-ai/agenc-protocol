@@ -4,7 +4,7 @@
 import type { Address } from "@solana/kit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
-import { SOL, startWorld, type World } from "./harness.js";
+import { confirmPayout, SOL, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -34,7 +34,7 @@ describe("money arriving in the main balance", () => {
     await wallet.tick();
     await sandbox.workOnce();
     await wallet.tick();
-    await wallet.approveJob(job.id, 5, true);
+    await confirmPayout(wallet, job.id, 5);
     const beforeTidy = await world.balance(wallet.mainAddress);
     await wallet.tick();
     await wallet.tick();
@@ -79,7 +79,7 @@ describe("money arriving in the main balance", () => {
     await wallet.tick();
     await sandbox.workOnce();
     await wallet.tick();
-    await wallet.approveJob(job.id, 5, true);
+    await confirmPayout(wallet, job.id, 5);
 
     // The deposits come back, but the first look after it still shows the
     // balance from before; the next look, seconds later, shows them.

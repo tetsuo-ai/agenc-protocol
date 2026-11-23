@@ -21,6 +21,7 @@ import {
   pipe,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
+  getSignatureFromTransaction,
   type Address,
   type Instruction,
   type KeyPairSigner,
@@ -404,6 +405,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
   // LiteSVM history is disabled so identical sandbox transactions can be replayed.
   const landedListingSends = new Set<string>();
+  const failedReviewSends = new Set<string>();
+  const debits = new Map<string, { payer: Address; fee: bigint; debit: bigint }>();
   const base = market.transport;
   const transport: Transport = {
     ...base,
@@ -413,9 +416,23 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       signal?.throwIfAborted();
       syncClock();
       const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
+      const payer = message.staticAccounts[0]!;
       const balances = new Map(message.staticAccounts.map(address => [address, BigInt(svm.getBalance(address) ?? 0)]));
-      const result = await base.sendAndConfirm(signedTx);
-      if (signal) landedListingSends.add(result.signature);
+      const before = balances.get(payer)!;
+      const result = await base.sendAndConfirm(signedTx).catch(error => {
+        if (signal) {
+          const signature = getSignatureFromTransaction(signedTx);
+          const fee = before - BigInt(svm.getBalance(payer) ?? 0);
+          debits.set(signature, { payer, fee, debit: fee });
+          failedReviewSends.add(signature);
+        }
+        throw error;
+      });
+      if (signal) {
+        landedListingSends.add(result.signature);
+        debits.set(result.signature, { payer, fee: BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length),
+          debit: before - BigInt(svm.getBalance(payer) ?? 0) });
+      }
       try {
         for (const account of message.staticAccounts) {
           known.add(account);
@@ -468,6 +485,12 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
     // Local sends execute atomically; no broadcast can arrive after cancellation.
+    reviewSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" :
+      failedReviewSends.has(signature) ? "failed" : "expired",
+    reviewDebit: async (signature, payer) => {
+      const paid = debits.get(signature);
+      return paid?.payer === payer ? paid : null;
+    },
     listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
     listingSendSettled: async () => true,
     clientFor: (signer) => createMarketplaceClient({ transport: sending, signer }),

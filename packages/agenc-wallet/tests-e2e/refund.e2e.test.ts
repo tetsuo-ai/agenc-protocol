@@ -16,8 +16,8 @@ import {
   values,
 } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
-import { providerRecordAddress, turnDownReason } from "../src/market.js";
-import { CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
+import { providerRecordAddress } from "../src/market.js";
+import { confirmDecision, REVIEW_ALLOWANCE, CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -42,28 +42,11 @@ async function recordedReason(current: World, task: string, provider: string): P
   return values.bytesToHex(new Uint8Array((await submissionOf(current, task, provider)).rejectionHash));
 }
 
-/**
- * The reason as a reviewer works it out with nothing but the chain: the
- * delivery's fingerprint from the submission, the request's from the pinned
- * job spec, and the one reason a person gives.
- */
-async function reasonFromChain(current: World, task: string, provider: string): Promise<string> {
-  const [spec] = await findTaskJobSpecPda({ task: task as Address });
-  const pinned = getTaskJobSpecDecoder().decode((await current.sandbox.chain.readAccount(spec))!);
-  const submission = await submissionOf(current, task, provider);
-  const reason = await turnDownReason({
-    task: task as Address,
-    deliveryHashHex: values.bytesToHex(new Uint8Array(submission.proofHash)),
-    requestHashHex: values.bytesToHex(new Uint8Array(pinned.jobSpecHash)),
-  });
-  return reason.hex;
-}
-
 async function fundedAgent(current: World, cents = 300) {
   const agent = await current.wallet.createAgent("My assistant");
   await current.wallet.setPolicy(agent.id, {
     askAboveCents: 100,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   await current.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;
@@ -175,7 +158,7 @@ describe("refunds", () => {
     expect(looked.firstRecordCost?.lamports).toBe(recordRent.toString());
 
     const beforeTurnDown = await world.balance(agent.address);
-    const turnedDown = await wallet.refundJob(job.id, true);
+    const turnedDown = await confirmDecision(wallet, job.id, "reject");
     expect(turnedDown.status).toBe("in_review");
     // The answer itself already has the new rule, its clock and its bond:
     // the wallet read the freeze back before answering.
@@ -193,7 +176,7 @@ describe("refunds", () => {
     // The delivery carries a reason anyone can work out again from what the
     // chain holds: this delivery, this request, and why.
     expect(await recordedReason(world, looked.task!, looked.provider!)).toBe(
-      await reasonFromChain(world, looked.task!, looked.provider!),
+      (await wallet.reviewRecord(job.id)).entries[0]!.hash,
     );
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
@@ -251,7 +234,7 @@ describe("refunds", () => {
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     await sandbox.workOnce();
     await wallet.getJob(job.id, true);
-    await wallet.refundJob(job.id, true);
+    await confirmDecision(wallet, job.id, "reject");
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
     expect(held.status).toBe("in_review");
@@ -294,7 +277,7 @@ describe("refunds", () => {
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     await sandbox.workOnce();
     await wallet.getJob(job.id, true);
-    await wallet.refundJob(job.id, true);
+    await confirmDecision(wallet, job.id, "reject");
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
     await sandbox.disputeTurnDown({ task: held.task as never, providerAgent: held.provider as never });
@@ -317,7 +300,7 @@ describe("refunds", () => {
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     await sandbox.workOnce();
     await wallet.getJob(job.id, true);
-    await wallet.refundJob(job.id, true);
+    await confirmDecision(wallet, job.id, "reject");
     await wallet.tick();
     const held = await wallet.getJob(job.id, true);
     await sandbox.disputeTurnDown({ task: held.task as never, providerAgent: held.provider as never });
@@ -350,12 +333,12 @@ describe("refunds", () => {
 
     // The first turn-down pays the fee and starts the buyer's record.
     const balance = await world.balance(agent.address);
-    const turnedDown = await wallet.refundJob(job.id, true);
+    const turnedDown = await confirmDecision(wallet, job.id, "reject");
     expect(turnedDown.status).toBe("in_review");
     expect(balance - (await world.balance(agent.address))).toBe(5_000n + recordRent);
     expect(await turnDowns(world, provider)).toBe(1n);
     expect(await recordedReason(world, looked.task!, provider)).toBe(
-      await reasonFromChain(world, looked.task!, provider),
+      (await wallet.reviewRecord(job.id)).entries[0]!.hash,
     );
 
     // A later turn-down costs only its fee.
@@ -365,7 +348,7 @@ describe("refunds", () => {
     expect(again.turnDownRecorded).toBe(true);
     expect(again.firstRecordCost).toBeNull();
     const balanceAgain = await world.balance(agent.address);
-    await wallet.refundJob(next.id, true);
+    await confirmDecision(wallet, next.id, "reject");
     expect(balanceAgain - (await world.balance(agent.address))).toBe(5_000n);
     expect(await turnDowns(world, provider)).toBe(2n);
     // Each reason names its own delivery.

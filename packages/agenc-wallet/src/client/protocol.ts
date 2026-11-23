@@ -162,10 +162,10 @@ export interface WalletMethods {
   };
   /** Accept the delivery and pay the provider. */
   "jobs.approve": {
-    params: { jobId: string; rating?: number };
+    params: { jobId: string; rating?: number; quoteId?: string };
     result: { job: JobView };
   };
-  "jobs.reviewRecord": { params: { jobId: string }; result: import("./reviews.js").ReviewRecord };
+  "jobs.reviewRecord": { params: { jobId: string; termsOnly?: boolean; before?: string }; result: import("./reviews.js").ReviewRecord };
   "jobs.draftReview": {
     params: { jobId: string; action: import("./reviews.js").ReviewAction; note: string; attachments?: import("./reviews.js").ReviewAttachment[] };
     result: { draft: import("./reviews.js").ReviewDraft };

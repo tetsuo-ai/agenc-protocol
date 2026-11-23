@@ -6,7 +6,7 @@ import { SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, SolanaError } from "@solana/ki
 import { AgencError } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
-import { CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
+import { REVIEW_ALLOWANCE, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -16,7 +16,7 @@ afterEach(async () => {
 
 const POLICY = {
   askAboveCents: 100,
-  refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+  refill: REVIEW_ALLOWANCE,
 };
 
 /** A chain whose hire can be made to lose its answer, or never be sent. */

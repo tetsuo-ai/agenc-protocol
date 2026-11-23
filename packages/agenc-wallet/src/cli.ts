@@ -96,7 +96,7 @@ interface Bootstrap {
   unlockSecret: string;
   ownerToken: string;
   earn?: {
-    executor: { argv: string[]; mode: string; reserveRevisionBudget?: boolean; envAllowlist?: string[]; timeoutMs?: number; readiness?: { argv: string[]; timeoutMs?: number } } | null;
+    executor: { argv: string[]; mode: string; isolatedJobRoom?: boolean; reserveRevisionBudget?: boolean; envAllowlist?: string[]; timeoutMs?: number; readiness?: { argv: string[]; timeoutMs?: number } } | null;
     maxRewardLamports?: string | null;
     /** Take jobs only from this wallet's own addresses. */
     ownJobsOnly?: boolean;
@@ -206,6 +206,7 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
       argv: executor.argv,
       mode: executor.mode,
       envAllowlist: executor.envAllowlist ?? [],
+      isolatedJobRoom: executor.isolatedJobRoom === true,
       reserveRevisionBudget: executor.reserveRevisionBudget === true,
       timeoutMs: executor.timeoutMs ?? 15 * 60_000,
       ...(readiness === undefined ? {} : { readiness }),

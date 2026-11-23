@@ -94,7 +94,11 @@ describe("a daily budget", () => {
 
     // Spend most of it. Nothing more is handed over that day...
     await sandbox.workOnce();
+    await expect(wallet.approveJob(job.id, undefined, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    // The first top-up used the day’s allowance. A person grants room for the review fee.
+    await wallet.setPolicy(agent.id, { ...set.policy, refill: { ...set.policy.refill, perDayCents: 501 } });
     await wallet.approveJob(job.id, undefined, true);
+    await wallet.setPolicy(agent.id, set.policy);
     await wallet.reclaimFromAgent(agent.id, { usdCents: 300 });
     const low = await world.balance(agent.address);
     expect(low).toBeLessThan(250n * CENT);

@@ -20,6 +20,10 @@ export interface ReviewQuote {
   rejectionRent: Money;
   disputeRent: Money;
   bond: Money;
+  payer?: string;
+  dailyLimitCents?: number | null;
+  canPay: boolean;
+  submissionCount: number;
   deliveryHash: string;
   reviewEndsAt: number;
   reviewWindowSeconds: number;
@@ -31,6 +35,8 @@ export interface ReviewEntry {
   fee: Money | null;
   rent: Money | null;
   bond: Money | null;
+  evidenceUri?: string;
+  evidenceVerified?: boolean;
   hash: string;
   at: number;
   deadline: number | null;
@@ -39,6 +45,9 @@ export interface ReviewEntry {
 }
 export interface ReviewRecord {
   entries: ReviewEntry[];
+  historyIncomplete?: boolean;
+  continuation?: string;
+  publication?: { hashes: string[]; published?: string[]; signature?: string; confirmed: boolean };
   historyAvailable: boolean;
   termsAvailable: boolean;
   resubmitBy: number | null;

@@ -1,4 +1,4 @@
-import { setEarnWithApproval } from "./harness.js";
+import { REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // Taking money back, or sending it all out, leaves nothing of the person's
 // behind where it can never be used. A wallet that is not empty must keep the
 // network's minimum, so "all" keeps it only while a job or earning may still
@@ -34,7 +34,7 @@ async function agentWith(current: World, cents: number) {
   const agent = await current.wallet.createAgent("My assistant");
   await current.wallet.setPolicy(agent.id, {
     askAboveCents: 1_000,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   await current.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;

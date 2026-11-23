@@ -1,4 +1,4 @@
-import { setEarnWithApproval } from "./harness.js";
+import { confirmDecision, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // "Take jobs while idle": the stock worker loop runs for an agent, signs with
 // the agent's own wallet, delivers a public job, and the pay shows up.
 import { values } from "@tetsuo-ai/marketplace-sdk";
@@ -222,6 +222,7 @@ describe("earning", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
+    await wallet.setPolicy(agent.id, { askAboveCents: 100, refill: REVIEW_ALLOWANCE });
     await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
@@ -242,16 +243,14 @@ describe("earning", () => {
     // The agent's wallet holds what it needs to work, not a bond: the person
     // is told what to add, and nothing changes.
     // In the person's money (play money: $1.00 is 0.01 SOL), never in SOL.
-    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({
+    await expect(confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.")).rejects.toMatchObject({
       code: "NOT_ENOUGH_MONEY",
-      message: expect.stringMatching(
-        /^Disputing this turn-down needs \$[0-9.]+: the bond of \$1\.00, a deposit of \$[0-9.]+ that comes back, and network fees\. Add at least \$[0-9.]+ and try again\. Nothing changed\.$/,
-      ),
+      message: expect.stringMatching(/^This decision needs \$.*Add at least \$/),
     });
     await wallet.fundAgent(agent.id, { usdCents: 200 });
 
     const before = await world.balance(agent.address as never);
-    const disputed = await wallet.disputeTurnDown(held.id, true);
+    const disputed = await confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.");
     expect(disputed.turnDown?.disputed).toBe(true);
     expect(disputed.canDispute).toBe(false);
     expect(disputed.statusText).toMatch(/You disputed the buyer's turn-down/);
@@ -260,7 +259,7 @@ describe("earning", () => {
     expect(before - (await world.balance(agent.address as never))).toBe(
       values.MIN_DISPUTE_BOND_LAMPORTS + bondRent + 5_000n,
     );
-    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    await expect(confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.")).rejects.toMatchObject({ code: "NOT_ALLOWED" });
 
     await sandbox.ruleOnTurnedDown({ task: open.task, payProvider: true });
     await wallet.tick();
@@ -316,9 +315,9 @@ describe("earning", () => {
     expect(held.canDispute).toBe(false);
     expect(held.statusText).toMatch(/The marketplace has suspended your agent, and a suspended agent cannot dispute\./);
     const before = await world.balance(agent.address as never);
-    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({
+    await expect(confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.")).rejects.toMatchObject({
       code: "NOT_ALLOWED",
-      message: expect.stringMatching(/suspended this agent, and a suspended agent cannot dispute a turn-down\. Nothing changed\./),
+      message: expect.stringMatching(/unavailable/),
     });
     // Refused before anything was signed: not even a fee.
     expect(await world.balance(agent.address as never)).toBe(before);

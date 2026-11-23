@@ -48,6 +48,7 @@ import {
 
 /** The owner and bytes of an account, as any RPC `getAccountInfo` returns them. */
 export type ProgramAccountSnapshot = {
+  readonly lamports?: bigint;
   readonly owner: Address;
   readonly data: Uint8Array | ReadonlyUint8Array;
 };
@@ -68,7 +69,7 @@ export function accountSnapshotReader(
   return async (account) => {
     const encoded = await fetchEncodedAccount(rpc, account);
     if (!encoded.exists) return null;
-    return { owner: encoded.programAddress, data: encoded.data };
+    return { owner: encoded.programAddress, data: encoded.data, lamports: encoded.lamports };
   };
 }
 
@@ -324,11 +325,17 @@ export async function missingRecordCost(
     discriminator: ReadonlyUint8Array,
     size: number,
   ): Promise<RecordCostEntry> => {
-    const exists = hasProgramAccount(await read(address), discriminator);
+    const account = await read(address);
+    const exists = hasProgramAccount(account, discriminator);
+    if (account && !exists && (account.owner !== "11111111111111111111111111111111" || account.data.length)) {
+      throw new Error("Invalid owner or contents for a marketplace record.");
+    }
+    const rent = exists ? 0n : await getMinimumBalanceForRentExemption(size);
+    const prefunded = account?.lamports ?? 0n;
     return {
       address,
       exists,
-      lamports: exists ? 0n : await getMinimumBalanceForRentExemption(size),
+      lamports: rent > prefunded ? rent - prefunded : 0n,
     };
   };
   const creatorRecord =

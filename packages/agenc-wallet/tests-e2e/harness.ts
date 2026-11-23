@@ -126,3 +126,15 @@ export async function eventually<T>(
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
+
+export const REVIEW_ALLOWANCE = { enabled: true, topUpToCents: 0, perDayCents: 1000 };
+
+export async function confirmPayout(wallet: AgencWallet, jobId: string, rating?: number) {
+  const { quote } = await wallet.reviewRecord(jobId, undefined, { termsOnly: true });
+  return wallet.approveJob(jobId, rating, true, undefined, quote!.id);
+}
+
+export async function confirmDecision(wallet: AgencWallet, jobId: string, action: "change" | "reject" | "dispute",
+  note = "The delivered work is missing the requested heading.") {
+  return wallet.confirmReview(jobId, await wallet.draftReview(jobId, action, note), true);
+}

@@ -4,6 +4,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import {
   AccountRole,
+  appendTransactionMessageInstruction,
+  compileTransaction,
+  createTransactionMessage,
+  getBase64EncodedWireTransaction,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash,
   address,
   createDefaultRpcTransport,
   createSolanaRpcFromTransport,
@@ -70,7 +76,12 @@ export interface Chain {
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
-  /** Distinguish successful execution from a failed or expired transaction. */
+  /** Simulate the delivery check before the buyer can publish a paid review. */
+  checkReviewDelivery?(payer: Address, guard: Instruction): Promise<void>;
+  /** Distinguish a confirmed failure from a send never seen before verified expiry. */
+  reviewSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired">;
+  /** Actual fee and payer debit from a confirmed review receipt. */
+  reviewDebit?(signature: string, payer: Address): Promise<{ fee: bigint; debit: bigint } | null>;
   listingSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome>;
   /** True only after confirmation, failure, or verified expiry of an interrupted listing send. */
   listingSendSettled?(receipt: PendingListingSend): Promise<boolean>;
@@ -106,7 +117,7 @@ export interface Chain {
   /** Most recent verified settlement transaction for a task, when known. */
   findSettlementSignature?(task: Address): Promise<string | null>;
   /** Confirmed review instructions and costs from the claim history. */
-  reviewHistory?(task: Address, claim: Address): Promise<ReviewHistory>;
+  reviewHistory?(task: Address, claim: Address, before?: string): Promise<ReviewHistory>;
   /** Delivery commitment from a settled task's authenticated transaction history. */
   findSettledDelivery?(task: Address, creator: Address): Promise<SettledDelivery | null>;
   /**
@@ -364,7 +375,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     options.computeUnitPrice === undefined
       ? 0n
       : (options.computeUnitPrice * BigInt(PRICED_COMPUTE_UNIT_LIMIT) + 999_999n) / 1_000_000n;
-  async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
+  async function reviewSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired"> {
     const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
       searchTransactionHistory: true,
     }).send()).value[0];
@@ -379,10 +390,33 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     if (epoch.blockHeight <= BigInt(receipt.lastValidBlockHeight)) return "pending";
     // The status view can lag the height. Recheck after verified expiry.
     const last = await status();
-    return first == null && last == null ? "failed" : outcome(last);
+    return first == null && last == null ? "expired" : outcome(last);
+  }
+  async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
+    const outcome = await reviewSendOutcome(receipt);
+    return outcome === "expired" ? "failed" : outcome;
   }
   const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
   return usesScopedRequests<Chain>({
+    reviewSendOutcome,
+    async checkReviewDelivery(payer, guard) {
+      const { value: lifetime } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+      const message = setTransactionMessageFeePayer(payer, createTransactionMessage({ version: 0 }));
+      const tx = compileTransaction(appendTransactionMessageInstruction(guard, setTransactionMessageLifetimeUsingBlockhash(lifetime, message)));
+      const { value } = await rpc.simulateTransaction(getBase64EncodedWireTransaction(tx), {
+        encoding: "base64", commitment: "confirmed", sigVerify: false,
+      }).send();
+      if (value.err) throw new WalletError("NOT_AVAILABLE", "The marketplace could not verify this delivery for review.");
+    },
+    async reviewDebit(signature, payer) {
+      const tx = await rpc.getTransaction(signature as Signature, {
+        commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0,
+      }).send();
+      if (!tx?.meta || tx.transaction.signatures[0] !== signature ||
+          tx.transaction.message.accountKeys[0]?.pubkey !== payer) return null;
+      const debit = tx.meta.preBalances[0]! - tx.meta.postBalances[0]!;
+      return { fee: tx.meta.fee, debit: debit > 0n ? debit : 0n };
+    },
     listingSendOutcome,
     listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
     network: options.network,
@@ -485,7 +519,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
-    reviewHistory: (task, claim) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions)),
+    reviewHistory: (task, claim, before) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions, before)),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>
