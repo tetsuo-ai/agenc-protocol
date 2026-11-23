@@ -150,8 +150,8 @@ describe("the catalog", () => {
           items: [
             LIVE_ITEM,
             { ...LIVE_ITEM, pda: "not an address" },
-            { ...LIVE_ITEM, priceMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
-            { ...LIVE_ITEM, state: 1 },
+            { ...LIVE_ITEM, pda: TASK, priceMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
+            { ...LIVE_ITEM, pda: PROVIDER, state: 1 },
           ],
         });
       },
@@ -184,6 +184,39 @@ describe("the catalog", () => {
       },
     ]);
     expect(hosts.asked).toEqual([LIVE_ITEM.specUri]);
+  });
+
+  it("loads the whole catalog once, even when two searches cross the former 300-row cutoff", async () => {
+    const items = Array.from({ length: 315 }, (_, index) => {
+      const bytes = new Uint8Array(32);
+      new DataView(bytes.buffer).setUint32(0, index + 1);
+      return { ...LIVE_ITEM, pda: getAddressDecoder().decode(bytes), specHash: "", specUri: "" };
+    });
+    const pages: number[] = [];
+    const services = createHostedServices({ fetchImpl: fakeFetch({
+      "GET https://agenc.ag/api/listings": ({ url }) => {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        return json({ items: items.slice((page - 1) * 100, page * 100), total: items.length });
+      },
+    }).fetch });
+    const [first, second] = await Promise.all([services.listServices(), services.listServices()]);
+    expect(first.map((row) => row.listing)).toEqual(items.map((row) => row.pda));
+    expect(second).toEqual(first);
+    expect(pages).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+  });
+
+  it("rejects a repeated page and retries without caching a partial list", async () => {
+    let repeats = true;
+    const services = createHostedServices({ fetchImpl: fakeFetch({
+      "GET https://agenc.ag/api/listings": ({ url }) => json({
+        total: 2,
+        items: [{ ...LIVE_ITEM, specUri: "", pda: repeats || url.searchParams.get("page") === "1" ? LISTING : TASK, specHash: "" }],
+      }),
+    }).fetch });
+    await expect(services.listServices()).rejects.toMatchObject({ code: "NETWORK" });
+    repeats = false;
+    expect((await services.listServices()).map((row) => row.listing)).toEqual([LISTING, TASK]);
   });
 
   it("says so plainly when the catalog is down", async () => {
@@ -377,7 +410,7 @@ describe("the catalog", () => {
     expect(rows.map((row) => row.details)).toEqual(["ready", "ready"]);
   });
 
-  it("shows a provider's exact repeat once, and never merges two providers", async () => {
+  it("keeps each listing ID even when the provider, price and description match", async () => {
     const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
     const addressOf = (fill: number) => getAddressDecoder().decode(new Uint8Array(32).fill(fill));
     const untried = { ...LIVE_ITEM, specHash, pda: addressOf(11), provenance: { settledHireCount: 0 }, ratingCount: 0 };
@@ -390,7 +423,9 @@ describe("the catalog", () => {
       publicFetcher: hosts.fetcher,
     });
     const rows = await services.listServices();
-    expect(rows.map((row) => row.listing)).toEqual([addressOf(12), addressOf(13), addressOf(14)]);
+    const targeted = await services.listServices({ listing: untried.pda });
+    expect(targeted.find((row) => row.listing === untried.pda)?.details).toBe("ready");
+    expect(rows.map((row) => row.listing)).toEqual([addressOf(11), addressOf(12), addressOf(13), addressOf(14)]);
   });
 
   it("keeps listings on later legacy catalog pages when the fee or capacity is missing", async () => {
@@ -1092,7 +1127,7 @@ describe("the jobs a provider finished", () => {
           ...SETTLED,
           pda: getAddressDecoder().decode(new Uint8Array(32).fill(page * 101 + index + 1)),
         }));
-        return json({ page, pageSize: 100, total: 120, items });
+        return json({ slot: 1000, page, pageSize: 100, total: 120, items });
       },
     });
     const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0, now: () => now });

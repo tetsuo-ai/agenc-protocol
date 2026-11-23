@@ -1,3 +1,4 @@
+import { DISCOVERY_CAPABILITY, type ServiceState } from "./discovery.js";
 // The wire contract between the wallet service and anything that talks to it
 // (a desktop panel, an agent host, a CLI). Everything here is plain JSON:
 // lamport amounts travel as decimal strings, times as unix milliseconds.
@@ -198,7 +199,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY] as const);
 
 export interface WalletOverview {
   /**
@@ -266,6 +267,9 @@ export interface ServiceView {
   operatorFeeBps?: number;
   operator?: string | null;
   proceeds?: import("./seller-terms.js").SellerProceeds;
+  state?: ServiceState;
+  /** Canonical listing page for a service on the public marketplace. */
+  listingUrl?: string;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;
@@ -355,7 +359,9 @@ export interface ProviderView {
   disputesLost: number | null;
   /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
   deposit: Money | null;
-  /** Its other services on offer now. */
+  /** Count across the catalog. Filter by provider to page through all of them. */
+  otherServiceCount?: number;
+  /** A preview of its other services on offer now. */
   otherServices: { listing: string; name: string }[];
 }
 

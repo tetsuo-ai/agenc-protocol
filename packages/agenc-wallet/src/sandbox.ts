@@ -6,6 +6,7 @@
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
 import { listingDetails } from "./listing-details.js";
+import { SERVICE_STATES } from "./client/discovery.js";
 import { mkdtempSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import lighthouseFixture from "../testing-assets/lighthouse.so.json";
@@ -634,13 +635,15 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   }
 
   const services: MarketServices = {
-    async listServices() {
+    async listServices(filters) {
       const rows: CatalogRow[] = [];
       for (const entry of listed) {
         const info = readInfo(entry.listing);
         if (info === null) continue;
         const account = getServiceListingDecoder().decode(info.data);
-        if (Number(account.state) !== 0) continue;
+        const state = SERVICE_STATES[Number(account.state)];
+        if (state !== (filters?.state ?? "active") || account.priceMint.__option === "Some") continue;
+        if (state === "active" && account.maxOpenJobs > 0 && account.openJobs >= account.maxOpenJobs) continue;
         // Like the real catalog, only a service that passed the check is shown.
         const [approval] = await findListingModerationPda({
           listing: entry.listing,
@@ -650,6 +653,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         if (readInfo(approval)?.owner !== AGENC_COORDINATION_PROGRAM_ADDRESS) continue;
         rows.push({
           listing: entry.listing,
+          ...(state === "active" ? {} : { state }),
           providerAgent: account.providerAgent,
           name: values.decodeListingName(new Uint8Array(account.name)),
           category: entry.category,

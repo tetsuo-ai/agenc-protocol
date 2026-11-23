@@ -28,7 +28,7 @@ import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
-import { MAX_LISTING_DELIVERY_SECS, type AmountInput, type WalletEvent } from "./client/protocol.js";
+import { MAX_LISTING_DELIVERY_SECS, type MethodParams, type MethodResult, type AmountInput, type WalletEvent } from "./client/protocol.js";
 import { identifyEntry, entrantCosts, contestClaims, archiveContestEntries, contestPostCosts, liveContestEntries, sendContest, contestUnavailable } from "./contest.js";
 import { contestPage, contestReceipts } from "./contest-page.js";
 import { contestPlan } from "./contest-decision.js";
@@ -50,8 +50,6 @@ import type {
   JobView,
   Money,
   OfferView,
-  ProviderView,
-  ServiceView,
   WalletOverview,
 } from "./client/types.js";
 import {
@@ -127,7 +125,7 @@ import {
   type TurnDownOnChain,
 } from "./market.js";
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
-import { createRecordKeeper, type KnownRecord, type RecordKeeper, type RecordRow } from "./records.js";
+import { createRecordKeeper, type RecordKeeper } from "./records.js";
 import {
   buildJobSpec,
   buildListingSpec,
@@ -149,7 +147,9 @@ import {
   type WalletState,
   agentOffers,
 } from "./store.js";
-import { compareRecords, EMPTY_RECORD, type TrustRecord } from "./trust.js";
+import { ServiceDiscovery, recordRow, type ServiceContext } from "./service-discovery.js";
+import { priceCeiling } from "./price-ceiling.js";
+import { DISCOVERY_CAPABILITY } from "./client/discovery.js";
 import { KeyVault } from "./vault.js";
 import { activityView, amountWords, approvalView, jobStatus, jobView, money } from "./views.js";
 
@@ -192,56 +192,6 @@ function isDrawing(text: string): boolean {
   return /^<svg[\s>]/i.test(rest);
 }
 
-/** The most services one page of a search holds. */
-const MAX_FIND_LIMIT = 50;
-
-/**
- * Words that say nothing about what is wanted. A person asks "find someone
- * to write a haiku about my garden", and so does an agent; only "write",
- * "haiku" and "garden" say what to look for.
- */
-const SEARCH_FILLER = new Set([
-  "a", "an", "and", "any", "are", "about", "can", "do", "for", "find", "from", "get", "have", "i", "in", "is",
-  "it", "like", "looking", "me", "my", "need", "of", "on", "or", "our", "please", "some", "someone", "something",
-  "that", "the", "this", "to", "want", "who", "will", "with", "you", "your",
-]);
-
-/** A search word with the other forms it may take in a description. */
-interface SearchWord {
-  /** "memes" also finds "meme"; "summary" also finds "summaries". */
-  forms: string[];
-  /** A short word has to stand alone: "ai" is not in "maintain". */
-  whole: boolean;
-}
-
-/**
- * The words of a search. Deliberately small: filler is dropped unless it is
- * all there is, a plural does not hide a match, and a word of three letters
- * or fewer only matches as a word of its own.
- */
-function searchWords(query: string): SearchWord[] {
-  const all = [...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 0))];
-  const telling = all.filter((word) => !SEARCH_FILLER.has(word));
-  const words: SearchWord[] = [];
-  for (const word of (telling.length > 0 ? telling : all).slice(0, 12)) {
-    const forms = new Set([word]);
-    if (word.length > 4 && word.endsWith("ies")) forms.add(`${word.slice(0, -3)}y`);
-    else if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) forms.add(word.slice(0, -1));
-    if (word.length > 4 && word.endsWith("y")) forms.add(`${word.slice(0, -1)}ies`);
-    words.push({ forms: [...forms], whole: word.length <= 3 });
-  }
-  return words;
-}
-
-/** Text to search in, as it is and as the set of its words. */
-function searchable(text: string): { text: string; words: Set<string> } {
-  const lower = text.toLowerCase();
-  return { text: lower, words: new Set(lower.split(/[^a-z0-9]+/)) };
-}
-
-function found(word: SearchWord, place: { text: string; words: Set<string> }): boolean {
-  return word.forms.some((form) => (word.whole ? place.words.has(form) : place.text.includes(form)));
-}
 const BALANCE_CACHE_MS = 4_000;
 /**
  * How long after a job gives money back to the main balance a read of that
@@ -533,29 +483,6 @@ interface RequestTerms {
   deliverWithinSecs: number;
 }
 
-/** What a list of services is described with: the record, the dollar rate, the fee rate, who offers what. */
-interface ServiceContext {
-  known: KnownRecord;
-  rate: number | null;
-  feeBps: number | null;
-  /** Every service on the list, by the agent that offers it. */
-  byProvider: Map<string, { listing: string; name: string }[]>;
-}
-
-function recordRow(row: CatalogRow): RecordRow {
-  return { listing: row.listing, providerAgent: row.providerAgent, specHashHex: row.specHashHex };
-}
-
-/**
- * A service's record, or null when it is not known: not read yet, or its
- * agent's finished jobs could not be read the last time.
- */
-function knownRecord(known: KnownRecord, row: CatalogRow): TrustRecord | null {
-  const record = known.record;
-  if (record === null || !record.facts.has(row.providerAgent) || record.unread.has(row.providerAgent)) return null;
-  return record.listings.get(row.listing) ?? EMPTY_RECORD;
-}
-
 export class AgencWallet {
   readonly #config: WalletConfig;
   readonly #chain: Chain;
@@ -599,6 +526,7 @@ export class AgencWallet {
    */
   readonly #owed = new Map<string, ReadonlyMap<string, bigint>>();
   /** Who offers each service and what buyers paid them, read in the background. */
+  readonly #discovery: ServiceDiscovery;
   readonly #records: RecordKeeper;
   /** The marketplace's fee rate in basis points, as last read (null: it could not be). */
   #feeRate: { at: number; bps: number | null } | null = null;
@@ -617,6 +545,12 @@ export class AgencWallet {
     this.#releaseLock = releaseLock;
     this.#now = config.now ?? Date.now;
     this.#log = config.log ?? (() => {});
+    this.#discovery = new ServiceDiscovery({
+      rate: () => this.#displayRate(), listServices: (filters) => this.#services.listServices(filters),
+      fillTerms: (rows) => fillCatalogTerms(this.#chain, rows),
+      ownServices: (rows) => this.#ownServices(rows), context: (rows, rate) => this.#serviceContext(rows, RECORD_WAIT_MS, rate),
+      publicNetwork: this.#chain.network === "mainnet", now: this.#now,
+    });
     this.#records = createRecordKeeper(
       {
         chain: config.chain,
@@ -1651,71 +1585,23 @@ export class AgencWallet {
   }
 
   /** Everything a list of services is described with, besides the services themselves. */
-  async #serviceContext(rows: readonly CatalogRow[], waitMs: number): Promise<ServiceContext> {
-    const [known, rate, feeBps] = await Promise.all([
-      this.#records.read(rows.map(recordRow), waitMs),
-      this.#displayRate(),
+  async #serviceContext(rows: readonly CatalogRow[], waitMs: number, rate: number | null): Promise<ServiceContext> {
+    const [known, feeBps] = await Promise.all([
+      rows.some((row) => !row.recordPending)
+        ? this.#records.read(rows.filter((row) => !row.recordPending).map(recordRow), waitMs)
+        : { record: null, reading: false },
       this.#marketFeeBps(),
     ]);
     const byProvider = new Map<string, { listing: string; name: string }[]>();
+    const seen = new Set<string>();
     for (const row of rows) {
+      if (seen.has(row.listing)) continue;
+      seen.add(row.listing);
       const list = byProvider.get(row.providerAgent) ?? [];
-      if (!list.some((entry) => entry.listing === row.listing)) list.push({ listing: row.listing, name: row.name });
+      list.push({ listing: row.listing, name: row.name });
       byProvider.set(row.providerAgent, list);
     }
     return { known, rate, feeBps, byProvider };
-  }
-
-  #serviceView(row: CatalogRow, context: ServiceContext): ServiceView {
-    const { rate, feeBps } = context;
-    const record = knownRecord(context.known, row);
-    const facts = record === null ? null : context.known.record!.facts.get(row.providerAgent)!;
-    const listing = record ?? EMPTY_RECORD;
-    let offeredBy: ProviderView | null = null;
-    if (record !== null && facts !== null) {
-      const provider = context.known.record!.providers.get(row.providerAgent) ?? EMPTY_RECORD;
-      offeredBy = {
-        since: facts.since,
-        jobsDone: provider.jobs,
-        paid: money(provider.paidLamports, rate),
-        buyers: provider.buyers,
-        turnedDown: facts.turnedDown,
-        disputesLost: facts.disputesLost,
-        deposit: facts.depositLamports === null ? null : money(facts.depositLamports, rate),
-        otherServices: (context.byProvider.get(row.providerAgent) ?? []).filter((other) => other.listing !== row.listing),
-      };
-    }
-    return {
-      listing: row.listing,
-      name: row.name,
-      summary: row.summary,
-      description: row.description,
-      category: row.category,
-      tags: row.tags,
-      inputs: row.inputs,
-      outputs: row.outputs,
-      terms: row.terms,
-      details: row.details,
-      ...(row.specHashHex && { specHashHex: row.specHashHex }),
-      price: money(row.priceLamports, rate),
-      ...(row.listingVersion !== undefined && { listingVersion: row.listingVersion }),
-      ...(row.maxOpenJobs !== undefined && { maxOpenJobs: row.maxOpenJobs }),
-      ...(row.operatorFeeBps !== undefined && row.operator !== undefined && (!row.operatorFeeBps || row.operator) && { operatorFeeBps: row.operatorFeeBps, operator: row.operator ?? null,
-        proceeds: sellerProceeds(row.priceLamports, row.operatorFeeBps, feeBps, rate) }),
-      marketFee:
-        feeBps === null
-          ? null
-          : { bps: feeBps, amount: money((row.priceLamports * BigInt(feeBps)) / 10_000n, rate) },
-      rating: listing.rating,
-      ratingCount: listing.ratings,
-      jobsDone: listing.jobs,
-      paid: money(listing.paidLamports, rate),
-      buyers: listing.buyers,
-      record: record !== null ? "ready" : context.known.reading ? "loading" : "unavailable",
-      provider: row.providerAgent,
-      offeredBy,
-      deliverySecs: row.deliverySecs,
-    };
   }
 
   /**
@@ -1725,97 +1611,21 @@ export class AgencWallet {
    * record's deposit and the deposit behind the safety check of the request
    * come back when the job is tidied.
    */
-  async networkFee(): Promise<Money> {
+  async networkFee(rateSnapshot?: number | null): Promise<Money> {
     const [marker, rate] = await Promise.all([
       this.#chain.getMinimumBalanceForRentExemption(getTaskMarkerSize()),
-      this.#displayRate(),
+      rateSnapshot === undefined ? this.#displayRate() : rateSnapshot,
     ]);
     return money(marker + jobNetworkFees(this.#chain.transferFeeLamports), rate);
   }
 
-  /**
-   * Services a buyer can hire, best match first. `total` is how many match in
-   * all; `offset` and `limit` take a page of them.
-   *
-   * A search looks at everything a buyer could mean: the name, what the
-   * provider wrote about the service, its category and tags, what it asks for
-   * and what it hands back. Of several words, the services matching the most
-   * of them are the answer, and a word in the name counts for more than the
-   * same word further down. Words that say nothing ("find someone to ...")
-   * are left out, so a whole sentence works as a search.
-   */
-  async find(params: {
-    query?: string;
-    maxPriceCents?: number;
-    limit?: number;
-    offset?: number;
-  }): Promise<{ services: ServiceView[]; total: number }> {
-    const [listed, rate] = await Promise.all([this.#services.listServices(), this.#displayRate()]);
-    const rows = [...listed, ...(await this.#ownServices(listed))];
-    const context = await this.#serviceContext(rows, RECORD_WAIT_MS);
-    const words = searchWords(params.query ?? "");
-    const limit = Math.min(MAX_FIND_LIMIT, Math.max(1, Math.trunc(params.limit ?? 8)));
-    const offset = Math.max(0, Math.trunc(params.offset ?? 0));
-    let maxLamports: bigint | null = null;
-    if (params.maxPriceCents !== undefined) {
-      if (rate === null) {
-        throw new WalletError(
-          "NETWORK",
-          "Dollar prices are not available right now. Try again in a moment.",
-        );
-      }
-      maxLamports = ceilingLamports(params.maxPriceCents, rate);
-    }
-    const matched = rows
-      .filter((row) => maxLamports === null || row.priceLamports <= maxLamports)
-      .map((row) => {
-        const name = searchable(row.name);
-        const rest = searchable(
-          [
-            row.summary ?? "",
-            row.description ?? "",
-            (row.category ?? "").replace(/-/g, " "),
-            row.tags.join(" ").replace(/-/g, " "),
-            row.inputs.join(" "),
-            row.outputs.join(" "),
-          ].join(" "),
-        );
-        let hits = 0;
-        let inName = 0;
-        for (const word of words) {
-          if (found(word, name)) {
-            hits += 1;
-            inName += 1;
-          } else if (found(word, rest)) {
-            hits += 1;
-          }
-        }
-        return { row, hits, inName };
-      });
-    // A search of several words shows the services that match the most of
-    // them: all of them when any service does, the nearest ones otherwise.
-    // One stray word in a long description does not make a match.
-    const most = matched.reduce((best, entry) => Math.max(best, entry.hits), 0);
-    const scored = matched.filter((entry) => words.length === 0 || (most > 0 && entry.hits === most));
-    // Then by what buyers really paid and said, weighed by money: many good
-    // paid jobs rank above one excellent cheap one (trust.ts).
-    const recordOf = (row: CatalogRow): TrustRecord => knownRecord(context.known, row) ?? EMPTY_RECORD;
-    scored.sort(
-      (a, b) =>
-        b.inName - a.inName ||
-        // A service nobody can read about goes below the ones that say what they do.
-        Number(a.row.details === "unavailable") - Number(b.row.details === "unavailable") ||
-        compareRecords(recordOf(a.row), recordOf(b.row)) ||
-        (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
-    );
-    const page = await fillCatalogTerms(this.#chain, scored.slice(offset, offset + limit).map((entry) => entry.row));
-    return {
-      services: page.map((row) => ({
-        ...this.#serviceView(row, { ...context, rate }),
-        ...(rate !== null && { maxPriceCents: params.maxPriceCents ?? Number(microcents(row.priceLamports, rate)) / 1_000_000 }),
-      })),
-      total: scored.length,
-    };
+  async find(params: MethodParams<"market.find">) {
+    return (await this.#discovery.search(params)).page;
+  }
+
+  async findPage(params: MethodParams<"market.find">): Promise<MethodResult<"market.find">> {
+    const { page, rate } = await this.#discovery.search(params);
+    return { ...page, discovery: DISCOVERY_CAPABILITY, networkFee: await this.networkFee(rate) };
   }
 
   /**
@@ -1876,6 +1686,7 @@ export class AgencWallet {
     maxPriceCents?: number;
     expectedPriceLamports?: string;
     expectedSpecHash?: string;
+    displayedLimitCents?: number;
     acceptance?: string[];
     idempotencyKey?: string;
   }, quoteOnly = false): Promise<{ job: JobView; approval: ApprovalView | null }> {
@@ -1900,7 +1711,9 @@ export class AgencWallet {
     }
     const terms = await readHireableListing(this.#chain, listing);
     const rate = await this.#freshRate(true);
-    checkPriceLimit(terms.priceLamports, params.maxPriceCents, rate);
+    const ceiling = params.displayedLimitCents === undefined ? params.maxPriceCents
+      : Math.min(params.maxPriceCents ?? Infinity, params.displayedLimitCents);
+    checkPriceLimit(terms.priceLamports, ceiling, rate);
     if ((params.expectedPriceLamports !== undefined && params.expectedPriceLamports !== terms.priceLamports.toString()) ||
         (params.expectedSpecHash !== undefined && params.expectedSpecHash !== values.bytesToHex(terms.specHash))) {
       throw new WalletError("PRICE_CHANGED", "The service changed. Refresh its details and request a new quote.");
@@ -1925,40 +1738,7 @@ export class AgencWallet {
 
     const now = this.#now();
     const jobId = newId("job");
-    const catalog = await this.#services.listServices().catch(() => [] as CatalogRow[]);
-    const specHashHex = values.bytesToHex(terms.specHash);
-    const catalogRow = catalog.find((row) => row.listing === listing);
-    if (catalogRow && catalogRow.specHashHex !== values.bytesToHex(terms.specHash)) {
-      throw new WalletError("PRICE_CHANGED", "The service description changed. Refresh its details and request a new quote.");
-    }
-    const service: ServiceView = this.#serviceView(
-      {
-        listing,
-        providerAgent: terms.providerAgent,
-        name: terms.name,
-        category: terms.category,
-        summary: catalogRow?.summary ?? null,
-        description: catalogRow?.description ?? null,
-        tags: catalogRow?.tags ?? [],
-        inputs: catalogRow?.inputs ?? [],
-        outputs: catalogRow?.outputs ?? [],
-        terms: catalogRow?.terms ?? [],
-        listingVersion: terms.version.toString(),
-        maxOpenJobs: terms.maxOpenJobs,
-        operator: terms.operator,
-        operatorFeeBps: terms.operatorFeeBps,
-        // Only show public words committed by the listing being hired.
-        details: catalogRow?.details ?? "unavailable",
-        priceLamports: terms.priceLamports,
-        rating: catalogRow?.rating ?? null,
-        ratingCount: terms.ratingCount,
-        jobsDone: catalogRow?.jobsDone ?? 0,
-        deliverySecs: terms.deliverySecs,
-        specHashHex,
-      },
-      // What is known of the service's record right now; a request does not wait for it.
-      { ...await this.#serviceContext(catalog, 0), rate },
-    );
+    const service = this.#discovery.describeHire(terms, rate, await this.#marketFeeBps());
     const record: JobRecord = {
       id: jobId,
       inputFingerprint: fingerprint,

@@ -1,6 +1,8 @@
 // Finding a service, against the real program: a search reads what a provider
 // wrote, the list comes a page at a time, and every row says what the buyer
 // is asked to send and what comes back.
+import { getAddressDecoder } from "@solana/kit";
+import { createHostedServices } from "../src/services.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { CENT, startWorld, type World } from "./harness.js";
 
@@ -84,6 +86,52 @@ describe("finding a service", () => {
       tags: [],
       terms: [],
     });
+  });
+
+  it("filters and ranks the full hosted catalog before paging, including an exact ID on page four", async () => {
+    const id = (i: number) => {
+      const bytes = new Uint8Array(32);
+      new DataView(bytes.buffer).setUint32(0, i + 1);
+      return getAddressDecoder().decode(bytes);
+    };
+    const items = Array.from({ length: 307 }, (_, i) => ({
+      pda: id(i), providerAgent: id(i < 300 ? 501 : 502), name: i < 300 ? "Poetry" : "Proofread",
+      state: i === 300 ? 1 : 0, priceLamports: String(BigInt(i + 1) * CENT),
+    }));
+    const hosted = createHostedServices({ fetchImpl: async (url) => {
+      const page = Number(new URL(String(url)).searchParams.get("page"));
+      return Response.json({ total: items.length, items: items.slice((page - 1) * 100, page * 100) });
+    } });
+    world = await startWorld({ services: (local) => ({ ...local, listServices: hosted.listServices }) });
+    const { wallet } = world;
+    const params = { query: "proofread", provider: id(502), maxPriceCents: 305, limit: 2 };
+    expect(await wallet.find(params)).toMatchObject({ total: 4, services: [{ listing: id(301) }, { listing: id(302) }] });
+    expect(await wallet.find({ ...params, offset: 2 })).toMatchObject({ total: 4, services: [{ listing: id(303) }, { listing: id(304) }] });
+    expect(await wallet.find({ ...params, offset: 4 })).toEqual({ total: 4, services: [] });
+    expect(await wallet.find({ query: id(306) })).toMatchObject({ total: 1, services: [{ listing: id(306) }] });
+    expect(await wallet.find({ query: id(306), provider: id(501) })).toEqual({ total: 0, services: [] });
+    expect(await wallet.find({ query: id(304), maxPriceCents: 304.999999 })).toEqual({ total: 0, services: [] });
+    expect(await wallet.find({ query: id(300) })).toEqual({ total: 0, services: [] });
+  });
+
+  it("rejects malformed discovery filters and reports unread trust records", async () => {
+    world = await startWorld({ chain: (chain) => ({ ...chain, readRawAccounts: async () => { throw new Error("offline"); } }) });
+    for (const params of [{ provider: "partial" }, { minPaidJobs: -1 }, { minPaidJobs: 1.5 }, { minRating: 6 },
+      { minRating: NaN }, { maxPriceCents: -1 }]) {
+      await expect(world.wallet.find(params)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    expect(await world.wallet.find({ minPaidJobs: 1 })).toMatchObject({ total: 0, services: [], recordsUnavailable: true });
+    expect((await world.wallet.find({})).total).toBe(1);
+  });
+
+  it("links a public listing to its canonical page and keeps practice IDs local", async () => {
+    world = await startWorld();
+    expect((await world.wallet.find({ query: world.listing })).services[0]).not.toHaveProperty("listingUrl");
+    await world.wallet.close();
+    // Same in-process chain and catalog, advertising the public network.
+    world.wallet = await world.reopen({ chain: { ...world.sandbox.chain, network: "mainnet" } });
+    expect((await world.wallet.find({ query: world.listing })).services[0]?.listingUrl)
+      .toBe(`https://agenc.ag/listings/${world.listing}`);
   });
 
   it("hands the list out a page at a time and says how many there are", async () => {

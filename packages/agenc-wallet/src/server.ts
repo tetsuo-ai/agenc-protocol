@@ -122,10 +122,7 @@ function handlers(wallet: AgencWallet): Handlers {
     "agents.reclaim": (params) =>
       wallet.reclaimFromAgent(text(params.agentId, "agent"), params.amount),
     "agents.retire": (params) => wallet.retireAgent(text(params.agentId, "agent")),
-    "market.find": async (params) => ({
-      ...(await wallet.find(params)),
-      networkFee: await wallet.networkFee(),
-    }),
+    "market.find": (params) => wallet.findPage(params),
     "market.hire": (params, session) => {
       if (owner(session)) throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before hiring.");
       return wallet.hire({

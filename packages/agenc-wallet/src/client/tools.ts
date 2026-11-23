@@ -7,9 +7,12 @@
 // service and a request, or a request and a reward; the wallet service
 // decides whether the agent's own allowance covers it or a person has to say
 // yes.
-import { formatDuration, formatMoney, formatWait } from "./format.js";
+import { formatMoney, formatWait } from "./format.js";
 import { WalletClientError, type WalletClient } from "./socket-client.js";
-import type { JobView, ServiceView } from "./types.js";
+import type { JobView } from "./types.js";
+
+import { discoveryTool, findServices, type describeService } from "./discovery-tool.js";
+import { dollarsToCents, text, ToolInputError } from "./tool-input.js";
 
 const MAX_MARKET_ID_LENGTH = 128;
 
@@ -44,30 +47,7 @@ export const MARKET_TOOL_INSTRUCTIONS = [
 ].join(" ");
 
 export const MARKET_TOOLS: readonly MarketToolSpec[] = [
-  {
-    name: "market_find",
-    description:
-      "Search the AgenC marketplace for services other agents offer. Read-only. The search looks at each service's name, description and category. Returns services with an id, what you get, what the provider asks you to send, the price, its record (ratings and paid jobs, each weighed by what the job paid) and how long delivery takes. Leave query empty to see the services with the best record first.",
-    readOnly: true,
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        query: {
-          type: "string",
-          maxLength: 200,
-          description: "What you are looking for, in plain words.",
-        },
-        max_price_usd: {
-          type: "number",
-          exclusiveMinimum: 0,
-          maximum: 100000,
-          description: "Only show services at or below this price in US dollars.",
-        },
-        limit: { type: "integer", minimum: 1, maximum: 20 },
-      },
-    },
-  },
+  discoveryTool,
   {
     name: "market_hire",
     description:
@@ -233,117 +213,12 @@ export interface MarketToolResult {
   submissions?: import("./types.js").ContestEntry[];
   next_entry?: string | null;
   services?: ReturnType<typeof describeService>[];
+  total?: number;
+  next_cursor?: string | null;
+  max_price_usd?: number;
+  next_offset?: number | null;
   job?: ReturnType<typeof describeJob>;
   jobs?: ReturnType<typeof describeJob>[];
-}
-
-class ToolInputError extends Error {}
-
-function text(value: unknown, field: string, max: number, required: boolean): string | undefined {
-  if (value === undefined || value === null || value === "") {
-    if (required) throw new ToolInputError(`${field} is required.`);
-    return undefined;
-  }
-  if (typeof value !== "string") throw new ToolInputError(`${field} must be text.`);
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    if (required) throw new ToolInputError(`${field} is required.`);
-    return undefined;
-  }
-  if (trimmed.length > max) {
-    throw new ToolInputError(`${field} is too long (at most ${max} characters).`);
-  }
-  return trimmed;
-}
-
-function dollarsToCents(value: unknown, field: string): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 100_000) {
-    throw new ToolInputError(`${field} must be a dollar amount above zero.`);
-  }
-  // Shift the decimal exponent without introducing a binary rounding step.
-  const [digits, exponent = "0"] = value.toString().split("e");
-  const cents = Number(digits + "e" + (Number(exponent) + 2));
-  return field === "max_price_usd" ? cents : Math.round(cents);
-}
-
-function describeService(service: ServiceView) {
-  return {
-    id: service.listing,
-    name: service.name,
-    ...(service.category !== null ? { category: service.category } : {}),
-    // Everything from here to `terms` is the provider's own text.
-    what_you_get:
-      service.summary ??
-      (service.details === "loading"
-        ? "The description is still loading. Search again in a moment."
-        : service.details === "unavailable"
-          ? "The provider's description could not be read."
-          : null),
-    ...(service.inputs.length > 0 ? { asks_for: service.inputs } : {}),
-    ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
-    ...(service.terms.length > 0 ? { terms: service.terms } : {}),
-    price: formatMoney(service.price),
-    ...(service.maxPriceCents !== undefined && { max_price_usd: service.maxPriceCents / 100 }),
-    listing_version: service.listingVersion,
-    ...(service.maxOpenJobs !== undefined && { max_open_jobs: service.maxOpenJobs, delivery_secs: service.deliverySecs,
-      price_lamports: service.price.lamports, tags: service.tags, operator: service.operator,
-      operator_fee_bps: service.operatorFeeBps, proceeds: service.proceeds }),
-    // A wallet older than this client sends no fee and no record: those are left out, not guessed.
-    ...(service.marketFee != null
-      ? { marketplace_fee: `${formatMoney(service.marketFee.amount)} of the price (${service.marketFee.bps / 100}%)` }
-      : {}),
-    ...describeRecord(service),
-    delivery:
-      service.deliverySecs === null ? "The seller must set a delivery period before you can hire this service." : `within ${formatDuration(service.deliverySecs)}`,
-  };
-}
-
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
-/** "5 jobs, $2.00 paid by 3 buyers" */
-function paidJobs(jobs: number, paid: ServiceView["paid"], buyers: number): string {
-  return jobs === 0
-    ? "none yet"
-    : `${plural(jobs, "job", "jobs")}, ${formatMoney(paid)} paid by ${plural(buyers, "buyer", "buyers")}`;
-}
-
-/** A service's record and its provider's, as far as they are known. */
-function describeRecord(service: ServiceView): Record<string, unknown> {
-  if (service.record !== "ready") {
-    return {
-      record:
-        service.record === "loading"
-          ? "Its record is still being read. Search again in a moment."
-          : "Its record could not be read right now.",
-    };
-  }
-  const provider = service.offeredBy ?? null;
-  return {
-    rating:
-      service.rating === null
-        ? "not rated yet"
-        : `${service.rating.toFixed(1)} of 5 from ${plural(service.ratingCount, "rating", "ratings")}`,
-    paid_jobs: paidJobs(service.jobsDone, service.paid, service.buyers),
-    ...(provider !== null
-      ? {
-          provider: {
-            ...(provider.since !== null
-              ? { on_the_marketplace_since: new Date(provider.since).toISOString().slice(0, 10) }
-              : {}),
-            paid_jobs: paidJobs(provider.jobsDone, provider.paid, provider.buyers),
-            // A provider without a stats record has not been counted, not cleared.
-            turned_down: provider.turnedDown ?? "no record kept",
-            disputes_lost: provider.disputesLost ?? "no record kept",
-            ...(provider.otherServices.length > 0
-              ? { other_services: provider.otherServices.slice(0, 8).map((other) => other.name) }
-              : {}),
-          },
-        }
-      : {}),
-  };
 }
 
 function describeJob(job: JobView, now: number) {
@@ -457,36 +332,12 @@ export async function runMarketTool(
   const signal = options.signal;
   const callOptions = signal ? { signal } : undefined;
   try {
-    if (name === "market_find") {
-      const query = text(args.query, "query", 200, false);
-      const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd");
-      const limit =
-        typeof args.limit === "number" && Number.isInteger(args.limit)
-          ? Math.min(20, Math.max(1, args.limit))
-          : 8;
-      const { services, total, networkFee } = await client.call(
-        "market.find",
-        {
-          ...(query !== undefined ? { query } : {}),
-          ...(maxPriceCents !== undefined ? { maxPriceCents } : {}),
-          limit,
-        },
-        callOptions,
-      );
-      return {
-        ok: true,
-        message:
-          services.length === 0
-            ? "No service matches that right now."
-            : `${total > services.length ? `Showing the best ${services.length} of ${total} services` : `Found ${services.length} ${services.length === 1 ? "service" : "services"}`}. Each job also costs about ${formatMoney(networkFee)} in network fees, which are not returned even if the job is cancelled. Tell the user the name and price before hiring.`,
-        services: services.map(describeService),
-      };
-    }
+    if (name === "market_find") return await findServices(client, args, callOptions);
 
     if (name === "market_hire") {
       const listing = text(args.service, "service", MAX_MARKET_ID_LENGTH, true)!;
       const request = text(args.request, "request", 4000, true)!;
-      const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd");
+      const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd", true);
       const acceptance = acceptanceOf(args.acceptance);
       const started = options.readOutcomeOnly
         ? await client.call("jobs.callOutcome", { agentId, kind: "hire", key: options.idempotencyKey ?? "" }, callOptions)
