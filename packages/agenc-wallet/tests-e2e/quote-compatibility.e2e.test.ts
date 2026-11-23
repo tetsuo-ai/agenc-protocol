@@ -58,6 +58,32 @@ it("replays the raw acceptance fingerprint from an older journal after restart",
   expect(await world.wallet.listJobs({}, true)).toHaveLength(1);
 });
 
+it.each(["agent", "main"] as const)("replays a pre-upgrade %s post without funding twice", async payer => {
+  world = await startWorld();
+  const agent = await world.wallet.createAgent("Buyer");
+  const request = "Write a poem.";
+  const acceptance = ["Use   three lines."];
+  const input = { request, acceptance, reward: { usdCents: 30 }, idempotencyKey: "older-post" };
+  const post = (minReputation: number) => payer === "main"
+    ? world.wallet.quotePost({ ...input, minReputation })
+    : world.wallet.post({ ...input, agentId: agent.id, minReputation });
+  const first = await post(10);
+  const placed = await world.wallet.decideApproval(first.approval!.id, true);
+  expect(placed.task).toBeTruthy();
+  await world.wallet.close();
+  const file = join(world.dataDir, "state.json");
+  const state: WalletState = JSON.parse(readFileSync(file, "utf8"));
+  state.jobs[first.job.id]!.inputFingerprint = createHash("sha256").update(JSON.stringify([
+    payer === "main", request, acceptance, null, ["usdCents", 30], null, null, 7, null, 10, "1",
+  ])).digest("hex");
+  writeFileSync(file, JSON.stringify(state));
+  world.wallet = await world.reopen();
+  const balance = await world.balance(world.wallet.mainAddress);
+  expect((await post(10)).job.task).toBe(placed.task);
+  await expect(post(11)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  expect(await world.balance(world.wallet.mainAddress)).toBe(balance);
+});
+
 it.each([
   [undefined, false], [20, false], [undefined, true], [20, true],
 ] as const)("refreshes the price within the buyer's own cap (%s, legacy %s)", async (maxPriceCents, legacy) => {
@@ -65,7 +91,7 @@ it.each([
   world = await startWorld({ config: { prices: { solUsd: async () => rate } } });
   const { wallet, listing } = world;
   const agent = await wallet.createAgent("Buyer");
-  const first = (await wallet.hire({ agentId: agent.id, listing, request: "Write a poem.", maxPriceCents })).approval!;
+  const first = (await wallet.hire({ agentId: agent.id, listing, request: "Write a poem.", ...(maxPriceCents !== undefined && { maxPriceCents }) })).approval!;
   expect(first.maxPriceCents).toBe(20);
   await wallet.close();
   if (legacy) {

@@ -22,9 +22,9 @@ export function checkPriceLimit(lamports: bigint, cap: number | undefined, rate:
 export function legacyRefreshLimit(job: JobRecord): number | undefined {
   if (job.kind === "hire" && job.terms && job.inputFingerprint) {
     const input = { request: job.request, listing: job.listing, acceptance: job.acceptance };
-    for (const deadline of [undefined, job.terms.deadline]) {
-      for (const reviewWindowSecs of [undefined, job.terms.reviewWindowSecs]) {
-        if (jobIdentity({ ...input, deadline, reviewWindowSecs }, false) === job.inputFingerprint) return undefined;
+    for (const deadline of [{}, { deadline: job.terms.deadline }]) {
+      for (const review of [{}, { reviewWindowSecs: job.terms.reviewWindowSecs }]) {
+        if (jobIdentity({ ...input, ...deadline, ...review }, false) === job.inputFingerprint) return undefined;
       }
     }
   }
