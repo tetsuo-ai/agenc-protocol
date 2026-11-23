@@ -33,6 +33,7 @@ export interface ReviewInputFile { name: string; bytes: Uint8Array }
 export async function readReviewInputs(
   envelope: taskThread.TaskThreadEnvelope,
   read: (hash: string) => Promise<Uint8Array | null>,
+  fileProblem: (name: string, bytes: Uint8Array) => string | null,
 ): Promise<ReviewInputFile[]> {
   const files: ReviewInputFile[] = [];
   let total = 0;
@@ -50,6 +51,8 @@ export async function readReviewInputs(
     if (!bytes?.length || createHash("sha256").update(bytes).digest("hex") !== attachment.hash) {
       throw new Error("A revision input could not be verified.");
     }
+    const problem = fileProblem(name, bytes);
+    if (problem) throw new Error("Invalid revision input: " + problem);
     total += bytes.length;
     if (total > 256 * 1024) throw new Error("The revision inputs exceed 256 KB.");
     files.push({ name, bytes });

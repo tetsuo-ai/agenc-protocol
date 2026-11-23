@@ -216,6 +216,9 @@ function context(
 ): WorkerContext {
   return {
     config: config(),
+    reviewRoom: { fileProblem: () => null, execute: async ({ prompt }) => ({
+      stdout: Buffer.from(prompt?.includes("missing recovery evidence") ? "revision-used-feedback" : "worker-result"), exitCode: 0,
+    }) },
     client: client as unknown as MarketplaceClient,
     signer: { address: WALLET } as TransactionSigner,
     gpa: { getProgramAccounts: async () => [] } as ProgramAccountsTransport,
@@ -1708,7 +1711,10 @@ describe("transaction-boundary recovery", () => {
     expect(submitTaskResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("restores a revision without replenishing its model budget (budgeted: %s)", async (budgeted) => {
+  it.each(["available", "exhausted", "unsupported"])("restores a revision with its reserved budget (%s)", async mode => {
+    const budgeted = mode !== "available";
+    const file = Buffer.from("not a picture");
+    const fileHash = sha256Hex(file);
     const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-revision-"));
     const previousHash = new Uint8Array(32).fill(3);
     const previousHashHex = Buffer.from(previousHash).toString("hex");
@@ -1718,7 +1724,7 @@ describe("transaction-boundary recovery", () => {
       parentHash: null,
       role: "buyer",
       body: "Please add the missing recovery evidence.",
-      attachments: [],
+      attachments: mode === "unsupported" ? [{ uri: "https://store.invalid/" + fileHash + "#image.png", hash: fileHash }] : [],
       ts: 1_700_000_200,
     };
     const changesHash = (await taskThread.envelopeHash(changesEnvelope)).bytes;
@@ -1731,7 +1737,7 @@ describe("transaction-boundary recovery", () => {
       rewardAmount: REWARD.toString(),
       submittedAt: "2026-07-18T00:00:00.000Z",
       settled: false,
-      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0 } } : {}),
+      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(mode === "unsupported" && { revisionRound: 0 }) } } : {}),
     });
     saveState(stateDir, state);
 
@@ -1818,6 +1824,26 @@ describe("transaction-boundary recovery", () => {
       submissions: [],
     });
 
+    const room = ctx.reviewRoom!;
+    delete ctx.reviewRoom;
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    expect(threadGet).not.toHaveBeenCalled();
+    expect(submitTaskResult).not.toHaveBeenCalled();
+    ctx.reviewRoom = room;
+    if (mode === "unsupported") {
+      const before = loadState(stateDir).openClaim!.modelBudget;
+      expect(before?.remainingCents).toBeGreaterThan(0);
+      const execute = vi.fn(room.execute);
+      const fileProblem = vi.fn(() => "The bytes are not a picture.");
+      ctx.reviewRoom = { fileProblem, execute };
+      ctx.readReviewArtifact = async hash => hash === fileHash ? file : Buffer.from(taskThread.canonicalEnvelopeJson(changesEnvelope));
+      expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+      expect(fileProblem).toHaveBeenCalledWith("image.png", file);
+      expect(execute).not.toHaveBeenCalled();
+      expect(loadState(stateDir).openClaim?.modelBudget).toEqual(before);
+      return;
+    }
+
     if (budgeted) {
       expect(loadState(stateDir).openClaim?.modelBudget).toEqual({ totalCents: 50, remainingCents: 0 });
       expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
@@ -1834,6 +1860,34 @@ describe("transaction-boundary recovery", () => {
     expect(
       events.filter((event) => event.event === "task.revision-requested"),
     ).toHaveLength(1);
+  });
+
+  it.each(["executed", "submitting"] as const)("keeps later %s work when the confirmed account is older", async phase => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-round-order-"));
+    const state = emptyState();
+    const hash = sha256Hex(Buffer.from("a"));
+    state.openClaim = { task: TASK, claimedAt: new Date().toISOString(), phase, revisionSubmissionCount: 2,
+      ...(phase === "executed" ? {
+        execution: { resultHashHex: hash, resultBytesBase64: "YQ==", rewardAmount: "5", executedAt: new Date().toISOString() },
+      } : {
+        submission: { resultUri: SPEC_URI, resultHashHex: hash, rewardAmount: "5", preparedAt: new Date().toISOString(), transactionSignature: "pending" },
+      }) };
+    saveState(stateDir, state);
+    const [claim] = await findClaimPda({ task: TASK, bidder: WORKER });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    const accounts = new Map<Address, Uint8Array>([[TASK, taskData(TaskStatus.InProgress)], [claim, claimData(claim)],
+      [submission, submissionData(claim, new Uint8Array(32), SubmissionStatus.Rejected, new Uint8Array(32).fill(2), 1)]]);
+    const status = vi.fn(async () => null);
+    const ctx = context(stateDir, accounts, { transport: { getSignatureStatus: status } }, []);
+    const before = loadState(stateDir).openClaim;
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    expect(loadState(stateDir).openClaim).toEqual(before);
+    if (phase === "submitting") {
+      accounts.set(submission, submissionData(claim, Buffer.from(hash, "hex"), SubmissionStatus.Rejected, new Uint8Array(32).fill(3), 3));
+      expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+      expect(status).toHaveBeenCalledWith("pending");
+      expect(loadState(stateDir).openClaim).toEqual(before);
+    }
   });
 
   it("does not immediately resend after a signature timeout while RPC still shows the stale Rejected revision", async () => {

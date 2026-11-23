@@ -25,10 +25,10 @@ describe("anchored reviews", () => {
     const input = { hash, uri: "https://store.invalid/artifacts/" + hash + "#input.txt" };
     const ref = { hash, uri: "https://evidence.invalid/story#section" };
     const read = async (key: string) => key === hash ? bytes : null;
-    expect(await readReviewInputs({ ...envelope, attachments: [input, ref] }, read)).toEqual([{ name: "input.txt", bytes }]);
-    await expect(readReviewInputs({ ...envelope, attachments: [input, input] }, read)).rejects.toThrow();
-    await expect(readReviewInputs({ ...envelope, attachments: [input] }, async () => Buffer.from("changed"))).rejects.toThrow();
-    await expect(readReviewInputs({ ...envelope, attachments: [{ ...input, uri: input.uri.replace("input.txt", "../other") }] }, read)).rejects.toThrow();
+    expect(await readReviewInputs({ ...envelope, attachments: [input, ref] }, read, () => null)).toEqual([{ name: "input.txt", bytes }]);
+    await expect(readReviewInputs({ ...envelope, attachments: [input, input] }, read, () => null)).rejects.toThrow();
+    await expect(readReviewInputs({ ...envelope, attachments: [input] }, async () => Buffer.from("changed"), () => null)).rejects.toThrow();
+    await expect(readReviewInputs({ ...envelope, attachments: [{ ...input, uri: input.uri.replace("input.txt", "../other") }] }, read, () => null)).rejects.toThrow();
   });
 });
 
