@@ -108,7 +108,9 @@ describe("approvals", () => {
     const { wallet } = world;
     const agent = await wallet.createAgent("My assistant");
     await wallet.fundAgent(agent.id, { usdCents: 500 });
-    const twice = await wallet.fundAgent(agent.id, { usdCents: 500 });
+    const quote = await wallet.quoteTransfer({ kind: "fund", agentId: agent.id, amount: { usdCents: 500 } });
+    await wallet.confirmTransfer(quote.id);
+    const twice = (await wallet.overview()).agents[0]!;
     expect(twice.balance.usdCents).toBe(1_000);
     const back = await wallet.reclaimFromAgent(agent.id, "all");
     // Nothing still needs this agent's money, so all of it came back.
@@ -134,12 +136,12 @@ describe("approvals", () => {
 
     // Spend it down (here: take it back) and the rule refills, but only up
     // to what is left of today's limit.
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     await wallet.tick();
     // "Take it all back" leaves nothing behind in an agent with nothing to pay for.
     const afterSecond = BigInt((await wallet.overview()).agents[0]!.balance.lamports);
     expect(afterSecond).toBe(100n * CENT - 2n * world.sandbox.chain.transferFeeLamports);
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     await wallet.tick();
     expect(BigInt((await wallet.overview()).agents[0]!.balance.lamports)).toBe(0n);
 

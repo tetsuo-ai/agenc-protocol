@@ -55,7 +55,7 @@ describe("taking everything back", () => {
     // Everything came back but the transfer's own fee.
     expect((await world.balance(wallet.mainAddress)) - mainBefore).toBe(held - FEE);
     // Nothing is left to take back, and the agent can be given money again.
-    await expect(wallet.reclaimFromAgent(agent.id, "all")).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
+    await expect(wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
     expect((await wallet.fundAgent(agent.id, { usdCents: 100 })).balance.usdCents).toBe(100);
   });
 
@@ -82,7 +82,7 @@ describe("taking everything back", () => {
     // Once it is tidied, nothing needs the agent's money any more.
     world.clock.now += 2 * 60 * 60_000;
     await wallet.tick();
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     expect(await world.balance(agent.address)).toBe(0n);
   });
 

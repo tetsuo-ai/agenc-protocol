@@ -137,7 +137,8 @@ export const REVIEW_ALLOWANCE = { enabled: true, topUpToCents: 0, perDayCents: 1
 
 export async function confirmPayout(wallet: AgencWallet, jobId: string, rating?: number) {
   const { quote } = await wallet.reviewRecord(jobId, undefined, { termsOnly: true });
-  return wallet.approveJob(jobId, rating, true, undefined, quote!.id);
+  const stars = rating === undefined || (await wallet.getJob(jobId, true)).kind !== "hire" ? undefined : await wallet.quoteRating(jobId, rating, true);
+  return wallet.approveJob(jobId, rating, true, undefined, quote!.id, stars?.id);
 }
 
 export async function confirmDecision(wallet: AgencWallet, jobId: string, action: "change" | "reject" | "dispute",
