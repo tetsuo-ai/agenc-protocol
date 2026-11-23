@@ -1,14 +1,16 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { getEventListeners } from "node:events";
 import { expect, it } from "vitest";
 import { generateKeyPairSigner, type RpcTransport } from "@solana/kit";
 import { createRpcChain, transferInstruction } from "../src/chain.js";
 import { createHostedServices } from "../src/services.js";
-import { inTransportScope, type PendingListingSend } from "../src/transport-scope.js";
+import { abortableTransport, inTransportScope, type PendingListingSend } from "../src/transport-scope.js";
 
-function scope() {
+function scope(timeoutMs = 30_000) {
   const controller = new AbortController();
   const pending: PendingListingSend[] = [];
   const context = {
-    signal: controller.signal,
+    signal: controller.signal, timeoutMs,
     sending: (receipt: PendingListingSend) => { pending.push(receipt); },
     confirmed: (signature: string) => { pending.splice(pending.findIndex((entry) => entry.signature === signature), 1); },
   };
@@ -109,12 +111,12 @@ it.each(["request", "body"])("cancels a stalled marketplace HTTP %s", async (whe
 });
 
 it.each([
-  { statuses: [null], height: 100, settled: false },
-  { statuses: [null, null], height: 101, settled: true },
-  { statuses: [null, { confirmationStatus: "processed", err: null }], height: 101, settled: false },
-  { statuses: [{ confirmationStatus: "confirmed", err: null }], height: 99, settled: true },
-  { statuses: [{ confirmationStatus: "finalized", err: { InstructionError: [] } }], height: 99, settled: true },
-])("reconciles an interrupted send from status and expiry: %j", async ({ statuses, height, settled }) => {
+  { statuses: [null], height: 100, outcome: "pending" },
+  { statuses: [null, null], height: 101, outcome: "failed" },
+  { statuses: [null, { confirmationStatus: "processed", err: null }], height: 101, outcome: "pending" },
+  { statuses: [{ confirmationStatus: "confirmed", err: null }], height: 99, outcome: "landed" },
+  { statuses: [{ confirmationStatus: "finalized", err: { InstructionError: [] } }], height: 99, outcome: "failed" },
+])("reconciles an interrupted send from status and expiry: %j", async ({ statuses, height, outcome }) => {
   const chain = createRpcChain({ network: "localnet", rpcUrl: "http://localhost:8899",
     transport: (async (config) => {
       const { id, method } = config.payload as { id: string; method: string };
@@ -122,5 +124,43 @@ it.each([
         : { context: { slot: 1 }, value: [statuses.shift()] } };
     }) as RpcTransport,
   });
-  expect(await chain.listingSendSettled!({ signature: "1".repeat(64), lastValidBlockHeight: "100" })).toBe(settled);
+  expect(await chain.listingSendOutcome!({ signature: "1".repeat(64), lastValidBlockHeight: "100" })).toBe(outcome);
+});
+
+it("releases abort listeners after successful and cancelled transport waits", async () => {
+  const controller = new AbortController();
+  for (let i = 0; i < 100; i++) await abortableTransport(controller.signal, async () => i);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  for (let i = 0; i < 100; i++) {
+    const next = new AbortController();
+    const pending = abortableTransport(next.signal, () => new Promise(() => {}));
+    const rejected = expect(pending).rejects.toBeDefined();
+    await Promise.resolve();
+    next.abort();
+    await rejected;
+    expect(getEventListeners(next.signal, "abort")).toHaveLength(0);
+  }
+});
+
+it("gives a successful RPC send and its confirmation separate deadlines", async () => {
+  const active = scope(500);
+  const chain = createRpcChain({ network: "localnet", rpcUrl: "http://localhost:8899",
+    transport: (async ({ payload }) => {
+      const { id, method } = payload as { id: string; method: string };
+      if (method === "getLatestBlockhash") return { jsonrpc: "2.0", id, result: {
+        context: { slot: 1 }, value: { blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 100 },
+      } };
+      await delay(300);
+      if (method === "sendTransaction") return { jsonrpc: "2.0", id, result: active.pending[0]!.signature };
+      expect(method).toBe("getSignatureStatuses");
+      return { jsonrpc: "2.0", id, result: {
+        context: { slot: 1 }, value: [{ confirmationStatus: "confirmed", err: null }],
+      } };
+    }) as RpcTransport,
+  });
+  const signer = await generateKeyPairSigner();
+  const result = await active.run(() => chain.clientFor(signer).send([transferInstruction(signer, signer.address, 1n)]));
+  expect(result.signature).toBeTruthy();
+  expect(active.pending).toEqual([]);
 });

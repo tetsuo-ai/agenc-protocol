@@ -40,7 +40,7 @@ import {
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
-import { abortableTransport, scopedRpcTransport, scopedSendTransport, transportSignal, type PendingListingSend } from "./transport-scope.js";
+import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
 const CLOCK_SYSVAR_ADDRESS = address("SysvarC1ock11111111111111111111111111111111");
@@ -69,6 +69,8 @@ export interface Chain {
    * caller has already checked what it does (see approval.ts).
    */
   sendSigned(transaction: Transaction): Promise<string>;
+  /** Distinguish successful execution from a failed or expired transaction. */
+  listingSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome>;
   /** True only after confirmation, failure, or verified expiry of an interrupted listing send. */
   listingSendSettled?(receipt: PendingListingSend): Promise<boolean>;
   /**
@@ -126,18 +128,10 @@ export interface Chain {
 
 /** Bound read-only adapters too. Mutation continuations are always joined. */
 export function scopedChainReads(chain: Chain): Chain {
-  const reads = new Set<PropertyKey>([
+  return scopeAdapterRequests(chain, [
     "readAccount", "readRawAccount", "readRawAccounts", "readAccountInfo", "getBalance", "getBalances",
-    "getMinimumBalanceForRentExemption", "clusterTime", "assertSigningRevision", "listingSendSettled",
+    "getMinimumBalanceForRentExemption", "clusterTime", "assertSigningRevision", "listingSendSettled", "listingSendOutcome",
   ]);
-  return new Proxy({} as Chain, {
-    get(_target, property) {
-      const value: unknown = Reflect.get(chain, property, chain);
-      if (typeof value !== "function") return value;
-      if (!reads.has(property)) return value.bind(chain);
-      return (...args: unknown[]) => abortableTransport(transportSignal(), () => value.apply(chain, args));
-    },
-  });
 }
 
 /** A System Program transfer, built by hand so no extra package is needed. */
@@ -367,7 +361,26 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     options.computeUnitPrice === undefined
       ? 0n
       : (options.computeUnitPrice * BigInt(PRICED_COMPUTE_UNIT_LIMIT) + 999_999n) / 1_000_000n;
-  return {
+  async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
+    const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
+      searchTransactionHistory: true,
+    }).send()).value[0];
+    const outcome = (value: Awaited<ReturnType<typeof status>>): ListingSendOutcome => {
+      if (value?.confirmationStatus !== "confirmed" && value?.confirmationStatus !== "finalized") return "pending";
+      return value.err === null ? "landed" : "failed";
+    };
+    const first = await status();
+    const observed = outcome(first);
+    if (observed !== "pending") return observed;
+    const epoch = await rpc.getEpochInfo({ commitment: "confirmed" }).send();
+    if (epoch.blockHeight <= BigInt(receipt.lastValidBlockHeight)) return "pending";
+    // The status view can lag the height. Recheck after verified expiry.
+    const last = await status();
+    return first == null && last == null ? "failed" : outcome(last);
+  }
+  return usesScopedRequests<Chain>({
+    listingSendOutcome,
+    listingSendSettled: async (receipt) => await listingSendOutcome(receipt) !== "pending",
     network: options.network,
     transferFeeLamports: BASE_FEE_LAMPORTS + priorityFee,
     clientFor(signer) {
@@ -389,20 +402,6 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       // Only a marketplace call reaches here (a job's safety check).
       await signingRevision();
       return sendThroughTransport(transport, transaction);
-    },
-    async listingSendSettled(receipt) {
-      const status = async () => (await rpc.getSignatureStatuses([receipt.signature as Signature], {
-        searchTransactionHistory: true,
-      }).send()).value[0];
-      const confirmed = (value: Awaited<ReturnType<typeof status>>) =>
-        value?.confirmationStatus === "confirmed" || value?.confirmationStatus === "finalized";
-      const first = await status();
-      if (confirmed(first)) return true;
-      const epoch = await rpc.getEpochInfo({ commitment: "confirmed" }).send();
-      if (epoch.blockHeight <= BigInt(receipt.lastValidBlockHeight)) return false;
-      // Recheck after the expiry read, since the status view can lag the height.
-      const last = await status();
-      return confirmed(last) || (first == null && last == null);
     },
     assertSigningRevision: signingRevision,
     readAccount: (account) => network(() => readAccount(account)),
@@ -486,7 +485,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>
       network(() => readSettlementFacts(rpc, task, creator, options)),
-  };
+  });
 }
 
 /** Default public endpoints. A dedicated RPC is faster and less rate-limited. */

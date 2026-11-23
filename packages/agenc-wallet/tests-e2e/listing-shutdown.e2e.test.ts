@@ -1,7 +1,7 @@
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
-import type { Address } from "@solana/kit";
+import { getCompiledTransactionMessageDecoder, type Address } from "@solana/kit";
 import { readListing } from "../src/market.js";
 import { StateStore } from "../src/store.js";
 import { abortableTransport, transportSignal } from "../src/transport-scope.js";
@@ -27,19 +27,28 @@ const EARN = {
   pollIntervalMs: 100,
   retryDelayMs: 1000,
 };
-async function liveOffer() {
+async function liveOffers(count: number) {
   const agent = await world!.wallet.createAgent();
   await setEarnWithApproval(world!.wallet, agent.id, true, 10);
-  await setOfferWithApproval(world!.wallet, agent.id, { name: "Writer", summary: "Write a line.", price: { usdCents: 50 } });
-  const offer = await eventually(async () => {
+  for (let i = 0; i < count; i++) {
+    await setOfferWithApproval(world!.wallet, agent.id, { name: `Writer ${i}`, summary: "Write a line.", price: { usdCents: 50 } });
+  }
+  const offers = await eventually(async () => {
     await world!.wallet.tick();
-    const current = (await world!.wallet.overview()).agents.find((entry) => entry.id === agent.id)!;
-    return current.earn.offer?.status === "live" ? current.earn.offer : null;
+    const current = saved(agent.id).offers!;
+    return current.every((offer) => offer.status === "live") ? current : null;
   });
-  return { agent, offer };
+  return { agent, offers };
+}
+async function liveOffer() {
+  const { agent, offers } = await liveOffers(1);
+  return { agent, offer: offers[0]! };
+}
+function state() {
+  return StateStore.open(path.join(world!.dataDir, "state.json")).state;
 }
 function saved(id: string) {
-  return StateStore.open(path.join(world!.dataDir, "state.json")).state.agents[id]!.earn;
+  return state().agents[id]!.earn;
 }
 
 it.each(["background", "shutdown"])("cancels a stalled %s listing read, releases ownership within the bound, and reconciles before discovery", async (where) => {
@@ -110,11 +119,11 @@ it("journals a broadcast with a stalled response and checks its outcome before r
       return result;
     } }),
     chain: (base) => ({ ...base,
-      async listingSendSettled(receipt) {
+      async listingSendOutcome(receipt) {
         checks += 1;
-        if (unresolved) return false;
+        if (unresolved) return "pending";
         await check.wait();
-        return base.listingSendSettled!(receipt);
+        return base.listingSendOutcome!(receipt);
       },
       async readAccountInfo(address) {
         if (checks > 0 && address === listing) readAfterCheck = true;
@@ -145,8 +154,174 @@ it("journals a broadcast with a stalled response and checks its outcome before r
   expect(saved(agent.id).pendingListingSends).toEqual(pending);
   check.release();
   await on;
+  await eventually(async () => (await readListing(world!.sandbox.chain, listing as Address))?.state === 0);
   expect(readAfterCheck).toBe(true);
   expect(saved(agent.id).pendingListingSends).toEqual([]);
   expect(saved(agent.id).listingReconciliationRequired).toBe(false);
   expect(await readListing(world.sandbox.chain, listing as Address)).toMatchObject({ state: 0 });
+});
+
+it.each([
+  { readMs: 2000, config: {}, startupMs: 70_000 },
+  { readMs: 100, config: { listingTimeoutMs: 1000 }, startupMs: 5000 },
+])("restarts four live listings and claims on successful $readMs ms reads", async ({ readMs, config, startupMs }) => {
+  let slow = false;
+  let claims = 0;
+  const readiness = gate();
+  let checkRoom = false;
+  world = await startWorld({ earn: {
+    ...EARN,
+    async checkExecutionReady() {
+      if (checkRoom) await readiness.wait();
+    },
+  }, config, chain: (base) => ({
+    ...base,
+    async readAccountInfo(address) {
+      if (slow) await delay(readMs);
+      return base.readAccountInfo(address);
+    },
+    clientFor(signer) {
+      const original = base.clientFor(signer);
+      return Object.create(original, { claimTaskWithJobSpec: { value: async (...args: Parameters<typeof original.claimTaskWithJobSpec>) => {
+        const result = await original.claimTaskWithJobSpec(...args);
+        claims++;
+        return result;
+      } } }) as typeof original;
+    },
+  }) });
+  releases.push(() => { slow = false; });
+  const { agent, offers } = await liveOffers(4);
+  await world.wallet.close();
+  await world.sandbox.postOpenJob({ title: "Waiting for startup", instructions: "Write one line.", rewardLamports: 50n * CENT });
+  checkRoom = slow = true;
+  const started = Date.now();
+  world.wallet = await world.reopen();
+  await readiness.entered;
+  for (const offer of offers) expect(await readListing(world.sandbox.chain, offer.listing as Address)).toMatchObject({ state: 1 });
+  expect(claims).toBe(0);
+  readiness.release();
+  await eventually(async () => claims === 1, startupMs - (Date.now() - started));
+  expect(Date.now() - started).toBeLessThan(startupMs);
+  await eventually(async () => saved(agent.id).offers!.every((offer) => offer.status === "live"), startupMs);
+  expect(claims).toBe(1);
+}, 130_000);
+
+it("releases ownership at the default deadline and fences a late shutdown read", async () => {
+  const read = gate();
+  let listing: string | undefined;
+  let heldSignal: AbortSignal | undefined;
+  world = await startWorld({ earn: EARN, chain: (base) => ({
+    ...base,
+    async readAccountInfo(address) {
+      if (address === listing) {
+        heldSignal = transportSignal();
+        await read.wait();
+      }
+      return base.readAccountInfo(address);
+    },
+  }) });
+  const { agent, offer } = await liveOffer();
+  listing = offer.listing!;
+  const started = Date.now();
+  const closing = world.wallet.close();
+  await read.entered;
+  await closing;
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeGreaterThanOrEqual(29_500);
+  expect(elapsed).toBeLessThan(32_000);
+  expect(heldSignal?.aborted).toBe(true);
+  expect(saved(agent.id).listingReconciliationRequired).toBe(true);
+  listing = undefined;
+  world.wallet = await world.reopen();
+  await eventually(async () => !saved(agent.id).listingReconciliationRequired);
+  await world.wallet.renameAgent(agent.id, "Fresh owner");
+  read.release();
+  await delay(100);
+  expect(state().agents[agent.id]!.name).toBe("Fresh owner");
+}, 40_000);
+
+it("recovers one activity entry and allowance charge for a landed funding transfer", async () => {
+  const sent = gate();
+  let stall = false;
+  let main: string | undefined;
+  let landed: string | undefined;
+  let checkOutcome = false;
+  world = await startWorld({ earn: EARN, config: { listingTimeoutMs: 1000 },
+    chain: (base) => ({ ...base, listingSendOutcome: (receipt) =>
+      checkOutcome ? base.listingSendOutcome!(receipt) : Promise.resolve("pending") }),
+    transport: (base) => ({ ...base, async sendAndConfirm(transaction) {
+      const result = await base.sendAndConfirm(transaction);
+      const payer = getCompiledTransactionMessageDecoder().decode(transaction.messageBytes).staticAccounts[0];
+      if (stall && transportSignal() && payer === main) {
+        stall = false;
+        landed = result.signature;
+        await sent.wait();
+      }
+      return result;
+    } }),
+  });
+  const { agent } = await liveOffer();
+  main = world.wallet.mainAddress;
+  await world.wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents: 1000 } });
+  await world.wallet.reclaimFromAgent(agent.id, "all");
+  const before = await world.balance(main);
+  const initialCharges = state().agents[agent.id]!.refills.length;
+  stall = true;
+  const setting = world.wallet.setOffer(agent.id, { name: "Extra writer", summary: "Write a line.", price: { usdCents: 50 } });
+  await sent.entered;
+  await setting;
+  const debit = before - await world.balance(main);
+  const amount = (debit - world.sandbox.chain.transferFeeLamports).toString();
+  expect(BigInt(amount)).toBeGreaterThan(0n);
+  expect(saved(agent.id).pendingListingSends).toMatchObject([{ signature: landed, operation: { kind: "funding", lamports: amount } }]);
+  expect(state().activity.some((entry) => entry.signature === landed)).toBe(false);
+  expect(state().agents[agent.id]!.refills).toHaveLength(initialCharges + 1);
+  // Isolate recovery from new funding that the second offer would otherwise request.
+  await world.wallet.setPolicy(agent.id, { askAboveCents: 0, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  await world.wallet.close();
+  checkOutcome = true;
+  for (let i = 0; i < 2; i++) {
+    world.wallet = await world.reopen();
+    await eventually(async () => saved(agent.id).pendingListingSends?.length === 0);
+    sent.release();
+    const journal = state();
+    expect(journal.activity.filter((entry) => entry.signature === landed)).toMatchObject([
+      { kind: "allowance", agentId: agent.id, lamports: amount },
+    ]);
+    expect(journal.agents[agent.id]!.refills).toHaveLength(initialCharges + 1);
+    expect(journal.agents[agent.id]!.refills.filter((charge) => charge.signature === landed)).toMatchObject([
+      { lamports: debit.toString() },
+    ]);
+    await world.wallet.close();
+  }
+});
+
+it("resumes an interrupted pass from its unfinished listing across retries and reopen", async () => {
+  let failing: string | undefined;
+  const reads: string[] = [];
+  world = await startWorld({ earn: EARN, chain: (base) => ({ ...base,
+    async readAccountInfo(address) {
+      if (failing && transportSignal()) {
+        reads.push(address);
+        if (address === failing) throw new Error("temporarily unavailable");
+      }
+      return base.readAccountInfo(address);
+    },
+  }) });
+  const { agent, offers } = await liveOffers(4);
+  await world.wallet.close();
+  failing = offers[3]!.listing!;
+  world.wallet = await world.reopen();
+  await eventually(async () => !!saved(agent.id).lastError);
+  const earlier = offers.slice(0, 3).map((offer) => offer.listing!);
+  for (const address of earlier) expect(reads).toContain(address);
+  reads.length = 0;
+  await world.wallet.tick();
+  await world.wallet.close();
+  world.wallet = await world.reopen();
+  await eventually(async () => reads.filter((address) => address === failing).length >= 3);
+  expect(reads.filter((address) => earlier.includes(address))).toEqual([]);
+  failing = undefined;
+  await world.wallet.tick();
+  await eventually(async () => saved(agent.id).offers!.every((offer) => offer.status === "live"));
 });

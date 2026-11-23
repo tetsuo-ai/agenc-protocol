@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
 import { createPublicUriFetcher, type UriFetcher } from "@tetsuo-ai/agenc-worker";
 import { taskThread, values } from "@tetsuo-ai/marketplace-sdk";
-import { abortableTransport, transportSignal } from "./transport-scope.js";
+import { abortableTransport, listingTimeoutMs, transportSignal, usesScopedRequests } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import {
   NO_DETAILS,
@@ -273,7 +273,7 @@ async function requestJson(
         ? JSON.stringify(init.body)
         : undefined;
   const parent = transportSignal();
-  const timeout = AbortSignal.timeout(limits.timeoutMs);
+  const timeout = AbortSignal.timeout(Math.min(limits.timeoutMs, listingTimeoutMs() ?? limits.timeoutMs));
   const signal = parent === undefined ? timeout : AbortSignal.any([parent, timeout]);
   let response: Response;
   try {
@@ -792,7 +792,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     return tasks;
   }
 
-  return {
+  return usesScopedRequests<MarketServices>({
     async finishedJobs(provider) {
       const fresh = (list: FinishedList | undefined): list is FinishedList =>
         list !== undefined && now() - list.at < FINISHED_TTL_MS;
@@ -1112,7 +1112,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       };
       return { url: artifactUploadUrl, fetch: upload };
     },
-  };
+  });
 }
 
 /** What every job asks the provider to hand in. */

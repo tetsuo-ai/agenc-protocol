@@ -33,7 +33,10 @@ it("preserves APPROVAL_REQUIRED when earn.set exceeds the automatic cap over the
 });
 
 it("pauses a legacy unlimited listing with two hires across restart and rejects a third in LiteSVM", async () => {
-  world = await startWorld({ earn: EARN });
+  let ready = false;
+  world = await startWorld({ earn: { ...EARN, checkExecutionReady: async () => {
+    if (!ready) throw new Error("unready");
+  } } });
   const { sandbox } = world;
   let wallet = world.wallet;
   const seller = await wallet.createAgent("Seller");
@@ -87,6 +90,9 @@ it("pauses a legacy unlimited listing with two hires across restart and rejects 
   await wallet.tick();
   expect(await readListing(sandbox.chain, listing)).toMatchObject({ maxOpenJobs: 0, openJobs: 0, state: 1 });
   updateUnavailable = false;
+  await wallet.tick();
+  expect(await readListing(sandbox.chain, listing)).toMatchObject({ maxOpenJobs: 1, openJobs: 0, state: 1 });
+  ready = true;
   await eventually(async () => {
     await wallet.tick();
     const listingState = await readListing(sandbox.chain, listing);

@@ -260,7 +260,7 @@ export type WorkerContext = {
    * before every fresh claim, before its WAL or transaction. Throw to defer.
    * Receives no buyer text. Recovery and settlement remain available.
    */
-  checkExecutionReady?: (input: { task: Address; signal?: AbortSignal }) => Promise<void>;
+  checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal }) => Promise<void>;
 };
 
 /** The worker's on-chain identity. */
@@ -2047,7 +2047,11 @@ export async function processCandidate(
   // landed claim, but cannot begin another lifecycle it cannot fund through
   // submission.
   try {
-    await ctx.checkExecutionReady?.({ task, ...(ctx.signal === undefined ? {} : { signal: ctx.signal }) });
+    await ctx.checkExecutionReady?.({
+      task,
+      ...(hireBinding.listing && { listing: hireBinding.listing }),
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    });
     if (ctx.signal?.aborted) throw new Error("Worker is stopping.");
   } catch (error) {
     const reason = formatDiagnosticError(error);
@@ -3153,11 +3157,11 @@ async function runUpLocked(
   const readiness = ctx.checkExecutionReady;
   ctx = {
     ...ctx,
-    checkExecutionReady: async ({ task, signal: executionSignal }) => {
+    checkExecutionReady: async ({ signal: executionSignal, ...job }) => {
       const signals = [signal, executionSignal].filter((item): item is AbortSignal => item !== undefined);
       const readinessSignal = AbortSignal.any(signals);
       readinessSignal.throwIfAborted();
-      await readiness?.({ task, signal: readinessSignal });
+      await readiness?.({ ...job, signal: readinessSignal });
       readinessSignal.throwIfAborted();
     },
   };
@@ -3250,6 +3254,7 @@ async function runUpLocked(
   });
 
   try {
+    ctx.log({ event: "watch.started" });
     for await (const claimable of watch) {
       if (signal?.aborted) break;
       await enqueue(async () => {

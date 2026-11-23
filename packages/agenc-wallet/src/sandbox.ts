@@ -65,7 +65,7 @@ import {
   transferInstruction,
   type Chain,
 } from "./chain.js";
-import { scopedSendTransport } from "./transport-scope.js";
+import { scopedSendTransport, transportSignal } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
@@ -400,13 +400,18 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return out;
     },
   };
+  // LiteSVM history is disabled so identical sandbox transactions can be replayed.
+  const landedListingSends = new Set<string>();
   const base = market.transport;
   const transport: Transport = {
     ...base,
     getLatestBlockhash: () => base.getLatestBlockhash(),
     async sendAndConfirm(signedTx) {
+      const signal = transportSignal();
+      signal?.throwIfAborted();
       syncClock();
       const result = await base.sendAndConfirm(signedTx);
+      if (signal) landedListingSends.add(result.signature);
       try {
         const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
         for (const account of message.staticAccounts) {
@@ -454,6 +459,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     network: "sandbox",
     transferFeeLamports: BASE_FEE_LAMPORTS,
     // Local sends execute atomically; no broadcast can arrive after cancellation.
+    listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
     listingSendSettled: async () => true,
     clientFor: (signer) => createMarketplaceClient({ transport: sending, signer }),
     sendSigned: (transaction) => sendThroughTransport(sending, transaction),

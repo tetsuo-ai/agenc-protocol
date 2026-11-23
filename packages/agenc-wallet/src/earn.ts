@@ -119,6 +119,8 @@ export interface EarnAgent {
   minRewardLamports: bigint;
   /** Fresh dollars per SOL. Required before a job can be claimed or executed. */
   solUsd?: () => Promise<number | null>;
+  /** Leave the worker free for existing service hires while reopening listings. */
+  reconcileBeforeOpenJobs?: boolean;
   /** Hires it owes, by task, with what each pays: taken whatever the floor. */
   owed?: ReadonlyMap<string, bigint>;
 }
@@ -181,6 +183,11 @@ export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
   recoveryOnly: boolean;
+  discovering: boolean;
+  firstDiscovery: Promise<void>;
+  finishStartup: () => void;
+  awaitingListings: boolean;
+  checkReady?: (signal?: AbortSignal) => Promise<void>;
   controller: AbortController;
   done: Promise<void>;
   state: EarnState;
@@ -502,18 +509,41 @@ export class EarnHost {
     }
   }
 
+  canTakeJobs(agentId: string): boolean {
+    const entry = this.#running.get(agentId);
+    return entry?.discovering === true && !entry.controller.signal.aborted && entry.paused === null;
+  }
+
+  listingsReconciled(agentId: string): void {
+    const entry = this.#running.get(agentId);
+    if (entry?.discovering) entry.awaitingListings = false;
+  }
+
+  async checkListingReady(agentId: string, signal?: AbortSignal): Promise<void> {
+    const entry = this.#running.get(agentId);
+    if (!entry?.checkReady || !this.canTakeJobs(agentId)) throw new Error("Worker discovery is unavailable");
+    await entry.checkReady(signal ? AbortSignal.any([signal, entry.controller.signal]) : entry.controller.signal);
+  }
+
   /** Whether this agent is only draining persisted work. */
   isRecovering(agentId: string): boolean {
     return this.#running.get(agentId)?.recoveryOnly === true;
   }
 
   /** Start (or keep) one loop. Recovery never enters the discovery path. */
-  start(agent: EarnAgent, recoveryOnly = false): void {
+  start(agent: EarnAgent, recoveryOnly = false): Promise<void> {
     const executor = this.#options.executor;
-    if (this.#shutdown.signal.aborted || (!recoveryOnly && executor === null) || this.#running.has(agent.agentId)) return;
+    if (this.#shutdown.signal.aborted || (!recoveryOnly && executor === null)) return Promise.resolve();
+    const running = this.#running.get(agent.agentId);
+    if (running) return running.firstDiscovery;
+    let finishStartup!: () => void;
+    const firstDiscovery = new Promise<void>((resolve) => { finishStartup = resolve; });
     const controller = new AbortController();
     const entry: Running = {
       recoveryOnly,
+      discovering: false,
+      firstDiscovery, finishStartup,
+      awaitingListings: agent.reconcileBeforeOpenJobs === true,
       controller,
       done: Promise.resolve(),
       state: "starting",
@@ -535,10 +565,12 @@ export class EarnHost {
     }, entry).catch((error) => {
       this.#log(`earn ${agent.agentId}: ${describeError(error)}`);
     }).finally(() => {
+      entry.finishStartup();
       if (this.#running.get(agent.agentId) === entry) this.#running.delete(agent.agentId);
       this.#notify(agent.agentId, { type: "state" });
     });
     this.#notify(agent.agentId, { type: "state" });
+    return firstDiscovery;
   }
 
   async stop(agentId: string): Promise<void> {
@@ -580,6 +612,13 @@ export class EarnHost {
 
     const log = (event: WorkerLogEvent): void => {
       switch (event.event) {
+        case "watch.started":
+          if (!entry.discovering) {
+            entry.discovering = true;
+            setState("watching");
+            entry.finishStartup();
+          }
+          break;
         case "task.claimed":
         case "task.resuming-open-claim":
         case "task.resuming-executed-result":
@@ -648,6 +687,23 @@ export class EarnHost {
       this.#workerEvent(agent.agentId, event);
     };
 
+    const checkReady = async (signal?: AbortSignal): Promise<void> => {
+      if (this.#options.checkExecutionReady !== undefined) {
+        await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
+      } else if (executor.readiness !== undefined) {
+        await runExecutor({
+          argv: executor.readiness.argv.map(fill),
+          timeoutMs: executor.readiness.timeoutMs ?? 30_000,
+          envAllowlist: executor.envAllowlist,
+          maxStdoutBytes: 64 * 1024,
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } else if (executor.mode === "sandboxed") {
+        throw new Error("The host must configure a job room readiness self-test before taking jobs.");
+      }
+    };
+    entry.checkReady = checkReady;
+
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       acceptServiceHiresBelowMinReward: true,
@@ -665,20 +721,9 @@ export class EarnHost {
         executorTimeoutMs: executor.timeoutMs,
       },
       log,
-      checkExecutionReady: async ({ signal }) => {
-        if (this.#options.checkExecutionReady !== undefined) {
-          await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
-        } else if (executor.readiness !== undefined) {
-          await runExecutor({
-            argv: executor.readiness.argv.map(fill),
-            timeoutMs: executor.readiness.timeoutMs ?? 30_000,
-            envAllowlist: executor.envAllowlist,
-            maxStdoutBytes: 64 * 1024,
-            ...(signal === undefined ? {} : { signal }),
-          });
-        } else if (executor.mode === "sandboxed") {
-          throw new Error("The host must configure a job room readiness self-test before taking jobs.");
-        }
+      checkExecutionReady: async ({ listing, signal }) => {
+        if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
+        await checkReady(signal);
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
@@ -738,6 +783,8 @@ export class EarnHost {
         }
       } catch (error) {
         if (signal.aborted) break;
+        entry.discovering = false;
+        entry.finishStartup();
         this.#log(`earn ${agent.agentId}: stopped (${describeError(error)})`);
         setState("error", earnFailureText(error));
         await new Promise<void>((resolve) => {

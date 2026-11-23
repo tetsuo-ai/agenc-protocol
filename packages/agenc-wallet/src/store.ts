@@ -13,7 +13,7 @@ import type {
   JobResult,
   ServiceView,
 } from "./client/types.js";
-import type { PendingListingSend } from "./transport-scope.js";
+import type { AllowanceCharge, PendingListingSend } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 
@@ -73,6 +73,8 @@ export interface OfferRecord {
    * payment that may still be on its way is not made a second time.
    */
   approvalAttemptAt?: number | null;
+  /** Completed intent during an interrupted pass. Cleared after the full pass. */
+  reconciledForLive?: boolean;
   signatures: { create?: string; update?: string; state?: string; approval?: string };
 }
 
@@ -95,7 +97,7 @@ export interface AgentRecord {
   /** Lifetime lamports earned as a provider. */
   earnedLamports: string;
   /** Automatic top-ups in the last day, for the per-day rule. */
-  refills: { ts: number; lamports: string; usdCents?: number | null }[];
+  refills: AllowanceCharge[];
   earn: {
     enabled: boolean;
     minPayCents: number;
