@@ -5,7 +5,7 @@ import { type Address, type KeyPairSigner } from "@solana/kit";
 import { findClaimPda, getTaskClaimDecoder, getTaskClaimDiscriminatorBytes, taskThread, TaskStatus } from "@tetsuo-ai/marketplace-sdk";
 import { readAgent, readProgramAccount, readTask } from "./market.js";
 import type { Chain } from "./chain.js";
-import { checkOutputAgreement, type OutputAgreement, type ExchangeReceipt, type PrivateFileView, type PrivateRequirement } from "./client/job-exchange.js";
+import { checkOutputAgreement, type OutputAgreement, type ExchangeReceipt, type PrivateFileView, type PrivateInputPart, type PrivateRequirement } from "./client/job-exchange.js";
 
 export type Parties = taskThread.ExchangeParties;
 export type Packet = taskThread.SignedPacket;
@@ -82,8 +82,17 @@ export function bundleManifest(bundle: PrivateBundle) {
 }
 
 interface Staged { bundle: PrivateBundle; recipient: string | null; processing: string }
-export function stagePrivateInputs(journal: ExchangeJournal, files: ExchangeFile[], recipient: string | null, processing: string, outputs?: OutputAgreement): PrivateRequirement {
-  if (!files.length || typeof processing !== "string" || !processing.trim() || processing.length > 512) return fail();
+export function stagePrivateInputs(journal: ExchangeJournal, parts: PrivateInputPart[], recipient: string | null, processing: string, outputs?: OutputAgreement): PrivateRequirement {
+  if (!Array.isArray(parts) || !parts.length || parts.length > 8 || typeof processing !== "string" || !processing.trim() || processing.length > 512) return fail();
+  const files = parts.map(part => {
+    if (!("stagedCommitment" in part)) return part;
+    if (!/^[a-f0-9]{64}$/.test(part.stagedCommitment)) return fail();
+    const saved = journal.read<Staged>("stage/" + part.stagedCommitment);
+    if (!saved || saved.bundle.files.length !== 1 || saved.recipient !== recipient || saved.processing !== processing ||
+        JSON.stringify(saved.bundle.outputs) !== JSON.stringify(outputs && checkOutputAgreement(outputs)) ||
+        bundleManifest(saved.bundle) !== part.stagedCommitment) return fail();
+    return saved.bundle.files[0]!;
+  });
   const bundle = { files, processing, ...(outputs && { outputs: checkOutputAgreement(outputs) }), text: "", version: 1, salt: randomBytes(32).toString("hex") };
   const commitment = bundleManifest(bundle);
   journal.write("stage/" + commitment, { bundle, recipient, processing } satisfies Staged);

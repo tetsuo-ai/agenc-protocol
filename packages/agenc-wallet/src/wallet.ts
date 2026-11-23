@@ -2,8 +2,8 @@ import { currentSubmission, verifiedEvidence, readEvidenceChunk, requireInspecti
 import { localExchangeHistory, rememberExchange } from "./exchange-history.js";
 import { JobExchangeSession } from "./job-exchange-session.js";
 import { ExchangeRelay } from "./exchange-relay.js";
-import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, type PrivateBundle, type ExchangeFile } from "./private-inputs.js";
-import type { OutputAgreement } from "./client/job-exchange.js";
+import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, type PrivateBundle } from "./private-inputs.js";
+import type { OutputAgreement, PrivateInputPart } from "./client/job-exchange.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
 // every job. It accepts plain requests ("hire this", "approve that"), decides
@@ -3890,7 +3890,7 @@ export class AgencWallet {
     return ExchangeJournal.open(this.#config.dataDir, await this.#vault.signer(MAIN_KEY));
   }
 
-  async stageJobInputs(files: ExchangeFile[], recipient: string | null, processing: string, outputs?: OutputAgreement) {
+  async stageJobInputs(files: PrivateInputPart[], recipient: string | null, processing: string, outputs?: OutputAgreement) {
     return stagePrivateInputs(await this.#stagingJournal(), files, recipient, processing, outputs);
   }
 
@@ -3924,11 +3924,11 @@ export class AgencWallet {
     return new JobExchange(journal, signer, live, await this.#stagingJournal(), pinned);
   }
 
-  async jobExchangeHistory(jobId: string, agentId?: string) {
+  async jobExchangeHistory(jobId: string, agentId?: string, contextIndex?: number, beforeEntry?: number) {
     const job = this.#reviewJob(jobId, agentId);
     if (!job.task) return [];
     const signer = await this.#vault.signer(job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
-    return localExchangeHistory(await ExchangeJournal.open(this.#config.dataDir, signer), jobId, job.task);
+    return localExchangeHistory(await ExchangeJournal.open(this.#config.dataDir, signer), jobId, job.task, contextIndex, beforeEntry);
   }
 
   /** Broker-only. room and relay are installation settings, never RPC parameters. */

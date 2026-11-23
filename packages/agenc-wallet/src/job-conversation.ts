@@ -3,6 +3,13 @@ import type { JobMessage } from "./client/job-exchange.js";
 import { JobExchange, digest, type Parties } from "./private-inputs.js";
 
 export interface ConversationEntry { author: string; message: JobMessage }
+/** Even maximally escaped message text fits in a single wallet response. */
+export function conversationPage(entries: ConversationEntry[], before = entries.length) {
+  if (!Number.isSafeInteger(before) || before < 0 || before > entries.length) throw new Error("Invalid message page.");
+  const first = Math.max(0, before - 16);
+  return { entries: entries.slice(first, before), beforeEntry: first || null };
+}
+
 export interface WaitingQuestion { question: string; answer: string | null }
 interface Thread {
   deadline: number;

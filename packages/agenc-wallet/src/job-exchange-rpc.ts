@@ -8,7 +8,9 @@ import { WalletError } from "./errors.js";
 interface Caller { owner: boolean; agentId?: string }
 interface Host { roomFor: (jobId: string) => Promise<string>; relay: ExchangeRelay }
 export type JobExchangeAction =
-  | { action: "join" | "refresh" | "history" | "status" | "grantPreview" | "retryMessages" | "retryInputs" }
+  | { action: "join" | "refresh" | "grantPreview" | "retryMessages" | "retryInputs" }
+  | { action: "history"; contextIndex?: number; beforeEntry?: number }
+  | { action: "status"; beforeEntry?: number }
   | { action: "release"; preview: RecipientGrantPreview }
   | { action: "send"; message: JobMessage }
   | { action: "collect"; commitment: string };
@@ -17,10 +19,10 @@ export async function handleJobExchange(wallet: AgencWallet, host: Host, caller:
   if (!caller.owner && (!caller.agentId || ["grantPreview", "release", "retryInputs"].includes(request.action))) {
     throw new WalletError("NOT_ALLOWED", "This private handoff needs the owner in Market.");
   }
-  if (request.action === "history") return wallet.jobExchangeHistory(jobId, caller.owner ? undefined : caller.agentId);
+  if (request.action === "history") return wallet.jobExchangeHistory(jobId, caller.owner ? undefined : caller.agentId, request.contextIndex, request.beforeEntry);
   const session = await wallet.jobExchangeSession(jobId, await host.roomFor(jobId), host.relay, caller.owner ? undefined : caller.agentId);
   switch (request.action) {
-    case "status": return session.status();
+    case "status": return session.status(request.beforeEntry);
     case "refresh": return session.refresh();
     case "join": return session.join();
     case "grantPreview": return session.grantPreview();

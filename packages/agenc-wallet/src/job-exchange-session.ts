@@ -2,7 +2,7 @@ import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { type ExchangeReceipt, type JobMessage, type RecipientGrantPreview, type PrivateRequirement } from "./client/job-exchange.js";
 import { acceptImportReceipt, ExchangeRelay, handoffView, importAndAcknowledge } from "./exchange-relay.js";
 import { deliveryFileProblem } from "./client/delivery-files.js";
-import { JobConversation } from "./job-conversation.js";
+import { conversationPage, JobConversation } from "./job-conversation.js";
 import { collectOutput, JobExchange, protectOutput, type Packet, type PrivateBundle } from "./private-inputs.js";
 
 interface Mailbox {
@@ -67,14 +67,13 @@ export class JobExchangeSession {
     return this.status();
   }
 
-  async status() {
+  async status(beforeEntry?: number) {
     const { read } = await this.mailbox();
     const box = read();
     const { cursor, entries, waiting, deadline } = await this.conversation.view();
     const handoff = this.required ? await handoffView(this.exchange, this.required, deadline) : null;
-    return { deadline, cursor, entries, waiting, receipt: box.receipt ?? null, peerReady: !!box.peerKey,
+    return { deadline, cursor, ...conversationPage(entries, beforeEntry), waiting, receipt: box.receipt ?? null, peerReady: !!box.peerKey,
       state: box.receipt ? "received" : box.inputs ? "waitingForRoom" : handoff?.state ?? "ready" };
-
   }
 
   /** Owner-only. Approve the exact room, authority, claim instance and public

@@ -100,3 +100,46 @@ it("refuses unsafe paths, modified bytes, unapproved recipients and substituted 
   const packet = await send.inputs(requirement);
   await expect(receive.receiveBundle({ ...packet, payload: packet.payload + " " }, "inputs", requirement.commitment)).rejects.toThrow();
 });
+
+it("stages eight full-size files through bounded owner requests and binds the final set to the same consent", async () => {
+  const { send, receive, parts, wk } = await setup();
+  const { stageInputSelection } = await import("../src/client/job-exchange.js");
+  const bytes = Buffer.alloc(256 * 1024, 37);
+  const files = Array.from({ length: 8 }, (_, i) => ({
+    name: i + ".csv", bytes: bytes.length, base64: bytes.toString("base64"), sha256: digest(bytes),
+  }));
+  const consent = "Only the report room.";
+  const calls: number[] = [];
+  const approved = await stageInputSelection(files, async input => {
+    calls.push(Buffer.byteLength(JSON.stringify(input)));
+    return stagePrivateInputs(send.journal, input, parts.authority, consent);
+  });
+  expect(calls).toHaveLength(9);
+  expect(Math.max(...calls)).toBeLessThan(1024 * 1024);
+  await send.grant(approved, parts, wk);
+  const bundle = await receive.receiveBundle(await send.inputs(approved), "inputs", approved.commitment);
+  expect(bundle.files.map(f => f.name)).toEqual(files.map(f => f.name));
+  const one = stagePrivateInputs(send.journal, [files[0]!], parts.authority, consent);
+  const ref = { stagedCommitment: one.commitment };
+  expect(() => stagePrivateInputs(send.journal, [ref], null, consent)).toThrow();
+  expect(() => stagePrivateInputs(send.journal, [ref], parts.authority, "Different model")).toThrow();
+  expect(() => stagePrivateInputs(send.journal, [ref, ref], parts.authority, consent)).toThrow();
+});
+
+it("pages persisted conversations by entry and claim within the wallet frame", async () => {
+  const { send, parts } = await setup();
+  const { localExchangeHistory, rememberExchange } = await import("../src/exchange-history.js");
+  const entries = Array.from({ length: 34 }, (_, i) => ({ author: parts.buyer,
+    message: { kind: "progress", parent: null, id: i.toString(16).padStart(32, "0"), body: "\u0001".repeat(8000) } }));
+  for (const claimedAt of ["99", parts.claimedAt]) {
+    const party = { ...parts, claimedAt };
+    rememberExchange(send.journal, "job", party);
+    send.journal.write("thread/" + taskThread.exchangeContext(party), { entries, cursor: 35, waiting: null, deadline: 2000 });
+  }
+  const [last] = localExchangeHistory(send.journal, "job", parts.task);
+  expect(last!.entries).toEqual(entries.slice(18));
+  expect(Buffer.byteLength(JSON.stringify(last))).toBeLessThan(1024 * 1024);
+  const [earlier] = localExchangeHistory(send.journal, "job", parts.task, last!.contextIndex, last!.beforeEntry!);
+  expect(earlier!.entries).toEqual(entries.slice(2,18));
+  expect(localExchangeHistory(send.journal, "job", parts.task, last!.previousContext!)[0]!.parties.claimedAt).toBe("99");
+});
