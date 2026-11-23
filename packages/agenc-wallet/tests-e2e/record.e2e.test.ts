@@ -2,7 +2,8 @@
 // who offers it, and what buyers really paid it, read from the chain and
 // weighed by the fee each job paid.
 import { afterEach, describe, expect, it } from "vitest";
-import type { Address } from "@solana/kit";
+import { createHostedServices } from "../src/services.js";
+import { getAddressDecoder, type Address } from "@solana/kit";
 import { readMarketRecord } from "../src/records.js";
 import { NO_FIRST_PARTY } from "../src/trust.js";
 import { CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
@@ -77,7 +78,7 @@ describe("a service's record", () => {
     // Tidying closes the job's link to its service on the chain: the record keeps it.
     await wallet.tick();
 
-    const [after] = (await wallet.find({ query: "haiku" })).services;
+    const [after] = (await wallet.find({ query: "haiku", minPaidJobs: 1 })).services;
     expect(after).toMatchObject({
       record: "ready",
       rating: 5,
@@ -109,8 +110,24 @@ describe("a service's record", () => {
     expect(after.offeredBy).toMatchObject({ turnedDown: 1, disputesLost: 0 });
   });
 
-  it("keeps a paid job nobody rated after the job is tidied", async () => {
-    world = await startWorld();
+  it("finds a compacted unrated job on the 501st history row for the paid-jobs filter", async () => {
+    let lastPage = 0;
+    world = await startWorld({ services: (local) => {
+      const hosted = createHostedServices({ finishedGapMs: 0, fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        const provider = url.searchParams.get("provider") as Address;
+        const page = Number(url.searchParams.get("page") ?? 1);
+        lastPage = Math.max(page, lastPage);
+        const jobs = await local.finishedJobs!(provider);
+        const items = page === 6 ? jobs : Array.from({ length: 100 }, (_, i) => {
+          const bytes = new Uint8Array(32);
+          new DataView(bytes.buffer).setUint32(0, page * 100 + i + 1);
+          return getAddressDecoder().decode(bytes);
+        });
+        return Response.json({ slot: 42, total: 500 + jobs.length, page, items: items.map((pda) => ({ pda, providerAgent: provider, status: "settled" })) });
+      } });
+      return { ...local, finishedJobs: hosted.finishedJobs! };
+    } });
     const { wallet, sandbox, listing, clock } = world;
     const agent = await spender(world, 300);
     await paidJob(world, agent.id, listing);
@@ -127,7 +144,8 @@ describe("a service's record", () => {
     const compacted = await sandbox.chain.readAccountInfo(task as Address);
     expect(compacted?.data.length).toBe(56);
 
-    const [after] = (await wallet.find({ query: "haiku" })).services;
+    const [after] = (await wallet.find({ query: "haiku", minPaidJobs: 1 })).services;
+    expect(lastPage).toBe(6);
     expect(after).toMatchObject({
       record: "ready",
       rating: null,

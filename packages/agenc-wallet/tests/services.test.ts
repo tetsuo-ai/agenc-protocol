@@ -150,8 +150,8 @@ describe("the catalog", () => {
           items: [
             LIVE_ITEM,
             { ...LIVE_ITEM, pda: "not an address" },
-            { ...LIVE_ITEM, priceMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
-            { ...LIVE_ITEM, state: 1 },
+            { ...LIVE_ITEM, pda: TASK, priceMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
+            { ...LIVE_ITEM, pda: PROVIDER, state: 1 },
           ],
         });
       },
@@ -201,7 +201,7 @@ describe("the catalog", () => {
     const [first, second] = await Promise.all([services.listServices(), services.listServices()]);
     expect(first.map((row) => row.listing)).toEqual(items.map((row) => row.pda));
     expect(second).toEqual(first);
-    expect(pages).toEqual([1, 2, 3, 4]);
+    expect(pages).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
   });
 
   it("rejects a repeated page and retries without caching a partial list", async () => {
@@ -408,7 +408,7 @@ describe("the catalog", () => {
     expect(rows.map((row) => row.details)).toEqual(["ready", "ready"]);
   });
 
-  it("shows a provider's exact repeat once, and never merges two providers", async () => {
+  it("keeps each listing ID even when the provider, price and description match", async () => {
     const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
     const addressOf = (fill: number) => getAddressDecoder().decode(new Uint8Array(32).fill(fill));
     const untried = { ...LIVE_ITEM, specHash, pda: addressOf(11), provenance: { settledHireCount: 0 }, ratingCount: 0 };
@@ -420,10 +420,10 @@ describe("the catalog", () => {
       fetchImpl: fakeFetch(listingsRoute([untried, proven, dearer, someoneElse])).fetch,
       publicFetcher: hosts.fetcher,
     });
+    const rows = await services.listServices();
     const targeted = await services.listServices({ listing: untried.pda });
     expect(targeted.find((row) => row.listing === untried.pda)?.details).toBe("ready");
-    const rows = await services.listServices();
-    expect(rows.map((row) => row.listing)).toEqual([addressOf(12), addressOf(13), addressOf(14)]);
+    expect(rows.map((row) => row.listing)).toEqual([addressOf(11), addressOf(12), addressOf(13), addressOf(14)]);
   });
 
   it("uses words the list itself carries only when the description gives none", async () => {
@@ -1083,7 +1083,7 @@ describe("the jobs a provider finished", () => {
           ...SETTLED,
           pda: getAddressDecoder().decode(new Uint8Array(32).fill(page * 101 + index + 1)),
         }));
-        return json({ page, pageSize: 100, total: 120, items });
+        return json({ slot: 1000, page, pageSize: 100, total: 120, items });
       },
     });
     const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0, now: () => now });
