@@ -128,6 +128,20 @@ describe("market_post", () => {
     );
   });
 
+  it("reads the complete selected entry in chat and recovers a completed contest call without posting", async () => {
+    const entry = "a".repeat(64);
+    const content = "poem ".repeat(12000);
+    const { client, calls } = wallet({
+      "jobs.delivery": { result: { text: content, verified: true, files: [], hash: entry, uri: null } },
+      "jobs.callOutcome": { job: job(), approval: null },
+    });
+    const read = await runMarketTool(client, "agent_1", "market_status", { job_id: "job_1", entry_id: entry });
+    expect(read.delivery?.untrusted_content).toBe(content);
+    await runMarketTool(client, "agent_1", "market_post", { request: "A poem", reward_usd: 9, contest_entries: 3 },
+      { readOutcomeOnly: true, idempotencyKey: "contest-replay" });
+    expect(calls.map(([method]) => method)).toEqual(["jobs.delivery", "jobs.callOutcome"]);
+  });
+
   it("posts a contest and drafts each settlement choice without owner authority", async () => {
     const answer = { job: job(), approval: null };
     const { client, calls } = wallet({ "market.postContest": answer, "jobs.quoteContest": answer });
