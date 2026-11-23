@@ -43,6 +43,12 @@ export type EarnState = "off" | "starting" | "watching" | "working" | "finishing
 
 /** Readonly upper bound for enabling earning and preparing the agent's offers. */
 export interface EarnFundingQuote {
+  /** Supports consuming this quote together with its exact action. */
+  confirmAction?: boolean;
+  /** Additional main balance needed, leaving its network reserve intact. */
+  shortfall?: Money;
+  sellerTerms?: import("./seller-terms.js").SellerTerms;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   quoteId: string;
   agentId: string;
   expiresAt: number;
@@ -74,6 +80,8 @@ export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" 
 
 /** A service this agent offers for others to hire. */
 export interface OfferView {
+  terms?: import("./seller-terms.js").SellerTerms;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   /** Names this service in `earn.offer`; it stays the same for as long as the service is kept. */
   id: string;
   /** The listing address once it exists. */
@@ -243,6 +251,10 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  maxOpenJobs?: number;
+  operatorFeeBps?: number;
+  operator?: string | null;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;

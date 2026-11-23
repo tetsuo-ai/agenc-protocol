@@ -17,6 +17,13 @@ import type {
 /** An amount a caller names either in US cents or in lamports. */
 export type AmountInput = { usdCents: number } | { lamports: string };
 
+export interface SellerOfferInput {
+  name: string;
+  summary: string;
+  price: AmountInput;
+  terms?: Partial<import("./seller-terms.js").SellerTerms>;
+}
+
 export interface WalletMethods {
   /**
    * Balances, agents, counts and service `capabilities` on every response.
@@ -185,12 +192,12 @@ export interface WalletMethods {
 
   /** Switch taking jobs on or off. Off replies while an existing job is still finishing. */
   "earn.set": {
-    params: { agentId: string; enabled: boolean; minPayCents?: number };
+    params: { agentId: string; enabled: boolean; minPayCents?: number; fundingQuoteId?: string };
     result: AgentView;
   };
   /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
   "earn.quote": {
-    params: { agentId: string; offerId?: string; offer?: { name: string; summary: string; price: AmountInput } };
+    params: { agentId: string; offerId?: string; minPayCents?: number; offer?: SellerOfferInput };
     result: import("./types.js").EarnFundingQuote;
   };
   /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
@@ -210,7 +217,8 @@ export interface WalletMethods {
     params: {
       agentId: string;
       offerId?: string;
-      offer: { name: string; summary: string; price: AmountInput } | null;
+      offer: SellerOfferInput | null;
+      fundingQuoteId?: string;
     };
     result: AgentView;
   };

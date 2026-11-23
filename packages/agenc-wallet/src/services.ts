@@ -33,6 +33,9 @@ export type DetailsState = "ready" | "loading" | "unavailable";
 
 /** One service as a catalog source reports it (chain-shaped, not display). */
 export interface CatalogRow {
+  maxOpenJobs?: number;
+  operatorFeeBps?: number;
+  operator?: string | null;
   listing: Address;
   providerAgent: Address;
   name: string;
@@ -458,6 +461,7 @@ interface ListedService {
     | "rating"
     | "ratingCount"
     | "jobsDone"
+    | "maxOpenJobs" | "operatorFeeBps" | "operator"
     | "deliverySecs"
   >;
   /** Words the list itself carried, used when the description gives none. */
@@ -508,7 +512,8 @@ function withoutRepeats(listed: readonly ListedService[]): ListedService[] {
     const key =
       entry.specHashHex === null
         ? `single ${index}`
-        : `${entry.base.providerAgent} ${entry.specHashHex} ${entry.base.priceLamports}`;
+        : [entry.base.providerAgent, entry.specHashHex, entry.base.priceLamports, entry.base.deliverySecs,
+           entry.base.maxOpenJobs, entry.base.operatorFeeBps, entry.base.operator].join(" ");
     const kept = best.get(key);
     if (kept === undefined) {
       best.set(key, entry);
@@ -749,6 +754,8 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         providerAgent,
         name,
         priceLamports: price,
+        ...(Number.isInteger(item.maxOpenJobs) && Number(item.maxOpenJobs) >= 0 && Number(item.maxOpenJobs) <= 65535 && { maxOpenJobs: Number(item.maxOpenJobs) }),
+        ...(Number.isInteger(item.operatorFeeBps) && Number(item.operatorFeeBps) >= 0 && Number(item.operatorFeeBps) <= 2000 && { operatorFeeBps: Number(item.operatorFeeBps), operator: safeAddress(item.operator) }),
         rating,
         ratingCount: Math.max(0, Math.trunc(ratingCount)),
         jobsDone: Math.max(0, Math.trunc(settled ?? 0)),
@@ -1159,13 +1166,19 @@ export function buildListingSpec(input: {
   name: string;
   summary: string;
   category: string;
+  tags?: string[];
+  inputs?: string[];
+  outputs?: string[];
 }): Record<string, unknown> {
   return {
     category: input.category,
+    ...(input.tags?.length && { tags: input.tags }),
     custom: {
       listingMetadata: {
         displayName: input.name,
         longDescription: input.summary,
+        ...(input.inputs?.length && { buyerInputs: input.inputs }),
+        ...(input.outputs?.length && { deliverables: input.outputs }),
       },
     },
   };

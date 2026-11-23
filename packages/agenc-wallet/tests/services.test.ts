@@ -178,6 +178,7 @@ describe("the catalog", () => {
         ratingCount: 2,
         jobsDone: 1,
         deliverySecs: 86_400,
+        maxOpenJobs: 4, operator: null, operatorFeeBps: 0,
         specHashHex: LIVE_ITEM.specHash,
       },
     ]);

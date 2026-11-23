@@ -7,6 +7,9 @@
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
+import { resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
+import type { SellerOfferInput } from "./client/protocol.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { address, type Address, type KeyPairSigner } from "@solana/kit";
@@ -249,8 +252,6 @@ const FEE_RATE_TTL_MS = 10 * 60_000;
 const FEE_RATE_RETRY_MS = 60_000;
 /** The marketplace's catalog hides a service priced below this. */
 const MIN_OFFER_PRICE_LAMPORTS = 1_000n;
-/** How long an agent gets to deliver a job hired from its own service. */
-const OFFER_DELIVERY_SECS = 60 * 60;
 /** The marketplace's safety check is asked at most this often per service. */
 const OFFER_CHECK_RETRY_MS = 60_000;
 /** Steps one housekeeping pass may take for one offer (create, update, switch, check). */
@@ -362,6 +363,10 @@ interface BalanceSnapshot {
 
 function newId(prefix: string): string {
   return `${prefix}_${randomBytes(9).toString("base64url")}`;
+}
+
+function sameOfferTerms(left: OfferRecord, right: OfferRecord): boolean {
+  return JSON.stringify(storedTerms(left)) === JSON.stringify(storedTerms(right));
 }
 
 function clearOfferFundingWait(offer: OfferRecord): void {
@@ -577,7 +582,8 @@ export class AgencWallet {
   #closing = false;
   /** Agents being stopped earning for good right now. */
   readonly #retiring = new Set<string>();
-  readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; target: bigint }>();
+  readonly #quotedContinuation = new AsyncLocalStorage<{ agentId: string; active: boolean }>();
+  readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; target: bigint; action: string; before: string; offers: OfferRecord[] }>();
   /**
    * An agent's waiting hires, found when stopping it for good was refused for
    * them, with what each pays: its loop takes them whatever its smallest pay
@@ -974,12 +980,15 @@ export class AgencWallet {
       paused: offer.wanted ? "Off offer while taking jobs is switched off." : "Off offer.",
       problem: offer.error ?? "This could not be put on offer.",
     };
+    const terms = storedTerms(offer);
     return {
       id: offer.id,
       listing: offer.listing,
       name: offer.name,
       summary: offer.summary,
       price: money(offer.priceLamports, rate),
+      terms,
+      proceeds: sellerProceeds(BigInt(offer.priceLamports), terms.operatorFeeBps, this.#feeRate?.bps ?? null, rate),
       status,
       statusText: statusText[status],
       listed: offer.listed,
@@ -1038,6 +1047,7 @@ export class AgencWallet {
   async #oneAgentView(agentId: string): Promise<AgentView> {
     const [balances, rate] = await Promise.all([this.#readBalances(true), this.#displayRate()]);
     const agent = this.#agentRecord(agentId);
+    if (agentOffers(agent).length) await this.#marketFeeBps();
     return this.#agentView(
       agent,
       balances.values.get(agentId) ?? null,
@@ -1201,7 +1211,7 @@ export class AgencWallet {
     const state = this.#store.state;
     const ordered = Object.values(state.agents).sort((a, b) => a.createdAt - b.createdAt);
     const facts = await Promise.all(ordered.map((agent) => this.#registrationFacts(agent)));
-    const costs = await this.#serviceCosts();
+    const [costs] = await Promise.all([this.#serviceCosts(), ordered.some((agent) => agentOffers(agent).length) && this.#marketFeeBps()]);
     return {
       capabilities: [...WALLET_CAPABILITIES],
       network: this.#chain.network,
@@ -1438,12 +1448,21 @@ export class AgencWallet {
     agent: AgentRecord,
     lamports: bigint,
     text: string,
-    funding?: { approved?: boolean },
+    funding?: { approved?: boolean; exact?: EarnFundingQuote },
   ): Promise<void> {
     await this.#lock(MAIN_KEY, async () => {
       const floor = await this.#floor();
       const mainBalance = await this.#chain.getBalance(this.mainAddress);
       const agentBalance = await this.#chain.getBalance(agent.address as Address);
+      const continuation = this.#quotedContinuation.getStore();
+      if (funding && !funding.approved && continuation?.active && continuation.agentId === agent.id) {
+        throw new WalletError("APPROVAL_REQUIRED", "The action needs more funding. Review a new quote.");
+      }
+      if (funding?.exact && (funding.exact.expiresAt <= this.#now() ||
+        agentBalance !== BigInt(funding.exact.agentBalance.lamports) ||
+        this.#chain.transferFeeLamports !== BigInt(funding.exact.transferFee.lamports))) {
+        throw new WalletError("PRICE_CHANGED", "Funding changed or the quote expired. Review a new quote.");
+      }
       if (lamports <= 0n) throw new WalletError("BAD_REQUEST", "That amount is not valid.");
       if (agentBalance + lamports < floor) {
         const rate = await this.#displayRate();
@@ -1464,7 +1483,10 @@ export class AgencWallet {
       if (funding !== undefined) {
         const rate = await this.#freshRate().catch(() => null);
         const charge = lamports + this.#chain.transferFeeLamports;
-        if (!funding.approved && charge > this.#dailyRoom(this.#agentRecord(agent.id), rate)) {
+        const dailyRoom = this.#dailyRoom(this.#agentRecord(agent.id), rate);
+        if (funding.exact && BigInt(funding.exact.dailyRemaining.lamports) !== dailyRoom)
+          throw new WalletError("PRICE_CHANGED", "The remaining daily allowance changed. Review a new quote.");
+        if (!funding.approved && charge > dailyRoom) {
           throw new WalletError(
             "APPROVAL_REQUIRED",
             "This funding needs your approval. Review the full earning quote first.",
@@ -1645,6 +1667,9 @@ export class AgencWallet {
       terms: row.terms,
       details: row.details,
       price: money(row.priceLamports, rate),
+      ...(row.maxOpenJobs !== undefined && { maxOpenJobs: row.maxOpenJobs }),
+      ...(row.operatorFeeBps !== undefined && { operatorFeeBps: row.operatorFeeBps, operator: row.operator ?? null,
+        proceeds: sellerProceeds(row.priceLamports, row.operatorFeeBps, feeBps, rate) }),
       marketFee:
         feeBps === null
           ? null
@@ -1774,6 +1799,7 @@ export class AgencWallet {
         if (known.has(offer.listing as Address)) continue;
         const providerAgent = await this.#earn.marketplaceAgent(agent.id).catch(() => null);
         if (providerAgent === null) continue;
+        const terms = storedTerms(offer);
         own.push({
           listing: offer.listing as Address,
           providerAgent,
@@ -1781,9 +1807,12 @@ export class AgencWallet {
           category: offer.category,
           summary: offer.summary,
           description: offer.summary,
-          tags: [],
-          inputs: [],
-          outputs: [],
+          tags: terms.tags,
+          inputs: terms.inputs,
+          outputs: terms.outputs,
+          maxOpenJobs: terms.maxOpenJobs,
+          operator: terms.operator,
+          operatorFeeBps: terms.operatorFeeBps,
           terms: [],
           details: "ready",
           priceLamports: BigInt(offer.priceLamports),
@@ -1863,28 +1892,31 @@ export class AgencWallet {
     const now = this.#now();
     const jobId = newId("job");
     const catalog = await this.#services.listServices().catch(() => [] as CatalogRow[]);
-    const catalogRow = catalog.find((row) => row.listing === listing);
+    const specHashHex = values.bytesToHex(terms.specHash);
+    const catalogRow = catalog.find((row) => row.listing === listing && row.specHashHex === specHashHex);
     const service: ServiceView = this.#serviceView(
-      catalogRow ?? {
+      {
         listing,
         providerAgent: terms.providerAgent,
         name: terms.name,
         category: terms.category,
-        summary: null,
-        description: null,
-        tags: [],
-        inputs: [],
-        outputs: [],
-        terms: [],
-        // The marketplace's list does not show this service, so its
-        // description was never read.
-        details: "unavailable",
+        summary: catalogRow?.summary ?? null,
+        description: catalogRow?.description ?? null,
+        tags: catalogRow?.tags ?? [],
+        inputs: catalogRow?.inputs ?? [],
+        outputs: catalogRow?.outputs ?? [],
+        terms: catalogRow?.terms ?? [],
+        maxOpenJobs: terms.maxOpenJobs,
+        operator: terms.operator,
+        operatorFeeBps: terms.operatorFeeBps,
+        // Only show public words committed by the listing being hired.
+        details: catalogRow?.details ?? "unavailable",
         priceLamports: terms.priceLamports,
-        rating: null,
+        rating: catalogRow?.rating ?? null,
         ratingCount: terms.ratingCount,
-        jobsDone: 0,
+        jobsDone: catalogRow?.jobsDone ?? 0,
         deliverySecs: terms.deliverySecs,
-        specHashHex: values.bytesToHex(terms.specHash),
+        specHashHex,
       },
       // What is known of the service's record right now; a request does not wait for it.
       await this.#serviceContext(catalog, 0),
@@ -4065,6 +4097,7 @@ export class AgencWallet {
         listings +=
           (await this.#chain.getMinimumBalanceForRentExemption(LISTING_ACCOUNT_SPACE)) + FEE_HEADROOM_LAMPORTS;
       } else if (
+        !sameChainTerms(account, storedTerms(offer)) ||
         account.price !== BigInt(offer.priceLamports) ||
         values.bytesToHex(new Uint8Array(account.specHash)) !== offer.specHashHex ||
         account.specUri !== offer.specUri ||
@@ -4110,13 +4143,18 @@ export class AgencWallet {
 
   async quoteEarn(
     agentId: string,
-    input?: { name: string; summary: string; price: AmountInput },
+    input?: SellerOfferInput,
     offerId?: string,
+    minPayCents?: number,
   ): Promise<EarnFundingQuote> {
     const agent = this.#agentRecord(agentId);
     this.#refuseIfRetired(agent);
+    if (minPayCents !== undefined && (input !== undefined || !Number.isSafeInteger(minPayCents) || minPayCents < 0))
+      throw new WalletError("BAD_REQUEST", "Give a valid minimum job payment when turning on Earns.");
     let offers = agentOffers(agent);
     let price: bigint | null = null;
+    let quotedTerms: ReturnType<typeof storedTerms> | undefined;
+    let action = JSON.stringify(["enable", minPayCents ?? null]);
     if (input !== undefined) {
       if (input === null || typeof input !== "object") {
         throw new WalletError("BAD_REQUEST", "That service is not valid.");
@@ -4136,9 +4174,12 @@ export class AgencWallet {
       }
       if (previous === undefined && offers.filter((offer) => offer.wanted).length >= MAX_OFFERS_PER_AGENT)
         throw new WalletError("BAD_REQUEST", "Take one service off offer first.");
-      price = await this.#toLamports(input.price);
+      price = await this.#offerLamports(input.price);
       this.#checkOfferPrice(price);
-      const spec = buildListingSpec({ name, summary, category: "other" });
+      const terms = resolveTerms(input.terms, previous);
+      quotedTerms = terms;
+      const spec = buildListingSpec({ name, summary, ...terms });
+      action = this.#quotedOfferKey(offerId, name, summary, price, terms);
       const hash = await jobSpecHash(spec);
       const next: OfferRecord = {
         id: previous?.id ?? "quote",
@@ -4147,9 +4188,10 @@ export class AgencWallet {
         listed: previous?.listed ?? false,
         name,
         summary,
-        category: "other",
+        category: terms.category,
+        terms,
         priceLamports: price.toString(),
-        deliverySecs: OFFER_DELIVERY_SECS,
+        deliverySecs: terms.deliverySecs,
         spec,
         specHashHex: hash.hex,
         specUri: previous?.specHashHex === hash.hex ? (previous.specUri ?? null) : null,
@@ -4163,19 +4205,65 @@ export class AgencWallet {
       offers = [...offers.filter((offer) => offer.id !== previous?.id), next];
     }
     const quote = await this.#earningQuote(agent, offers);
-    if (price !== null) quote.offerPrice = money(price, await this.#displayRate());
+    quote.confirmAction = true;
+    const total = BigInt(quote.totalFromMain.lamports);
+    if (total > 0n) {
+      const available = await this.#chain.getBalance(this.mainAddress);
+      const missing = total + BigInt(quote.networkReserve.lamports) - available;
+      quote.shortfall = money(missing > 0n ? missing : 0n, await this.#displayRate());
+    }
+    if (price !== null && quotedTerms) {
+      const rate = await this.#displayRate();
+      quote.offerPrice = money(price, rate);
+      quote.sellerTerms = quotedTerms;
+      quote.proceeds = sellerProceeds(price, quotedTerms.operatorFeeBps, await this.#marketFeeBps(), rate);
+    }
     for (const [id, value] of this.#fundingQuotes)
       if (value.quote.expiresAt <= this.#now()) this.#fundingQuotes.delete(id);
     if (this.#fundingQuotes.size >= 100) this.#fundingQuotes.delete(this.#fundingQuotes.keys().next().value!);
     this.#fundingQuotes.set(quote.quoteId, {
       quote: structuredClone(quote),
       target: BigInt(quote.requiredBalance.lamports),
+      action, before: this.#sellerRevision(agent), offers: structuredClone(offers),
     });
     return quote;
   }
 
+  async #continueSellerAction<T>(agentId: string, quoteId: string | undefined, work: () => Promise<T>): Promise<T> {
+    if (quoteId === undefined) return work();
+    const scope = { agentId, active: true };
+    try {
+      return await this.#quotedContinuation.run(scope, work);
+    } finally {
+      // Future maintenance keeps using the ordinary daily allowance.
+      scope.active = false;
+    }
+  }
+
+  #sellerRevision(agent: AgentRecord): string {
+    return JSON.stringify([agent.earn.enabled, agent.earn.minPayCents, agentOffers(agent).map((offer) =>
+      [offer.id, offer.name, offer.wanted, offer.specHashHex, offer.priceLamports, storedTerms(offer)])]);
+  }
+
+  #offerLamports(price: AmountInput): Promise<bigint> {
+    if (!price || typeof price !== "object" || ("usdCents" in price) === ("lamports" in price) ||
+      ("lamports" in price && typeof price.lamports !== "string")) {
+      throw new WalletError("BAD_REQUEST", "Give one price, in dollars or lamports.");
+    }
+    return this.#toLamports(price);
+  }
+
+  #quotedOfferKey(id: string | undefined, name: string, summary: string, price: bigint, terms: ReturnType<typeof storedTerms>): string {
+    return JSON.stringify([id ?? null, name, summary, price.toString(), terms]);
+  }
+
   /** Explicit owner approval of this quote's agent and maximum transfer, once. */
   async approveEarnFunding(quoteId: string): Promise<AgentView> {
+    const agent = await this.#consumeFunding(quoteId);
+    return this.#oneAgentView(agent.id);
+  }
+
+  async #consumeFunding(quoteId: string, confirm?: { agentId: string; action: string }): Promise<AgentRecord> {
     const entry = this.#fundingQuotes.get(quoteId);
     this.#fundingQuotes.delete(quoteId);
     if (entry === undefined || entry.quote.expiresAt <= this.#now())
@@ -4183,22 +4271,37 @@ export class AgencWallet {
     const agent = this.#agentRecord(entry.quote.agentId);
     this.#refuseIfRetired(agent);
     await this.#lock(`funding:${agent.id}`, async () => {
+      if (confirm && (confirm.agentId !== agent.id || confirm.action !== entry.action ||
+        entry.before !== this.#sellerRevision(this.#agentRecord(agent.id)))) {
+        throw new WalletError("PRICE_CHANGED", "The service or earning settings changed. Review a new quote.");
+      }
       const balance = await this.#chain.getBalance(agent.address as Address);
+      if (confirm) {
+        const fresh = await this.#earningQuote(agent, entry.offers);
+        for (const key of ["registration", "listings", "checks", "workingReserve", "networkReserve", "fromMain", "transferFee", "dailyRemaining"] as const) {
+          if (fresh[key].lamports !== entry.quote[key].lamports)
+            throw new WalletError("PRICE_CHANGED", "The funding figures changed. Review a new quote.");
+        }
+      }
       const missing = entry.target > balance ? entry.target - balance : 0n;
       const quoted = BigInt(entry.quote.fromMain.lamports);
+      if (confirm && (entry.quote.expiresAt <= this.#now() || missing !== quoted ||
+        (quoted > 0n && this.#chain.transferFeeLamports !== BigInt(entry.quote.transferFee.lamports)))) {
+        throw new WalletError("PRICE_CHANGED", "Funding changed or the quote expired. Review a new quote.");
+      }
       const amount = missing < quoted ? missing : quoted;
       if (amount > 0n && amount + this.#chain.transferFeeLamports > BigInt(entry.quote.totalFromMain.lamports)) {
         throw new WalletError("PRICE_CHANGED", "The funding fee changed. Review a new quote.");
       }
       if (amount > 0n)
-        await this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`, { approved: true });
+        await this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`, { approved: true, ...(confirm && { exact: entry.quote }) });
     });
     // A pass that was already waiting on funding must record its result first.
     await this.#lock(`offer:${agent.id}`, async () => {
       this.#store.update((draft) => agentOffers(draft.agents[agent.id]!).forEach(clearOfferFundingWait));
       this.#emit({ type: "overview" });
     });
-    return this.#oneAgentView(agent.id);
+    return agent;
   }
 
   async #fundEarning(agent: AgentRecord): Promise<void> {
@@ -4312,7 +4415,12 @@ export class AgencWallet {
   }
 
   /** Switch "take jobs while idle" on or off for an agent. Owner only. */
-  async setEarn(agentId: string, enabled: boolean, minPayCents?: number): Promise<AgentView> {
+  async setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string): Promise<AgentView> {
+    const apply = () => this.#setEarn(agentId, enabled, minPayCents, fundingQuoteId);
+    return fundingQuoteId === undefined ? apply() : this.#lock(`seller-confirm:${agentId}`, apply);
+  }
+
+  async #setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string): Promise<AgentView> {
     if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const agent = this.#agentRecord(agentId);
     if (enabled) this.#refuseIfRetired(agent);
@@ -4326,7 +4434,8 @@ export class AgencWallet {
           "This computer is not set up to do jobs yet.",
         );
       }
-      await this.#fundEarning(agent);
+      if (fundingQuoteId !== undefined) await this.#consumeFunding(fundingQuoteId, { agentId, action: JSON.stringify(["enable", minPayCents ?? null]) });
+      else await this.#fundEarning(agent);
     }
     // Setting money aside takes a moment; the agent may have been stopped for good meanwhile.
     if (enabled) this.#refuseIfRetired(this.#agentRecord(agentId));
@@ -4344,7 +4453,7 @@ export class AgencWallet {
         await this.#earn.stop(agentId);
         this.#earn.clearPause(agentId);
       }
-      await this.#startEarning(this.#agentRecord(agentId));
+      await this.#continueSellerAction(agentId, fundingQuoteId, () => this.#startEarning(this.#agentRecord(agentId)));
     } else {
       // stop aborts discovery synchronously. Its promise still drains the job,
       // but the owner can turn other agents off while that work finishes.
@@ -4584,9 +4693,15 @@ export class AgencWallet {
    */
   async setOffer(
     agentId: string,
-    input: { name: string; summary: string; price: AmountInput } | null,
+    input: SellerOfferInput | null,
     offerId?: string,
+    fundingQuoteId?: string,
   ): Promise<AgentView> {
+    const apply = () => this.#setOffer(agentId, input, offerId, fundingQuoteId);
+    return fundingQuoteId === undefined ? apply() : this.#lock(`seller-confirm:${agentId}`, apply);
+  }
+
+  async #setOffer(agentId: string, input: SellerOfferInput | null, offerId?: string, fundingQuoteId?: string): Promise<AgentView> {
     const agent = this.#agentRecord(agentId);
     if (input !== null) this.#refuseIfRetired(agent);
     const offers = agentOffers(agent);
@@ -4657,19 +4772,25 @@ export class AgencWallet {
         );
       }
     }
-    const priceLamports = await this.#toLamports(input.price);
+    const priceLamports = await this.#offerLamports(input.price);
     this.#checkOfferPrice(priceLamports);
-    const category = "other";
-    const spec = buildListingSpec({ name, summary, category });
+    const terms = resolveTerms(input.terms, current);
+    const category = terms.category;
+    const spec = buildListingSpec({ name, summary, ...terms });
     const hash = await jobSpecHash(spec);
     const price = priceLamports.toString();
     const id = current?.id ?? values.bytesToHex(values.randomId32());
+    if (fundingQuoteId !== undefined) {
+      const action = this.#quotedOfferKey(offerId, name, summary, priceLamports, terms);
+      await this.#consumeFunding(fundingQuoteId, { agentId, action });
+    }
     this.#store.update((draft) => {
       const entry = draft.agents[agentId]!;
       const list = agentOffers(entry);
       const previous = list.find((offer) => offer.id === id) ?? null;
       const sameWords = previous !== null && previous.specHashHex === hash.hex;
-      if (previous?.status === "awaiting_approval" && sameWords && previous.priceLamports === price) return;
+      const sameTerms = previous !== null && JSON.stringify(storedTerms(previous)) === JSON.stringify(terms);
+      if (previous?.status === "awaiting_approval" && sameTerms && sameWords && previous.priceLamports === price) return;
       const next: OfferRecord = {
         id,
         listingIdHex: previous?.listingIdHex ?? values.bytesToHex(values.randomId32()),
@@ -4679,13 +4800,14 @@ export class AgencWallet {
         summary,
         category,
         priceLamports: price,
-        deliverySecs: previous?.deliverySecs ?? OFFER_DELIVERY_SECS,
+        deliverySecs: terms.deliverySecs,
+        terms,
         spec,
         specHashHex: hash.hex,
         specUri: sameWords ? (previous.specUri ?? null) : null,
         wanted: true,
         status:
-          previous !== null && previous.status === "live" && previous.wanted && sameWords && previous.priceLamports === price
+          previous !== null && previous.status === "live" && previous.wanted && sameTerms && sameWords && previous.priceLamports === price
             ? "live"
             : "getting_ready",
         error: null,
@@ -4698,7 +4820,7 @@ export class AgencWallet {
       entry.earn.offers = previous === null ? [...list, next] : list.map((offer) => (offer.id === id ? next : offer));
       delete entry.earn.offer;
     });
-    await this.#advanceOffer(agentId);
+    await this.#continueSellerAction(agentId, fundingQuoteId, () => this.#advanceOffer(agentId));
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);
   }
@@ -4800,7 +4922,7 @@ export class AgencWallet {
               if (!again) {
                 this.#patchOffer(agentId, offer.id, (entry) => {
                   if (entry.wanted === offer.wanted && entry.priceLamports === offer.priceLamports &&
-                      entry.specHashHex === offer.specHashHex) entry.reconciledForLive = wantLive;
+                      entry.specHashHex === offer.specHashHex && sameOfferTerms(entry, offer)) entry.reconciledForLive = wantLive;
                 });
               }
             } catch (error) {
@@ -4847,7 +4969,7 @@ export class AgencWallet {
         // The owner may have edited or withdrawn the offer while funding was being checked.
         if (
           !this.#agentRecord(agentId).earn.enabled || !offer.wanted ||
-          offer.specHashHex !== attempted.specHashHex || offer.priceLamports !== attempted.priceLamports
+          offer.specHashHex !== attempted.specHashHex || offer.priceLamports !== attempted.priceLamports || !sameOfferTerms(offer, attempted)
         ) return;
         offer.status = "awaiting_approval";
         offer.lastCheckAt = null;
@@ -4908,7 +5030,7 @@ export class AgencWallet {
         wantLive &&
         state === LISTING_STATE_PAUSED &&
         // Back exactly as it was: same price, same words, where they are.
-        account.maxOpenJobs === 1 &&
+        sameChainTerms(account, storedTerms(offer)) &&
         account.price === BigInt(offer.priceLamports) &&
         values.bytesToHex(new Uint8Array(account.specHash)) === offer.specHashHex &&
         (offer.specUri ?? null) !== null &&
@@ -4992,7 +5114,7 @@ export class AgencWallet {
         async () => sendCreateListing(this.#chain, await this.#vault.signer(agent.keyId), {
           providerAgent, listingId, name: offer.name, category: offer.category,
           specHash: values.hexToBytes(offer.specHashHex), specUri,
-          priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.deliverySecs,
+          priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.deliverySecs, terms: storedTerms(offer),
         }));
       this.#dropBalances();
       this.#emit({ type: "overview" });
@@ -5036,7 +5158,9 @@ export class AgencWallet {
 
     // Freeze admissions before trying a finite cap. The program refuses a cap
     // below outstanding hires, and another buyer must not extend that backlog.
-    if (account.maxOpenJobs !== 1 && state === LISTING_STATE_ACTIVE) {
+    const terms = storedTerms(offer);
+    const reducingCapacity = terms.maxOpenJobs > 0 && (account.maxOpenJobs === 0 || account.maxOpenJobs > terms.maxOpenJobs);
+    if (reducingCapacity && state === LISTING_STATE_ACTIVE) {
       await sendListingState(this.#chain, await this.#vault.signer(agent.keyId), {
         listing, providerAgent, state: "Paused",
       });
@@ -5044,7 +5168,7 @@ export class AgencWallet {
       this.#dropBalances();
       return true;
     }
-    if (account.maxOpenJobs !== 1 && account.openJobs > 1) {
+    if (reducingCapacity && account.openJobs > terms.maxOpenJobs) {
       return settle("paused", "Existing hires must finish before this service can take new work.");
     }
 
@@ -5057,7 +5181,7 @@ export class AgencWallet {
       return settle("problem", "This network has nowhere to publish a service's description yet.");
     }
     const movedDescription = account.specUri !== specUri;
-    if (priceChanged || wordsChanged || movedDescription || account.maxOpenJobs !== 1) {
+    if (priceChanged || wordsChanged || movedDescription || !sameChainTerms(account, terms)) {
       await this.#fundEarning(agent);
       const spec =
         wordsChanged || movedDescription
@@ -5066,7 +5190,7 @@ export class AgencWallet {
       await sendUpdateListing(
         this.#chain,
         await this.#vault.signer(agent.keyId),
-        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec },
+        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec, terms },
       );
       this.#dropBalances();
       return true;

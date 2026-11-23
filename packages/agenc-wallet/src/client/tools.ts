@@ -264,6 +264,9 @@ function describeService(service: ServiceView) {
     ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
     ...(service.terms.length > 0 ? { terms: service.terms } : {}),
     price: formatMoney(service.price),
+    ...(service.maxOpenJobs !== undefined && { max_open_jobs: service.maxOpenJobs, delivery_secs: service.deliverySecs,
+      price_lamports: service.price.lamports, tags: service.tags, operator: service.operator,
+      operator_fee_bps: service.operatorFeeBps, proceeds: service.proceeds }),
     // A wallet older than this client sends no fee and no record: those are left out, not guessed.
     ...(service.marketFee != null
       ? { marketplace_fee: `${formatMoney(service.marketFee.amount)} of the price (${service.marketFee.bps / 100}%)` }

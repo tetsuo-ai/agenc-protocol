@@ -8,7 +8,7 @@
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
 import { withListingOperation } from "./transport-scope.js";
-import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
+import { address, getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
@@ -198,7 +198,7 @@ export interface ListingTerms {
  * Read a listing and refuse anything a buyer cannot hire: paused or closed,
  * priced in a token, or at capacity.
  */
-export async function readHireableListing(chain: Chain, listing: Address): Promise<ListingTerms> {
+export async function readHireableListing(chain: Chain, listing: Address): Promise<ListingTerms & { maxOpenJobs: number; operator: Address | null; operatorFeeBps: number }> {
   const account = await readListing(chain, listing);
   if (account === null) {
     throw new WalletError("NOT_FOUND", "That service does not exist.");
@@ -229,6 +229,9 @@ export async function readHireableListing(chain: Chain, listing: Address): Promi
     providerAgent: account.providerAgent,
     name,
     category,
+    maxOpenJobs: account.maxOpenJobs,
+    operator: isDefaultAddress(account.operator) ? null : account.operator,
+    operatorFeeBps: account.operatorFeeBps,
     priceLamports: account.price,
     version: account.version,
     specHash: new Uint8Array(account.specHash),
@@ -1493,6 +1496,7 @@ export async function listingAddressFor(
 }
 
 export interface ListingOffer {
+  terms: import("./client/seller-terms.js").SellerTerms;
   providerAgent: Address;
   listingId: Uint8Array;
   name: string;
@@ -1506,7 +1510,7 @@ export interface ListingOffer {
 }
 
 /**
- * Admit one open hire per listing. The program enforces this atomically,
+ * Admit hires up to the chosen capacity. The program enforces this atomically,
  * including concurrent buyers. close_task frees the slot after settlement.
  * A delayed close conservatively keeps the service busy.
  */
@@ -1521,16 +1525,16 @@ export async function sendCreateListing(
     listingId: offer.listingId,
     name: offer.name,
     category: offer.category as never,
-    tags: [],
+    tags: offer.terms.tags,
     specHash: offer.specHash,
     specUri: offer.specUri,
     price: offer.priceLamports,
     priceMint: null,
     requiredCapabilities: 1n,
     defaultDeadlineSecs: BigInt(offer.deliverySecs),
-    maxOpenJobs: 1,
-    operator: null,
-    operatorFeeBps: 0,
+    maxOpenJobs: offer.terms.maxOpenJobs,
+    operator: offer.terms.operator ? address(offer.terms.operator) : null,
+    operatorFeeBps: offer.terms.operatorFeeBps,
   });
   return result.signature;
 }
@@ -1543,6 +1547,7 @@ export async function sendUpdateListing(
     listing: Address;
     providerAgent: Address;
     priceLamports: bigint;
+    terms: ListingOffer["terms"];
     spec: { hash: Uint8Array; uri: string } | null;
   },
 ): Promise<string> {
@@ -1556,12 +1561,12 @@ export async function sendUpdateListing(
         ...(input.spec === null
           ? { specHash: null, specUri: null }
           : { specHash: input.spec.hash, specUri: input.spec.uri }),
-        tags: null,
+        tags: values.encodeListingTags(input.terms.tags),
         requiredCapabilities: null,
-        defaultDeadlineSecs: null,
-        maxOpenJobs: 1,
-        operator: null,
-        operatorFeeBps: null,
+        defaultDeadlineSecs: BigInt(input.terms.deliverySecs),
+        maxOpenJobs: input.terms.maxOpenJobs,
+        operator: input.terms.operator ? address(input.terms.operator) : SYSTEM_PROGRAM_ADDRESS,
+        operatorFeeBps: input.terms.operatorFeeBps,
       }),
     ]);
     return result.signature;

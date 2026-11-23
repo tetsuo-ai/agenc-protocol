@@ -5,6 +5,7 @@
 //
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
+import { listingDetails } from "./listing-details.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -619,7 +620,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           category: entry.category,
           summary: entry.summary,
           description: entry.summary.length > 0 ? entry.summary : null,
-          tags: [],
+          tags: values.decodeListingTags(new Uint8Array(account.tags)),
+          maxOpenJobs: account.maxOpenJobs,
+          operatorFeeBps: account.operatorFeeBps,
+          operator: account.operator === SYSTEM_PROGRAM_ADDRESS ? null : account.operator,
           inputs: entry.inputs,
           outputs: entry.outputs,
           terms: [],
@@ -685,12 +689,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       // approval below has been paid for and recorded.
       const metadata = (input.spec.custom as { listingMetadata?: { longDescription?: unknown } } | undefined)
         ?.listingMetadata;
+      const details = listingDetails(input.spec);
       const entry = {
         listing: input.listing,
         summary: typeof metadata?.longDescription === "string" ? metadata.longDescription : "",
         category: typeof input.spec.category === "string" ? input.spec.category : "other",
-        inputs: [],
-        outputs: [],
+        inputs: details.inputs,
+        outputs: details.outputs,
       };
       const at = listed.findIndex((item) => item.listing === input.listing);
       if (at === -1) listed.push(entry);

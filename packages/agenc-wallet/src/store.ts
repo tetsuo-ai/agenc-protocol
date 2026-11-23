@@ -32,6 +32,7 @@ const MAX_WORK_RECORDS = 1_000;
  * in line one step at a time, so a crash between steps loses nothing.
  */
 export interface OfferRecord {
+  terms?: import("./client/seller-terms.js").SellerTerms;
   /**
    * Stable for as long as the person keeps this service, while its listing
    * may be replaced (a retired listing starts over under a new id).
