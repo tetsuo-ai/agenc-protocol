@@ -51,6 +51,24 @@ describe("earning", () => {
     }
   }, 30_000);
 
+  it("derives the request source from the task creator even when the worker takes anyone's jobs", async () => {
+    world = await startWorld({
+      // All transport is the local SVM. Exercise the wallet's real-money source selection.
+      chain: base => ({ ...base, network: "mainnet" }),
+      earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write(process.argv[1])", "{requestSource}", "{prompt}"],
+        mode: "sandboxed", envAllowlist: [], timeoutMs: 5000 }, pollIntervalMs: 100 },
+    });
+    const { wallet, sandbox } = world;
+    const worker = await wallet.createAgent("Seller");
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    const other = await sandbox.postOpenJob({ title: "External", instructions: "own", rewardLamports: 50n * CENT });
+    await eventually(() => other.delivered());
+    expect([...sandbox.deliveries.values()].map(bytes => Buffer.from(bytes).toString())).toContain("external");
+    await other.approve();
+    const own = await wallet.postFromBalance({ request: "Use contact@example.org.", reward: { usdCents: 50 } });
+    await eventually(async () => (await wallet.getJob(own.id, true)).result?.text === "own");
+  }, 30000);
+
   it("is refused on a host that cannot run jobs", async () => {
     world = await startWorld();
     const agent = await world.wallet.createAgent("My assistant");

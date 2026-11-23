@@ -719,7 +719,11 @@ export class EarnHost {
       modelBudgetForTask: async (task) => jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null),
       executorForTask: async (task, _address, reservedCents) => {
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
-        return executor.argv.map((part) => fill(part).replaceAll("{pay}", String(pay)));
+        const ownRequest = this.#chain.network === "sandbox" || this.#ownAddresses().includes(task.creator);
+        return executor.argv.map(part => {
+          if (part === "{requestSource}") return ownRequest ? "own" : "external";
+          return fill(part).replaceAll("{pay}", String(pay));
+        });
       },
       ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),
       config: {
