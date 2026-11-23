@@ -1797,7 +1797,7 @@ async function executeAndSubmit(
   // Retain what the seller agreed to before running the work. This survives
   // submission, settlement, and removal of the public job-spec account.
   const payload = JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
-  const request = [payload.instructions, payload.details, payload.summary].find((value) => typeof value === "string");
+  const request = [payload.instructions, payload.fullDescription, payload.details, payload.shortDescription, payload.summary].find((value) => typeof value === "string");
   const criteria = payload.acceptance ?? payload.acceptanceCriteria;
   const evidenceState = loadState(ctx.stateDir);
   if (evidenceState.openClaim?.task === task) {

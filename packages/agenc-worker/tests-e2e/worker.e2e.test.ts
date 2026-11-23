@@ -32,7 +32,7 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "../src/runtime.js";
-import { hexToBytes, loadState } from "../src/state.js";
+import { hexToBytes, loadState, readJobEvidence } from "../src/state.js";
 import { sha256, sha256Hex } from "../src/result.js";
 import { DEFAULT_MAX_EXECUTOR_PROMPT_BYTES } from "../src/executor.js";
 import {
@@ -75,7 +75,9 @@ function jobSpecDocument(payload: Record<string, unknown>): {
 
 const SPEC = jobSpecDocument({
   title: "haiku",
-  summary: "write a haiku about solana on stdout",
+  shortDescription: "write a haiku",
+  fullDescription: "write a haiku about solana on stdout",
+  acceptanceCriteria: ["Use three lines."],
 });
 
 /**
@@ -243,6 +245,9 @@ describe("e2e: one worker tick against the real program", () => {
     // Worker agent was registered on-chain by ensureRegistered.
     const state = loadState(stateDir);
     expect(state.agentIdHex).not.toBeNull();
+    expect(readJobEvidence(stateDir, state.submissions.find(entry => entry.task === task)!)).toEqual({
+      request: "write a haiku about solana on stdout", acceptance: ["Use three lines."],
+    });
     const [workerAgent] = await findAgentPda({
       agentId: hexToBytes(state.agentIdHex!),
     });
