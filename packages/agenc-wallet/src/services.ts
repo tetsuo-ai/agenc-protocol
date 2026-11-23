@@ -1,3 +1,4 @@
+import { briefDeliverable as jobDeliverable, parseJobBrief } from "@tetsuo-ai/agenc-worker";
 import type { JobTerms } from "./client/types.js";
 // Everything the wallet needs from OUTSIDE the chain, behind one interface:
 // the catalog of services, moderation attestations, job-spec hosting and
@@ -939,9 +940,13 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       );
       if (input.terms) {
         const spec = published.payload;
-        const description = spec.fullDescription || spec.shortDescription;
+        let brief;
+        try { brief = parseJobBrief(spec); }
+        catch (cause) { throw new WalletError("NOT_AVAILABLE", "The published brief conflicts with the quote.", { cause }); }
+        const description = brief.request;
         if (spec.title !== jobTitle(input) || description !== input.request ||
-            JSON.stringify(spec.acceptanceCriteria ?? []) !== JSON.stringify(input.acceptance) ||
+            spec.shortDescription !== input.request.slice(0, JOB_SUMMARY_MAX) ||
+            JSON.stringify(brief.acceptance) !== JSON.stringify(input.acceptance) ||
             JSON.stringify(spec.deliverables) !== JSON.stringify([jobDeliverable(input.terms)])) {
           throw new WalletError("NOT_AVAILABLE", "The published brief differs from the quote. Request a new quote.");
         }
@@ -1124,20 +1129,6 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       return { url: artifactUploadUrl, fetch: upload };
     },
   });
-}
-
-/** What every job asks the provider to hand in. */
-const JOB_DELIVERABLE =
-  "Put the complete result in your submission. The buyer reads exactly what you submit.";
-function jobDeliverable(terms?: JobTerms): string {
-  if (!terms) return JOB_DELIVERABLE;
-  const eligibility = terms.eligibility
-    ? ` Workers need reputation of at least ${terms.eligibility.minReputation} and capability mask ${terms.eligibility.requiredCapabilities}.`
-    : "";
-  if (terms.contest) {
-    return `${JOB_DELIVERABLE} Up to ${terms.contest.maxEntries} simultaneous entries. Deliver by ${new Date(terms.deadline * 1000).toISOString()}. Entry deposit ${terms.contest.entryDepositLamports} lamports, returned on settlement. A no-show forfeits it. Review setting ${terms.reviewWindowSecs} seconds. The owner can choose one winner before ${new Date(terms.contest.releaseAt * 1000).toISOString()}. After that, remaining submitters share the prize.${eligibility}`;
-  }
-  return `${JOB_DELIVERABLE} Deliver by ${new Date(terms.deadline * 1000).toISOString()}. The buyer has ${terms.reviewWindowSecs} seconds to review the submission.${eligibility}`;
 }
 
 /** The marketplace keeps this much of a request as its summary; the rest goes in the details. */

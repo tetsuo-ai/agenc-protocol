@@ -1,3 +1,4 @@
+import { briefDeliverable } from "../src/job-brief.js";
 // REAL on-chain worker loop against the compiled agenc-coordination program
 // (litesvm): a creator registers + creates + activates a CreatorReview task
 // (driven through the SDK facade, mirroring the SDK's client.e2e suite), then
@@ -73,11 +74,13 @@ function jobSpecDocument(payload: Record<string, unknown>): {
   };
 }
 
+const agreed = { deadline: 1_800_000_123, reviewWindowSecs: 1, listingDurationSecs: 3600, eligibility: null };
 const SPEC = jobSpecDocument({
   title: "haiku",
   shortDescription: "write a haiku",
   fullDescription: "write a haiku about solana on stdout",
   acceptanceCriteria: ["Use three lines."],
+  deliverables: [briefDeliverable(agreed)],
 });
 
 /**
@@ -247,6 +250,7 @@ describe("e2e: one worker tick against the real program", () => {
     expect(state.agentIdHex).not.toBeNull();
     expect(readJobEvidence(stateDir, state.submissions.find(entry => entry.task === task)!)).toEqual({
       request: "write a haiku about solana on stdout", acceptance: ["Use three lines."],
+      terms: agreed, marketplaceDeadline: Number(getTaskDecoder().decode(accountData(svm, task)!).deadline),
     });
     const [workerAgent] = await findAgentPda({
       agentId: hexToBytes(state.agentIdHex!),

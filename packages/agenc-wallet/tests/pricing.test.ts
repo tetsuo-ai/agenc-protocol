@@ -3,6 +3,8 @@ import {
   centsToLamports,
   decodePythPrice,
   lamportsToCents,
+  pythPrice,
+  PYTH_RECEIVER_PROGRAM,
   PYTH_SOL_USD_FEED_ID,
 } from "../src/pricing.js";
 
@@ -21,6 +23,18 @@ describe("the on-chain price", () => {
       nowSecs: PUBLISHED + 30,
     });
     expect(price).toBeCloseTo(71.64297517, 6);
+  });
+
+  it("bypasses the display cache when a quote needs a fresh price", async () => {
+    const account = { owner: PYTH_RECEIVER_PROGRAM, data: ACCOUNT, lamports: 1n };
+    let raw: typeof account | null = account;
+    const source = pythPrice({ readRawAccount: async () => raw }, { now: () => PUBLISHED * 1000 });
+    expect(await source.solUsd()).toBeGreaterThan(0);
+    raw = null;
+    expect(await source.solUsd()).toBeGreaterThan(0);
+    expect(await source.solUsd({ fresh: true })).toBeNull();
+    raw = account;
+    expect(await source.solUsd({ fresh: true })).toBeGreaterThan(0);
   });
 
   it("refuses a stale price", () => {

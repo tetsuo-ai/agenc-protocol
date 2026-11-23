@@ -17,7 +17,7 @@ describe("asking for changes", () => {
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
@@ -53,7 +53,7 @@ describe("asking for changes", () => {
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });

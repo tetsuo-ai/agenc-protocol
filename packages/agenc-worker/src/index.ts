@@ -168,3 +168,5 @@ export {
   parseSolanaKeypairJson,
   WalletFileError,
 } from "./wallet.js";
+
+export { parseJobBrief, briefDeliverable, type BriefTerms } from "./job-brief.js";

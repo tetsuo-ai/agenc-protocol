@@ -1,3 +1,4 @@
+import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
 // every job. It accepts plain requests ("hire this", "approve that"), decides
 // whether the agent's own allowance covers them or a person must say yes,
@@ -25,8 +26,9 @@ import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
 import { identifyEntry, entrantCosts, cancelUnsubmittedContest, archiveContestEntries, contestPostCosts, liveContestEntries, quoteContestAction, sendContestAction, sendContest, contestUnavailable } from "./contest.js";
 import type { ContestAction } from "./client/types.js";
-import { jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
-import { buildJobQuote, checkPriceLimit, jobCosts, JOB_TRANSACTION_FEES_LAMPORTS } from "./job-quote.js";
+import { ceilingLamports, jobNetworkFees, microcents, remainingJobMicrocents, reserveJobSpend, type JobDeposits } from "./job-money.js";
+import { checkedAcceptance, jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
+import { buildJobQuote, checkPriceLimit, jobCosts } from "./job-quote.js";
 import type { JobTerms } from "./client/types.js";
 import { WALLET_CAPABILITIES } from "./client/types.js";
 import type {
@@ -451,21 +453,6 @@ function hireFailureText(
   };
 }
 
-/** Checks a delivery has to pass, as a buyer wrote them: at most 8 lines of 300 characters. */
-function checkedAcceptance(list: readonly string[] | undefined): string[] {
-  if (list !== undefined && !Array.isArray(list)) throw new WalletError("BAD_REQUEST", "Provide the checks as a list.");
-  const acceptance = (list ?? []).map((item) => {
-    if (typeof item !== "string" || item.trim().length > 300) throw new WalletError("BAD_REQUEST", "Use up to 300 characters per check.");
-    const line = tidyText(item, 300);
-    if (line === null) throw new WalletError("BAD_REQUEST", "A check cannot be empty.");
-    return line;
-  });
-  if (acceptance.length > 8) {
-    throw new WalletError("BAD_REQUEST", "Use at most 8 checks.");
-  }
-  return acceptance;
-}
-
 /**
  * A posted request's title: its first sentence, kept short and without the
  * mark that ends it, so it reads inside another sentence ("Paid for ...").
@@ -773,8 +760,8 @@ export class AgencWallet {
   // ------------------------------------------------------------- prices
 
   /** A fresh dollars-per-SOL, or null. Remembers the last good value. */
-  async #freshRate(): Promise<number | null> {
-    const raw = await listingRequest(() => this.#config.prices.solUsd());
+  async #freshRate(fresh = false): Promise<number | null> {
+    const raw = await listingRequest(() => this.#config.prices.solUsd({ fresh }));
     const value = raw !== null && Number.isFinite(raw) && raw > 0 ? raw : null;
     if (value !== null) {
       const previous = this.#store.state.lastSolUsd;
@@ -1019,7 +1006,7 @@ export class AgencWallet {
       id: agent.id,
       name: agent.name,
       scope: agent.scope ?? null,
-      budgetCents: agent.policy.refill.enabled ? agent.policy.refill.perDayCents : 0,
+      budgetCents: agent.policy.refill.perDayCents,
       address: agent.address,
       balance: money(balance ?? 0n, rate),
       balanceKnown: balance !== null,
@@ -1107,7 +1094,7 @@ export class AgencWallet {
   }
 
   /** What posting a request from the main balance costs on top of its reward, when read. */
-  #postCostCache: { at: number; total: bigint; kept: bigint } | null = null;
+  #postCostCache: (JobDeposits & { at: number }) | null = null;
   #postCostReading: Promise<void> | null = null;
 
   /**
@@ -1139,7 +1126,7 @@ export class AgencWallet {
     // neither, since it is never spent.
     const cost = jobCosts(cached);
     return {
-      kept: money(cost.fees, rate),
+      kept: money(cost.fees - cached.cancellationRent, rate),
       setAside: money(cost.returned, rate),
     };
   }
@@ -1335,6 +1322,7 @@ export class AgencWallet {
         spentLamports: "0",
         earnedLamports: "0",
         refills: [],
+        jobSpends: [],
         earn: { enabled: false, minPayCents: 0, jobsDone: 0, lastError: null, offer: null },
       };
     });
@@ -1356,9 +1344,7 @@ export class AgencWallet {
   async setPolicy(agentId: string, policy: AgentPolicy): Promise<AgentView> {
     const clean = assertPolicy(policy);
     this.#agentRecord(agentId);
-    this.#store.update((draft) => {
-      draft.agents[agentId]!.policy = clean;
-    });
+    await this.#lock(`wallet:${agentId}`, async () => this.#store.update(draft => { draft.agents[agentId]!.policy = clean; }));
     this.#emit({ type: "overview" });
     return this.#oneAgentView(agentId);
   }
@@ -1376,9 +1362,7 @@ export class AgencWallet {
       refill: { enabled: perDayCents > 0, topUpToCents: perDayCents, perDayCents },
     });
     this.#agentRecord(agentId);
-    this.#store.update((draft) => {
-      draft.agents[agentId]!.policy = budget;
-    });
+    await this.#lock(`wallet:${agentId}`, async () => this.#store.update(draft => { draft.agents[agentId]!.policy = budget; }));
     // Hand it over now, not at the next housekeeping pass.
     await this.#refill().catch((error) => {
       this.#log(`refill: ${describeError(error)}`);
@@ -1659,6 +1643,7 @@ export class AgencWallet {
       outputs: row.outputs,
       terms: row.terms,
       details: row.details,
+      ...(row.specHashHex && { specHashHex: row.specHashHex }),
       price: money(row.priceLamports, rate),
       marketFee:
         feeBps === null
@@ -1688,7 +1673,7 @@ export class AgencWallet {
       this.#chain.getMinimumBalanceForRentExemption(getTaskMarkerSize()),
       this.#displayRate(),
     ]);
-    return money(marker + JOB_TRANSACTION_FEES_LAMPORTS, rate);
+    return money(marker + jobNetworkFees(this.#chain.transferFeeLamports), rate);
   }
 
   /**
@@ -1722,7 +1707,7 @@ export class AgencWallet {
           "Dollar prices are not available right now. Try again in a moment.",
         );
       }
-      maxLamports = centsToLamports(params.maxPriceCents, rate);
+      maxLamports = ceilingLamports(params.maxPriceCents, rate);
     }
     const matched = rows
       .filter((row) => maxLamports === null || row.priceLamports <= maxLamports)
@@ -1767,7 +1752,10 @@ export class AgencWallet {
         (a.row.priceLamports < b.row.priceLamports ? -1 : a.row.priceLamports > b.row.priceLamports ? 1 : 0),
     );
     return {
-      services: scored.slice(offset, offset + limit).map((entry) => this.#serviceView(entry.row, context)),
+      services: scored.slice(offset, offset + limit).map(({ row }) => ({
+        ...this.#serviceView(row, { ...context, rate }),
+        ...(rate !== null && { maxPriceCents: params.maxPriceCents ?? Number(microcents(row.priceLamports, rate)) / 1_000_000 }),
+      })),
       total: scored.length,
     };
   }
@@ -1824,6 +1812,8 @@ export class AgencWallet {
     listing: string;
     request: string;
     maxPriceCents?: number;
+    expectedPriceLamports?: string;
+    expectedSpecHash?: string;
     acceptance?: string[];
     idempotencyKey?: string;
   }, quoteOnly = false): Promise<{ job: JobView; approval: ApprovalView | null }> {
@@ -1847,11 +1837,15 @@ export class AgencWallet {
       throw new WalletError("NOT_ALLOWED", "An agent cannot hire its own service.");
     }
     const terms = await readHireableListing(this.#chain, listing);
-    const rate = await this.#freshRate();
+    const rate = await this.#freshRate(true);
     checkPriceLimit(terms.priceLamports, params.maxPriceCents, rate);
-    if (!quoteOnly) await this.#ensureListingGate(terms);
+    if ((params.expectedPriceLamports !== undefined && params.expectedPriceLamports !== terms.priceLamports.toString()) ||
+        (params.expectedSpecHash !== undefined && params.expectedSpecHash !== values.bytesToHex(terms.specHash))) {
+      throw new WalletError("PRICE_CHANGED", "The service changed. Refresh its details and request a new quote.");
+    }
 
-    const duration = terms.deliverySecs ?? Number((await readProtocolConfig(this.#chain)).maxClaimDuration);
+    const duration = terms.deliverySecs;
+    if (duration === null) throw new WalletError("NOT_AVAILABLE", "The seller must set a delivery period before this service can be quoted.");
     const jobTerms = resolveJobTerms(params, await this.#chain.clusterTime(), this.#config.reviewWindowSecs ?? DEFAULT_REVIEW_WINDOW_SECS, duration);
     const spec = buildJobSpec({ title: terms.name, request, acceptance, listing, terms: jobTerms });
     const hash = await jobSpecHash(spec);
@@ -1869,6 +1863,9 @@ export class AgencWallet {
     const jobId = newId("job");
     const catalog = await this.#services.listServices().catch(() => [] as CatalogRow[]);
     const catalogRow = catalog.find((row) => row.listing === listing);
+    if (catalogRow && catalogRow.specHashHex !== values.bytesToHex(terms.specHash)) {
+      throw new WalletError("PRICE_CHANGED", "The service description changed. Refresh its details and request a new quote.");
+    }
     const service: ServiceView = this.#serviceView(
       catalogRow ? { ...catalogRow, name: terms.name, priceLamports: terms.priceLamports } : {
         listing,
@@ -1936,15 +1933,6 @@ export class AgencWallet {
       error: null,
     };
 
-    if (autonomous) {
-      this.#store.update((draft) => {
-        draft.jobs[jobId] = { ...record, payer: "agent" };
-      });
-      await this.#advance(jobId);
-      this.#emit({ type: "job", jobId });
-      return { job: await this.#jobView(this.#jobRecord(jobId), false), approval: null };
-    }
-
     return this.#queueJob(record, covered ? "agent" : "main", service, rate, quoteOnly);
   }
 
@@ -1960,7 +1948,7 @@ export class AgencWallet {
     return costs;
   }
 
-  async #queueJob(record: JobRecord, payer: "main" | "agent", service: ServiceView | null, rate: number | null, panel: boolean) {
+  async #queueJob(record: JobRecord, payer: "main" | "agent", service: ServiceView | null, rate: number | null, panel: boolean, replaces?: string) {
     const address = payer === "main" ? this.mainAddress : this.#agentRecord(record.agentId).address as Address;
     const [deposits, { protocolFeeBps }, chainNow] = await Promise.all([
       this.#jobDeposits(record, address),
@@ -1979,6 +1967,21 @@ export class AgencWallet {
       approvalId, payer, service, deposits, protocolFeeBps, rate, now, expiresAt,
     });
     if (record.terms.contest) Object.assign(approval, await entrantCosts(this.#chain));
+    if (job.phase === "cleared" && rate !== null) {
+      const allowed = await this.#lock(this.#payerLock(job), async () => this.#store.update(draft => {
+        const charge = microcents(BigInt(job.priceLamports) + jobCosts(deposits).extra, rate);
+        if (!reserveJobSpend(draft.agents[job.agentId]!, job.id, charge, microcents(BigInt(job.priceLamports), rate), now, false)) return false;
+        draft.jobs[job.id] = job;
+        draft.approvals[approvalId] = { ...approval, status: "approved" };
+        return true;
+      }));
+      if (allowed) {
+        await this.#advance(job.id);
+        const pending = this.#store.state.approvals[approvalId]!;
+        return { job: await this.#jobView(this.#jobRecord(job.id), false), approval: pending.status === "pending" ? approvalView(pending, name, rate) : null };
+      }
+      job.phase = "needs_approval";
+    }
     if (panel) {
       // Drafts shown while typing cannot appear as jobs or spend. A restart invalidates them.
       for (const [id, draft] of this.#panelQuotes) {
@@ -1990,6 +1993,10 @@ export class AgencWallet {
     } else {
       this.#store.update(draft => {
         draft.jobs[job.id] = job;
+        if (replaces) {
+          if (draft.approvals[replaces]?.status !== "pending") throw new WalletError("NOT_AVAILABLE", "The original quote expired.");
+          draft.approvals[replaces]!.status = "expired";
+        }
         draft.approvals[approvalId] = approval;
       });
       this.#emit({ type: "approval", approvalId });
@@ -2010,29 +2017,41 @@ export class AgencWallet {
     agentId: string,
     key: string | null,
     kind: "hire" | "request",
-    fingerprint: string,
+    fingerprint?: string,
   ): Promise<{ job: JobView; approval: ApprovalView | null } | null> {
     if (key === null) return null;
     const panel = Array.from(this.#panelQuotes.values()).find(({ job }) => job.agentId === agentId && job.idempotencyKey === key && job.kind === kind);
     if (panel && panel.approval.expiresAt > this.#now()) {
-      this.#checkFingerprint(panel.job.inputFingerprint, fingerprint);
+      if (fingerprint) this.#checkFingerprint(panel.job.inputFingerprint, fingerprint);
       const name = agentId === "" ? "You" : this.#agentRecord(agentId).name;
       return { job: await this.#jobView(panel.job, true), approval: approvalView(panel.approval, name, panel.approval.quoteRate ?? null) };
     }
     const existing = Object.values(this.#store.state.jobs).find(
       (job) => job.agentId === agentId && job.idempotencyKey === key && (job.kind ?? "hire") === kind,
-    );
+    ) ?? this.#store.state.callReceipts?.[JSON.stringify([agentId, kind, key])];
     if (existing === undefined) return null;
-    this.#checkFingerprint(existing.inputFingerprint, fingerprint);
+    if (fingerprint) this.#checkFingerprint(existing.inputFingerprint, fingerprint);
     const approval = Object.values(this.#store.state.approvals).find(
       (entry) => entry.jobId === existing.id && entry.status === "pending",
     );
+    // An owner re-entering the same panel request joins the original decision,
+    // including one still publishing its brief.
+    if (existing.approvalId && agentId === "" && this.#locks.has(`decision:${existing.approvalId}`)) {
+      await this.#locks.get(`decision:${existing.approvalId}`);
+      return { job: await this.#jobView(this.#jobRecord(existing.id), true), approval: null };
+    }
     const rate = await this.#displayRate();
     const name = agentId === "" ? "You" : this.#store.state.agents[agentId]?.name ?? "An agent";
     return {
       job: await this.#jobView(existing, agentId === ""),
       approval: approval === undefined ? null : approvalView(approval, name, rate),
     };
+  }
+
+  async callOutcome(agentId: string, kind: "hire" | "request", key: string) {
+    const result = await this.#sameCall(agentId, key.trim(), kind);
+    if (!result) throw new WalletError("NOT_FOUND", "There is no saved outcome for this call.");
+    return result;
   }
 
   // --------------------------------------------------------------- post
@@ -2054,9 +2073,10 @@ export class AgencWallet {
     if (typeof params.reward !== "object" || params.reward === null) {
       throw new WalletError("BAD_REQUEST", "Say what the request pays.");
     }
-    const rate = await this.#freshRate();
+    const rate = await this.#freshRate(true);
     if (terms.contest && rate === null) throw new WalletError("NETWORK", "Dollar prices are unavailable. Refresh the contest quote.");
-    const rewardLamports = await this.#toLamports(params.reward, rate);
+    const rewardLamports = "usdCents" in params.reward && rate !== null
+      ? ceilingLamports(params.reward.usdCents, rate) : await this.#toLamports(params.reward, rate);
     if (rewardLamports < MIN_OFFER_PRICE_LAMPORTS) {
       throw new WalletError("BAD_REQUEST", "That reward is too small to post.");
     }
@@ -2173,30 +2193,13 @@ export class AgencWallet {
       autonomous ? "agent" : null,
     );
     record.inputFingerprint = fingerprint;
-    if (autonomous) {
-      this.#store.update((draft) => {
-        draft.jobs[record.id] = record;
-      });
-      await this.#advance(record.id);
-      this.#emit({ type: "job", jobId: record.id });
-      return { job: await this.#jobView(this.#jobRecord(record.id), false), approval: null };
-    }
+    if ("usdCents" in params.reward) record.maxPriceCents = params.reward.usdCents;
     return this.#queueJob(record, covered ? "agent" : "main", null, rate, false);
   }
 
-  /**
-   * The person posts a request from the main balance. Asking is the yes:
-   * what it costs was on the screen (`overview.postCost`), so nothing waits
-   * for an approval. Owner only.
-   */
-  async postFromBalance(params: TermsInput & {
-    request: string;
-    reward: AmountInput;
-    deadlineDays?: number;
-    acceptance?: string[];
-    idempotencyKey?: string;
-  }): Promise<JobView> {
-    return (await this.#balanceRequest(params, false)).job;
+  /** Legacy direct creation is refused even for an owner connection. */
+  async postFromBalance(_params: TermsInput & { request: string; reward: AmountInput; acceptance?: string[]; idempotencyKey?: string }): Promise<JobView> {
+    throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before posting.");
   }
 
   async quotePost(params: Parameters<AgencWallet["postFromBalance"]>[0]) {
@@ -2226,16 +2229,10 @@ export class AgencWallet {
         `There is not enough in your balance. This needs ${formatMoney(money(need, rate))} and you have ${formatMoney(money(balance, rate))}.`,
       );
     }
-    const record = await this.#requestRecord("", key, terms, quoteOnly ? "needs_approval" : "cleared", "main");
+    const record = await this.#requestRecord("", key, terms, "needs_approval", "main");
     record.inputFingerprint = fingerprint;
-    if (quoteOnly) return this.#queueJob(record, "main", null, terms.rate, true);
-    this.#store.update((draft) => {
-      draft.jobs[record.id] = record;
-    });
-    this.#emit({ type: "overview" });
-    await this.#advance(record.id);
-    this.#emit({ type: "job", jobId: record.id });
-    return { job: await this.#jobView(this.#jobRecord(record.id), true), approval: null };
+    if ("usdCents" in params.reward) record.maxPriceCents = params.reward.usdCents;
+    return this.#queueJob(record, "main", null, terms.rate, true);
   }
 
   /**
@@ -2287,6 +2284,65 @@ export class AgencWallet {
 
   // ---------------------------------------------------------- approvals
 
+  async approvalPage(after?: string) {
+    // A stable compound cursor survives another approval leaving the queue.
+    const cursor = (a: ApprovalRecord) => String(a.createdAt).padStart(16, "0") + ":" + a.id;
+    const ordered = Object.values(this.#store.state.approvals)
+      .filter(a => a.status === "pending" && (!after || cursor(a) > after))
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+    const rows = ordered.slice(0, 48);
+    return { entries: rows.map(({ id, jobId }) => ({ id, jobId })), next: ordered.length > rows.length ? cursor(rows.at(-1)!) : null };
+  }
+
+  async getApproval(id: string) {
+    const entry = this.#panelQuotes.get(id)?.approval ?? this.#store.state.approvals[id];
+    if (!entry) throw new WalletError("NOT_FOUND", "That quote is no longer available.");
+    const name = entry.agentId === "" ? "You" : this.#store.state.agents[entry.agentId]?.name ?? "An agent";
+    return { approval: approvalView(entry, name, entry.quoteRate ?? null), status: entry.status };
+  }
+
+  async approvalListPage(after?: string) {
+    const page = await this.approvalPage(after);
+    const approvals: ApprovalView[] = [];
+    let bytes = 0;
+    for (const { id } of page.entries) {
+      const { approval } = await this.getApproval(id);
+      bytes += Buffer.byteLength(JSON.stringify(approval)) + 1;
+      if (bytes > 512 * 1024 && approvals.length) {
+        const last = approvals.at(-1)!;
+        return { approvals, next: String(last.createdAt).padStart(16, "0") + ":" + last.id };
+      }
+      approvals.push(approval);
+    }
+    return { approvals, next: page.next };
+  }
+
+  async approvalOutcome(id: string) {
+    const panel = this.#panelQuotes.get(id);
+    const entry = panel?.approval ?? this.#store.state.approvals[id];
+    if (!entry) {
+      const receipt = Object.values(this.#store.state.callReceipts ?? {}).find(job => job.approvalId === id);
+      if (receipt) return { status: receipt.phase === "declined" ? "declined" as const : "approved" as const, job: await this.#jobView(receipt, true) };
+      throw new WalletError("NOT_FOUND", "That quote is no longer available.");
+    }
+    const { status, approval } = await this.getApproval(id);
+    const job = panel?.job ?? this.#jobRecord(entry.jobId);
+    return { status, approval, job: await this.#jobView(job, true) };
+  }
+
+  async refreshApproval(id: string) {
+    return this.#lock(`decision:${id}`, async () => {
+      const entry = this.#store.state.approvals[id];
+      if (!entry || entry.status !== "pending") throw new WalletError("NOT_AVAILABLE", "That quote cannot be refreshed.");
+      const rate = await this.#freshRate(true);
+      if (rate === null) throw new WalletError("NETWORK", "Dollar prices are still unavailable.");
+      const old = this.#jobRecord(entry.jobId);
+      if (!old.payer) throw new WalletError("NOT_AVAILABLE", "Request a new quote.");
+      const result = await this.#queueJob(old, old.payer, entry.service, rate, false, id);
+      return { approval: result.approval! };
+    });
+  }
+
   async listApprovals(): Promise<ApprovalView[]> {
     const rate = await this.#displayRate();
     const state = this.#store.state;
@@ -2307,6 +2363,7 @@ export class AgencWallet {
     const panel = this.#panelQuotes.get(approvalId);
     const approval = panel?.approval ?? this.#store.state.approvals[approvalId];
     if (approval === undefined) throw new WalletError("NOT_FOUND", "That request is gone.");
+    if (approval.status === "expired" && approve) throw new WalletError("NOT_AVAILABLE", "The quote expired. Request a new quote.");
     if (approval.status !== "pending") {
       return this.#jobView(this.#jobRecord(approval.jobId), true);
     }
@@ -2369,6 +2426,7 @@ export class AgencWallet {
       const entry = draft.jobs[jobId];
       if (entry !== undefined && entry.phase === "needs_approval") {
         entry.phase = "cleared";
+        entry.ownerApproved = true;
         entry.payer = payer;
         entry.updatedAt = this.#now();
       }
@@ -2380,18 +2438,44 @@ export class AgencWallet {
     return this.#jobView(this.#jobRecord(jobId), true);
   }
 
-  async #checkJobQuote(job: JobRecord, deposits: { total: bigint; kept: bigint }) {
+  async #checkJobQuote(job: JobRecord, deposits: JobDeposits) {
     const quote = job.approvedCosts;
     if (job.terms && await this.#chain.clusterTime() >= job.terms.deadline) {
       throw new WalletError("NOT_AVAILABLE", "The delivery deadline has passed.");
     }
-    if (job.maxPriceCents !== undefined) checkPriceLimit(BigInt(job.priceLamports), job.maxPriceCents, await this.#freshRate());
-    if (!quote) return;
+    if (!quote?.networkFees || job.maxPriceCents === undefined) {
+      throw new WalletError("NOT_AVAILABLE", "Refresh the quote to get the current costs.");
+    }
     if (quote.expiresAt <= this.#now()) throw new WalletError("NOT_AVAILABLE", "This quote has expired.");
+    const rate = await this.#freshRate(true);
+    checkPriceLimit(BigInt(job.priceLamports), job.maxPriceCents, rate);
     const { protocolFeeBps } = await readProtocolConfig(this.#chain);
-    if (quote.protocolFeeBps !== protocolFeeBps || quote.total !== deposits.total.toString() || quote.kept !== deposits.kept.toString()) {
+    if (quote.networkFees !== deposits.networkFees.toString() || quote.cancellationRent !== deposits.cancellationRent.toString() || quote.protocolFeeBps !== protocolFeeBps || quote.total !== deposits.total.toString() || quote.kept !== deposits.kept.toString()) {
       throw new WalletError("PRICE_CHANGED", "The deposit or fees changed. Request a new quote.");
     }
+    return rate!;
+  }
+
+  /** Last check under the payer lock, before the write-ahead send marker. */
+  async #authorizeCreation(job: JobRecord, deposits: JobDeposits): Promise<boolean> {
+    const rate = await this.#checkJobQuote(job, deposits);
+    if (job.payer === "main") {
+      if (!job.ownerApproved) throw new WalletError("NOT_ALLOWED", "Approve this quote before funding it.");
+      return true;
+    }
+    const charge = microcents(BigInt(job.priceLamports) + jobCosts(deposits).extra, rate);
+    const approved = this.#store.update(draft => {
+      const agent = draft.agents[job.agentId]!;
+      if (reserveJobSpend(agent, job.id, charge, microcents(BigInt(job.priceLamports), rate), this.#now(), job.ownerApproved === true)) return true;
+      agent.jobSpends = agent.jobSpends?.filter(entry => entry.id !== job.id) ?? [];
+      draft.jobs[job.id]!.phase = "needs_approval";
+      const approval = job.approvalId && draft.approvals[job.approvalId];
+      if (!approval) throw new WalletError("NOT_ALLOWED", "Request a new quote.");
+      approval.status = "pending";
+      return false;
+    });
+    if (!approved) this.#emit({ type: "overview" });
+    return approved;
   }
 
   /** Resolve when an approval is answered or lapses, or after `timeoutMs`. */
@@ -2451,7 +2535,9 @@ export class AgencWallet {
   }
 
   #failJob(jobId: string, message: string): void {
-    this.#patchJob(jobId, (job) => {
+    this.#patchJob(jobId, (job, draft) => {
+      const agent = draft.agents[job.agentId];
+      if (agent?.jobSpends && job.hireAttemptAt === null) agent.jobSpends = agent.jobSpends.filter(entry => entry.id !== jobId);
       job.phase = "failed";
       job.error = message;
     });
@@ -2472,6 +2558,7 @@ export class AgencWallet {
           else if (before.phase === "done") await this.#stepTidy(before);
           else return;
         } catch (error) {
+          if (before.phase === "cleared" && error instanceof WalletError && error.code !== "NETWORK") this.#failJob(jobId, error.message);
           this.#log(`job ${jobId} ${before.phase}: ${describeError(error)}`);
           return;
         }
@@ -2481,8 +2568,16 @@ export class AgencWallet {
     });
   }
 
+  async #checkBeforePublish(job: JobRecord) {
+    if (!job.approvedCosts?.networkFees || job.approvedCosts.expiresAt <= this.#now() ||
+        !job.terms || job.terms.deadline <= await this.#chain.clusterTime()) {
+      throw new WalletError("NOT_AVAILABLE", "This quote has expired. Request a new quote.");
+    }
+  }
+
   /** cleared -> hiring: fix the payer and the task address, re-check terms. */
   async #stepClear(job: JobRecord): Promise<void> {
+    await this.#checkBeforePublish(job);
     if (isRequest(job)) {
       await this.#stepClearRequest(job);
       return;
@@ -2509,7 +2604,11 @@ export class AgencWallet {
       );
       return;
     }
+    if (terms.deliverySecs === null || terms.deliverySecs !== job.terms?.listingDurationSecs) {
+      throw new WalletError("PRICE_CHANGED", "The service delivery period changed. Request a new quote.");
+    }
     await this.#ensureListingGate(terms);
+    await this.#checkBeforePublish(job);
     // The request is published now: after the person's OK, before any money
     // moves. The hire commits to the hash of exactly what was published.
     let published: PublishedJob;
@@ -2546,6 +2645,7 @@ export class AgencWallet {
    */
   async #stepClearRequest(job: JobRecord): Promise<void> {
     const payer = await this.#payerSigner(job);
+    await this.#checkBeforePublish(job);
     let published: PublishedJob;
     try {
       published = await this.#services.publishJobSpec({
@@ -2684,7 +2784,7 @@ export class AgencWallet {
         return;
       }
       try {
-        await this.#checkJobQuote(job, deposits);
+        if (!await this.#authorizeCreation(job, deposits)) return;
       } catch (error) {
         if (!(error instanceof WalletError) || error.code === "NETWORK") throw error;
         this.#failJob(job.id, error.message);
@@ -2751,7 +2851,7 @@ export class AgencWallet {
         return;
       }
       try {
-        await this.#checkJobQuote(job, deposits);
+        if (!await this.#authorizeCreation(job, deposits)) return;
       } catch (error) {
         if (!(error instanceof WalletError) || error.code === "NETWORK") throw error;
         this.#failJob(job.id, error.message);
@@ -2929,6 +3029,14 @@ export class AgencWallet {
    * then says how much to add, and the refund is tried again on later looks.
    */
   async #refundBlocked(job: JobRecord, payer: Address): Promise<boolean> {
+    const quote = job.approvedCosts;
+    const approvedRent = quote?.cancellationRent;
+    if (quote?.networkFees && approvedRent && (await creatorRecordCost(this.#chain, payer) > BigInt(approvedRent) ||
+        jobNetworkFees(this.#chain.transferFeeLamports) > BigInt(quote.networkFees))) {
+      const message = "Refund costs changed. Review the new cost before cancelling.";
+      if (job.error !== message) this.#patchJob(job.id, entry => { entry.error = message; });
+      return true;
+    }
     const missing = await cancelShortfall(this.#chain, payer);
     const blocked = missing > 0n ? missing.toString() : undefined;
     if (blocked !== job.refundBlockedLamports) {
@@ -3699,7 +3807,8 @@ export class AgencWallet {
             : entry.state === "paid"
               ? "completed"
               : "cancelled",
-      deadline: null,
+      deadline: entry.marketplaceDeadline ?? null,
+      ...(entry.terms && { terms: entry.terms }),
       reviewDeadlineAt:
         entry.state === "delivered"
           ? (this.#frozenWork.get(entry.task)?.reviewDeadlineAt ?? null)
@@ -3732,6 +3841,7 @@ export class AgencWallet {
       if (!job.request && cached?.request) {
         job.request = cached.request;
         job.acceptance = cached.acceptance ?? [];
+        if (cached.terms) job.terms = cached.terms;
       }
       if (!job.request && job.task !== null) {
         try {
@@ -3741,10 +3851,7 @@ export class AgencWallet {
             ...(this.#services.resolveAgencUri ? { resolveAgencUri: this.#services.resolveAgencUri } : {}),
           });
           const spec = JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
-          const request = [spec.instructions, spec.fullDescription, spec.details, spec.shortDescription, spec.summary].find((value) => typeof value === "string");
-          const acceptance = spec.acceptance ?? spec.acceptanceCriteria;
-          job.request = typeof request === "string" ? request : "";
-          job.acceptance = Array.isArray(acceptance) ? acceptance.filter((value): value is string => typeof value === "string") : [];
+          Object.assign(job, parseJobBrief(spec));
         } catch (error) {
           this.#log(`work request fetch: ${describeError(error)}`);
         }
@@ -3759,7 +3866,7 @@ export class AgencWallet {
         this.#store.update((draft) => {
           const record = (draft.workRecords ??= {})[job.id] ??= {};
           if (job.result !== null) record.result = job.result;
-          if (job.request) { record.request = job.request; record.acceptance = job.acceptance; }
+          if (job.request) { record.request = job.request; record.acceptance = job.acceptance; if (job.terms) record.terms = job.terms; }
         });
       }
     });
@@ -4288,7 +4395,9 @@ export class AgencWallet {
           ? (BigInt(entry.lamports) * rateMicros + 9_999_999n) / 10_000_000n
           : BigInt(Math.round(entry.usdCents * 1_000_000));
     }
-    const remaining = BigInt(rule.perDayCents) * 1_000_000n - usedMicros;
+    const transferRoom = BigInt(rule.perDayCents) * 1_000_000n - usedMicros;
+    const jobRoom = remainingJobMicrocents(agent, this.#now());
+    const remaining = transferRoom < jobRoom ? transferRoom : jobRoom;
     return remaining <= 0n ? 0n : (remaining * 10_000_000n) / rateMicros;
   }
 

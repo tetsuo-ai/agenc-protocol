@@ -1,3 +1,4 @@
+import { approvedPost } from "./harness.js";
 import { address } from "@solana/kit";
 import { setImmediate } from "node:timers/promises";
 import path from "node:path";
@@ -26,7 +27,7 @@ function call(operation: Operation, agentId: string, idempotencyKey = "same-requ
   const params = { agentId, request, idempotencyKey };
   if (operation === "hire") return world!.wallet.hire({ ...params, listing: world!.listing });
   if (operation === "post") return world!.wallet.post({ ...params, reward: { usdCents: 20 } });
-  return world!.wallet.postFromBalance({ ...params, reward: { usdCents: 20 } })
+  return approvedPost(world!.wallet, { ...params, reward: { usdCents: 20 } })
     .then((job) => ({ job, approval: null }));
 }
 
@@ -97,7 +98,7 @@ describe("single-flight job requests", () => {
     world.sandbox.fund(address(agent.address), 1_000_000_000n);
     await world.wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     let completed = 0;
     const run = () => call(operation, agent.id).then((value) => { completed += 1; return value; });
@@ -145,7 +146,7 @@ describe("single-flight job requests", () => {
     world.sandbox.fund(address(agent.address), 1_000_000_000n);
     await world.wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     const [first, second] = await Promise.all([call(operation, agent.id), call(operation, agent.id)]);
     expect(second).toEqual(first);
@@ -173,7 +174,7 @@ describe("single-flight job requests", () => {
     world.sandbox.fund(address(agent.address), 1_000_000_000n);
     await world.wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     prices.mockClear();
     fail = true;
@@ -208,12 +209,12 @@ describe("single-flight job requests", () => {
     world.sandbox.fund(address(agent.address), 1_000_000_000n);
     await world.wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
     });
     const socketPath = path.join(world.dataDir, "wallet.sock");
     const ownerToken = "single-flight-test-owner-credential";
     server = await serveWallet({ wallet: world.wallet, socketPath, ownerToken, agentExists: (id) => world!.wallet.hasAgent(id) });
-    clients.push(await connectWallet({ socketPath, token: ownerToken }), await connectWallet({ socketPath, token: ownerToken }));
+    clients.push(await connectWallet({ socketPath, token: ownerToken, actAs: agent.id }), await connectWallet({ socketPath, token: ownerToken, actAs: agent.id }));
     const params = { agentId: agent.id, request, idempotencyKey: "rpc-request" };
     const results = await Promise.all(clients.map((client) => operation === "hire"
       ? client.call("market.hire", { ...params, listing: world!.listing })

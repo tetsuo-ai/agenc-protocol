@@ -63,7 +63,7 @@ async function fundedAgent(current: World, cents = 300) {
   const agent = await current.wallet.createAgent("My assistant");
   await current.wallet.setPolicy(agent.id, {
     askAboveCents: 100,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
   });
   await current.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;

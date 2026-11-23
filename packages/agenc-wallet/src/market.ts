@@ -1,3 +1,4 @@
+import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // Chain-facing marketplace steps for the buyer side: read a listing, resolve
 // the moderation gate, hire, activate, review, cancel, tidy up.
 //
@@ -417,7 +418,7 @@ export async function findTaskGate(
 export function purchaseDeposits(
   chain: Chain,
   buyer: Address,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   return jobDeposits(chain, buyer, true);
 }
 
@@ -428,7 +429,7 @@ export function purchaseDeposits(
 export function requestDeposits(
   chain: Chain,
   creator: Address,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   return jobDeposits(chain, creator, false);
 }
 
@@ -436,7 +437,7 @@ async function jobDeposits(
   chain: Chain,
   payer: Address,
   hired: boolean,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
   const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent, markerRent] =
     await Promise.all([
@@ -468,11 +469,9 @@ async function jobDeposits(
     total += once;
     kept += once;
   }
-  // A paying wallet's first turn-down or cancel (a refund included) also
-  // starts its record of those, paid then, before the refund. That is not set
-  // aside here: it is shown on the job (`creatorRecordCost`), kept back when
-  // everything is taken out of the wallet, and asked for when it is missing.
-  return { total, kept };
+  const cancellationRent = await creatorRecordCost(chain, payer);
+  const networkFees = jobNetworkFees(chain.transferFeeLamports);
+  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent };
 }
 
 /**

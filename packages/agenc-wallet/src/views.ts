@@ -1,4 +1,5 @@
 // Turn the journal's records into what a person reads.
+import { fractionalQuoteUsd } from "./job-money.js";
 import { formatMoney, formatUsd, formatWait } from "./client/format.js";
 import type {
   ActivityView,
@@ -408,6 +409,11 @@ export function approvalView(
 ): ApprovalView {
   const kind = approval.kind ?? "hire";
   if (approval.quoteRate !== undefined) usdPerSol = approval.quoteRate;
+  const quotedMoney = (lamports: string | bigint): Money => {
+    const amount = money(lamports, usdPerSol);
+    const exact = usdPerSol === null ? undefined : fractionalQuoteUsd(BigInt(lamports), usdPerSol);
+    return exact === undefined ? amount : { ...amount, quotedUsd: exact };
+  };
   return {
     ...(approval.terms?.contest && { contestCosts: {
       entryRent: money(approval.entryRentLamports ?? "0", usdPerSol),
@@ -419,9 +425,12 @@ export function approvalView(
     ...(approval.terms && { terms: structuredClone(approval.terms), acceptance: [...(approval.acceptance ?? [])] }),
     ...(approval.protocolFeeBps !== undefined && { marketFee: {
       bps: approval.protocolFeeBps,
-      amount: money(BigInt(approval.priceLamports) * BigInt(approval.protocolFeeBps) / 10_000n, usdPerSol),
+      amount: quotedMoney(BigInt(approval.priceLamports) * BigInt(approval.protocolFeeBps) / 10_000n),
     } }),
     ...(approval.maxPriceCents !== undefined && { maxPriceCents: approval.maxPriceCents }),
+    ...(approval.networkFees !== undefined && { networkFees: quotedMoney(approval.networkFees) }),
+    ...(approval.retainedRent !== undefined && { retainedRent: quotedMoney(approval.retainedRent) }),
+    ...(approval.cancellationRent !== undefined && { cancellationRent: quotedMoney(approval.cancellationRent) }),
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,
@@ -430,12 +439,12 @@ export function approvalView(
     service:
       kind === "request" || approval.service === null ? null : savedService(approval.service, usdPerSol),
     request: approval.request,
-    refundableDeposit: money(BigInt(approval.depositsLamports) - BigInt(approval.keptLamports), usdPerSol),
-    total: money(BigInt(approval.priceLamports) + BigInt(approval.depositsLamports), usdPerSol),
-    price: money(approval.priceLamports, usdPerSol),
-    deposits: money(approval.depositsLamports, usdPerSol),
-    fees: money(BigInt(approval.keptLamports) - BigInt(approval.contestRegistration?.rent ?? 0) - BigInt(approval.contestRegistration?.stake ?? 0), usdPerSol),
-    fromMain: money(approval.fromMainLamports, usdPerSol),
+    refundableDeposit: quotedMoney(BigInt(approval.depositsLamports) - BigInt(approval.keptLamports)),
+    total: quotedMoney(BigInt(approval.priceLamports) + BigInt(approval.depositsLamports)),
+    price: quotedMoney(approval.priceLamports),
+    deposits: quotedMoney(approval.depositsLamports),
+    fees: quotedMoney(BigInt(approval.keptLamports) - BigInt(approval.contestRegistration?.rent ?? 0) - BigInt(approval.contestRegistration?.stake ?? 0)),
+    fromMain: quotedMoney(approval.fromMainLamports),
     createdAt: approval.createdAt,
     expiresAt: approval.expiresAt,
   };

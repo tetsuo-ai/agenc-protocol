@@ -45,7 +45,7 @@ export async function contestRegistration(chain: Chain, payer: Address, newId: s
 export async function contestPostCosts(chain: Chain, payer: Address, registrationId: string) {
   const [ordinary, registration] = await Promise.all([requestDeposits(chain, payer), contestRegistration(chain, payer, registrationId)]);
   const locked = BigInt(registration.rent) + BigInt(registration.stake);
-  return { total: ordinary.total + locked, kept: ordinary.kept + locked, registration };
+  return { ...ordinary, total: ordinary.total + locked, kept: ordinary.kept + locked, registration };
 }
 
 export async function entrantCosts(chain: Chain) {

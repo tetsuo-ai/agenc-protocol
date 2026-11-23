@@ -1,3 +1,4 @@
+import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // "Take jobs while idle": run the stock marketplace worker loop for an agent,
 // signing with that agent's own wallet.
 //
@@ -146,6 +147,8 @@ export interface EarnedJob {
   resultUri: string | null;
   request: string;
   acceptance: string[];
+  terms?: BriefTerms;
+  marketplaceDeadline?: number;
   createdAt: number;
   settlementSignature: string | null;
   /** What the job is called in its job spec: the buyer's words. */
@@ -437,6 +440,8 @@ export class EarnHost {
         resultUri: null,
         request: evidence?.request ?? "",
         acceptance: evidence?.acceptance ?? [],
+        ...(evidence?.terms && { terms: evidence.terms }),
+        ...(evidence?.marketplaceDeadline !== undefined && { marketplaceDeadline: evidence.marketplaceDeadline }),
         createdAt: Date.parse(claim.claimedAt) || 0,
         settlementSignature: null,
         title: claim.title ?? null,
@@ -464,6 +469,8 @@ export class EarnHost {
         resultUri: record.resultUri,
         request: evidence?.request ?? "",
         acceptance: evidence?.acceptance ?? [],
+        ...(evidence?.terms && { terms: evidence.terms }),
+        ...(evidence?.marketplaceDeadline !== undefined && { marketplaceDeadline: evidence.marketplaceDeadline }),
         createdAt: Date.parse(record.submittedAt) || 0,
         settlementSignature: record.settlementSignature ?? null,
         title: record.title ?? null,

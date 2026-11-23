@@ -81,6 +81,8 @@ export interface WalletMethods {
       request: string;
       /** Refuse if the service costs more than this. */
       maxPriceCents?: number;
+      expectedPriceLamports?: string;
+      expectedSpecHash?: string;
       /** Checks the delivery must pass, written for the provider to read. */
       acceptance?: string[];
       /** Exact delivery deadline, in Unix seconds. */
@@ -123,8 +125,7 @@ export interface WalletMethods {
     result: { job: JobView; approval: ApprovalView | null };
   };
   /**
-   * The person posts a request from the main balance. Owner only: asking is
-   * the yes. Interactive clients use wallet.quotePost and confirm its ID.
+   * Legacy owner method. Direct creation is refused. Use wallet.quotePost and confirm its ID.
    */
   "wallet.post": {
     params: {
@@ -153,7 +154,15 @@ export interface WalletMethods {
   "wallet.quoteHire": WalletMethods["market.hire"];
   "wallet.quotePost": { params: WalletMethods["wallet.post"]["params"]; result: WalletMethods["market.post"]["result"] };
 
-  "approvals.list": { params: Record<string, never>; result: { approvals: ApprovalView[] } };
+  "jobs.callOutcome": { params: { agentId: string; kind: "hire" | "request"; key: string }; result: WalletMethods["market.hire"]["result"] };
+  "approvals.page": {
+    params: { after?: string };
+    result: { entries: { id: string; jobId: string }[]; next: string | null };
+  };
+  "approvals.get": { params: { approvalId: string }; result: { approval: ApprovalView; status: "pending" | "approved" | "expired" | "declined" } };
+  "approvals.outcome": { params: { approvalId: string }; result: { job: JobView; status: "pending" | "approved" | "expired" | "declined"; approval?: ApprovalView } };
+  "approvals.refresh": { params: { approvalId: string }; result: { approval: ApprovalView } };
+  "approvals.list": { params: { after?: string }; result: { approvals: ApprovalView[]; next?: string | null } };
   "approvals.decide": {
     params: { approvalId: string; approve: boolean };
     result: { job: JobView };
@@ -291,6 +300,7 @@ export const AGENT_METHODS: readonly WalletMethod[] = [
   "market.post",
   "market.postContest",
   "approvals.wait",
+  "jobs.callOutcome",
   "jobs.list",
   "jobs.quoteContest",
   "jobs.get",

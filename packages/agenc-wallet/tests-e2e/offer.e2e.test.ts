@@ -25,7 +25,7 @@ const LINE_WRITER = {
   summary: "One friendly line about anything you name.",
   price: { usdCents: 30 },
 };
-const NO_REFILL = { enabled: false, topUpToCents: 0, perDayCents: 0 };
+const NO_REFILL = { enabled: false, topUpToCents: 0, perDayCents: 10_000 };
 
 let world: World | null = null;
 afterEach(async () => {

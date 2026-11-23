@@ -15,6 +15,8 @@ export type Lamports = string;
  * SOL price is available; show the SOL figure then.
  */
 export interface Money {
+  /** Exact dollars at the saved quote rate when the amount includes a fraction of a cent. */
+  quotedUsd?: string;
   lamports: Lamports;
   usdCents: number | null;
 }
@@ -185,7 +187,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "contests"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests"] as const);
 
 export interface WalletOverview {
   /**
@@ -194,6 +196,7 @@ export interface WalletOverview {
    *   the agent takes no new job. While its job is still in progress,
    *   `earn.state` is "finishing", never "off".
    * - "contests": contest posting, entry review and quoted prize release.
+   * - "job-spend-quotes": durable call outcomes, paged approvals and all-in daily limits.
    * - "job-terms": panel quotes and approvals bind the payer, costs and brief.
    * Clients may ignore this field and any capability they do not recognize.
    */
@@ -245,6 +248,8 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  maxPriceCents?: number;
+  specHashHex?: string;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;
@@ -537,6 +542,9 @@ export interface JobTerms {
 
 export interface ApprovalView {
   contestCosts?: { entryDeposit: Money; entryRent: Money; firstWorkerRecord: Money; registrationRent: Money; registrationStake: Money };
+  networkFees?: Money;
+  retainedRent?: Money;
+  cancellationRent?: Money;
   /** Maximum marketplace share at settlement, included in the price. */
   marketFee?: { bps: number; amount: Money };
   refundableDeposit?: Money;
