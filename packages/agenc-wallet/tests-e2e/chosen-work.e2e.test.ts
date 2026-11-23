@@ -5,7 +5,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { address } from "@solana/kit";
 import { loadState } from "@tetsuo-ai/agenc-worker";
-import { findAgentPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
+import { findAgentPda, findClaimPda, findTaskSubmissionPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, getTaskSubmissionDecoder, SubmissionStatus, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
 import type { WorkerQuote } from "../src/client/types.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
 import { CENT, eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
@@ -472,6 +472,18 @@ it("admits a second contest entrant after submission and names the treasury and 
   expect(entry.job).toMatchObject({ contest: true, selectionDeadline: entry.job.deadline + 172800, treasury: submission.job.treasury });
   await assertBalances(entry);
   await expect(wallet.quoteWork(other.id, task, "release")).rejects.toThrow();
+  expect(getTaskDecoder().decode((await sandbox.chain.readAccount(task))!).status).toBe(TaskStatus.PendingValidation);
+  await eventually(async () => (await wallet.openWork(other.id)).held?.canSubmit);
+  const second = await wallet.quoteWork(other.id, task, "submit");
+  expect(second.job.preview).toBe("Room output");
+  await assertBalances(second);
+  for (const workerId of [id, other.id]) {
+    const [bidder] = await findAgentPda({ agentId: values.hexToBytes(journal(workerId).agentIdHex!) });
+    const [claim] = await findClaimPda({ task, bidder });
+    const [submissionPda] = await findTaskSubmissionPda({ claim });
+    expect(getTaskSubmissionDecoder().decode((await sandbox.chain.readAccount(submissionPda))!))
+      .toMatchObject({ worker: bidder, claim, status: SubmissionStatus.Submitted });
+  }
 });
 
 it("pages a stable set of eligible addresses and reads an exact brief without holding the signing lane", async () => {

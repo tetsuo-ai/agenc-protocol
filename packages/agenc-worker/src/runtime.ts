@@ -2557,9 +2557,12 @@ export async function resumeOpenClaim(
   // A pending/terminal task with no readable canonical submission is an RPC
   // inconsistency, not permission to execute again. Retain the marker and wait
   // for a coherent read rather than risking duplicate work.
+  const otherContestEntry = marker.chosen && !submission && !claim.isCompleted && !claim.isValidated &&
+    decodedTask.taskType === TaskType.Competitive && (decodedTask.reserved[0] ?? 0) >= 1 &&
+    decodedTask.constraintHash.some(byte => byte !== 0);
   if (
     decodedTask.status !== TaskStatus.InProgress &&
-    !(revisionRound && decodedTask.status === TaskStatus.PendingValidation)
+    !((revisionRound || otherContestEntry) && decodedTask.status === TaskStatus.PendingValidation)
   ) {
     const reason = `task status ${decodedTask.status} is not executable but its canonical submission is unavailable`;
     ctx.log({ event: "task.submission-recovery-pending", task, reason });
