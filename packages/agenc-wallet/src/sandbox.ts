@@ -6,6 +6,9 @@
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
 import { mkdtempSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
+import lighthouseFixture from "../testing-assets/lighthouse.so.json";
+import { LIGHTHOUSE } from "./contest-assertions.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -65,6 +68,7 @@ import {
   transferInstruction,
   type Chain,
 } from "./chain.js";
+import { contestEvents } from "./contest-history.js";
 import { scopedSendTransport, transportSignal } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
@@ -289,6 +293,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     unixTimestamp: BigInt(Math.floor(Date.now() / 1000)),
   });
   const svm = market.svm;
+  svm.addProgram(LIGHTHOUSE, gunzipSync(Buffer.from(lighthouseFixture.gzipBase64, "base64")));
   // litesvm keeps one blockhash and refuses a byte-identical repeat, so the
   // second "give $5" would be dropped as a duplicate. Expiring the blockhash
   // after each send would fix that but break any sender who had already
@@ -401,6 +406,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
   };
   // LiteSVM history is disabled so identical sandbox transactions can be replayed.
+  const contestLogs = new Map<Address, Array<{ signature: string; logs: readonly string[]; changes: import("./contest-history.js").NativeChange[] }>>();
   const landedListingSends = new Set<string>();
   const base = market.transport;
   const transport: Transport = {
@@ -410,7 +416,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const signal = transportSignal();
       signal?.throwIfAborted();
       syncClock();
+      const keys = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes).staticAccounts;
+      const before = keys.map(key => BigInt(svm.getBalance(key) ?? 0n));
       const result = await base.sendAndConfirm(signedTx);
+      const changes = keys.flatMap((address, i) => {
+        const delta = BigInt(svm.getBalance(address) ?? 0n) - before[i]!;
+        return delta ? [{ address, lamports: delta.toString() }] : [];
+      });
       if (signal) landedListingSends.add(result.signature);
       try {
         const message = getCompiledTransactionMessageDecoder().decode(signedTx.messageBytes);
@@ -433,7 +445,17 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             settledLogs.set(settled.task, result.logs);
           }
         }
+        const recorded = new Set<Address>();
         for (const event of parseAgencCoordinationEvents(result.logs)) {
+          if (["TaskResultSubmitted", "GhostShareDistributed", "TaskResultRejected", "TaskResultAccepted"].includes(event.eventName) && "task" in event.data) {
+            const task = event.data.task as Address;
+            if (!recorded.has(task)) {
+              const log = contestLogs.get(task) ?? [];
+              log.push({ signature: result.signature, logs: result.logs, changes });
+              contestLogs.set(task, log);
+              recorded.add(task);
+            }
+          }
           if (event.eventName === "ServiceListingHired") hireLogs.set(event.data.task, result.logs);
         }
       } catch {
@@ -488,6 +510,11 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return Number(svm.getClock().unixTimestamp);
     },
     gpa,
+    contestHistory: async (task, since) => {
+      const log = contestLogs.get(task) ?? [];
+      const fresh = log.slice(log.findIndex(item => item.signature === since) + 1);
+      return { cursor: fresh.at(-1)?.signature ?? since, events: fresh.flatMap(item => contestEvents(task, item.logs, item.signature, item.changes)) };
+    },
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
     findSettledDelivery: async (task, creator) => {
       const worker = settledBy.get(task);

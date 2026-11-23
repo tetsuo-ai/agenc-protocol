@@ -231,7 +231,7 @@ describe("switching earning off while finishing work", () => {
     expect((await promptly(client.call("earn.set", { agentId: agent.id, enabled: false }))).earn)
       .toMatchObject({ enabled: false, state: "finishing" });
     const finishing = await promptly(client.call("overview", {}));
-    expect(finishing.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes"]);
+    expect(finishing.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes", "contests"]);
     expect(finishing.agents[0]!.earn)
       .toMatchObject({ enabled: false, state: "finishing" });
     await eventually(async () => (await Promise.all(observed)).includes("finishing"));
@@ -240,7 +240,7 @@ describe("switching earning off while finishing work", () => {
     await delivered(job.task);
     await eventually(async () => (await Promise.all(observed)).includes("off"));
     const finished = await client.call("overview", {});
-    expect(finished.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes"]);
+    expect(finished.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes", "contests"]);
     expect(finished.agents[0]!.earn).toMatchObject({ enabled: false, state: "off" });
   }, 60_000);
 

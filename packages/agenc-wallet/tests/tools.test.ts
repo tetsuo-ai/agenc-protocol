@@ -110,6 +110,7 @@ describe("market_post", () => {
     expect(post.inputSchema.required).toEqual(["request", "reward_usd"]);
     expect(Object.keys(post.inputSchema.properties as object).sort()).toEqual([
       "acceptance",
+      "contest_entries",
       "deadline",
       "deadline_days",
       "min_reputation",
@@ -125,6 +126,37 @@ describe("market_post", () => {
     expect(MARKET_TOOL_INSTRUCTIONS).toMatch(
       /The quote includes network fees, deposits and the cost of the payer's first cancellation record\./,
     );
+  });
+
+  it("reads the complete selected entry in chat and recovers a completed contest call without posting", async () => {
+    const entry = "a".repeat(64);
+    const content = "poem ".repeat(12000);
+    const { client, calls } = wallet({
+      "jobs.delivery": { result: { text: content, verified: true, files: [], hash: entry, uri: null } },
+      "jobs.callOutcome": { job: job(), approval: null },
+    });
+    const read = await runMarketTool(client, "agent_1", "market_status", { job_id: "job_1", entry_id: entry });
+    expect(read.delivery?.untrusted_content).toBe(content);
+    await runMarketTool(client, "agent_1", "market_post", { request: "A poem", reward_usd: 9, contest_entries: 3 },
+      { readOutcomeOnly: true, idempotencyKey: "contest-replay" });
+    expect(calls.map(([method]) => method)).toEqual(["jobs.delivery", "jobs.callOutcome"]);
+  });
+
+  it("posts a contest and drafts each settlement choice without owner authority", async () => {
+    const answer = { job: job(), approval: null };
+    const { client, calls } = wallet({ "market.postContest": answer, "jobs.quoteContest": answer });
+    const post = { request: "A poem", reward_usd: 9, contest_entries: 3 };
+    expect((await runMarketTool(client, "agent_1", "market_post", post)).ok).toBe(true);
+    for (const action of ["winner", "reject", "release"]) {
+      const review = { job_id: "job_1", action, entry_id: "e1", note: "Missing a line" };
+      expect((await runMarketTool(client, "agent_1", "market_review", review)).ok).toBe(true);
+    }
+    expect(calls).toEqual([
+      ["market.postContest", { request: "A poem", reward: { usdCents: 900 }, contestEntries: 3, agentId: "agent_1" }],
+      ["jobs.quoteContest", { jobId: "job_1", entryId: "e1", action: "winner" }],
+      ["jobs.quoteContest", { jobId: "job_1", entryId: "e1", action: "reject", reason: "Missing a line" }],
+      ["jobs.quoteContest", { jobId: "job_1", entryId: "e1", action: "release" }],
+    ]);
   });
 
   it("posts as the agent, in cents, and passes the call's key", async () => {

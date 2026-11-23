@@ -24,6 +24,7 @@ import {
   DEFAULT_ENDPOINT,
   hexToBytes,
   loadState,
+  saveState,
   readJobEvidence,
   readClaimAccountRentMinimums,
   readMinAgentStake,
@@ -252,6 +253,15 @@ export class EarnHost {
 
   stateDir(agentId: string): string {
     return path.join(this.#dataDir, agentId);
+  }
+
+  /** A first contest uses the same registration as the worker and its retirement flow. */
+  contestRegistrationId(agentId: string, proposedId: string, reserve = false): string {
+    const dir = this.stateDir(agentId);
+    const state = loadState(dir);
+    if (state.agentIdHex !== null) return state.agentIdHex;
+    if (reserve) saveState(dir, { ...state, agentIdHex: proposedId });
+    return proposedId;
   }
 
   state(agentId: string): { state: EarnState; lastError: string | null } {

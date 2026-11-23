@@ -1,3 +1,4 @@
+import { facade } from "@tetsuo-ai/marketplace-sdk";
 import { createHash } from "node:crypto";
 import type { AmountInput } from "./client/protocol.js";
 import type { JobTerms } from "./client/types.js";
@@ -21,6 +22,7 @@ export function checkedAcceptance(list: readonly string[] | undefined): string[]
 }
 
 export interface TermsInput {
+  contestEntries?: number;
   deadline?: number;
   deadlineDays?: number;
   reviewWindowSecs?: number;
@@ -56,6 +58,15 @@ export function resolveJobTerms(input: TermsInput, clock: number, defaultReview:
     }
     eligibility = { minReputation, requiredCapabilities };
   }
+  if (input.contestEntries !== undefined) {
+    if (listingDuration !== null || !Number.isInteger(input.contestEntries) || input.contestEntries < 2 || input.contestEntries > 4) {
+      throw new WalletError("BAD_REQUEST", "Choose 2 to 4 contest entry slots on a public post.");
+    }
+    return { deadline, reviewWindowSecs, eligibility, listingDurationSecs: null, contest: {
+      maxEntries: input.contestEntries, entryDepositLamports: facade.CONTEST_ENTRY_DEPOSIT_LAMPORTS.toString(),
+      releaseAt: deadline + Number(facade.CONTEST_SELECTION_WINDOW_SECS),
+    } };
+  }
   return { deadline, reviewWindowSecs, eligibility, listingDurationSecs: listingDuration };
 }
 
@@ -71,6 +82,7 @@ export function jobIdentity(input: TermsInput & { request: string; acceptance?: 
     quoteOnly, input.request.trim(), acceptanceFormat === "raw" ? input.acceptance ?? [] : checkedAcceptance(input.acceptance), input.listing, amount, input.maxPriceCents,
     input.deadline, input.deadline === undefined && !input.listing ? input.deadlineDays ?? 7 : input.deadlineDays,
     input.reviewWindowSecs, input.minReputation ?? 0, input.requiredCapabilities ?? "1",
+    ...(input.contestEntries === undefined ? [] : ["contest", input.contestEntries]),
     ...(input.expectedPriceLamports || input.expectedSpecHash ? [input.expectedPriceLamports, input.expectedSpecHash] : []),
   ])).digest("hex");
 }

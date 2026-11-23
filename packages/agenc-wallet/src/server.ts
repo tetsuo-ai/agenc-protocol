@@ -134,6 +134,10 @@ function handlers(wallet: AgencWallet): Handlers {
         agentId: session.agentId ?? text(params.agentId, "agent"),
       });
     },
+    "market.postContest": (params, session) => {
+      if (owner(session)) throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before posting.");
+      return wallet.post({ ...params, contestEntries: params.contestEntries ?? 0, agentId: session.agentId ?? text(params.agentId, "agent") });
+    },
     "market.post": (params, session) => {
       if (owner(session)) throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before posting.");
       return wallet.post({
@@ -162,11 +166,16 @@ function handlers(wallet: AgencWallet): Handlers {
         owner(session),
       ),
     }),
+    "jobs.contestPage": async (params, session) => wallet.contestPage(text(params.jobId, "job"), params.after, scope(session)),
+    "jobs.contestReceipts": async (params, session) => wallet.contestReceipts(text(params.jobId, "job"), params.after, scope(session)),
+    "jobs.contestQuote": async (params, session) => wallet.savedContestQuote(text(params.jobId, "job"), text(params.quoteId, "quote"), scope(session)),
+    "jobs.quoteContest": async (params, session) => ({ job: await wallet.quoteContest(text(params.jobId, "job"), params, scope(session)) }),
+    "jobs.decideContest": async params => ({ job: await wallet.decideContest(text(params.jobId, "job"), text(params.quoteId, "quote"), params.approve === true) }),
     "jobs.get": async (params, session) => ({
       job: await wallet.getJob(text(params.jobId, "job"), owner(session), scope(session)),
     }),
     "jobs.delivery": async (params, session) => ({
-      result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session)),
+      result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session), params.entryId),
     }),
     "jobs.file": async (params) => ({
       file: await wallet.jobFile(text(params.jobId, "job"), text(params.sha256, "file")),

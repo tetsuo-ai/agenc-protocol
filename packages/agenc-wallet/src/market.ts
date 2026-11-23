@@ -9,7 +9,7 @@ import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
 import { withListingOperation } from "./transport-scope.js";
-import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
+import { getAddressEncoder, type Address, type KeyPairSigner, type TransactionSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
@@ -27,6 +27,7 @@ import {
   findModerationAttestorPda,
   findModerationConfigPda,
   findProtocolConfigPda,
+  findTaskAttestorConfigPda, getTaskAttestorConfigDiscriminatorBytes,
   findTaskJobSpecPda,
   findTaskModerationPda,
   findTaskPda,
@@ -114,7 +115,7 @@ function startsWith(data: Uint8Array, prefix: ArrayLike<number>): boolean {
  * Read and decode one program account. Returns null when the account is
  * absent, owned by another program, closed (tombstoned) or of another type.
  */
-async function readProgramAccount<T>(
+export async function readProgramAccount<T>(
   chain: Chain,
   account: Address,
   discriminator: ArrayLike<number>,
@@ -506,7 +507,7 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
 }
 
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
-function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
+export function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
   return async (account) => {
     const info = await chain.readAccountInfo(account);
     return info === null ? null : { owner: info.owner, data: info.data };
@@ -636,6 +637,7 @@ export async function hireLanded(
 // door a wallet with no registered agent uses.
 
 export interface RequestIntent {
+  maxEntries?: number;
   minReputation: number;
   requiredCapabilities: bigint;
   taskId: Uint8Array;
@@ -688,7 +690,7 @@ export async function requestLanded(
   chain: Chain,
   creator: Address,
   task: Address,
-  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline">,
+  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline" | "maxEntries">,
 ): Promise<boolean> {
   const account = await readTask(chain, task);
   if (account === null) return false;
@@ -697,7 +699,8 @@ export async function requestLanded(
   };
   if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports ||
       account.minReputation !== intent.minReputation || account.requiredCapabilities !== intent.requiredCapabilities ||
-      account.deadline !== intent.deadline) mismatch();
+      account.deadline !== intent.deadline || account.maxWorkers !== (intent.maxEntries ?? 1) ||
+      Number(account.taskType) !== (intent.maxEntries === undefined ? 0 : 2)) mismatch();
   if (!bytesEqual(new Uint8Array(account.description), requestDescription(intent.jobSpecHash))) mismatch();
   if ((await readHireRecord(chain, task)) !== null) mismatch();
   return true;
@@ -968,10 +971,15 @@ export async function sendApproval(
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  approvedPayees?: Pick<Payees, "workerAuthority" | "treasury">,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
   const payees = await settlementPayees(chain, account, providerAgent);
+  if (approvedPayees && (payees.workerAuthority !== approvedPayees.workerAuthority || payees.treasury !== approvedPayees.treasury ||
+      payees.operator !== null || payees.referrer !== null)) {
+    throw new WalletError("PRICE_CHANGED", "The payout recipients changed. Review a new quote.");
+  }
   const [hireRecord] = await findHireRecordPda({ task });
   const [creatorCompletionBond] = await findCreatorCompletionBondPda({
     task,
@@ -1371,6 +1379,11 @@ export async function sendTidy(
   task: Address,
   providerAgent: Address | null,
 ): Promise<string | null> {
+  const instruction = await prepareTidy(chain, buyer, task, providerAgent);
+  return instruction ? (await chain.clientFor(buyer).send([instruction])).signature : null;
+}
+
+export async function prepareTidy(chain: Chain, buyer: TransactionSigner, task: Address, providerAgent: Address | null) {
   const read = await facade.readTask(snapshotReader(chain), task);
   if (read.kind === "missing") return null;
   if (read.kind === "task") {
@@ -1415,6 +1428,11 @@ export async function sendTidy(
     }
   }
 
+  const [attestor] = await findTaskAttestorConfigPda({ task });
+  const attestorInfo = await chain.readAccountInfo(attestor);
+  if (attestorInfo?.owner === AGENC_COORDINATION_PROGRAM_ADDRESS && startsWith(attestorInfo.data, getTaskAttestorConfigDiscriminatorBytes())) {
+    children.push({ kind: "creatorFunded", account: attestor });
+  }
   for (const record of await buyerPaidModerationRecords(chain, task, buyer.address)) {
     children.push({ kind: "namedRecipient", account: record, recipient: buyer.address });
   }
@@ -1430,8 +1448,7 @@ export async function sendTidy(
     task,
     creator: buyer.address,
   });
-  const client = chain.clientFor(buyer);
-  const result = await client.closeTask({
+  return facade.closeTask({
     task,
     authority: buyer,
     creatorCompletionBond,
@@ -1439,7 +1456,6 @@ export async function sendTidy(
     ...(activated ? {} : { taskJobSpec: null }),
     children,
   });
-  return result.signature;
 }
 
 /** What leaving a rating costs: the record's deposit (never returned) plus a fee. */

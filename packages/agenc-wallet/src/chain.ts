@@ -33,6 +33,7 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { WalletNetwork } from "./client/types.js";
 import { WalletError } from "./errors.js";
+import { readContestHistory } from "./contest-history.js";
 import { readSettledDelivery, type SettledDelivery } from "./delivery-history.js";
 import { assertSigningRevision, revisionGatedClient } from "./revision.js";
 import {
@@ -55,6 +56,7 @@ export interface RawAccount {
 }
 
 export interface Chain {
+  contestHistory?(task: Address, since: string | null, checkpoint?: import("./contest-history.js").ContestCheckpoint): Promise<import("./contest-history.js").ContestHistory>;
   readonly network: WalletNetwork;
   /**
    * A client that signs and pays fees with `signer`. On a real network it
@@ -86,7 +88,7 @@ export interface Chain {
   /** Bytes plus owner, for accounts whose owner matters. */
   readRawAccount(account: Address): Promise<RawAccount | null>;
   /** Several accounts at once, in the order asked; null for one that does not exist. */
-  readRawAccounts(accounts: readonly Address[]): Promise<Array<RawAccount | null>>;
+  readRawAccounts(accounts: readonly Address[], minContextSlot?: number): Promise<Array<RawAccount | null>>;
   /** Owner/executable-aware reader in the shape the worker runtime expects. */
   readAccountInfo: AccountInfoReader;
   getBalance(account: Address): Promise<bigint>;
@@ -417,13 +419,14 @@ export function createRpcChain(options: RpcChainOptions): Chain {
         };
       });
     },
-    readRawAccounts: (accounts) =>
+    readRawAccounts: (accounts, minContextSlot) =>
       network(async () => {
         const out: Array<RawAccount | null> = [];
         // The endpoint takes at most 100 addresses at a time.
         for (let start = 0; start < accounts.length; start += 100) {
           const { value } = await rpc
             .getMultipleAccounts(accounts.slice(start, start + 100), {
+              ...(minContextSlot && { minContextSlot: BigInt(minContextSlot) }),
               commitment: "confirmed",
               encoding: "base64",
             })
@@ -480,6 +483,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       });
     },
     gpa: rpc,
+    contestHistory: (task, since, checkpoint) => network(() => readContestHistory(rpc, task, since, checkpoint)),
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),

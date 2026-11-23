@@ -165,7 +165,30 @@ export type ChainTaskStatus =
   | "disputed"
   | "reject_frozen";
 
+export interface ContestRegistration {
+  agentId: string;
+  stake: string;
+  rent: string;
+}
+
 export interface JobRecord {
+  contestRegistration?: ContestRegistration;
+  contestEntries?: Array<import("./client/types.js").ContestEntry & { commitment?: string; observedEvent?: boolean; eventId?: string }>;
+  contestQuote?: import("./client/types.js").ContestQuote;
+  contestReceipts?: string[];
+  contestSettlements?: import("./client/types.js").ContestReceipt[];
+  contestClaims?: { claim: string; workerAuthority: string }[];
+  contestCleanup?: boolean;
+  contestCancel?: boolean;
+  contestPending?: import("./transport-scope.js").PendingListingSend;
+  contestReleaseOpen?: boolean;
+  contestCreditMicrocents?: string;
+  contestFailedExpense?: { credit: string; charge: string };
+  contestOverBudget?: boolean;
+  contestOverage?: string;
+  contestCursor?: string;
+  contestScanned?: boolean;
+  contestCheckpoint?: import("./contest-history.js").ContestCheckpoint;
   terms?: JobTerms;
   inputFingerprint?: string;
   /** Null when the buyer left the maximum to the quote. Older journals omit this field. */
@@ -340,6 +363,11 @@ export interface JobRecord {
 }
 
 export interface ApprovalRecord {
+  contestOverBudget?: boolean;
+  contestOverage?: string;
+  entryRentLamports?: string;
+  workerRecordLamports?: string;
+  contestRegistration?: ContestRegistration;
   networkFees?: string;
   retainedRent?: string;
   cancellationRent?: string;
@@ -436,7 +464,7 @@ function isFinished(job: JobRecord): boolean {
   return (
     job.phase === "declined" ||
     job.phase === "failed" ||
-    (job.phase === "done" && job.tidied)
+    (job.phase === "done" && job.tidied && (!job.terms?.contest || job.contestScanned === true))
   );
 }
 
