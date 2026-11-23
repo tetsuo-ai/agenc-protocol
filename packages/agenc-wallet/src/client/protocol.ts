@@ -83,6 +83,9 @@ export interface WalletMethods {
       maxPriceCents?: number;
       /** Checks the delivery must pass, written for the provider to read. */
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       /** Makes a retried call return the same job instead of hiring twice. */
       idempotencyKey?: string;
     };
@@ -105,8 +108,14 @@ export interface WalletMethods {
       reward: AmountInput;
       /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
       deadlineDays?: number;
+      minReputation?: number;
+      /** Nonzero unsigned 64-bit mask, encoded as decimal text. */
+      requiredCapabilities?: string;
       /** Checks the delivery must pass. */
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       /** Makes a retried call return the same job instead of posting twice. */
       idempotencyKey?: string;
     };
@@ -114,19 +123,28 @@ export interface WalletMethods {
   };
   /**
    * The person posts a request from the main balance. Owner only: asking is
-   * the yes, so nothing waits for approval. `overview.postCost` says what it
-   * costs on top of the reward.
+   * the yes. Interactive clients use wallet.quotePost and confirm its ID.
    */
   "wallet.post": {
     params: {
       request: string;
       reward: AmountInput;
       deadlineDays?: number;
+      minReputation?: number;
+      /** Nonzero unsigned 64-bit mask, encoded as decimal text. */
+      requiredCapabilities?: string;
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       idempotencyKey?: string;
     };
     result: { job: JobView };
   };
+
+  /** Owner previews. These always wait for a separate approvals.decide. */
+  "wallet.quoteHire": WalletMethods["market.hire"];
+  "wallet.quotePost": { params: WalletMethods["wallet.post"]["params"]; result: WalletMethods["market.post"]["result"] };
 
   "approvals.list": { params: Record<string, never>; result: { approvals: ApprovalView[] } };
   "approvals.decide": {

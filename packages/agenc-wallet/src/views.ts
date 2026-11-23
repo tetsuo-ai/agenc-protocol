@@ -313,7 +313,9 @@ export function jobView(
     agentId: job.agentId,
     title: job.title,
     request: job.request,
-    acceptance: job.acceptance,
+    acceptance: [...job.acceptance],
+    ...(job.terms && { terms: structuredClone(job.terms) }),
+    ...(job.deadline && job.deadline > 0 ? { marketplaceDeadline: job.deadline } : {}),
     price,
     status,
     statusText: statusText(job, status, price, context.now, context.usdPerSol),
@@ -399,7 +401,14 @@ export function approvalView(
   usdPerSol: number | null,
 ): ApprovalView {
   const kind = approval.kind ?? "hire";
+  if (approval.quoteRate !== undefined) usdPerSol = approval.quoteRate;
   return {
+    ...(approval.terms && { terms: structuredClone(approval.terms), acceptance: [...(approval.acceptance ?? [])] }),
+    ...(approval.protocolFeeBps !== undefined && { marketFee: {
+      bps: approval.protocolFeeBps,
+      amount: money(BigInt(approval.priceLamports) * BigInt(approval.protocolFeeBps) / 10_000n, usdPerSol),
+    } }),
+    ...(approval.maxPriceCents !== undefined && { maxPriceCents: approval.maxPriceCents }),
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,
@@ -408,6 +417,8 @@ export function approvalView(
     service:
       kind === "request" || approval.service === null ? null : savedService(approval.service, usdPerSol),
     request: approval.request,
+    refundableDeposit: money(BigInt(approval.depositsLamports) - BigInt(approval.keptLamports), usdPerSol),
+    total: money(BigInt(approval.priceLamports) + BigInt(approval.depositsLamports), usdPerSol),
     price: money(approval.priceLamports, usdPerSol),
     deposits: money(approval.depositsLamports, usdPerSol),
     fees: money(approval.keptLamports, usdPerSol),

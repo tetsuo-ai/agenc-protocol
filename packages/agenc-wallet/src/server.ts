@@ -140,6 +140,8 @@ function handlers(wallet: AgencWallet): Handlers {
       }),
     // Not an agent method: the main balance pays with no one asked.
     "wallet.post": async (params) => ({ job: await wallet.postFromBalance(params) }),
+    "wallet.quoteHire": (params) => wallet.hire(params, true),
+    "wallet.quotePost": (params) => wallet.quotePost(params),
     "approvals.list": async () => ({ approvals: await wallet.listApprovals() }),
     "approvals.decide": async (params) => ({
       job: await wallet.decideApproval(text(params.approvalId, "request"), params.approve === true),

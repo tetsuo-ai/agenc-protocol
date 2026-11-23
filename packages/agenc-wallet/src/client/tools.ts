@@ -91,6 +91,8 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
           description:
             "Exactly what you want delivered, written for the provider. Include every detail they need; they cannot ask you questions.",
         },
+        deadline: { type: "integer", minimum: 1, description: "Exact delivery deadline in Unix seconds. For a hire this is the buyer's deadline in the brief, within the listing's delivery period." },
+        review_window_secs: { type: "integer", minimum: 1, maximum: 604800, description: "Seconds to review the delivery before automatic payment. Default 86400." },
         acceptance: {
           type: "array",
           maxItems: 8,
@@ -137,6 +139,10 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
           description:
             "Days to deliver in. Nobody can take it after that, and it is cancelled with the reward returned. Default 7.",
         },
+        deadline: { type: "integer", minimum: 1, description: "Exact delivery deadline in Unix seconds. For a hire this is the buyer's deadline in the brief, within the listing's delivery period." },
+        review_window_secs: { type: "integer", minimum: 1, maximum: 604800, description: "Seconds to review the delivery before automatic payment. Default 86400." },
+        min_reputation: { type: "integer", minimum: 0, maximum: 10000, description: "Minimum worker reputation. Default 0." },
+        required_capabilities: { type: "string", pattern: "^[1-9][0-9]{0,19}$", description: "Required capability mask as nonzero unsigned 64-bit decimal text. Default 1." },
         acceptance: {
           type: "array",
           maxItems: 8,
@@ -330,11 +336,14 @@ function describeJob(job: JobView, now: number) {
     status_text: job.statusText,
     price: formatMoney(job.price),
     request: job.request,
+    acceptance: job.acceptance,
+    ...(job.terms && { terms: job.terms }),
+    ...(job.marketplaceDeadline !== undefined && { marketplace_deadline: new Date(job.marketplaceDeadline * 1000).toISOString() }),
     ...(job.autoRefundAt !== null && job.status === "waiting"
       ? { refunds_itself: formatWait(job.autoRefundAt, now) }
       : {}),
     ...(job.autoApproveAt !== null && job.status === "delivered"
-      ? { pays_itself: formatWait(job.autoApproveAt, now) }
+      ? { pays_itself: formatWait(job.autoApproveAt, now), review_closes_at: new Date(job.autoApproveAt).toISOString() }
       : {}),
     ...(job.result
       ? {
@@ -363,6 +372,20 @@ function describeJob(job: JobView, now: number) {
 }
 
 /** The checks a delivery must pass, as a tool call gives them. */
+function jobClockArgs(args: Record<string, unknown>) {
+  const deadline = optionalInteger(args.deadline, "deadline", 1, Number.MAX_SAFE_INTEGER);
+  const reviewWindowSecs = optionalInteger(args.review_window_secs, "review_window_secs", 1, 604800);
+  return { ...(deadline !== undefined && { deadline }), ...(reviewWindowSecs !== undefined && { reviewWindowSecs }) };
+}
+
+function optionalInteger(value: unknown, name: string, min: number, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) {
+    throw new ToolInputError(`${name} must be a whole number from ${min} to ${max}.`);
+  }
+  return value;
+}
+
 function acceptanceOf(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value) || value.length > 8) {
@@ -451,6 +474,7 @@ export async function runMarketTool(
           listing,
           request,
           ...(maxPriceCents !== undefined ? { maxPriceCents } : {}),
+          ...jobClockArgs(args),
           ...(acceptance !== undefined ? { acceptance } : {}),
           ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
         },
@@ -498,13 +522,21 @@ export async function runMarketTool(
         throw new ToolInputError("deadline_days must be a whole number of days from 1 to 30.");
       }
       const acceptance = acceptanceOf(args.acceptance);
+      const minReputation = optionalInteger(args.min_reputation, "min_reputation", 0, 10000);
+      const mask = args.required_capabilities;
+      if (mask !== undefined && (typeof mask !== "string" || !/^[1-9][0-9]{0,19}$/.test(mask) || BigInt(mask) > 0xffffffffffffffffn)) {
+        throw new ToolInputError("required_capabilities must be a nonzero unsigned 64-bit decimal string.");
+      }
       const started = await client.call(
         "market.post",
         {
           agentId,
           request,
           reward: { usdCents: rewardCents },
+          ...(minReputation !== undefined && { minReputation }),
+          ...(mask !== undefined && { requiredCapabilities: mask }),
           ...(typeof days === "number" ? { deadlineDays: days } : {}),
+          ...jobClockArgs(args),
           ...(acceptance !== undefined ? { acceptance } : {}),
           ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
         },

@@ -637,6 +637,8 @@ export async function hireLanded(
 // door a wallet with no registered agent uses.
 
 export interface RequestIntent {
+  minReputation: number;
+  requiredCapabilities: bigint;
   taskId: Uint8Array;
   /** Canonical hash of the published request. The task commits to it. */
   jobSpecHash: Uint8Array;
@@ -667,11 +669,11 @@ export async function sendRequest(
     await facade.createTaskHumanless({
       creator,
       taskId: intent.taskId,
-      requiredCapabilities: 1n,
+      requiredCapabilities: intent.requiredCapabilities,
       description: requestDescription(intent.jobSpecHash),
       rewardAmount: intent.rewardLamports,
       deadline: intent.deadline,
-      minReputation: 0,
+      minReputation: intent.minReputation,
       reviewWindowSecs: intent.reviewWindowSecs,
     }),
   ]);
@@ -687,14 +689,16 @@ export async function requestLanded(
   chain: Chain,
   creator: Address,
   task: Address,
-  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash">,
+  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline">,
 ): Promise<boolean> {
   const account = await readTask(chain, task);
   if (account === null) return false;
   const mismatch = (): never => {
     throw new WalletError("INTERNAL", "A job on the marketplace does not match the wallet's records.");
   };
-  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports) mismatch();
+  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports ||
+      account.minReputation !== intent.minReputation || account.requiredCapabilities !== intent.requiredCapabilities ||
+      account.deadline !== intent.deadline) mismatch();
   if (!bytesEqual(new Uint8Array(account.description), requestDescription(intent.jobSpecHash))) mismatch();
   if ((await readHireRecord(chain, task)) !== null) mismatch();
   return true;

@@ -1,3 +1,4 @@
+import type { JobTerms } from "./client/types.js";
 // The wallet's journal: agents, jobs, approvals and the activity list, in one
 // private JSON file that is rewritten atomically on every change.
 //
@@ -162,6 +163,11 @@ export type ChainTaskStatus =
   | "reject_frozen";
 
 export interface JobRecord {
+  terms?: JobTerms;
+  inputFingerprint?: string;
+  maxPriceCents?: number;
+  /** Costs and expiry of the exact quote authorized for this job. */
+  approvedCosts?: { total: string; kept: string; protocolFeeBps: number; expiresAt: number };
   id: string;
   role: "buying" | "working";
   /**
@@ -189,7 +195,7 @@ export interface JobRecord {
   deliverWithinSecs?: number;
   /**
    * A request only: unix seconds by which the work must be delivered, fixed
-   * when posting starts. Nobody can take it after that.
+   * when the brief is prepared. Nobody can take it after that.
    */
   requestDeadline?: number | null;
 
@@ -327,6 +333,12 @@ export interface JobRecord {
 }
 
 export interface ApprovalRecord {
+  protocolFeeBps?: number;
+  terms?: JobTerms;
+  acceptance?: string[];
+  maxPriceCents?: number;
+  /** Rate used when displaying this quote, fixed until it expires. */
+  quoteRate?: number | null;
   id: string;
   jobId: string;
   agentId: string;

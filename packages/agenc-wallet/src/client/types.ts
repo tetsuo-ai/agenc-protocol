@@ -185,7 +185,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms"] as const);
 
 export interface WalletOverview {
   /**
@@ -385,6 +385,9 @@ export interface JobResult {
 }
 
 export interface JobView {
+  /** Deadline observed on the marketplace after funding, in Unix seconds. */
+  marketplaceDeadline?: number;
+  terms?: JobTerms;
   /** List evidence was shortened or omitted. Use jobs.get/jobs.delivery for details. */
   previewTruncated?: boolean;
   id: string;
@@ -480,7 +483,23 @@ export interface JobView {
 }
 
 /** A hire, or a request an agent wants to post, waiting for a person to say yes. */
+export interface JobTerms {
+  /** Exact delivery deadline in Unix seconds. For a hire this is part of its signed brief. */
+  deadline: number;
+  reviewWindowSecs: number;
+  eligibility: { minReputation: number; requiredCapabilities: string } | null;
+  /** A hire's on-chain clock runs from the landing block. */
+  listingDurationSecs: number | null;
+}
+
 export interface ApprovalView {
+  /** Maximum marketplace share at settlement, included in the price. */
+  marketFee?: { bps: number; amount: Money };
+  refundableDeposit?: Money;
+  total?: Money;
+  terms?: JobTerms;
+  acceptance?: string[];
+  maxPriceCents?: number;
   id: string;
   jobId: string;
   agentId: string;
