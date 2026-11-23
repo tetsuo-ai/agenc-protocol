@@ -603,6 +603,26 @@ describe("publishing", () => {
     ]);
   });
 
+  it("verifies the approved brief even if the publisher returns a self-consistent hash", async () => {
+    const job = {
+      title: "Proofread", request: "Read my draft.", acceptance: ["Mark every typo."],
+      terms: { deadline: 1_800_000_000, reviewWindowSecs: 41, eligibility: null, listingDurationSecs: 3600 },
+      listing: LISTING as Address, signer: await generateKeyPairSigner(),
+    };
+    const host = (route: Route) =>
+      createHostedServices({ fetchImpl: fakeFetch({ "POST https://agenc.ag/api/jobspecs": route }).fetch });
+    const original = await host(specStore()).publishJobSpec(job);
+    expect(original.spec.deliverables).toEqual([expect.stringContaining("41 seconds")]);
+    for (const change of [
+      { acceptanceCriteria: [] }, { shortDescription: "Something else." }, { deliverables: [] },
+    ]) {
+      const payload = { ...original.spec, ...change };
+      const payloadSha256 = (await jobSpecHash(payload)).hex;
+      const publisher = host(() => json({ uri: original.uri, payload, payloadSha256 }));
+      await expect(publisher.publishJobSpec(job)).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+    }
+  });
+
   it("believes nothing the publisher says that it cannot re-derive", async () => {
     const signer = await generateKeyPairSigner();
     const spec = buildListingSpec({ name: "Line Writer", summary: "A line.", category: "other" });

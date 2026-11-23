@@ -110,8 +110,12 @@ describe("market_post", () => {
     expect(post.inputSchema.required).toEqual(["request", "reward_usd"]);
     expect(Object.keys(post.inputSchema.properties as object).sort()).toEqual([
       "acceptance",
+      "deadline",
       "deadline_days",
+      "min_reputation",
       "request",
+      "required_capabilities",
+      "review_window_secs",
       "reward_usd",
     ]);
     // The model is told, in the tool and in its instructions, that a request is public.
@@ -129,7 +133,7 @@ describe("market_post", () => {
       client,
       "agent_1",
       "market_post",
-      { request: "  A haiku about rain.  ", reward_usd: 0.3, deadline_days: 3, acceptance: ["Three lines"] },
+      { request: "  A haiku about rain.  ", reward_usd: 0.3, deadline_days: 3, min_reputation: 10000, required_capabilities: "9223372036854775808", review_window_secs: 42, acceptance: ["Three lines"] },
       { idempotencyKey: "tool:call-1" },
     );
     expect(calls).toEqual([
@@ -140,6 +144,7 @@ describe("market_post", () => {
           request: "A haiku about rain.",
           reward: { usdCents: 30 },
           deadlineDays: 3,
+          minReputation: 10000, requiredCapabilities: "9223372036854775808", reviewWindowSecs: 42,
           acceptance: ["Three lines"],
           idempotencyKey: "tool:call-1",
         },

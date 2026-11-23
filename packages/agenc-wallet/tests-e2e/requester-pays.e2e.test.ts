@@ -306,7 +306,7 @@ describe("the wallet pays for its own approvals", () => {
     // What never comes back: the marker the tidied job record is compacted
     // into and the first hire's one-time record. The deposit behind the
     // safety check of the request comes back since revision 9.
-    expect(BigInt(approval!.fees.lamports)).toBe((await rent(MARKER_SPACE)) + (await rent(67)));
+    expect(BigInt(approval!.fees.lamports)).toBe((await rent(MARKER_SPACE)) + (await rent(67)) + 30_000n);
     expect(BigInt(approval!.deposits.lamports)).toBeGreaterThan(BigInt(approval!.fees.lamports));
   });
 
