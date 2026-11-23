@@ -20,7 +20,7 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms, releaseQuoteLifetime } from "./worker-jobs.js";
 import type { WorkerQuote, WorkAction } from "./client/types.js";
-import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
+import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, type WorkerDispatch, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { isNetworkTrouble, scopedChainReads, transferInstruction, type Chain } from "./chain.js";
 import { deliveryFileProblem, splitDelivery, type DeliveryFile } from "./client/delivery-files.js";
 import { formatMoney } from "./client/format.js";
@@ -724,7 +724,7 @@ export class AgencWallet {
     const agent = this.#agentRecord(agentId);
     if (agent.earn.enabled) await this.#startEarning(agent);
     else {
-      await this.#startDrain(agent);
+      await this.#lock(`earn-start:${agent.id}`, () => this.#startDrain(agent));
       await this.#advanceOffer(agentId);
     }
   }
@@ -4019,12 +4019,15 @@ export class AgencWallet {
     return rate;
   }
 
-  #workLane(agentId: string, heldOnly = false, readonly = false) {
+  #workLane(agentId: string, heldOnly = false, readonly = false): WorkerDispatch {
     const agent = this.#agentRecord(agentId);
     if (this.#closed || this.#closing || agent.earn.retiredAt != null) throw new WalletError("NOT_AVAILABLE", "This worker is unavailable.");
     if (heldOnly) {
       if (!this.#earn.hasChosenClaim(agentId)) throw new WalletError("NOT_AVAILABLE", "There is no chosen claim.");
-      return this.#earn.heldLane(agentId, () => this.#vault.signer(agent.keyId), readonly);
+      // A stopped-wallet reconciliation takes the journal lock. Queue it with
+      // startup so opening the picker cannot lock the worker out on restart.
+      return this.#earn.activeHeldLane(agentId, readonly) ?? (work => this.#lock(`earn-start:${agentId}`, () =>
+        this.#earn.heldLane(agentId, () => this.#vault.signer(agent.keyId), readonly)(work)));
     }
     if (!this.#agentRecord(agentId).earn.enabled || this.#closed || this.#closing)
       throw new WalletError("NOT_ALLOWED", "Turn on Earns for this agent to choose work.");
@@ -5379,7 +5382,7 @@ export class AgencWallet {
       if (agent.refills.some(entry => entry.work))
         await this.#reconcileWorkAllowance(agent.id).catch(error => this.#log(`worker allowance: ${describeError(error)}`));
       if (!agent.earn.enabled && agent.earn.retiredAt == null) {
-        await this.#startDrain(agent);
+        await this.#lock(`earn-start:${agent.id}`, () => this.#startDrain(agent));
         await this.#earn.tidyUp({
           agentId: agent.id,
           signer: await this.#vault.signer(agent.keyId),

@@ -144,7 +144,7 @@ export type OpenClaim = {
  * expires or the task ends; `claimReleased` says when its deposit is back.
  */
 export type FailedJob = {
-  chosen?: true;
+  chosen?: boolean;
   /** Task PDA (base58). */
   task: string;
   /** ISO timestamp at which claiming the task began. */
@@ -572,6 +572,13 @@ function reasonLine(value: unknown, label: string): string {
   return parsed;
 }
 
+/** An older worker did not record who could release an exhausted claim. */
+export function pendingOwnerClaim(state: WorkerState): FailedJob | undefined {
+  if (state.openClaim) return undefined;
+  return state.failedJobs.find(job => job.chosen && !job.claimReleased &&
+    !state.submissions.some(submission => submission.task === job.task));
+}
+
 function failedJob(value: unknown, label: string): FailedJob {
   const parsed = record(value, label);
   exactKeys(
@@ -587,6 +594,7 @@ function failedJob(value: unknown, label: string): FailedJob {
   if (typeof parsed.claimReleased !== "boolean") {
     fail(`${label}.claimReleased must be boolean`);
   }
+  if (parsed.chosen !== undefined && typeof parsed.chosen !== "boolean") fail(`${label}.chosen must be boolean`);
   return {
     task: taskAddress(parsed.task, `${label}.task`),
     claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
@@ -599,7 +607,7 @@ function failedJob(value: unknown, label: string): FailedJob {
       : {}),
     ...jobLabels(parsed, label),
     claimReleased: parsed.claimReleased,
-    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, label) } : {}),
+    chosen: parsed.chosen ?? !parsed.claimReleased,
   };
 }
 

@@ -79,6 +79,7 @@ import {
   bytesToHex,
   hexToBytes,
   loadState,
+  pendingOwnerClaim,
   MAX_JOB_TITLE_CHARS,
   MAX_UNSETTLED_SUBMISSIONS,
   newAgentId,
@@ -1140,7 +1141,7 @@ export function giveUpJob(
     marker.execution?.rewardAmount ??
     marker.submission?.rewardAmount;
   const job: FailedJob = {
-    ...(marker.chosen && { chosen: true }),
+    chosen: marker.chosen === true,
     task: marker.task,
     claimedAt: marker.claimedAt,
     failedAt: new Date().toISOString(),
@@ -1588,6 +1589,7 @@ function restoreRevisionRound(
     claimedAt: claimTimestamp(claim, fallbackClaimedAt),
     phase: "claimed",
     ...(priorMarker?.chosen || priorRecord?.chosen ? { chosen: true } : {}),
+    ...(priorMarker?.ownerDecision && { ownerDecision: true }),
     ...(priorMarker?.claimTransactionSignature !== undefined
       ? { claimTransactionSignature: priorMarker.claimTransactionSignature }
       : {}),
@@ -2276,7 +2278,22 @@ export async function resumeOpenClaim(
   agent: WorkerAgent,
 ): Promise<ProcessOutcome | null> {
   const state = loadState(ctx.stateDir);
-  if (state.openClaim === null) return null;
+  if (state.openClaim === null) {
+    const job = pendingOwnerClaim(state);
+    if (!job || ctx.dryRun) return null;
+    // Move one outstanding decision into the normal held-job slot. Other
+    // legacy failures retain their own decision until this slot is free.
+    if (!await readClaim(ctx, agent, job.task as Address)) {
+      job.claimReleased = true;
+      saveState(ctx.stateDir, state);
+      return null;
+    }
+    state.openClaim = { task: job.task, claimedAt: job.claimedAt, phase: "claimed",
+      chosen: true, ownerDecision: true, failures: job.attempts, lastFailure: job.reason,
+      ...(job.title && { title: job.title }), ...(job.listing && { listing: job.listing }) };
+    state.failedJobs = state.failedJobs.filter(entry => entry !== job);
+    saveState(ctx.stateDir, state);
+  }
   let marker = state.openClaim;
   const task = marker.task as Address;
   const [claim, decodedTask, submission] = await Promise.all([
@@ -2303,6 +2320,22 @@ export async function resumeOpenClaim(
     delete marker.chosenAttempt;
     saveState(ctx.stateDir, state);
     return { status: "held", task };
+  }
+
+  if (marker.chosen && marker.releaseRequestedAt && !ctx.dryRun) {
+    if (!claim && !submission) {
+      giveUpJob(ctx, state, marker, { cause: "released", reason: "The claim closed after release was requested.", claimReleased: true });
+      return null;
+    }
+    // The old journal only timestamped the send. Give it the existing
+    // ambiguity window before offering another approval on a live claim.
+    if (Date.now() - Date.parse(marker.releaseRequestedAt) < TRANSACTION_RECONCILIATION_GRACE_MS)
+      return { status: "held", task };
+    if (claim && decodedTask && !claim.isCompleted) {
+      delete marker.releaseRequestedAt;
+      marker.ownerDecision = true;
+      saveState(ctx.stateDir, state);
+    }
   }
 
   let revisionRound = false;

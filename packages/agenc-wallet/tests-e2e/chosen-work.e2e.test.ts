@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { address } from "@solana/kit";
-import { loadState } from "@tetsuo-ai/agenc-worker";
+import { loadState, saveState } from "@tetsuo-ai/agenc-worker";
 import { findAgentPda, findClaimPda, findTaskSubmissionPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, getTaskSubmissionDecoder, SubmissionStatus, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
 import type { WorkerQuote } from "../src/client/types.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
@@ -566,4 +566,68 @@ it("retains the signed claim reservation over restart until it proves unused", a
   const retry = await world!.wallet.quoteWork(id, task, "claim");
   expect(retry.dailyRemaining).toEqual(quote.dailyRemaining);
   expect(retry.id).not.toBe(quote.id);
+});
+
+it("leaves an exhausted 0.1.15 claim with no ownership flag for an owner decision after restart", async () => {
+  const { wallet, id, task } = await setup();
+  const quote = await wallet.quoteWork(id, task, "claim");
+  await wallet.decideWork(quote.id, true);
+  const claim = quote.flows.find(row => row.label === "Claim deposit")!.to;
+  await wallet.close();
+  const state = journal(id);
+  const { claimedAt } = state.openClaim!;
+  state.openClaim = null;
+  state.failedJobs.push({ task, claimedAt, failedAt: claimedAt, cause: "attempts", reason: "spec unavailable",
+    attempts: 3, claimReleased: false });
+  // Serialize the old worker's exact disk format, bypassing the new encoder.
+  writeFileSync(path.join(world!.dataDir, "earn", id, "state.json"), JSON.stringify(state));
+  const balance = await world!.balance(claim);
+  world!.wallet = await world!.reopen();
+  // Startup runs upkeep before the watcher's first discovery.
+  await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held?.canRelease || (await world!.balance(claim)) === 0n);
+  expect(await world!.balance(claim)).toBe(balance);
+  expect((await world!.wallet.openWork(id)).held).toMatchObject({ task, canSubmit: false, canRelease: true });
+  await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+  expect(await world!.balance(claim)).toBe(0n);
+});
+
+it.each(["still held", "already closed"] as const)("reconciles a timestamp-only legacy release that is %s", async outcome => {
+  const { wallet, id, task } = await setup();
+  const hash = await completedRoom(id, task);
+  const saved = journal(id);
+  if (outcome === "already closed") await assertBalances(await wallet.quoteWork(id, task, "release"));
+  await wallet.close();
+  saved.openClaim!.releaseRequestedAt = new Date(Date.now() - 121_000).toISOString();
+  saveState(path.join(world!.dataDir, "earn", id), saved);
+  world!.wallet = await world!.reopen();
+  if (outcome === "already closed") {
+    await eventually(async () => journal(id).openClaim === null);
+    expect(journal(id).failedJobs).toContainEqual(expect.objectContaining({ task, cause: "released", claimReleased: true }));
+    return;
+  }
+  const held = await eventually(async () => {
+    const page = await world!.wallet.openWork(id).catch(() => null);
+    return page?.held?.canSubmit && page.held;
+  });
+  expect(held).toMatchObject({ resultHash: hash, canSubmit: true, canRelease: true });
+  await assertBalances(await world!.wallet.quoteWork(id, task, "submit"));
+});
+
+it("holds both actions while an old release can still land, then restores the saved result", async () => {
+  const { wallet, id, task } = await setup();
+  const hash = await completedRoom(id, task);
+  await wallet.close();
+  const state = journal(id);
+  state.openClaim!.releaseRequestedAt = new Date().toISOString();
+  saveState(path.join(world!.dataDir, "earn", id), state);
+  world!.wallet = await world!.reopen();
+  const pending = await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held);
+  expect(pending).toMatchObject({ resultHash: hash, canSubmit: false, canRelease: false });
+  const originalNow = Date.now;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => originalNow() + 121_000);
+  try {
+    await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held?.canSubmit);
+    expect((await world!.wallet.openWork(id)).held).toMatchObject({ resultHash: hash, canRelease: true });
+    expect(world!.sandbox.deliveries.size).toBe(0);
+  } finally { clock.mockRestore(); }
 });

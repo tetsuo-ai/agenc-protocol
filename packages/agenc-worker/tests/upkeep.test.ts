@@ -198,6 +198,7 @@ function givenUp(stateDir: string): void {
     task: TASK,
     claimedAt: "2026-11-19T00:00:00.000Z",
     failedAt: "2026-11-19T00:10:00.000Z",
+    chosen: false,
     cause: "attempts",
     reason: "executor exited with code 3",
     attempts: 3,

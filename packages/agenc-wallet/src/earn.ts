@@ -23,6 +23,7 @@ import {
   DEFAULT_ENDPOINT,
   hexToBytes,
   loadState,
+  pendingOwnerClaim,
   readJobEvidence,
   readClaimAccountRentMinimums,
   readMinAgentStake,
@@ -523,7 +524,10 @@ export class EarnHost {
   }
 
   hasChosenClaim(agentId: string): boolean {
-    try { return loadState(this.stateDir(agentId)).openClaim?.chosen === true; }
+    try {
+      const state = loadState(this.stateDir(agentId));
+      return state.openClaim?.chosen === true || !!pendingOwnerClaim(state);
+    }
     catch (error) {
       this.#log(`earn ${agentId}: reading chosen work: ${describeError(error)}`);
       return false;
@@ -541,24 +545,30 @@ export class EarnHost {
 
   // A stopped or replacement wallet may have no executor at all. An owner
   // decision still uses the same claim journal lock and can never start a room.
-  heldLane(agentId: string, signer: () => Promise<KeyPairSigner>, readonly: boolean): WorkerDispatch {
+  activeHeldLane(agentId: string, readonly: boolean): WorkerDispatch | undefined {
     const entry = this.#running.get(agentId);
     const dispatch = readonly ? entry?.read : entry?.dispatch;
-    if (dispatch && !entry?.controller.signal.aborted) return dispatch;
+    return dispatch && !entry?.controller.signal.aborted ? dispatch : undefined;
+  }
+
+  heldLane(agentId: string, signer: () => Promise<KeyPairSigner>, readonly: boolean): WorkerDispatch {
+    const active = this.activeHeldLane(agentId, readonly);
+    if (active) return active;
     return async work => {
       const stateDir = this.stateDir(agentId);
       const key = await signer();
-      const reconcile = !!loadState(stateDir).openClaim?.chosenAttempt;
+      const prior = loadState(stateDir);
+      const reconcile = !!(prior.openClaim?.chosenAttempt || prior.openClaim?.releaseRequestedAt || pendingOwnerClaim(prior));
       const unlock = readonly && !reconcile ? () => {} : acquireStateLock(stateDir);
       try {
         const state = loadState(stateDir);
-        if (!state.openClaim?.chosen || !state.agentIdHex) throw new Error("There is no chosen claim.");
+        if ((!state.openClaim?.chosen && !pendingOwnerClaim(state)) || !state.agentIdHex) throw new Error("There is no chosen claim.");
         const agentIdBytes = hexToBytes(state.agentIdHex);
         const [agentPda] = await findAgentPda({ agentId: agentIdBytes });
         const agent = { agentId, signer: key, minRewardLamports: 0n };
         const ctx: WorkerContext = { ...this.#chainContext(agent, stateDir), config: this.#config(agent, []), log: () => {} };
         const registered = { agentId: agentIdBytes, agentPda, registered: true, justRegistered: false };
-        if (reconcile && state.openClaim.chosenAttempt) await resumeOpenClaim(ctx, registered);
+        if (reconcile) await resumeOpenClaim(ctx, registered);
         return await work(ctx, registered, this.#shutdown.signal);
       } finally { unlock(); }
     };

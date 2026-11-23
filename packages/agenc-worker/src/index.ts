@@ -131,6 +131,7 @@ export {
   FAILED_JOB_RETENTION,
   hexToBytes,
   loadState,
+  pendingOwnerClaim,
   readJobEvidence,
   MAX_FAILURE_REASON_CHARS,
   MAX_JOB_TITLE_CHARS,
