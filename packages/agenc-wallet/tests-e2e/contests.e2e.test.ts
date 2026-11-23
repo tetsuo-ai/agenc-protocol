@@ -186,8 +186,12 @@ it("recovers submissions from program events after other people release every sh
   expect(paid[0]! + paid[1]!).toBe(BigInt(brief.reward.lamports));
 });
 
-it("returns an empty contest to its payer when several claimants never submit", async () => {
-  world = await startWorld();
+it("refunds four no-shows with the configured priority fee and all guards in one packet", async () => {
+  world = await startWorld({ chain: base => ({ ...base, transferFeeLamports: 5001n, clientFor(signer) {
+    const client = base.clientFor(signer);
+    return { ...client, send: (instructions, options) => client.send(instructions,
+      { ...options, computeUnitPrice: 1n, computeUnitLimit: 250000 }) };
+  } }) });
   const { task, hash, job } = await post(false, 4);
   for (let i = 0; i < 4; i++) await enter(task, hash, false);
   const before = await world.balance(world.wallet.mainAddress);
@@ -195,6 +199,7 @@ it("returns an empty contest to its payer when several claimants never submit", 
   expect((await world.wallet.getJob(job.id, true)).status).toBe("working");
   expect(await world.balance(world.wallet.mainAddress)).toBe(before);
   const q = (await world.wallet.quoteContest(job.id, { action: "cancel", entryId: "" })).contestQuote!;
+  expect(q.networkFee.lamports).toBe("5001");
   expect(q.transfers?.filter(t => t.label === "No-show deposit").map(t => t.amount.lamports)).toEqual(Array(4).fill("10000000"));
   expect(q.transfers?.filter(t => t.label === "Claim rent return")).toHaveLength(4);
   expect((await world.wallet.decideContest(job.id, q.id, true)).status).toBe("refunded");
