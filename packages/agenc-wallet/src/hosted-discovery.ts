@@ -1,5 +1,6 @@
 import type { Address } from "@solana/kit";
 import type { UriFetcher } from "@tetsuo-ai/agenc-worker";
+import { getServiceListingDecoder, getServiceListingDiscriminatorBytes, ListingState } from "@tetsuo-ai/marketplace-sdk";
 import { WalletError } from "./errors.js";
 import { record, safeAddress, safeBigInt, finite, tidyText } from "./hosted-http.js";
 import { NO_DETAILS, listingDetails, openDetailsCache, summarize, verifiedListingPayload, withoutLeadingName, type ListingDetails } from "./listing-details.js";
@@ -71,6 +72,36 @@ function describedRow(
     terms: details.terms,
     details: state,
   };
+}
+
+/** The explorer's display projection omits terms kept in the encoded listing account. */
+function explorerTerms(listing: Record<string, unknown>, terms: Record<string, unknown>) {
+  const projected = { ...terms, pda: listing.pda, providerAgent: terms.provider, priceLamports: terms.price };
+  if (listing.accountData === undefined) return projected;
+  try {
+    if (typeof listing.accountData !== "string") throw new Error("Missing listing bytes");
+    const bytes = Buffer.from(listing.accountData, "base64");
+    const [account, end] = getServiceListingDecoder().read(bytes, 0);
+    if (end !== bytes.length || !getServiceListingDiscriminatorBytes().every((byte, i) => bytes[i] === byte)) {
+      throw new Error("Invalid listing account");
+    }
+    return {
+      ...projected,
+      providerAgent: account.providerAgent,
+      priceLamports: account.price.toString(),
+      priceMint: account.priceMint.__option === "Some" ? account.priceMint.value : null,
+      state: account.state,
+      maxOpenJobs: account.maxOpenJobs,
+      openJobs: account.openJobs,
+      specHash: Buffer.from(account.specHash).toString("hex"),
+      specUri: account.specUri,
+      defaultDeadlineSecs: Number(account.defaultDeadlineSecs),
+      ratingCount: account.ratingCount,
+      rawRatingAverage: account.ratingCount > 0 ? Number(account.totalRating) / account.ratingCount : null,
+    };
+  } catch (cause) {
+    throw new WalletError("NETWORK", "The service could not be read.", { cause });
+  }
 }
 
 export function hostedDiscovery(options: HostedServicesOptions, read: ReadJson, publicFetcher: UriFetcher):
@@ -149,12 +180,13 @@ export function hostedDiscovery(options: HostedServicesOptions, read: ReadJson, 
     const name = tidyText(item.name, 64);
     if (listing === null || providerAgent === null || price === null || name === null) return null;
     if (item.priceMint !== null && item.priceMint !== undefined) return null;
-    if (item.state !== SERVICE_STATES.indexOf(state)) return null;
+    const stateNumber = SERVICE_STATES.indexOf(state);
+    if (item.state !== stateNumber && item.state !== ListingState[stateNumber]) return null;
     if (state === "active" && Number(item.maxOpenJobs) > 0 && Number(item.openJobs) >= Number(item.maxOpenJobs)) return null;
     const provenance = record(item.provenance);
     const ratingCount = finite(provenance?.rawRatingCount) ?? finite(item.ratingCount) ?? 0;
     const average =
-      finite(provenance?.weightedRatingAverage) ?? finite(provenance?.rawRatingAverage);
+      finite(provenance?.weightedRatingAverage) ?? finite(provenance?.rawRatingAverage) ?? finite(item.rawRatingAverage);
     const rating =
       ratingCount > 0 && average !== null && average >= 1 && average <= 5 ? average : null;
     const settled = finite(provenance?.settledHireCount);
@@ -205,7 +237,7 @@ export function hostedDiscovery(options: HostedServicesOptions, read: ReadJson, 
     if (detail.status !== 200 || listing?.pda !== id) throw new WalletError("NETWORK", "The service could not be read.");
     const terms = record(listing.decoded);
     if (!terms || listing.metadataValid !== true) return [];
-    const row = parseRow({ ...terms, pda: id, providerAgent: terms.provider, priceLamports: terms.price }, state);
+    const row = parseRow(explorerTerms(listing, terms), state);
     if (!row) return [];
     if (state === "active") {
       // The explorer includes diagnostic listings. Require the site's hireability verdict for this ID.
