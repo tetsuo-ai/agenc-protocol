@@ -177,6 +177,7 @@ export interface ContestRegistration {
 }
 
 export interface JobRecord {
+  parties?: import("./client/business.js").JobParties;
   contestRegistration?: ContestRegistration;
   contestEntries?: Array<import("./client/types.js").ContestEntry & { commitment?: string; observedEvent?: boolean; eventId?: string }>;
   contestQuote?: import("./client/types.js").ContestQuote;
@@ -416,6 +417,8 @@ export interface ActivityRecord {
 }
 
 export interface WalletState {
+  actionInbox?: import("./action-inbox.js").SavedAction[];
+  businessRecovery?: { restoredAt: number; requiresConsent: boolean };
   setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;
   version: number;
   createdAt: number;
@@ -429,6 +432,7 @@ export interface WalletState {
     receipt?: PendingListingSend;
   }>;
   workRecords?: Record<string, {
+    parties?: import("./client/business.js").JobParties;
     revisionDeadlines?: Record<string, number>;
     reviewDraft?: import("./client/reviews.js").ReviewDraft;
     result?: JobResult;
