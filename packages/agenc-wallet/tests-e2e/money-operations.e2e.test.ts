@@ -221,3 +221,32 @@ it("refuses a paid hire whose on-chain protocol fee does not qualify", async () 
   await expect(w.wallet.quoteRating(job.id, 4, true)).rejects.toThrow(/qualify/);
   expect(await w.balance(w.wallet.mainAddress)).toBe(before);
 });
+
+it("keeps an expired signature with missing history reserved and rejects chat transfers", async () => {
+  let lost = false, sends = 0;
+  w = await startWorld({
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (lost) { sends++; throw new Error("Transport closed"); }
+      return base.sendAndConfirm(tx);
+    } }),
+    chain: base => ({ ...base, operationBlockhashValid: async () => false, reviewSendOutcome: async () => "expired" }),
+  });
+  const { moneyHandlers } = await import("../src/money-handlers.js");
+  const owner = { role: "owner", agentId: null } as const;
+  const agent = { role: "agent", agentId: (await w.wallet.createAgent("Observer")).id } as const;
+  const methods = moneyHandlers(w.wallet);
+  const request = { kind: "withdraw", to: (await generateKeyPairSigner()).address, amount: { lamports: String(SOL) } } as const;
+  await expect(methods["wallet.transferQuote"](request, agent)).rejects.toThrow(/owner/);
+  const quote = await methods["wallet.transferQuote"](request, owner);
+  await expect(methods["wallet.confirmTransfer"]({ id: quote.id }, agent)).rejects.toThrow(/owner/);
+  lost = true;
+  const pending = await methods["wallet.confirmTransfer"]({ id: quote.id }, owner);
+  expect(pending.state).toBe("pending");
+  w.clock.now += 86400_000;
+  await w.wallet.close();
+  w.wallet = await w.reopen();
+  expect((await w.wallet.confirmTransfer(quote.id)).signature).toBe(pending.signature);
+  await expect(w.wallet.quoteTransfer(request)).rejects.toThrow(/awaiting confirmation/);
+  expect(sends).toBe(1);
+  expect(await w.balance(request.to)).toBe(0n);
+});

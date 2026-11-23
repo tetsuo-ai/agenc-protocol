@@ -46,15 +46,20 @@ export async function readAccountChange(rpc: Rpc<GetTransactionApi>, account: Ad
       externalSender: meta.err === null && credits.length === 1 ? credits[0]! : null };
 }
 
-function classify(state: WalletState, change: AccountChange, own: ReadonlySet<string>): HistoryRow {
+export function classifyChange(state: WalletState, change: AccountChange, own: ReadonlySet<string>): HistoryRow {
   if (change.failed) return { ...change, kind: "fee" };
+  const op = Object.values(state.moneyOperations ?? {}).find(row => row.receipt.signature === change.signature);
+  if (op) return { ...change, ...(op.jobId && { jobId: op.jobId }), kind:
+    op.kind === "rating" ? "rating" : op.kind === "retirement" ? "stake return" : "transfer" };
   for (const job of Object.values(state.jobs)) {
     const effect = Object.entries(job.signatures).find(([, sig]) => sig === change.signature)?.[0];
     if (effect) return { ...change, jobId: job.id, kind: effect === "close" ? "rent" :
-      effect === "cancel" || (effect === "settle" && job.outcome === "refunded") ? "refund" : "settlement" };
+      effect === "cancel" || (effect === "settle" && job.outcome === "refunded") ? "refund" :
+      effect === "accept" || effect === "settle" ? "settlement" : effect === "hire" ? "job funding" :
+      effect === "approval" ? "job check" : effect === "rate" ? "rating" : "job update" };
   }
   if (change.externalSender && !own.has(change.externalSender)) return { ...change, kind: "deposit" };
-  if (Object.values(state.moneyOperations ?? {}).some(op => op.receipt.signature === change.signature) || change.externalSender)
+  if (change.externalSender)
     return { ...change, kind: "transfer" };
   return { ...change, kind: BigInt(change.delta) === -BigInt(change.payerFee) && BigInt(change.payerFee) > 0n ? "fee" : "other" };
 }
@@ -71,7 +76,7 @@ export async function indexAccountChanges(chain: Chain, store: StateStore, accou
     for (const change of page.rows) {
       const key = change.signature + "/" + account;
       if (rows[key]) continue;
-      const row = classify(s, change, own);
+      const row = classifyChange(s, change, own);
       rows[key] = row;
       if (row.kind === "deposit") onDeposit(s, row);
     }

@@ -1,7 +1,7 @@
 import { publishTaskReview } from "./task-review-publication.js";
 import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/task-review.js";
 import { contestStake } from "./contest-retirement.js";
-import { indexAccountChanges } from "./money-history.js";
+import { classifyChange, indexAccountChanges } from "./money-history.js";
 import { operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
@@ -6327,7 +6327,13 @@ export class AgencWallet {
   /** Notice money that arrived in the main balance from outside. */
   moneyHistory(jobId?: string) {
     const state = this.#store.state;
-    return { rows: Object.values(state.moneyRows ?? {}).filter(row => !jobId || row.jobId === jobId).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)),
+    const own = new Set(this.#walletIds().map(account => String(account.address)));
+    // A tick can observe the signature before its job finishes recording it.
+    const rows = Object.values(state.moneyRows ?? {}).map(row => {
+      if (row.jobId || row.kind !== "other") return row;
+      return classifyChange(state, row, own);
+    });
+    return { rows: rows.filter(row => !jobId || row.jobId === jobId).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)),
       gaps: Object.entries(state.moneyCursors ?? {}).flatMap(([account, cursor]) => (cursor.gap ?? cursor.missingCheckpoint) ? [{ account, message: (cursor.gap ?? cursor.missingCheckpoint)! }] : []) };
   }
 

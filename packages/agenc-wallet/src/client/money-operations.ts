@@ -18,7 +18,7 @@ export interface AccountChange {
   externalSender: string | null; failed: boolean;
 }
 export interface HistoryRow extends AccountChange {
-  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "other";
+  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "other";
   jobId?: string;
 }
 
