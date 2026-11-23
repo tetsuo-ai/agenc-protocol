@@ -177,6 +177,9 @@ function statusText(
   usdPerSol: number | null,
 ): string {
   const amount = formatMoney(price);
+  if (job.role === "buying" && status === "delivered" && job.tokenReward) {
+    return "Delivered. This wallet cannot pay token rewards.";
+  }
   if (
     job.role === "buying" &&
     job.refundBlockedLamports !== undefined &&
@@ -305,7 +308,7 @@ export function jobView(
   // Only a hired service can be rated: a rating is kept on its listing.
   const canRate = buying && kind === "hire" && status === "paid" && job.rating === null && !job.tidied;
   // Turning a delivery down is a person's call.
-  const canTurnDown = buying && status === "delivered" && context.isOwner;
+  const canTurnDown = buying && status === "delivered" && context.isOwner && !job.tokenReward;
   return {
     id: job.id,
     role: job.role,
@@ -327,7 +330,7 @@ export function jobView(
     result: job.result === null || (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked)
       ? null : { ...job.result, files: job.result.files ?? [] },
     autoApproveAt:
-      status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
+      status === "delivered" && !job.tokenReward && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     autoRefundAt: status === "waiting" ? job.autoRefundAt : null,
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
@@ -343,7 +346,7 @@ export function jobView(
       revision9TurnDown(job)!.disputeOpen &&
       revision9TurnDown(job)!.providerSuspended !== true,
     approvalInMarket: buying && job.payer !== "agent",
-    canApprove: buying && status === "delivered",
+    canApprove: buying && status === "delivered" && !job.tokenReward,
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.
     canAskChanges: buying && status === "delivered" && context.changesCanBeSent,

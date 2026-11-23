@@ -111,8 +111,10 @@ export async function quoteReview(chain: Chain, jobId: string, task: Address, pr
   const actions: ReviewAction[] = [];
   const pending = buying && held && !held.isCompleted && held.task === task && held.worker === provider && account.status === TaskStatus.PendingValidation && submission.account.status === SubmissionStatus.Submitted;
   const now = pending ? await chain.clusterTime() : null;
-  const canPay = now !== null && now <= Number(submission.account.reviewDeadlineAt);
-  if (canPay) {
+  const reviewOpen = now !== null && now <= Number(submission.account.reviewDeadlineAt);
+  // The wallet's settlement builder supplies native reward accounts only.
+  const canPay = reviewOpen && account.rewardMint.__option === "None";
+  if (reviewOpen) {
     if (account.taskType === TaskType.Exclusive && account.rewardMint.__option === "None") actions.push("reject");
     if (!(account.taskType === TaskType.Competitive && account.reserved[0]! >= 1) &&
         submission.account.submissionCount < 3) actions.push("change");

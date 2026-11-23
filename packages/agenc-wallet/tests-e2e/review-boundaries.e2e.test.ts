@@ -146,6 +146,28 @@ it("recovers a lost broadcast acknowledgement and charges the signature once acr
   expect(state().agents[agent.id]!.refills.filter(row => row.id?.startsWith("review:")).map(row => row.lamports)).toEqual(["5000"]);
 });
 
+it("offers only an executable change request for a legacy token reward", async () => {
+  world = await startWorld();
+  const agent = await buyer();
+  const job = await hire(agent.id);
+  await world.sandbox.workOnce();
+  await world.wallet.getJob(job.id, true);
+  const svm = world.sandbox.market.svm;
+  const raw = svm.getAccount(address(job.task!))!;
+  if (!raw.exists) throw new Error("Missing task");
+  const task = getTaskDecoder().decode(raw.data);
+  svm.setAccount({ ...raw, data: getTaskEncoder().encode({ ...task, rewardMint: some(address(agent.address)) }) } as never);
+  const delivered = await world.wallet.getJob(job.id, true);
+  expect(delivered).toMatchObject({ canApprove: false, canRefund: false, canAskChanges: true, autoApproveAt: null });
+  expect(delivered.statusText).not.toMatch(/approve it to pay|it is paid/i);
+  const quote = (await world.wallet.reviewRecord(job.id)).quote!;
+  expect(quote).toMatchObject({ canPay: false, actions: ["change"] });
+  await expect(world.wallet.approveJob(job.id, undefined, true, undefined, quote.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+  expect(state().reviewIntents?.[job.id]).toBeUndefined();
+  const draft = await world.wallet.draftReview(job.id, "change", "Add the missing title.");
+  expect((await world.wallet.confirmReview(job.id, draft, true)).status).toBe("changes_requested");
+});
+
 it("filters contest, multi-worker and token actions using the submitted job's chain terms", async () => {
   world = await startWorld();
   const agent = await buyer();

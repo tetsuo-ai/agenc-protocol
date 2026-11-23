@@ -794,6 +794,8 @@ export interface TurnDownOnChain {
 
 export interface JobOnChain {
   status: ChainTaskStatus;
+  /** Closed markers no longer carry the reward mint. */
+  tokenReward?: boolean;
   /** Unix seconds; 0 when the task has no deadline. */
   deadline: number;
   rewardLamports: bigint;
@@ -914,6 +916,7 @@ export async function inspectJob(
     status,
     deadline: Number(account.deadline),
     rewardLamports: account.rewardAmount,
+    tokenReward: account.rewardMint.__option === "Some",
     workers: account.currentWorkers,
     completions: account.completions,
     activated: await isActivated(chain, task),

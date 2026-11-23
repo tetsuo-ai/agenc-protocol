@@ -3078,6 +3078,7 @@ export class AgencWallet {
     const turnDown = turnDownRecord(seen.turnDown);
     const changed =
       job.chainStatus !== seen.status ||
+      (seen.tokenReward !== undefined && Boolean(job.tokenReward) !== seen.tokenReward) ||
       job.deadline !== seen.deadline ||
       job.autoRefundAt !== autoRefundAt ||
       job.reviewDeadlineAt !== reviewDeadlineAt ||
@@ -3087,6 +3088,7 @@ export class AgencWallet {
     if (!changed) return;
     this.#patchJob(job.id, (entry) => {
       entry.chainStatus = seen.status;
+      if (seen.tokenReward !== undefined) entry.tokenReward = seen.tokenReward;
       entry.deadline = seen.deadline;
       entry.reviewDeadlineAt = reviewDeadlineAt;
       entry.result = result;

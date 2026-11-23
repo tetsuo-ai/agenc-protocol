@@ -233,6 +233,8 @@ export interface JobRecord {
   approvalAttemptAt?: number | null;
 
   chainStatus: ChainTaskStatus | null;
+  /** Learned from the task account, including when refreshing an older record. */
+  tokenReward?: boolean;
   /** Unix seconds: the provider's deadline. */
   deadline: number | null;
   /** Unix seconds: when an unreviewed delivery pays out by itself. */
