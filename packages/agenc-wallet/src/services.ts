@@ -33,6 +33,7 @@ export type DetailsState = "ready" | "loading" | "unavailable";
 
 /** One service as a catalog source reports it (chain-shaped, not display). */
 export interface CatalogRow {
+  listingVersion?: string;
   maxOpenJobs?: number;
   operatorFeeBps?: number;
   operator?: string | null;
@@ -339,6 +340,7 @@ function safeAddress(value: unknown): Address | null {
 
 function safeBigInt(value: unknown): bigint | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
+  if (typeof value === "number" && !Number.isSafeInteger(value)) return null;
   const text = String(value);
   if (!/^(?:0|[1-9][0-9]{0,19})$/.test(text)) return null;
   return BigInt(text);
@@ -461,7 +463,7 @@ interface ListedService {
     | "rating"
     | "ratingCount"
     | "jobsDone"
-    | "maxOpenJobs" | "operatorFeeBps" | "operator"
+    | "listingVersion" | "maxOpenJobs" | "operatorFeeBps" | "operator"
     | "deliverySecs"
   >;
   /** Words the list itself carried, used when the description gives none. */
@@ -508,10 +510,11 @@ function describedRow(
 function withoutRepeats(listed: readonly ListedService[]): ListedService[] {
   const best = new Map<string, ListedService>();
   const order: string[] = [];
-  listed.forEach((entry, index) => {
+  listed.forEach((entry) => {
     const key =
-      entry.specHashHex === null
-        ? `single ${index}`
+      entry.specHashHex === null || entry.base.deliverySecs === null || entry.base.maxOpenJobs === undefined ||
+      entry.base.operatorFeeBps === undefined || entry.base.operator === undefined || (entry.base.operatorFeeBps > 0 && !entry.base.operator)
+        ? `listing ${entry.base.listing}`
         : [entry.base.providerAgent, entry.specHashHex, entry.base.priceLamports, entry.base.deliverySecs,
            entry.base.maxOpenJobs, entry.base.operatorFeeBps, entry.base.operator].join(" ");
     const kept = best.get(key);
@@ -746,6 +749,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       ratingCount > 0 && average !== null && average >= 1 && average <= 5 ? average : null;
     const settled = finite(provenance?.settledHireCount);
     const deadline = finite(item.defaultDeadlineSecs);
+    const listingVersion = safeBigInt(item.version);
     const specHash = typeof item.specHash === "string" ? item.specHash.toLowerCase() : "";
     const specUri = typeof item.specUri === "string" ? item.specUri.trim() : "";
     return {
@@ -754,8 +758,10 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
         providerAgent,
         name,
         priceLamports: price,
+        ...(listingVersion !== null && listingVersion >= 0n && { listingVersion: listingVersion.toString() }),
         ...(Number.isInteger(item.maxOpenJobs) && Number(item.maxOpenJobs) >= 0 && Number(item.maxOpenJobs) <= 65535 && { maxOpenJobs: Number(item.maxOpenJobs) }),
-        ...(Number.isInteger(item.operatorFeeBps) && Number(item.operatorFeeBps) >= 0 && Number(item.operatorFeeBps) <= 2000 && { operatorFeeBps: Number(item.operatorFeeBps), operator: safeAddress(item.operator) }),
+        ...(Number.isInteger(item.operatorFeeBps) && Number(item.operatorFeeBps) >= 0 && Number(item.operatorFeeBps) <= 2000 && { operatorFeeBps: Number(item.operatorFeeBps) }),
+        ...(item.operator === null || safeAddress(item.operator) !== null ? { operator: safeAddress(item.operator) } : {}),
         rating,
         ratingCount: Math.max(0, Math.trunc(ratingCount)),
         jobsDone: Math.max(0, Math.trunc(settled ?? 0)),
