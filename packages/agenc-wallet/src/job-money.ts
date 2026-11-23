@@ -2,6 +2,7 @@
 // can buy an extra lamport at a ceiling, even when both inputs look integral.
 import { APPROVAL_FEE_LAMPORTS } from "./approval.js";
 import { WalletError } from "./errors.js";
+import { childHolds } from "./child-hire-store.js";
 import type { AgentRecord } from "./store.js";
 
 export type JobDeposits = { total: bigint; kept: bigint; networkFees: bigint; cancellationRent: bigint };
@@ -42,9 +43,14 @@ export function microcents(lamports: bigint, usdPerSol: number): bigint {
 }
 
 /** Unknown charges from an older wallet require approval until they age out. */
-export function remainingJobMicrocents(agent: AgentRecord, now: number, except?: string): bigint {
+export function remainingJobMicrocents(agent: AgentRecord, now: number, except?: string, reviewFor?: string): bigint {
   let room = BigInt(agent.policy.refill.perDayCents) * 1_000_000n;
+  const holds = childHolds(agent).childHolds;
+  for (const [id, hold] of Object.entries(holds ?? {})) {
+    if (id !== except) room -= microcents((reviewFor === id ? 0n : BigInt(hold.review)) + (hold.funded ? 0n : BigInt(hold.purchase)), hold.rate);
+  }
   for (const entry of agent.jobSpends ?? []) {
+    if (holds?.[entry.id]?.funded === false) continue;
     if (entry.id === except || entry.at <= now - 86_400_000) continue;
     if (entry.microcents === null) return 0n;
     room -= BigInt(entry.microcents);
