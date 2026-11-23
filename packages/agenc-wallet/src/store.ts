@@ -166,6 +166,8 @@ export type ChainTaskStatus =
 export interface JobRecord {
   terms?: JobTerms;
   inputFingerprint?: string;
+  /** Null when the buyer left the maximum to the quote. Older journals omit this field. */
+  buyerMaxPriceCents?: number | null;
   maxPriceCents?: number;
   /** Costs and expiry of the exact quote authorized for this job. */
   ownerApproved?: boolean;

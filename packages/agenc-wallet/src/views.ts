@@ -381,6 +381,7 @@ function savedService(
   const saved: Partial<NonNullable<ApprovalRecord["service"]>> = service;
   return {
     ...service,
+    summary: saved.details === "unavailable" || saved.details === "loading" ? null : service.summary,
     description: saved.description ?? null,
     tags: saved.tags ?? [],
     inputs: saved.inputs ?? [],

@@ -26,7 +26,7 @@ import { formatMoney } from "./client/format.js";
 import type { AmountInput, WalletEvent } from "./client/protocol.js";
 import { ceilingLamports, jobNetworkFees, microcents, remainingJobMicrocents, reserveJobSpend, type JobDeposits } from "./job-money.js";
 import { checkedAcceptance, jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
-import { buildJobQuote, checkPriceLimit, jobCosts } from "./job-quote.js";
+import { legacyRefreshLimit, buildJobQuote, checkPriceLimit, jobCosts } from "./job-quote.js";
 import type { JobTerms } from "./client/types.js";
 import { WALLET_CAPABILITIES } from "./client/types.js";
 import type {
@@ -1826,7 +1826,7 @@ export class AgencWallet {
     }
     const acceptance = checkedAcceptance(params.acceptance);
     const key = params.idempotencyKey?.trim() || null;
-    const again = await this.#sameCall(agent.id, key, "hire", fingerprint);
+    const again = await this.#sameCall(agent.id, key, "hire", fingerprint, () => jobIdentity(params, quoteOnly, "raw"));
     if (again !== null) return again;
 
     const listing = toAddress(params.listing, "service");
@@ -1891,6 +1891,7 @@ export class AgencWallet {
     const record: JobRecord = {
       id: jobId,
       inputFingerprint: fingerprint,
+      buyerMaxPriceCents: params.maxPriceCents ?? null,
       ...(params.maxPriceCents !== undefined && { maxPriceCents: params.maxPriceCents }),
       terms: jobTerms,
       role: "buying",
@@ -2002,6 +2003,7 @@ export class AgencWallet {
     key: string | null,
     kind: "hire" | "request",
     fingerprint?: string,
+    rawFingerprint?: () => string,
   ): Promise<{ job: JobView; approval: ApprovalView | null } | null> {
     if (key === null) return null;
     const panel = Array.from(this.#panelQuotes.values()).find(({ job }) => job.agentId === agentId && job.idempotencyKey === key && job.kind === kind);
@@ -2014,7 +2016,9 @@ export class AgencWallet {
       (job) => job.agentId === agentId && job.idempotencyKey === key && (job.kind ?? "hire") === kind,
     ) ?? this.#store.state.callReceipts?.[JSON.stringify([agentId, kind, key])];
     if (existing === undefined) return null;
-    if (fingerprint) this.#checkFingerprint(existing.inputFingerprint, fingerprint);
+    if (fingerprint && existing.inputFingerprint !== fingerprint) {
+      this.#checkFingerprint(existing.inputFingerprint, rawFingerprint?.() ?? fingerprint);
+    }
     const approval = Object.values(this.#store.state.approvals).find(
       (entry) => entry.jobId === existing.id && entry.status === "pending",
     );
@@ -2154,7 +2158,7 @@ export class AgencWallet {
   async #post(params: Parameters<AgencWallet["post"]>[0], fingerprint: string): Promise<{ job: JobView; approval: ApprovalView | null }> {
     const agent = this.#agentRecord(params.agentId);
     const key = params.idempotencyKey?.trim() || null;
-    const again = await this.#sameCall(agent.id, key, "request", fingerprint);
+    const again = await this.#sameCall(agent.id, key, "request", fingerprint, () => jobIdentity(params, false, "raw"));
     if (again !== null) return again;
     const terms = await this.#requestTerms(params);
     const rate = terms.rate;
@@ -2195,7 +2199,7 @@ export class AgencWallet {
 
   async #postFromBalance(params: Parameters<AgencWallet["postFromBalance"]>[0], quoteOnly: boolean, fingerprint: string) {
     const key = params.idempotencyKey?.trim() || null;
-    const again = await this.#sameCall("", key, "request", fingerprint);
+    const again = await this.#sameCall("", key, "request", fingerprint, () => jobIdentity(params, quoteOnly, "raw"));
     if (again !== null) return again;
     const terms = await this.#requestTerms(params);
     // Said at once here; checked again just before anything is sent.
@@ -2319,7 +2323,13 @@ export class AgencWallet {
       if (rate === null) throw new WalletError("NETWORK", "Dollar prices are still unavailable.");
       const old = this.#jobRecord(entry.jobId);
       if (!old.payer) throw new WalletError("NOT_AVAILABLE", "Request a new quote.");
-      const result = await this.#queueJob(old, old.payer, entry.service, rate, false, id);
+      // Older priced hires stored only the effective maximum. Release it only
+      // if the request fingerprint proves that the buyer gave no limit.
+      const cap = old.buyerMaxPriceCents === undefined
+        ? legacyRefreshLimit(old)
+        : old.buyerMaxPriceCents ?? undefined;
+      checkPriceLimit(BigInt(old.priceLamports), cap, rate);
+      const result = await this.#queueJob({ ...old, maxPriceCents: cap }, old.payer, entry.service, rate, false, id);
       return { approval: result.approval! };
     });
   }

@@ -1,4 +1,6 @@
 import { ceilingLamports, microcents, type JobDeposits } from "./job-money.js";
+import { money } from "./views.js";
+import { jobIdentity } from "./job-terms.js";
 import { FEE_HEADROOM_LAMPORTS } from "./market.js";
 import { WalletError } from "./errors.js";
 import type { ServiceView } from "./client/types.js";
@@ -14,6 +16,19 @@ export function checkPriceLimit(lamports: bigint, cap: number | undefined, rate:
   if (cap === undefined) return;
   if (rate === null) throw new WalletError("NETWORK", "Dollar prices are not available right now, so the price limit cannot be checked.");
   if (lamports > ceilingLamports(cap, rate)) throw new WalletError("PRICE_CHANGED", "The service costs more than the price limit.");
+}
+
+/** Recover the absent cap of a pre-upgrade chat hire when its stored inputs prove it. */
+export function legacyRefreshLimit(job: JobRecord): number | undefined {
+  if (job.kind === "hire" && job.terms && job.inputFingerprint) {
+    const input = { request: job.request, listing: job.listing, acceptance: job.acceptance };
+    for (const deadline of [undefined, job.terms.deadline]) {
+      for (const reviewWindowSecs of [undefined, job.terms.reviewWindowSecs]) {
+        if (jobIdentity({ ...input, deadline, reviewWindowSecs }, false) === job.inputFingerprint) return undefined;
+      }
+    }
+  }
+  return job.maxPriceCents;
 }
 
 /** Snapshot a job and its matching approval together. Both panel and agent requests use this quote. */
@@ -39,7 +54,12 @@ export function buildJobQuote(record: JobRecord, input: {
     jobId: job.id,
     agentId: job.agentId,
     kind: job.kind ?? "hire",
-    service,
+    service: service === null ? null : {
+      ...service,
+      ...(service.details !== "ready" && { summary: null, details: "unavailable" }),
+      price: money(job.priceLamports, rate),
+      marketFee: { bps: protocolFeeBps, amount: money(BigInt(job.priceLamports) * BigInt(protocolFeeBps) / 10_000n, rate) },
+    },
     request: job.request,
     acceptance: job.acceptance,
     ...(job.terms && { terms: job.terms }),

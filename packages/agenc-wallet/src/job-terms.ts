@@ -60,7 +60,7 @@ export function resolveJobTerms(input: TermsInput, clock: number, defaultReview:
 }
 
 /** Use the caller's amount and clock choice so a retry survives rate and clock changes. */
-export function jobIdentity(input: TermsInput & { request: string; acceptance?: string[]; listing?: string; expectedPriceLamports?: string; expectedSpecHash?: string; reward?: AmountInput; maxPriceCents?: number }, quoteOnly: boolean): string {
+export function jobIdentity(input: TermsInput & { request: string; acceptance?: string[]; listing?: string; expectedPriceLamports?: string; expectedSpecHash?: string; reward?: AmountInput; maxPriceCents?: number }, quoteOnly: boolean, acceptanceFormat: "normalized" | "raw" = "normalized"): string {
   if (typeof input.request !== "string") throw new WalletError("BAD_REQUEST", "Describe the work.");
   const reward = input.reward;
   if (reward !== undefined && (typeof reward !== "object" || reward === null || ("usdCents" in reward && "lamports" in reward))) {
@@ -68,7 +68,7 @@ export function jobIdentity(input: TermsInput & { request: string; acceptance?: 
   }
   const amount = reward && ("usdCents" in reward ? ["usdCents", reward.usdCents] : ["lamports", reward.lamports]);
   return createHash("sha256").update(JSON.stringify([
-    quoteOnly, input.request.trim(), checkedAcceptance(input.acceptance), input.listing, amount, input.maxPriceCents,
+    quoteOnly, input.request.trim(), acceptanceFormat === "raw" ? input.acceptance ?? [] : checkedAcceptance(input.acceptance), input.listing, amount, input.maxPriceCents,
     input.deadline, input.deadline === undefined && !input.listing ? input.deadlineDays ?? 7 : input.deadlineDays,
     input.reviewWindowSecs, input.minReputation ?? 0, input.requiredCapabilities ?? "1",
     ...(input.expectedPriceLamports || input.expectedSpecHash ? [input.expectedPriceLamports, input.expectedSpecHash] : []),
