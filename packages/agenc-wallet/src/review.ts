@@ -78,6 +78,12 @@ export function reviewChargeCents(cost: bigint, usdPerSol: number): number {
   return Number((cost * rateMicros + 9_999_999n) / 10_000_000n) / 1_000_000;
 }
 
+/** A fixed task deadline and a claim expiry both limit resubmission. Zero means no fixed bound. */
+export function resubmissionDeadline(taskDeadline: bigint, claimExpiry: bigint): number | null {
+  const limits = [Number(taskDeadline), Number(claimExpiry)].filter(seconds => seconds > 0);
+  return limits.length ? Math.min(...limits) : null;
+}
+
 export async function quoteReview(chain: Chain, jobId: string, task: Address, provider: Address, buying: boolean, rate: number | null, funding?: { payer: string; dailyLimitCents: number | null }) {
   const [account, submission, [validation], [claim]] = await Promise.all([
     readTask(chain, task), readSubmission(chain, task, provider), findTaskValidationConfigPda({ task }), findClaimPda({ task, bidder: provider }),
@@ -93,8 +99,7 @@ export async function quoteReview(chain: Chain, jobId: string, task: Address, pr
       delivery: { deliveryHash: Buffer.from(submission.account.proofHash).toString("hex"), submissionCount: submission.account.submissionCount },
     } : null;
   const held = await readProgramAccount(chain, claim, getTaskClaimDiscriminatorBytes(), data => getTaskClaimDecoder().decode(data));
-  const limits = [Number(account.deadline), Number(held?.expiresAt ?? 0)].filter(n => n > 0);
-  const due = limits.length ? Math.min(...limits) : null;
+  const due = resubmissionDeadline(account.deadline, held?.expiresAt ?? 0n);
   const revising = (account.status === TaskStatus.InProgress || account.status === TaskStatus.PendingValidation) && held && !held.isCompleted && submission.account.status === SubmissionStatus.Rejected;
   const round = submission.account.submissionCount - (revising ? 0 : 1);
   // Only request_changes extends these two deadlines. Until the claim closes,

@@ -6,6 +6,7 @@
 // Nothing here touches a network or real funds. It needs the optional
 // `litesvm` native module (loaded only when a sandbox is started).
 import type { ReviewedDelivery } from "./client/reviews.js";
+import { resubmissionDeadline } from "./review.js";
 import { reviewAnchor, type ReviewAnchor } from "./review-history.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +47,8 @@ import {
   getProtocolConfigDecoder,
   getProtocolConfigEncoder,
   getServiceListingDecoder,
+  getTaskClaimDecoder,
+  getTaskDecoder,
   getTaskModerationSize,
   parseAgencCoordinationEvents,
   taskThread,
@@ -456,7 +459,16 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             balanceChange: address => BigInt(svm.getBalance(address) ?? 0) - balances.get(address)!,
           }, memo);
           if (anchor?.intendedDelivery && accounts[1]) anchor.appliedDelivery = submissions.get(accounts[1]);
-          if (anchor && subject) reviewEntries.set(subject, [...(reviewEntries.get(subject) ?? []), anchor]);
+          const claim = accounts[1];
+          if (anchor?.action === "change" && subject && claim) {
+            const taskAccount = svm.getAccount(subject);
+            const claimAccount = svm.getAccount(claim);
+            if (taskAccount?.exists && claimAccount?.exists) {
+              const due = resubmissionDeadline(getTaskDecoder().decode(taskAccount.data).deadline, getTaskClaimDecoder().decode(claimAccount.data).expiresAt);
+              if (due !== null) anchor.deadline = due * 1000;
+            }
+          }
+          if (anchor && claim) reviewEntries.set(claim, [...(reviewEntries.get(claim) ?? []), anchor]);
           const settled = settlementOf({
             programAddress,
             accounts: accounts as Address[],
@@ -532,7 +544,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     },
     gpa,
     findSettlementWorker: async (task) => settledBy.get(task) ?? null,
-    reviewHistory: async task => ({ entries: reviewEntries.get(task) ?? [], complete: true }),
+    reviewHistory: async (_task, claim) => ({ entries: reviewEntries.get(claim) ?? [], complete: true }),
     findSettledDelivery: async (task, creator) => {
       const worker = settledBy.get(task);
       const logs = settledLogs.get(task);

@@ -1,8 +1,9 @@
 import { AccountRole, signature as toSignature, type Address, type Signature } from "@solana/kit";
 import {
   AgencCoordinationInstruction as Ix, AGENC_COORDINATION_PROGRAM_ADDRESS,
-  findTaskPda, TaskType, parseAgencCoordinationEvents, parseAgencCoordinationInstruction,
+  parseAgencCoordinationEvents, parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
+import { closedRevisionDeadline } from "./review-deadline.js";
 import { settledDeliveryFromLogs } from "./delivery-history.js";
 import { reviewRead } from "./review.js";
 import { intendedDelivery } from "./review-memo.js";
@@ -90,7 +91,7 @@ function lamports(value: unknown): bigint | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
 }
 
-interface HistoryTransaction {
+export interface HistoryTransaction {
   transaction?: { signatures?: string[]; message?: { accountKeys?: (string | { pubkey: string })[]; instructions?: unknown[] } };
   meta?: { err: unknown; fee?: unknown; preBalances?: unknown[]; postBalances?: unknown[]; logMessages?: string[]; innerInstructions?: { instructions: unknown[] }[] };
 }
@@ -158,54 +159,8 @@ export function deliveryNotice(entry: ReviewAnchor): string | undefined {
   return `The buyer reviewed delivery ${intended.submissionCount}. The ${decision} was confirmed. Its affected delivery could not be verified.`;
 }
 
-// Before the deadline was logged, an exclusive job with a fixed deadline
-// started its claim one hour past that deadline. Only its own change requests
-// could extend either bound. Replay the original creation and submission events
-// so a device seeing the closed job for the first time can recover each round.
-async function legacyDeadline(rpc: SettlementHistoryRpc, task: Address, claim: Address, change: ReviewAnchor): Promise<number | null> {
-  let cursor = toSignature(change.signature);
-  let baseDue: number | undefined;
-  const windows = new Map<number, number>();
-  const requested = new Map([[change.round!, change.at]]);
-  const until = performance.now() + 2400;
-  while (performance.now() < until && baseDue === undefined) {
-    const rows = await reviewRead(rpc.getSignaturesForAddress(task, { limit: 32, commitment: "confirmed", before: cursor }).send(), 800);
-    if (!rows?.length) return null;
-    const receipts = await Promise.all(rows.map(async row => {
-      if (typeof row.signature !== "string" || row.err !== null) return null;
-      const tx = await reviewRead(rpc.getTransaction(row.signature, {
-        encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0,
-      }).send(), 800) as HistoryTransaction | null;
-      return tx?.meta?.err === null && tx.transaction?.signatures?.[0] === row.signature ? tx.meta.logMessages : null;
-    }));
-    for (const logs of receipts) {
-      for (const event of parseAgencCoordinationEvents(logs ?? [])) {
-        if (event.eventName === "TaskCreated" && (await findTaskPda({ creator: event.data.creator, taskId: event.data.taskId }))[0] === task) {
-          if (event.data.taskType !== TaskType.Exclusive || event.data.deadline <= 0n) return null;
-          baseDue = Number(event.data.deadline) * 1000;
-        } else if (event.eventName === "TaskResultSubmitted" && event.data.task === task && event.data.claim === claim) {
-          windows.set(event.data.submissionCount, Number(event.data.reviewDeadlineAt - event.data.submittedAt));
-        } else if (event.eventName === "TaskChangesRequested" && event.data.task === task && event.data.claim === claim) {
-          requested.set(event.data.round, Number(event.data.timestamp) * 1000);
-        }
-      }
-    }
-    const next = rows.at(-1)?.signature;
-    if (typeof next !== "string" || next === cursor || rows.length < 32) break;
-    cursor = toSignature(next);
-  }
-  if (baseDue === undefined) return null;
-  for (let round = 1; round <= change.round!; round++) {
-    const time = requested.get(round);
-    const window = windows.get(round);
-    if (time === undefined || window === undefined || window <= 0) return null;
-    baseDue = Math.max(baseDue, time + Math.max(86400, window) * 1000);
-  }
-  return baseDue;
-}
-
 export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address, claim: Address,
-  cache?: Map<string, readonly ReviewAnchor[]>, cursor?: string): Promise<ReviewHistory> {
+  cache?: Map<string, readonly ReviewAnchor[]>, cursor?: string, claimDuration?: () => Promise<bigint>): Promise<ReviewHistory> {
   const entries: ReviewAnchor[] = [];
   let before: Signature | undefined = cursor ? toSignature(cursor) : undefined;
   let complete = true;
@@ -213,7 +168,7 @@ export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address
   const finish = async (next?: Signature): Promise<ReviewHistory> => {
     await Promise.all(entries.map(async (entry, i) => {
       if (entry.action !== "change" || entry.deadline !== null || !entry.round) return;
-      const deadline = await legacyDeadline(rpc, task, claim, entry).catch(() => null);
+      const deadline = await closedRevisionDeadline(rpc, task, claim, entry, claimDuration).catch(() => null);
       entries[i] = { ...entry, deadline };
       if (deadline === null) complete = false;
     }));
@@ -279,7 +234,6 @@ export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address
             // Older payments have no delivery memo. Their acceptance event still has to be present.
             if ((instructionType === Ix.AcceptTaskResult || instructionType === Ix.AutoAcceptTaskResult) && !parseAgencCoordinationEvents(meta.logMessages!).some(event =>
               event.eventName === "TaskResultAccepted" && event.data.task === task && event.data.claim === claim)) verified = false;
-
           } catch { verified = false; }
         }
       }

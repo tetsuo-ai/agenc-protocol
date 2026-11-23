@@ -40,6 +40,7 @@ import {
   readSettlementWorker,
   type SettlementFacts,
 } from "./settlement.js";
+import { readProtocolConfig } from "./market.js";
 import { reviewBlockhash } from "./review-blockhash.js";
 import { readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
 import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
@@ -403,7 +404,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     return outcome === "expired" ? "failed" : outcome;
   }
   const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
-  return usesScopedRequests<Chain>({
+  const chain: Chain = usesScopedRequests<Chain>({
     reviewSendOutcome,
     async reviewDebit(signature, payer) {
       const tx = await rpc.getTransaction(signature as Signature, {
@@ -516,12 +517,14 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
-    reviewHistory: (task, claim, before) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions, before)),
+    reviewHistory: (task, claim, before) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions, before,
+      async () => (await readProtocolConfig(chain)).maxClaimDuration)),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>
       network(() => readSettlementFacts(rpc, task, creator, options)),
   });
+  return chain;
 }
 
 /** Default public endpoints. A dedicated RPC is faster and less rate-limited. */
