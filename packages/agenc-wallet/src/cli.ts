@@ -264,6 +264,7 @@ interface OpenService {
 }
 
 interface ServeTarget {
+  background?: boolean;
   network: WalletNetwork;
   dataDir: string;
   socketPath: string;
@@ -325,6 +326,8 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
   const server = await serveWallet({
     wallet,
     socketPath: target.socketPath,
+    grantFile: path.join(dataDir, "connection-grants.json"),
+    network, background: target.background === true,
     ownerToken: bootstrap.ownerToken,
     agentExists: (agentId) => wallet.hasAgent(agentId),
     log,
@@ -392,7 +395,7 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
     rpcUrlFlag: values["rpc-url"] as string | undefined,
   };
   if (typeof values["unlock-socket"] === "string") {
-    return serveLocked(target, path.resolve(values["unlock-socket"]));
+    return serveLocked({ ...target, background: true }, path.resolve(values["unlock-socket"]));
   }
   const bootstrapFile = path.join(baseDir, "bootstrap.json");
   // A host that manages this service writes the start-up line to stdin and
@@ -599,6 +602,7 @@ async function main(): Promise<number> {
     return values.help === true ? 0 : 2;
   }
   if (command === "init") return init(values);
+  if (command === "public-discovery") return (await import("./public-discovery.js")).servePublicCatalog();
   if (command === "serve") return serve(values);
   if (command === "status") return status(values);
   if (command === "restore") return restore(values);

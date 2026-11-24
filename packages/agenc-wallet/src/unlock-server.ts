@@ -2,6 +2,7 @@
 // person's service manager waits here, locked, until its host hands it the
 // start-up line; afterwards a host proves it holds the unlock secret to be
 // told the owner credential. One JSON line each way.
+import { listenWindowsPipe } from "./client/windows-pipe.js";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
@@ -59,13 +60,13 @@ function sameHex(a: string, b: string): boolean {
  * start-up line (it throws when the line does not open it) and is never run
  * twice at once; `opened` says what runs once it has.
  */
-export function listenForUnlock(options: {
+export async function listenForUnlock(options: {
   socketPath: string;
   unlock: (startup: unknown) => Promise<void>;
   opened: () => OpenWallet | null;
   log: (line: string) => void;
 }): Promise<UnlockServer> {
-  preparePrivateSocket(options.socketPath);
+  if (process.platform !== "win32") preparePrivateSocket(options.socketPath);
   let unlocking: Promise<void> | null = null;
   const sockets = new Set<Socket>();
 
@@ -175,6 +176,10 @@ export function listenForUnlock(options: {
     });
   };
 
+  if (process.platform === "win32") {
+    const stop = await listenWindowsPipe(options.socketPath,serveConnection);
+    return {socketPath:options.socketPath,close:async () => { for (const socket of sockets) socket.destroy(); stop(); }};
+  }
   const server = createServer(serveConnection);
   return new Promise<UnlockServer>((resolve, reject) => {
     server.once("error", reject);

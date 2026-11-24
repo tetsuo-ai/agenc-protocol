@@ -1,3 +1,4 @@
+import { runMarketTool, MARKET_TOOLS } from "./client/tools.js";
 // The wallet behind a local socket: newline-delimited JSON over a Unix domain
 // socket (a named pipe on Windows). No TCP listener, ever.
 //
@@ -5,7 +6,7 @@
 // everything. An AGENT connection is bound to one agent id when it says
 // hello and can reach only the methods in AGENT_METHODS, always as itself.
 // The binding comes from the credential, never from a request argument.
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { tmpdir } from "node:os";
 import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
@@ -21,9 +22,24 @@ import {
   type WalletEvent,
   type WalletMethod,
 } from "./client/protocol.js";
-import { createLineReader } from "./client/socket-client.js";
+import { createLineReader, WalletClientError, type WalletClient } from "./client/socket-client.js";
 import { describeError, toWalletErrorShape, WalletError } from "./errors.js";
 import type { AgencWallet } from "./wallet.js";
+
+import { featureCall, featureRoutes } from "./feature-dispatch.js";
+import { ConnectionGrants } from "./connection-grants.js";
+import { listenWindowsPipe } from "./client/windows-pipe.js";
+import type { ConnectionScope } from "./client/connections.js";
+
+const CONNECTION_METHODS = new Set(["connections.attach", "connections.tool", "connections.info", "connections.changes", "connections.subscribe",
+  "handoff.status", "handoff.delivery", "handoff.file", "handoff.propose"]);
+const READ_METHODS = new Set(["market.find", "jobs.list", "jobs.get", "jobs.wait", "jobs.delivery",
+  "jobs.reviewRecord", "jobs.callOutcome", "jobs.contestPage", "jobs.contestReceipts", "jobs.contestQuote",
+  "approvals.wait", "work.list", "jobs.inbox", "earn.operation", "listings.inquiries", "jobs.readDeliveryChunk"]);
+export function brokerSocketPath(socket: string): string {
+  if (process.platform === "win32") return socket + "-market";
+  return path.join(path.dirname(socket), createHash("sha256").update(socket).digest("hex").slice(0,12) + ".mcp");
+}
 
 const MAX_CONNECTIONS = 64;
 const MAX_IN_FLIGHT = 16;
@@ -68,6 +84,9 @@ export interface ServeWalletOptions {
   ownerToken: string;
   /** Agent ids that may connect. Called per hello, so new agents work. */
   agentExists: (agentId: string) => boolean;
+  grantFile?: string;
+  network?: string;
+  background?: boolean;
   log?: (line: string) => void;
 }
 
@@ -77,6 +96,7 @@ export interface WalletServer {
 }
 
 interface Session {
+  connection?: ConnectionScope;
   role: "owner" | "agent";
   agentId: string | null;
 }
@@ -102,10 +122,98 @@ function text(value: unknown, what: string): string {
   return value;
 }
 
-function handlers(wallet: AgencWallet): Handlers {
+function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options: ServeWalletOptions): Handlers {
+  const book = () => {
+    if (!grants) throw new WalletError("NOT_AVAILABLE", "Pairing is unavailable on this wallet.");
+    return grants;
+  };
+  const installation = (session: Session) => {
+    if (!session.connection) throw new WalletError("NOT_ALLOWED", "This needs a paired installation.");
+    return book().scope(session.connection.id);
+  };
   const owner = (session: Session): boolean => session.role === "owner";
   const scope = (session: Session): string | undefined => session.agentId ?? undefined;
-  return {
+  const table: Handlers = {
+    ...featureRoutes(wallet),
+    "connections.invite": async p => {
+      if (!wallet.hasAgent(p.agentId)) throw new WalletError("NOT_FOUND", "Choose an existing wallet agent.");
+      return book().invite(p);
+    },
+    "connections.attach": async (_,s) => book().attach(installation(s).id),
+    "connections.redeem": async p => book().redeem(p.ticket),
+    "connections.check": async p => book().scope(p.id),
+    "connections.list": async () => book().list(),
+    "connections.revoke": async p => book().revoke(p.id),
+    "connections.handoff": async p => {
+      const job = await wallet.getJob(text(p.jobId, "job"), true);
+      return book().grant(p.id, job.id, job.agentId, p.permissions);
+    },
+    "agents.self": async (_,s) => {
+      const agent = (await wallet.overview()).agents.find(a=>a.id === s.agentId);
+      if (!agent) throw new WalletError("NOT_FOUND","No connected agent.");
+      return {id:agent.id,address:agent.address};
+    },
+    "connections.info": async (_, s) => ({ ...installation(s), network: options.network ?? "sandbox", background: options.background === true }),
+    "connections.tool": async (p, s) => {
+      const grant = installation(s);
+      if (!MARKET_TOOLS.some(t => t.name === p.name)) throw new WalletError("BAD_REQUEST", "Unknown Market tool.");
+      const purchase = p.name === "market_hire" || p.name === "market_post";
+      if (purchase && (typeof p.operationId !== "string" ||
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(p.operationId)))
+        throw new WalletError("BAD_REQUEST", "A purchase needs a stable operation ID.");
+      if (p.lookup && !purchase) throw new WalletError("BAD_REQUEST", "Choose a purchase to look up.");
+      if (p.lookup) {
+        try { await wallet.callOutcome(grant.agentId, p.name === "market_hire" ? "hire" : "request", p.operationId!); }
+        catch (err) { if (err instanceof WalletError && err.code === "NOT_FOUND") return null; throw err; }
+      }
+      const client: WalletClient = {
+        role: "agent", agentId: grant.agentId, close() {},
+        async call(method, params) {
+          const current = installation(s);
+          if (!AGENT_METHODS.includes(method) || (current.access === "read" && !READ_METHODS.has(method))) {
+            throw new WalletClientError("NOT_ALLOWED", "The connection has read access only.");
+          }
+          try { return await table[method](params,s); }
+          catch (err) { if (err instanceof WalletError) throw new WalletClientError(err.code,err.message); throw err; }
+        },
+      };
+      return runMarketTool(client,grant.agentId,p.name,object(p.args),{
+        ...(p.operationId ? { idempotencyKey: p.operationId } : {}), readOutcomeOnly: p.lookup === true, approvalWaitMs: 1, statusWaitMs: 1000,
+      });
+    },
+    "connections.changes": async (p,s) => book().changes(installation(s).id, p.cursor),
+    "connections.subscribe": async (p,s) => {
+      const c = installation(s), jobId = text(p.jobId,"job");
+      try { await wallet.getJob(jobId, false, c.agentId); }
+      catch (error) {
+        if (!(error instanceof WalletError) || error.code !== "NOT_FOUND") throw error;
+        book().permission(c.id, jobId, "status");
+      }
+      return book().subscribe(installation(s).id, jobId);
+    },
+    "handoff.status": async (p,s) => {
+      const grant = book().permission(installation(s).id, p.jobId, "status");
+      const job = await wallet.getJob(grant.jobId, false, grant.payer);
+      book().permission(installation(s).id, p.jobId, "status");
+      return { jobId: job.id, payer: grant.payer, title: job.title, status: job.status, task: job.task, updatedAt: job.updatedAt };
+    },
+    "handoff.delivery": async (p,s) => {
+      const g = book().permission(installation(s).id,p.jobId,"artifacts");
+      const result = await wallet.jobDelivery(g.jobId,false,g.payer);
+      book().permission(installation(s).id,p.jobId,"artifacts");
+      return {result};
+    },
+    "handoff.file": async (p,s) => {
+      const g = book().permission(installation(s).id,p.jobId,"artifacts");
+      const file = await wallet.jobFile(g.jobId,text(p.sha256,"file"));
+      book().permission(installation(s).id,p.jobId,"artifacts");
+      return {file};
+    },
+    "handoff.propose": async (p,s) => {
+      const g = book().permission(installation(s).id,p.jobId,"propose");
+      if (!["change","reject","dispute"].includes(p.action)) throw new WalletError("BAD_REQUEST", "Choose a review proposal.");
+      return { draft: await wallet.draftReview(g.jobId,p.action,text(p.note,"note"),undefined,g.payer) };
+    },
     overview: () => wallet.overview(),
     "work.list": (p, session) => wallet.openWork(session.agentId ?? text(p.agentId, "agent"), p.offset, p.task),
     "work.quote": (p, session) => wallet.quoteWork(session.agentId ?? text(p.agentId, "agent"), text(p.task, "task"), p.action),
@@ -191,12 +299,12 @@ function handlers(wallet: AgencWallet): Handlers {
         scope(session),
       ),
     "jobs.approve": async (params, session) => ({
-      job: await wallet.approveJob(
+      job: await featureCall(wallet, "approveJob",
         text(params.jobId, "job"),
         params.rating,
         owner(session),
         scope(session),
-        params.quoteId,
+        params.quoteId, params.ratingQuoteId,
       ),
     }),
     "jobs.reviewRecord": (params, session) => wallet.reviewRecord(text(params.jobId, "job"), scope(session), params),
@@ -221,11 +329,11 @@ function handlers(wallet: AgencWallet): Handlers {
       job: await wallet.disputeTurnDown(text(params.jobId, "job"), owner(session), scope(session)),
     }),
     "jobs.rate": async (params, session) => ({
-      job: await wallet.rateJob(
+      job: await featureCall(wallet, "rateJob",
         text(params.jobId, "job"),
         params.score,
         owner(session),
-        scope(session),
+        scope(session), params.ratingQuoteId,
       ),
     }),
     "activity.list": async (params) => ({ activity: await wallet.listActivity(params.limit) }),
@@ -244,10 +352,11 @@ function handlers(wallet: AgencWallet): Handlers {
       ),
     "wallet.withdraw": (params) => wallet.withdraw(text(params.to, "address"), params.amount),
     "backup.export": (params) =>
-      wallet.exportBackup(text(params.password, "password"), text(params.file, "file")),
+      featureCall(wallet, "exportBackup", text(params.password, "password"), text(params.file, "file"), params.business),
     "backup.check": (params) =>
       wallet.checkBackup(text(params.password, "password"), text(params.file, "file")),
   };
+  return table;
 }
 
 function prepareSocketPath(socketPath: string): void {
@@ -289,7 +398,9 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     throw new WalletError("INTERNAL", "The wallet's owner credential is too short.");
   }
   const log = options.log ?? (() => {});
-  const table = handlers(options.wallet);
+  const brokerPath = brokerSocketPath(options.socketPath);
+  const grants = options.grantFile ? new ConnectionGrants(options.grantFile, brokerPath) : null;
+  const table = handlers(options.wallet, grants, options);
   const agentMethods = new Set<string>(AGENT_METHODS);
   const sockets = new Set<Socket>();
   prepareSocketPath(options.socketPath);
@@ -312,7 +423,7 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     return "The wallet did not accept that credential.";
   }
 
-  const server: Server = createServer((socket) => {
+  const accept = (socket: Socket, paired: boolean) => {
     if (sockets.size >= MAX_CONNECTIONS) {
       socket.destroy();
       return;
@@ -325,6 +436,8 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     const send = (value: unknown): void => {
       if (!socket.destroyed) socket.write(`${JSON.stringify(value)}\n`);
     };
+    let nonce = paired ? randomBytes(32).toString("base64url") : null;
+    let challenged = false;
     const helloTimer = setTimeout(() => {
       if (session === null) socket.destroy();
     }, HELLO_TIMEOUT_MS);
@@ -344,7 +457,21 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
         }
         if (session === null) {
           const hello = message as RpcHello;
-          const result = hello.hello === 1 ? authenticate(hello) : "Say hello first.";
+          let result: Session | string = "Say hello first.";
+          if (paired && nonce && grants) {
+            try {
+              if (!challenged) {
+                send(grants.challenge((message as { probe: string }).probe, nonce));
+                challenged = true;
+                return;
+              }
+              const proof = message as Parameters<ConnectionGrants["authenticate"]>[1];
+              const c = grants.authenticate(nonce, proof);
+              if (!options.agentExists(c.agentId)) throw new Error();
+              result = { role: "agent", agentId: c.agentId, connection: c };
+            } catch { result = "Pair again in Market. This connection is unavailable."; }
+            nonce = null;
+          } else if (!paired && hello.hello === 1) result = authenticate(hello);
           if (typeof result === "string") {
             const reply: RpcHelloReply = { hello: 1, ok: false, error: result };
             send(reply);
@@ -380,7 +507,11 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
           });
           return;
         }
-        if (activeSession.role === "agent" && !agentMethods.has(request.method)) {
+        if (paired && !CONNECTION_METHODS.has(request.method)) {
+          respond({ id: request.id, ok: false, error: { code: "NOT_ALLOWED", message: "Use a scoped Market tool." } });
+          return;
+        }
+        if (activeSession.role === "agent" && !agentMethods.has(request.method) && !(paired && CONNECTION_METHODS.has(request.method))) {
           respond({
             id: request.id,
             ok: false,
@@ -405,6 +536,13 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
         const method = request.method as WalletMethod;
         void (async () => {
           try {
+            if (activeSession.connection) {
+              const current = grants!.scope(activeSession.connection.id);
+              if (!options.agentExists(current.agentId) || (current.access === "read" &&
+                  !READ_METHODS.has(method) && !CONNECTION_METHODS.has(method))) {
+                throw new WalletError("NOT_ALLOWED", "This connection cannot make that decision.");
+              }
+            }
             const params = object(request.params ?? {});
             const handler = table[method] as (
               params: unknown,
@@ -430,9 +568,11 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
       unsubscribe?.();
       sockets.delete(socket);
     });
-  });
-
-  await new Promise<void>((resolve, reject) => {
+  };
+  const server: Server = createServer(socket => accept(socket,false));
+  let closeOwnerPipe: (() => void) | undefined;
+  if (process.platform === "win32") closeOwnerPipe = await listenWindowsPipe(options.socketPath, socket => accept(socket,false));
+  else await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.socketPath, () => {
       server.off("error", reject);
@@ -441,9 +581,28 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
   });
   if (process.platform !== "win32") chmodSync(options.socketPath, 0o600);
 
+  let closeBroker: (() => void) | undefined;
+  try {
+    if (grants) {
+      if (process.platform === "win32") closeBroker = await listenWindowsPipe(brokerPath, socket => accept(socket,true));
+      else {
+        prepareSocketPath(brokerPath);
+        const broker = createServer(socket => accept(socket,true));
+        await new Promise<void>((resolve,reject) => { broker.once("error",reject); broker.listen(brokerPath, resolve); });
+        closeBroker = () => { broker.close(); };
+        chmodSync(brokerPath, 0o600);
+      }
+    }
+  } catch (error) { closeBroker?.(); closeOwnerPipe?.(); server.close(); throw error; }
+  const stopEvents = grants ? options.wallet.on(event => {
+    if (event.type === "job") grants.changed(event.jobId);
+  }) : undefined;
   return {
     socketPath: options.socketPath,
     close() {
+      stopEvents?.();
+      closeBroker?.();
+      closeOwnerPipe?.();
       return new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy();
         server.close(() => {
