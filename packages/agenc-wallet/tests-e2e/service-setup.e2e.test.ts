@@ -61,3 +61,29 @@ it("keeps a different wallet's hire unclaimed on the seller's own harness", asyn
     expect((await world.wallet.listJobs({ role: "working" }, true)).map(j => j.task)).not.toContain(job.task);
   } finally { await other.close(); }
 }, 30000);
+
+it("accepts the approved setup after a small rate move, and refuses one the new rate leaves without a model budget", async () => {
+  let rate = 100;
+  const earn = { executor: { argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
+    mode: "sandboxed" as const, envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 50 };
+  world = await startWorld({ earn, config: { prices: { solUsd: async () => rate } } });
+  const seller = await world.wallet.createAgent();
+  const input = { setupId: "rate-move", enableEarns: true as const, name: "Rate move", summary: "Write a line.", price: { lamports: "3000000" } };
+  const quote = await world.wallet.quoteEarn(seller.id, input);
+  const before = await world.balance(world.wallet.mainAddress);
+  // The quote's dollar figures, including the model budget, came from this rate.
+  expect(quote.serviceAdmission!.modelBudgetCents).toBeGreaterThan(0);
+  rate = 100.37;
+  await world.wallet.setOffer(seller.id, input, undefined, quote.quoteId);
+  expect(world.wallet.sellerSetup(seller.id, input.setupId)!.fundedLamports).toBe(quote.fromMain.lamports);
+  expect(before - await world.balance(world.wallet.mainAddress)).toBe(BigInt(quote.totalFromMain.lamports));
+
+  const other = await world.wallet.createAgent();
+  rate = 100;
+  const second = { ...input, setupId: "rate-crash", name: "Rate crash" };
+  const quoted = await world.wallet.quoteEarn(other.id, second);
+  const kept = await world.balance(world.wallet.mainAddress);
+  rate = 1;
+  await expect(world.wallet.setOffer(other.id, second, undefined, quoted.quoteId)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  expect(await world.balance(world.wallet.mainAddress)).toBe(kept);
+}, 60000);

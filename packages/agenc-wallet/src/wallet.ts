@@ -13,6 +13,7 @@ import { checkHireOperator, checkOperator } from "./payable-operator.js";
 import { fillCatalogTerms, reducesListingCapacity, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
 import { sellerListingSpec } from "./seller-terms.js";
 import { serviceEconomics } from "./service-economics.js";
+import { sameFundingLamports, sameServiceAdmission } from "./seller-funding-match.js";
 import { readServiceRehearsal } from "./service-rehearsal.js";
 import { fractionalQuoteUsd } from "./job-money.js";
 import { facade, findAgentStatsPda, getAgentStatsSize } from "@tetsuo-ai/marketplace-sdk";
@@ -5068,15 +5069,18 @@ export class AgencWallet {
         const fresh = await this.#earningQuote(agent, entry.offers, entry.quote.capacity && entry.offers.at(-1)?.id);
         if (confirm && "offer" in confirm.effect && entry.quote.serviceAdmission) {
           const offer = confirm.effect.offer;
+          // Admitted again at the current rate: the price must still cover the margin and a model budget.
+          // The dollar figures move with the rate, so only the fixed terms are compared. The worker sets
+          // the model budget again from the rate at claim.
           const admission = await this.#serviceAdmission(agent.id, BigInt(offer.priceLamports), storedTerms(offer));
-          if (JSON.stringify(admission) !== JSON.stringify(entry.quote.serviceAdmission))
+          if (!sameServiceAdmission(admission, entry.quote.serviceAdmission))
             throw new WalletError("PRICE_CHANGED", "The service budget changed. Review a new quote.");
         }
         if (JSON.stringify(fresh.capacity) !== JSON.stringify(entry.quote.capacity))
           throw new WalletError("PRICE_CHANGED", "The number of open hires changed. Review a new quote.");
         if (entry.quote.sellerFunding && fresh.sellerFunding) {
-          const approvedRows = { ...entry.quote.sellerFunding, price: undefined };
-          if (JSON.stringify(approvedRows) !== JSON.stringify(fresh.sellerFunding))
+          // Lamports per row: a dollar figure from a newer rate is the same approval.
+          if (!sameFundingLamports(entry.quote.sellerFunding, fresh.sellerFunding))
             throw new WalletError("PRICE_CHANGED", "The funding breakdown changed. Review a new quote.");
         }
         for (const key of ["registration", "listings", "checks", "workingReserve", "networkReserve", "fromMain", "transferFee", "dailyRemaining"] as const) {
