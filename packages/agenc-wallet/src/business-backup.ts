@@ -296,8 +296,14 @@ export function pauseRestoredBusiness(
     )
   )
     return;
+  // Agents that sold before the restore need the room check and rehearsal.
+  const sellers = agents
+    .filter((a) => a.earn?.enabled || a.earn?.offer || a.earn?.offers?.length || a.earn?.pendingListingSends?.length ||
+      business?.services.some((s) => s.agentId === a.id))
+    .map((a) => a.id);
+  const before = state.businessRecovery?.sellers ?? [];
   for (const agent of agents) if (agent.earn) agent.earn.enabled = false;
-  state.businessRecovery = { restoredAt: now, requiresConsent: true };
+  state.businessRecovery = { restoredAt: now, requiresConsent: true, sellers: [...new Set([...before, ...sellers])] };
 }
 
 // A adds the money journal when its contract is installed. Older backups omit it.

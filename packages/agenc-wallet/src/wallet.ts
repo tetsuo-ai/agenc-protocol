@@ -1,5 +1,5 @@
 import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals } from "./business-backup.js";
-import { checkBusinessRoom } from "./business-room.js";
+import { checkBusinessRoom, restoredSeller } from "./business-room.js";
 import { correctChosenWork } from "@tetsuo-ai/agenc-worker";
 import { checkWorkFiles, correctionInputs, inspectWorkChunk, workFileSource } from "./work-inspection.js";
 import { readJobParties } from "./job-parties.js";
@@ -4688,7 +4688,8 @@ export class AgencWallet {
         await this.#reconcileWorkAllowance(id);
         await this.#reconcileListingSends(id);
         this.#store.update(draft => { draft.agents[id]!.earn.enabled = false; });
-        await checkBusinessRoom(this.#config.earn, id);
+        if (restoredSeller(this.#store.state, id, this.#earn.hasUnfinishedJob(id)))
+          await checkBusinessRoom(this.#config.earn, id);
       }
       const current = await this.businessStatus();
       if (current?.pendingSignatures.length) throw new WalletError("NOT_AVAILABLE", "A signed operation is still pending. Check again after confirmation.");
@@ -6256,7 +6257,9 @@ export class AgencWallet {
   }
 
   async #runTick(): Promise<void> {
-    if (this.#store.state.businessRecovery?.requiresConsent) return;
+    // A restore waiting for consent pauses only seller work: new claims,
+    // Earns and offers. Buying jobs, approvals and notices keep moving.
+    const sellerPaused = this.#store.state.businessRecovery?.requiresConsent === true;
     const now = this.#now();
     const lapsed = Object.values(this.#store.state.approvals).filter(
       (approval) => approval.status === "pending" && approval.expiresAt <= now,
@@ -6294,7 +6297,7 @@ export class AgencWallet {
     for (const agent of Object.values(this.#store.state.agents)) {
       if (agent.refills.some(entry => entry.work))
         await this.#reconcileWorkAllowance(agent.id).catch(error => this.#log(`worker allowance: ${describeError(error)}`));
-      if (!agent.earn.enabled && agent.earn.retiredAt == null) {
+      if (!sellerPaused && !agent.earn.enabled && agent.earn.retiredAt == null) {
         await this.#lock(`earn-start:${agent.id}`, () => this.#startDrain(agent));
         await this.#earn.tidyUp({
           agentId: agent.id,
@@ -6312,6 +6315,7 @@ export class AgencWallet {
     await this.#refill().catch((error) => {
       this.#log(`refill: ${describeError(error)}`);
     });
+    if (this.#store.state.businessRecovery?.requiresConsent) return;
     for (const agent of Object.values(this.#store.state.agents)) {
       if (agent.earn.enabled && this.#earn.state(agent.id).state === "off") await this.#startEarning(agent);
       else if (agentOffers(agent).length > 0 || agent.earn.pendingListingSends?.length) await this.#advanceOffer(agent.id);
