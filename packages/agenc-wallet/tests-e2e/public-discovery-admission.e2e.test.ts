@@ -132,6 +132,10 @@ it("binds the two signers and only selected terms to a funded hire across a wall
   expect((await world.wallet.hire(params)).approval?.id).toBe(quoted.approval!.id);
   const paid = await world.wallet.decideApproval(quoted.approval!.id, true);
   expect(paid.status).toBe("waiting");
+  // Every projection of the agreed terms names the paying creator beside the requester.
+  for (const view of [paid, await world.wallet.getJob(paid.id, true), await world.wallet.getJob(paid.id, false, buyer.id),
+    ...(await world.wallet.listJobs({}, true)).filter(j => j.id === paid.id)])
+    expect(view.terms?.inquiry).toMatchObject({ buyer: buyer.address, payingCreator: world.wallet.mainAddress });
   expect(published).toContain(quoted.approval!.terms!.inquiry!.agreementHash);
   expect(published).toContain("Two variations");
   expect(published).toContain("Buyer " + buyer.address);
