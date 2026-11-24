@@ -27,7 +27,7 @@ it("reads a released job's parties from the chain once, then lists it from the j
   await setEarnWithApproval(wallet, id, true);
   await eventually(async () => (await wallet.openWork(id).catch(() => null))?.jobs.length === 1);
   await wallet.decideWork((await wallet.quoteWork(id, task, "claim")).id, true);
-  await eventually(async () => (await wallet.openWork(id)).held?.canRelease);
+  await eventually(async () => { const held = (await wallet.openWork(id)).held; return held?.canSubmit && held.canRelease; });
   await wallet.decideWork((await wallet.quoteWork(id, task, "release")).id, true);
   await eventually(async () => (await wallet.openWork(id)).held === null || (await wallet.openWork(id)).held === undefined);
   await wallet.close();
