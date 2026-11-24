@@ -153,7 +153,7 @@ describe("stopping an agent's earning for good", () => {
     // Its money stays its own until the person takes it back: then all of it.
     const kept = await world.balance(worker.address);
     const main = await world.balance(world.wallet.mainAddress);
-    await world.wallet.reclaimFromAgent(worker.id, "all");
+    await world.wallet.confirmTransfer((await world.wallet.quoteTransfer({ kind: "reclaim", agentId: worker.id, amount: "all" })).id);
     expect(await world.balance(worker.address)).toBe(0n);
     expect(await world.balance(world.wallet.mainAddress)).toBe(main + kept - fee);
   }, 180_000);

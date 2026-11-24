@@ -1533,6 +1533,12 @@ export class AgencWallet {
             if (operation.charge) this.#reserveCharge(draft.agents[agent.id]!, operation.charge);
             (draft.agents[agent.id]!.earn.pendingListingSends ??= []).push({ ...signed, operation });
           },
+          refused: (draft, signed) => {
+            const entry = draft.agents[agent.id]!;
+            entry.earn.pendingListingSends = (entry.earn.pendingListingSends ?? []).filter(row => row.signature !== signed.signature);
+            if (operation.charge) entry.refills = entry.refills.filter(row => row.id !== operation.charge!.id);
+            if (operation.decision) recordSellerDecision(entry, operation.decision, false, signed.signature, operation.lamports);
+          },
           instructions: [transferInstruction(signer, recipient, lamports)] });
         if (receipt.state !== "confirmed") throw new WalletError("NETWORK", `Funding ${id} is ${receipt.state}. Check signature ${receipt.receipt.signature}.`);
         signature = receipt.receipt.signature;
@@ -1606,6 +1612,7 @@ export class AgencWallet {
       const payer = await this.#vault.signer(MAIN_KEY);
       const op = await sendOperation({ chain: this.#chain, store: this.#store, id, fingerprint: q.id,
         kind: "retirement", signer: payer, recipient: payer.address, jobId: q.jobId, amount: BigInt(q.credit.lamports),
+        checkExpiry: () => this.#checkQuoteExpiry(q.expiresAt),
         instructions: [await facade.deregisterAgent({ agent: q.registration, authority: payer })] });
       const evidence = op.state === "confirmed" ? await this.#chain.accountChange?.(payer.address, op.receipt.signature) : null;
       return { id, signature: op.receipt.signature, state: op.state, actualNetLamports: evidence?.delta ?? null,
@@ -1618,6 +1625,10 @@ export class AgencWallet {
     if (!saved) return null;
     const { receipt, allowance: _allowance, ...outcome } = saved;
     return { ...outcome, signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight };
+  }
+
+  #checkQuoteExpiry(expiresAt: number) {
+    if (this.#now() >= expiresAt) throw new WalletError("PRICE_CHANGED", "The quote expired. Review a new quote.");
   }
 
   async confirmTransfer(id: string) {
@@ -1641,6 +1652,7 @@ export class AgencWallet {
       const to = toAddress(quote.recipient, "recipient");
       const amount = BigInt(quote.credit.lamports);
       const result = await sendOperation({ chain: this.#chain, store: this.#store, signer, id, kind: quote.kind,
+        checkExpiry: () => this.#checkQuoteExpiry(quote.expiresAt),
         recipient: to, amount, fingerprint: operationFingerprint([quote]), instructions: [transferInstruction(signer, to, amount)] });
       if (result.state === "confirmed") {
         this.#store.update(draft => {
@@ -1684,14 +1696,16 @@ export class AgencWallet {
     }
   }
 
-  // Old clients have no operation ID. Repeating an identical request recovers
-  // its original receipt. A new intentional transfer must open its own quote.
+  // A legacy call cannot distinguish a retry from a second identical payment.
   async #legacyTransfer(request: TransferRequest) {
     const binding = operationFingerprint([request.kind, request.agentId, request.to, request.amount === "all" ? "all" :
       "lamports" in request.amount ? ["lamports", request.amount.lamports] : ["cents", request.amount.usdCents]]);
     const id = await this.#lock("transfer:" + binding, async () => {
       const previous = this.#store.state.legacyTransfers?.[binding];
-      if (previous && (this.#store.state.moneyOperations?.[previous] || (this.#store.state.transferQuotes?.[previous]?.quote.expiresAt ?? 0) > this.#now())) return previous;
+      if (previous) throw new WalletError("APPROVAL_REQUIRED",
+        `Check transfer receipt ${previous}, or review a new quote for a separate transfer.`);
+      if (request.amount === "all") throw new WalletError("APPROVAL_REQUIRED",
+        "Review a transfer quote for the exact recipient credit and network fee.");
       const quote = await this.quoteTransfer(request);
       this.#store.update(draft => { (draft.legacyTransfers ??= {})[binding] = quote.id; });
       return quote.id;
@@ -4702,6 +4716,7 @@ export class AgencWallet {
         const rate = await this.#freshRate();
         await this.#chain.assertSigningRevision?.();
         const op = await sendOperation({ chain: this.#chain, store: this.#store, signer: payer, id: quote.id,
+          checkExpiry: () => this.#checkQuoteExpiry(quote.expiresAt),
           fingerprint: operationFingerprint([quote]), kind: "rating", jobId, recipient: (await findHireRatingPda({task}))[0],
           amount: BigInt(quote.rent.lamports), instructions: [await facade.rateHire({ task, listing, buyer: payer, score })],
           ...(job.payer === "agent" && rate !== null && { allowance: { agentId: job.agentId, usdPerSol: rate } }),

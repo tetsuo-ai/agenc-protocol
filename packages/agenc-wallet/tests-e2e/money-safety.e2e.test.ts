@@ -78,7 +78,7 @@ describe("selling money safety", () => {
     await Promise.allSettled([wallet.setEarn(a.id, true), wallet.setEarn(a.id, true), wallet.tick()]);
     expect(await world.balance(wallet.mainAddress)).toBe(before);
     expect(charges(a.id).reduce((s, c) => s + BigInt(c.lamports), 0n)).toBe(300n * CENT);
-    await wallet.reclaimFromAgent(a.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: a.id, amount: "all" })).id);
     await wallet.tick();
     expect(await world.balance(wallet.mainAddress)).toBeGreaterThanOrEqual(before);
     clock.now += 86_400_001;
@@ -116,7 +116,7 @@ describe("selling money safety", () => {
     await wallet.setEarn(a.id, true, 10);
     await live(a.id);
     expect(charges(a.id).length).toBeGreaterThan(0);
-    await wallet.reclaimFromAgent(a.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: a.id, amount: "all" })).id);
     const before = await world.balance(wallet.mainAddress);
     await wallet.setOffer(a.id, { ...small, summary: "Write two lines." });
     await wallet.tick();
