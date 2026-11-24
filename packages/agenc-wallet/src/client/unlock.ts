@@ -12,13 +12,16 @@
 // the socket, into the service's memory. Before anything is sent, the socket
 // must sit in a folder only this user can reach into and belong to this user:
 // a socket in a shared place such as /tmp could otherwise be someone else's.
+// On Windows a pipe has no folder to check, and a program of the same user
+// could take its name first. There the service first proves it holds a key it
+// keeps in the wallet's own folder (`unlockServerKeyFile`), which only this
+// user can read, and when it is open, that it holds the unlock secret.
 // Dependency-free (node built-ins only), so a host can vendor this folder
 // unchanged.
-import {connectWindowsPipe} from "./windows-pipe.js";
-import { createHmac } from "node:crypto";
-import { lstatSync } from "node:fs";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { lstatSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 /** What the HMAC proof is bound to, so it means nothing anywhere else. */
 export const UNLOCK_PROOF_CONTEXT = "agenc-wallet unlock v1";
@@ -29,6 +32,43 @@ export const MAX_UNLOCK_LINE_BYTES = 1024 * 1024;
 export type UnlockHello =
   | { state: "locked" }
   | { state: "open"; nonce: string };
+
+/** What the service's own proofs are bound to. */
+export const UNLOCK_SERVER_PROOF_CONTEXT = "agenc-wallet unlock server v1";
+
+/** The service's key, in the wallet's own folder (`serve --data-dir`). */
+export function unlockServerKeyFile(dataDir: string): string {
+  return join(dataDir, "unlock-server.key");
+}
+
+/** The service proves it holds its key file: for the hello it answers. */
+export function unlockServerProof(key: Uint8Array, state: string, clientNonce: string, serverNonce: string | null): string {
+  return createHmac("sha256", key)
+    .update(JSON.stringify([UNLOCK_SERVER_PROOF_CONTEXT, "hello", state, clientNonce, serverNonce]))
+    .digest("hex");
+}
+
+/** An open service proves it holds the unlock secret, and binds what it hands back. */
+export function unlockOpenProof(
+  unlockSecret: Uint8Array,
+  clientNonce: string,
+  serverNonce: string,
+  socket: string,
+  ownerToken: string,
+): string {
+  return createHmac("sha256", unlockSecret)
+    .update(JSON.stringify([UNLOCK_SERVER_PROOF_CONTEXT, "open", clientNonce, serverNonce, socket, ownerToken]))
+    .digest("hex");
+}
+
+function sameHex(a: unknown, b: string): boolean {
+  if (typeof a !== "string") return false;
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+const NOT_PROVED = "The background wallet did not prove it is yours, so nothing was sent to it.";
 
 /** The proof a host that holds `unlockSecret` gives for `nonce`. */
 export function unlockProof(unlockSecret: Uint8Array, nonce: string): string {
@@ -81,14 +121,24 @@ export function openBackgroundWallet(options: {
   /** The start-up line, with `unlockSecret` and a fresh `ownerToken`. */
   startup: () => { ownerToken: string } & Record<string, unknown>;
   timeoutMs?: number;
+  /** The service's key file (`unlockServerKeyFile`). Needed on Windows. */
+  serverKeyFile?: string;
+  /**
+   * Send nothing before the service proved itself. Always on Windows, where
+   * the socket's folder cannot be checked; this turns it on elsewhere.
+   */
+  requireServerProof?: boolean;
 }): Promise<OpenedBackgroundWallet> {
+  const requireProof = options.requireServerProof ?? process.platform === "win32";
   try {
     assertPrivateSocket(options.socketPath);
   } catch (error) {
     return Promise.reject(error);
   }
   return new Promise<OpenedBackgroundWallet>((resolve, reject) => {
-    const socket = process.platform === "win32" ? connectWindowsPipe(options.socketPath) : connect(options.socketPath);
+    const socket = connect(options.socketPath);
+    const clientNonce = randomBytes(32).toString("hex");
+    let serverNonce: string | null = null;
     let buffered = "";
     let settled = false;
     let sentOwnerToken: string | null = null;
@@ -115,6 +165,27 @@ export function openBackgroundWallet(options: {
         finish(new Error("the background wallet answered with something unreadable"));
         return;
       }
+      if (message.state === "locked" || message.state === "open") {
+        if (requireProof) {
+          // The key file is read only now: the service makes it before it listens.
+          let key: Buffer;
+          try {
+            if (options.serverKeyFile === undefined) throw new Error("no key file");
+            key = readFileSync(options.serverKeyFile);
+            if (key.length !== 32) throw new Error("bad key file");
+          } catch {
+            finish(new UnlockRefused(NOT_PROVED));
+            return;
+          }
+          const nonce = typeof message.nonce === "string" ? message.nonce : null;
+          const ok = sameHex(message.proof, unlockServerProof(key, message.state, clientNonce, nonce));
+          key.fill(0);
+          if (!ok) {
+            finish(new UnlockRefused(NOT_PROVED));
+            return;
+          }
+        }
+      }
       if (message.state === "locked") {
         const startup = options.startup();
         sentOwnerToken = startup.ownerToken;
@@ -122,6 +193,7 @@ export function openBackgroundWallet(options: {
         return;
       }
       if (message.state === "open" && typeof message.nonce === "string") {
+        serverNonce = message.nonce;
         send({ type: "prove", mac: unlockProof(options.unlockSecret, message.nonce) });
         return;
       }
@@ -130,6 +202,13 @@ export function openBackgroundWallet(options: {
           typeof message.ownerToken === "string" ? message.ownerToken : sentOwnerToken;
         if (ownerToken === null) {
           finish(new Error("the background wallet did not say how to connect"));
+          return;
+        }
+        // An owner credential handed back is trusted only from a service that
+        // proved it holds the unlock secret, for this very exchange.
+        if (requireProof && sentOwnerToken === null && (serverNonce === null ||
+            !sameHex(message.proof, unlockOpenProof(options.unlockSecret, clientNonce, serverNonce, message.socket, ownerToken)))) {
+          finish(new UnlockRefused(NOT_PROVED));
           return;
         }
         finish(null, { socket: message.socket, ownerToken, unlocked: sentOwnerToken !== null });
@@ -156,7 +235,7 @@ export function openBackgroundWallet(options: {
         newline = buffered.indexOf("\n");
       }
     });
-    socket.on("connect", () => send({ type: "hello" }));
+    socket.on("connect", () => send({ type: "hello", nonce: clientNonce }));
     socket.on("error", (error) => finish(error));
     socket.on("close", () => finish(new Error("the background wallet closed the connection")));
   });
