@@ -60,6 +60,8 @@ it.each([["post", false], ["hire", false], ["post", true], ["hire", true]] as co
     await setEarnWithApproval(seller, provider.id, true, 10);
     await setOfferWithApproval(seller, provider.id, { name: "Studio report", summary: "Prepare a report.", price: { usdCents: 40 } });
     listing = await eventually(async () => { await seller!.tick(); return (await seller!.overview()).agents.find(a => a.id === provider.id)?.earn.offers[0]?.listing; });
+    // C publishes the capability from the seller's verified room; E reads it from the hashed document.
+    expect((await wallet.hire({ agentId: buyer.id, listing, request: "Prepare a report.", privateCommitment: req.commitment }, true)).approval).toBeTruthy();
   }
   const shared = { agentId: buyer.id, request: "Prepare a report.", acceptance, privateCommitment: req.commitment };
   const { job: quoted, approval: pending } = kind === "post" ? await wallet.post({ ...shared, reward: { usdCents: 40 } }) : await wallet.hire({ ...shared, listing });
@@ -113,8 +115,7 @@ it.each([["post", false], ["hire", false], ["post", true], ["hire", true]] as co
   const sealed = await protectOutput(workerExchange, output, buyerKey);
   await relay.put(workerExchange, sealed.packet);
   writeFileSync(pointerFile, sealed.pointer);
-  const delivered = await eventually(async () => { const d = await wallet.getJob(job.id, true); return d.status === "delivered" ? d : null; })
-;
+  const delivered = await eventually(async () => { const d = await wallet.getJob(job.id, true); return d.status === "delivered" ? d : null; });
   expect(delivered.result?.text).toBe(sealed.pointer);
   if (paid) {
     await confirmPayout(wallet, job.id);
