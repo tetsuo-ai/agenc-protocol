@@ -416,6 +416,7 @@ export interface ActivityRecord {
 }
 
 export interface WalletState {
+  contestRegistrations?: Record<string, ContestRegistration>;
   setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;
   version: number;
   createdAt: number;
@@ -515,10 +516,12 @@ function prune(state: WalletState): void {
     .filter(isFinished)
     .sort((a, b) => a.updatedAt - b.updatedAt);
   for (const job of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED_JOBS))) {
+    if (job.contestRegistration && job.terms?.contest && job.role === "buying" && job.payer === "main")
+      (state.contestRegistrations ??= {})[job.id] = job.contestRegistration;
     if (job.idempotencyKey) {
       const key = JSON.stringify([job.agentId, job.kind ?? "hire", job.idempotencyKey]);
       (state.callReceipts ??= {})[key] = {
-        ...job, jobSpec: {}, result: null, changes: [], request: "", acceptance: [],
+        ...job, jobSpec: {}, result: null, changes: [],
       };
     }
     delete state.jobs[job.id];

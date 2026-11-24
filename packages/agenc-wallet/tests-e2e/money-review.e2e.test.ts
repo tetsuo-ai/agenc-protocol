@@ -19,6 +19,15 @@ async function restart(update?: (state: WalletState) => void) {
   w.wallet = await w.reopen();
 }
 
+function compact(state: WalletState, id: string) {
+  const job = state.jobs[id]!;
+  Object.assign(job, { phase: "done", tidied: true, contestScanned: true });
+  for (let i = 1; i <= 500; i++) {
+    const { contestRegistration: _reg, ...copy } = job;
+    state.jobs["finished-" + i] = { ...copy, id: "finished-" + i, idempotencyKey: null, updatedAt: job.updatedAt + i };
+  }
+}
+
 it("requires a choice for ambiguous legacy transfers and exact approval for all", async () => {
   w = await startWorld();
   const agent = await w.wallet.createAgent("Writer");
@@ -175,4 +184,26 @@ it("restores owner-only pending transfers without sending, and disables retry af
   await w.wallet.confirmTransfer(q.id);
   expect(sends).toBe(1);
   expect(await w.balance(a.address)).toBe(0n);
+});
+
+it("retains the registration after the final contest leaves the job window", async () => {
+  w = await startWorld();
+  const id = await finishContest();
+  const first = await w.wallet.quoteContestRetirement(id);
+  await restart(s => compact(s, id));
+  expect(w.wallet.contestRegistrations().map(row => row.jobId)).toContain(id);
+  const q = await w.wallet.quoteContestRetirement(id);
+  expect(q.registration).toBe(first.registration);
+  expect(await w.wallet.retireContestRegistration(q.id)).toMatchObject({ actualCreditLamports: q.credit.lamports });
+});
+
+it("returns the agreed request and acceptance criteria after purchase compaction", async () => {
+  w = await startWorld();
+  const a = await w.wallet.createAgent("Buyer");
+  const args = { agentId: a.id, listing: w.listing, request: "Two poems.", acceptance: ["Both use rhyme."], idempotencyKey: "poems" };
+  const hire = await w.wallet.hire(args);
+  await w.wallet.decideApproval(hire.approval!.id, true);
+  await restart(s => compact(s, hire.job.id));
+  const { receipt } = await w.wallet.callOutcome(a.id, "hire", args.idempotencyKey);
+  expect(receipt).toMatchObject({ request: args.request, acceptance: args.acceptance, signatures: { hire: expect.any(String) } });
 });

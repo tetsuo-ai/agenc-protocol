@@ -16,6 +16,7 @@ export function moneyHandlers(wallet: AgencWallet): Handlers {
     "wallet.moneyHistory": async (p, session) => { owner(session); return wallet.moneyHistory(p.jobId); },
     "jobs.ratingQuote": async (p, session) => wallet.quoteRating(p.jobId, p.score, session.role === "owner", session.agentId ?? undefined),
     "jobs.publishReview": async (p, session) => { owner(session); return wallet.publishOrdinaryReview(p.jobId, p.stars, p.text); },
+    "jobs.contestRegistrations": async (_p, session) => { owner(session); return wallet.contestRegistrations(); },
     "jobs.contestStake": async (p, session) => { owner(session); return wallet.quoteContestRetirement(p.jobId); },
     "jobs.retireRegistration": async (p, session) => { owner(session); return wallet.retireContestRegistration(p.id); },
     "earn.operation": async (p, session) => {

@@ -1591,6 +1591,16 @@ export class AgencWallet {
       maximumDebit: money(credit + fee, rate), expiresAt };
   }
 
+  contestRegistrations() {
+    const registrations = new Map(Object.entries(this.#store.state.contestRegistrations ?? {}).map(([jobId, reg]) => [reg.agentId, { jobId, agentId: reg.agentId }]));
+    for (const job of Object.values(this.#store.state.jobs)) {
+      const reg = job.contestRegistration;
+      if (reg && job.role === "buying" && job.payer === "main" && job.terms?.contest && job.task)
+        registrations.set(reg.agentId, { agentId: reg.agentId, jobId: job.id });
+    }
+    return [...registrations.values()];
+  }
+
   async quoteContestRetirement(jobId: string) {
     const q = await contestStake(this.#chain, this.#store.state, this.mainAddress, jobId, await this.#displayRate(), this.#now() + 120_000);
     this.#store.update(s => {
@@ -2120,7 +2130,8 @@ export class AgencWallet {
     return { ...result, receipt: job ? { operationId: key.trim(), network, agentId, kind,
       payer: job.payer === "main" ? this.mainAddress : job.payer === "agent" ? this.#agentRecord(agentId).address : null,
       listing: job.listing, task: job.task, jobId: job.id, priceLamports: job.priceLamports, terms: job.terms,
-      request: job.request, fingerprint: job.inputFingerprint, signatures: { ...job.signatures }, status: result.job.status } : null };
+      request: job.request, acceptance: job.acceptance, jobSpecUri: job.jobSpecUri, jobSpecHashHex: job.jobSpecHashHex,
+      fingerprint: job.inputFingerprint, signatures: { ...job.signatures }, status: result.job.status } : null };
   }
 
   // --------------------------------------------------------------- post

@@ -39,6 +39,7 @@ export interface MoneyMethods {
   "wallet.moneyHistory": { params: { jobId?: string }; result: { rows: HistoryRow[]; gaps: { account: string; message: string }[] } };
   "jobs.ratingQuote": { params: { jobId: string; score: number }; result: RatingQuote };
   "jobs.publishReview": { params: { jobId: string; stars: number; text: string }; result: import("./task-review.js").SignedTaskReview };
+  "jobs.contestRegistrations": { params: Record<string, never>; result: { jobId: string; agentId: string }[] };
   "jobs.contestStake": { params: { jobId: string }; result: ContestStakeQuote };
   "jobs.retireRegistration": { params: { id: string }; result: PaymentOutcome & { actualCreditLamports: string | null; actualNetLamports: string | null } };
   "earn.operation": { params: { agentId: string; quoteId: string }; result: SellerOperationReceipt | null };
