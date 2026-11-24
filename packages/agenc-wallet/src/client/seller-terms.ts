@@ -23,7 +23,65 @@ export const SELLER_CATEGORIES = [
   "other",
 ] as const;
 
+/** Hash of the host's immutable, successful production room rehearsal. */
+export interface ServicePin {
+  digest: string;
+  runtimeDigest: string;
+  permissionDigest: string;
+  capabilities: "1" | "5";
+}
+
+export interface SellerFundingRows {
+  price?: Money;
+  alreadyStaked?: Money;
+  lockedStake: Money;
+  claimDeposits: Money;
+  registrationRent: Money;
+  listingRent: Money;
+  moderationRent: Money;
+  firstClaimRecordRent: Money;
+  setupFees: Money;
+  refundableClaimRent: Money;
+  reclaimNow: Money;
+  feeReserve: Money;
+}
+
+export interface ServiceUsage {
+  reservedCents: number;
+  unknownReservedCents?: number;
+  costUsd: number | null;
+  runs: number;
+}
+
+declare module "./types.js" {
+  interface JobView { modelUsage?: ServiceUsage; settledSellerCredit?: Money | null }
+  interface EarnFundingQuote {
+    sellerFunding?: SellerFundingRows;
+    serviceAdmission?: { minimumPriceLamports: string; modelBudgetCents: number; capabilities: string };
+  }
+}
+
+export function validServicePin(pin: unknown): pin is ServicePin {
+  if (!pin || typeof pin !== "object") return false;
+  const p = pin as ServicePin;
+  return Object.keys(pin).length === 4 && [p.digest, p.runtimeDigest, p.permissionDigest].every(
+    value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
+  ) && (p.capabilities === "1" || p.capabilities === "5");
+}
+
+export interface SellerDependency {
+  allowedListings: string[];
+  maxDebitLamports: string;
+  /** Seconds to keep for the parent after the child's delivery and review. */
+  returnBeforeSecs: number;
+  reviewWindowSecs: number;
+  sharing: "public-brief" | "buyer-approved-input";
+}
 export interface SellerTerms {
+  childPolicy?: SellerDependency | null;
+  servicePin?: ServicePin;
+  minimumMarginCents?: number;
+  modelCapCents?: number;
   category: string;
   tags: string[];
   inputs: string[];
@@ -55,6 +113,11 @@ export const DEFAULT_SELLER_TERMS: SellerTerms = {
 
 /** Also used on local drafts, which do not reach the wallet until publication. */
 export function sellerTermsProblem(terms: SellerTerms): string | null {
+  if (terms.servicePin !== undefined && !validServicePin(terms.servicePin)) return "Rehearse this service in the job room.";
+  if (terms.minimumMarginCents !== undefined && (!Number.isSafeInteger(terms.minimumMarginCents) || terms.minimumMarginCents < 0))
+    return "Enter the minimum margin in whole cents.";
+  if (terms.modelCapCents !== undefined && (!Number.isSafeInteger(terms.modelCapCents) || terms.modelCapCents < 1))
+    return "Enter a positive model spending limit in whole cents.";
   if (!SELLER_CATEGORIES.some((category) => category === terms.category))
     return "Choose a marketplace category.";
   if (

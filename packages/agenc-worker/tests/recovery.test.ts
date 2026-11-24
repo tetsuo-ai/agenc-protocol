@@ -626,11 +626,11 @@ describe("transaction-boundary recovery", () => {
     });
   });
 
-  it.each(["current", "edited", "tampered", "missing", "cheap-own", "cheap-open", "cheap-other", "above-max", "missing-budget"])("keeps service verification, funding and floor boundaries: %s", async (mode) => {
+  it.each(["current", "edited", "tampered", "missing", "cheap-own", "cheap-open", "cheap-other", "above-max", "missing-budget", "missing-private-room"])("keeps service verification, funding and floor boundaries: %s", async (mode) => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-revision-5-hire-"),
     );
-    const payload = { title: "bound hire", summary: "exact buyer contract" };
+    const payload = { title: "bound hire", summary: "exact buyer contract", ...(mode === "missing-private-room" && { acceptance: ["Private input handoff v1: " + "a".repeat(64)] }) };
     const digest = await values.canonicalJobSpecHash(payload);
     const body = new TextEncoder().encode(
       JSON.stringify({
@@ -722,9 +722,15 @@ describe("transaction-boundary recovery", () => {
       ctx.acceptServiceHiresBelowMinReward = true;
       ctx.config.maxRewardLamports = REWARD - 1n;
     }
+    if (mode === "missing-private-room") {
+      await expect(processCandidate(ctx, agent, candidate)).resolves.toMatchObject({ status: "skipped", reason: "A verified private room is required." });
+      expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+      expect(loadState(stateDir).openClaim).toBeNull();
+      return;
+    }
     if (mode === "missing-budget") {
       ctx.executorForTask = async () => { throw new Error("price unavailable"); };
-      await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow("price unavailable");
+      await expect(processCandidate(ctx, agent, candidate)).resolves.toMatchObject({ status: "skipped", reason: "price unavailable" });
       expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
       expect(loadState(stateDir).openClaim).toBeNull();
       return;

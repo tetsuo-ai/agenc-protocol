@@ -542,6 +542,7 @@ it("binds a cold-room quote to one seller setup across a wallet restart", async 
   const seller = await world.wallet.createAgent();
   const input = { ...service, setupId: "room-setup-one", enableEarns: true as const };
   const initial = await world.balance(world.wallet.mainAddress);
+  await expect(world.wallet.quoteEarn(seller.id, { ...input, setupId: "__proto__" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   const stale = await world.wallet.quoteEarn(seller.id, input);
   await world.wallet.close();
   world.wallet = await world.reopen();
@@ -554,6 +555,11 @@ it("binds a cold-room quote to one seller setup across a wallet restart", async 
   world.wallet = await world.reopen();
   const confirm = () => world.wallet.setOffer(seller.id, input, undefined, quote.quoteId);
   expect((await confirm()).earn.enabled).toBe(true);
+  const funded = world.wallet.sellerSetup(seller.id, input.setupId);
+  expect(funded).toMatchObject({ quoteId: quote.quoteId, fundedLamports: quote.fromMain.lamports });
+  await world.wallet.close();
+  world.wallet = await world.reopen();
   expect((await confirm()).earn.offers).toHaveLength(1);
+  expect(world.wallet.sellerSetup(seller.id, input.setupId)).toMatchObject({ quoteId: quote.quoteId, offerId: funded!.offerId });
   expect(initial - await world.balance(world.wallet.mainAddress)).toBe(BigInt(quote.totalFromMain.lamports));
 });
