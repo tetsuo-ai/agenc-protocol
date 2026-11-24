@@ -4,6 +4,12 @@ import type { HistoryQuery } from "./client/money-operations.js";
 import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
 import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
+import { currentSubmission, verifiedEvidence, readEvidenceChunk, acknowledgeEvidenceChunk, requireInspection } from "./delivery-evidence.js";
+import { localExchangeHistory, rememberExchange } from "./exchange-history.js";
+import { JobExchangeSession } from "./job-exchange-session.js";
+import { ExchangeRelay } from "./exchange-relay.js";
+import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, openBuyerOutput, openLegacyBuyerOutput, digest, type Parties, type PrivateBundle } from "./private-inputs.js";
+import type { DeliveryBinding, DeliveryChunkAck, OutputAgreement, PrivateInputPart } from "./client/job-exchange.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
 // every job. It accepts plain requests ("hire this", "approve that"), decides
@@ -3729,8 +3735,16 @@ export class AgencWallet {
     if (pointer === undefined) return;
     if (job.result?.verified && job.result.hash === pointer.hash) return;
     const result = await this.#loadResult(pointer.hash, Buffer.from(pointer.dataBase64, "base64"));
+    if (privateRequirementFromSpec(job.jobSpec) && result && (!/^agenc\.private-output\.v[12]:[0-9a-f]{64}$/.test(result.text ?? "") || createHash("sha256").update(result.text ?? "").digest("hex") !== pointer.hash)) {
+      this.#patchJob(job.id, entry => {
+        if (entry.deliveryPointer?.hash === pointer.hash && entry.deliveryPointer.dataBase64 === pointer.dataBase64) entry.result = null;
+      });
+      return;
+    }
     if (result !== null || job.result !== null) {
-      this.#patchJob(job.id, (entry) => { entry.result = result; });
+      this.#patchJob(job.id, (entry) => {
+        if (entry.deliveryPointer?.hash === pointer.hash && entry.deliveryPointer.dataBase64 === pointer.dataBase64) entry.result = result;
+      });
     }
   }
 
@@ -4124,8 +4138,155 @@ export class AgencWallet {
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
 
+  async #stagingJournal() {
+    return ExchangeJournal.open(this.#config.dataDir, await this.#vault.signer(MAIN_KEY));
+  }
+
+  async stageJobInputs(files: PrivateInputPart[], recipient: string | null, processing: string, outputs?: OutputAgreement) {
+    return stagePrivateInputs(await this.#stagingJournal(), files, recipient, processing, outputs);
+  }
+
+  async approvedJobInputs(commitment: string) {
+    return approvedRequirement(await this.#stagingJournal(), commitment);
+  }
+
+  /** Host-only factory, never serialize the signer or expose it to a room. */
+  async jobExchange(jobId: string, room: string, agentId?: string) {
+    const job = this.#reviewJob(jobId, agentId);
+    const worker = await this.#reviewProvider(job);
+    if (!job.task || !worker) throw new WalletError("NOT_AVAILABLE", "Waiting for a confirmed claim.");
+    const buying = job.role === "buying";
+    const signer = await this.#vault.signer(buying && job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
+    const task = job.task as Address;
+    const journal = await ExchangeJournal.open(this.#config.dataDir, signer);
+    const live = async () => {
+      const parties = await confirmedParties(this.#chain, task, worker, room);
+      if (signer.address !== (buying ? parties.buyer : parties.authority)) throw new WalletError("NOT_ALLOWED", "The job party changed.");
+      rememberExchange(journal, jobId, parties);
+      return parties;
+    };
+    await live();
+    const pinned = async () => {
+      const verified = await fetchAndVerifyJobSpec({
+        task, readAccount: key => this.#chain.readAccount(key),
+        ...(this.#services.resolveAgencUri && { resolveAgencUri: this.#services.resolveAgencUri }),
+      });
+      return privateRequirementFromSpec(JSON.parse(new TextDecoder().decode(verified.content)));
+    };
+    return new JobExchange(journal, signer, live, await this.#stagingJournal(), pinned);
+  }
+
+  async jobExchangeHistory(jobId: string, agentId?: string, contextIndex?: number, beforeEntry?: number) {
+    const job = this.#reviewJob(jobId, agentId);
+    if (!job.task) return [];
+    const signer = await this.#vault.signer(job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
+    return localExchangeHistory(await ExchangeJournal.open(this.#config.dataDir, signer), jobId, job.task, contextIndex, beforeEntry);
+  }
+
+  /** Broker-only. room and relay are installation settings, never RPC parameters. */
+  async jobExchangeSession(jobId: string, room: string, relay: ExchangeRelay, agentId?: string) {
+    const exchange = await this.jobExchange(jobId, room, agentId);
+    const parties = await exchange.live();
+    const task = parties.task as Address;
+    const [account, verified] = await Promise.all([
+      readTask(this.#chain, task), fetchAndVerifyJobSpec({ task, readAccount: this.#chain.readAccount,
+        ...(this.#services.resolveAgencUri && { resolveAgencUri: this.#services.resolveAgencUri }) }),
+    ]);
+    const spec = JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
+    const deadline = Number(account?.deadline ?? 0n) * 1000;
+    return new JobExchangeSession(exchange, relay, deadline, privateRequirementFromSpec(spec), this.#now,
+      () => this.collectJobOutput(jobId, relay, agentId));
+  }
+
+  async #deliveryEvidence(jobId: string, agentId?: string, relay = this.#services.exchangeRelay) {
+    const job = this.#ownedJob(jobId, agentId);
+    if (!job.task || (agentId !== undefined && job.payer !== "agent")) throw new WalletError("NOT_ALLOWED", "This agent does not pay for the job.");
+    const signer = await this.#vault.signer(job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
+    const journal = await ExchangeJournal.open(this.#config.dataDir, signer);
+    const current = await currentSubmission(this.#chain, job.task as Address, this.#knownProvider(job), signer.address);
+    const privateInputs = privateRequirementFromSpec(job.jobSpec);
+    const terms = privateInputs ? approvedOutputs(await this.#stagingJournal(), privateInputs) : job.jobSpec.outputAgreement as OutputAgreement | undefined;
+    const bundle = privateInputs ? await this.#buyerOutput(job, current.binding.deliveryHash, journal, signer, relay, current.binding) : undefined;
+    const evidence = await verifiedEvidence(current, this.#services, bundle, terms ?? { requiredFiles: [], allowTextOnly: true }, !!privateInputs);
+    return { journal, evidence, payer: signer.address };
+  }
+
+  async readDeliveryChunk(jobId: string, agentId: string, part: string, offset: number) {
+    if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+    const { journal, evidence } = await this.#deliveryEvidence(jobId, agentId);
+    return readEvidenceChunk(journal, agentId, evidence, part, offset);
+  }
+
+  async readOwnerDeliveryChunk(jobId: string, part: string, offset: number) {
+    const { journal, evidence } = await this.#deliveryEvidence(jobId);
+    return readEvidenceChunk(journal, null, evidence, part, offset);
+  }
+
+  async acknowledgeDeliveryChunk(jobId: string, agentId: string, ack: DeliveryChunkAck) {
+    if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+    const { journal, evidence } = await this.#deliveryEvidence(jobId, agentId);
+    return acknowledgeEvidenceChunk(journal, agentId, evidence, ack);
+  }
+
+  async requireDeliveryInspection(jobId: string, agentId: string, hash: string, round: number) {
+    if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+    const { journal, evidence, payer } = await this.#deliveryEvidence(jobId, agentId);
+    requireInspection(journal, agentId, evidence, hash, round);
+    const current = await currentSubmission(this.#chain, evidence.binding.task as Address, evidence.binding.worker as Address, payer);
+    if (JSON.stringify(current.binding) !== JSON.stringify(evidence.binding)) throw new WalletError("NOT_ALLOWED", "The delivery changed during inspection.");
+  }
+
+  async #buyerOutput(job: JobRecord, hash: string, journal: ExchangeJournal, signer: KeyPairSigner, relay?: ExchangeRelay, live?: DeliveryBinding) {
+    const worker = this.#knownProvider(job);
+    const matches = (p: Parties) => p.generation && p.task === job.task && p.buyer === signer.address && p.worker === worker &&
+      (!live || (p.claim === live.claim && p.generation === live.generation && p.claimedAt === live.claimedAt));
+    const saved = journal.read<{ parties: Parties; bundle: PrivateBundle }>(JSON.stringify(["collected", job.task, hash]));
+    if (saved && matches(saved.parties) && digest(privateOutputPointer(saved.bundle, saved.parties)) === hash) return saved.bundle;
+    if (!live) {
+      // A buyer who already collected a v1 delivery retains its paid copy.
+      const old = journal.read<{ claim: string; claimedAt: string; sender: string; commitment: string }>(JSON.stringify(["settled-output", job.task, hash]));
+      const bundle = old && journal.read<PrivateBundle>(JSON.stringify(["output", job.task, old.claim, old.claimedAt, old.sender, old.commitment]));
+      if (bundle && digest(privateOutputPointer(bundle)) === hash) return bundle;
+    }
+    const contexts = journal.read<Parties[]>("job-contexts/" + job.id) ?? [];
+    if (relay) {
+      for (const parties of contexts.reverse().filter(matches)) {
+        const packet = await relay.output(parties, signer, hash, live ? undefined : job.signatures.accept);
+        if (packet) return openBuyerOutput(journal, parties, hash, packet);
+      }
+      if (!live && job.deliveryPointer && contexts.some(p => !p.generation)) {
+        const result = job.result?.verified && job.result.hash === hash ? job.result :
+          await this.#loadResult(hash, Buffer.from(job.deliveryPointer.dataBase64, "base64"));
+        const pointer = result?.text;
+        if (pointer && /^agenc\.private-output\.v1:[a-f0-9]{64}$/.test(pointer) && digest(pointer) === hash) {
+          for (const p of contexts.filter(p => !p.generation && p.task === job.task && p.worker === worker && p.buyer === signer.address)) {
+            const key = journal.read<Awaited<ReturnType<typeof taskThread.createExchangeKey>>>("key/" + taskThread.legacyOutputContext(p));
+            if (!key) continue;
+            const packet = await relay.output({ ...p, generation: "legacy" }, signer, hash, job.signatures.accept, { pointer, publicKey: key.publicKey });
+            if (packet) return openLegacyBuyerOutput(journal, p, pointer, key, packet);
+          }
+        }
+      }
+    }
+    throw new WalletError("NOT_AVAILABLE", "The private delivery is unavailable. Retry collection.", { retryable: true });
+  }
+
+  async #settledPrivateOutput(job: JobRecord, relay = this.#services.exchangeRelay) {
+    if (!job.finalDeliveryChecked || !job.deliveryPointer || !job.task) throw new WalletError("NOT_AVAILABLE", "Waiting for the verified payment record.");
+    const signer = await this.#payerSigner(job);
+    return this.#buyerOutput(job, job.deliveryPointer.hash, await ExchangeJournal.open(this.#config.dataDir, signer), signer, relay);
+  }
+
+  async collectJobOutput(jobId: string, relay: ExchangeRelay, agentId?: string) {
+    const job = this.#ownedJob(jobId, agentId);
+    if ((agentId !== undefined && job.payer !== "agent") || !privateRequirementFromSpec(job.jobSpec)) {
+      throw new WalletError("NOT_ALLOWED", "This caller has no private delivery to collect.");
+    }
+    return this.jobDelivery(jobId, agentId === undefined, agentId, undefined, relay);
+  }
+
   /** Read the complete delivery without storing an oversized list preview. */
-  async jobDelivery(jobId: string, isOwner: boolean, agentId?: string, entryId?: string): Promise<NonNullable<JobRecord["result"]>> {
+  async jobDelivery(jobId: string, isOwner: boolean, agentId?: string, entryId?: string, relay = this.#services.exchangeRelay): Promise<NonNullable<JobRecord["result"]>> {
     const view = await this.getJob(jobId, isOwner, agentId);
     const job = view.role === "buying" ? this.#jobRecord(jobId) : this.#earnJobs(view.agentId).find((entry) => entry.id === jobId)!;
     if (entryId !== undefined) {
@@ -4138,8 +4299,20 @@ export class AgencWallet {
       }
       return result;
     }
+    if (job.role === "buying" && !isOwner && job.payer !== "agent" && privateRequirementFromSpec(job.jobSpec)) {
+      throw new WalletError("NOT_ALLOWED", "Only the buyer can collect the delivery.");
+    }
     if (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked) {
       throw new WalletError("NOT_FOUND", "The paid delivery has not been authenticated yet.");
+    }
+    if (job.role === "buying" && privateRequirementFromSpec(job.jobSpec) && job.outcome !== "paid") {
+      const { evidence } = await this.#deliveryEvidence(jobId, isOwner ? undefined : agentId, relay);
+      return { text: evidence.text, textTruncated: false, files: evidence.files, uri: null, hash: evidence.binding.deliveryHash, verified: true };
+    }
+    if (job.role === "buying" && privateRequirementFromSpec(job.jobSpec) && job.outcome === "paid") {
+      const bundle = await this.#settledPrivateOutput(job, relay);
+      return { text: bundle.text, textTruncated: false, files: bundle.files.map(f => ({ name: f.name, bytes: f.bytes, sha256: f.sha256,
+        type: deliveryFileType(f.name) ?? "application/octet-stream" })), uri: null, hash: job.deliveryPointer!.hash, verified: true };
     }
     const hash = job.deliveryPointer?.hash ?? view.result?.hash;
     if (hash == null) throw new WalletError("NOT_FOUND", "This job has no delivery yet.");
@@ -4157,11 +4330,27 @@ export class AgencWallet {
    * is that size, matches that fingerprint and really is the kind of file
    * its name says.
    */
-  async jobFile(jobId: string, sha256: string): Promise<DeliveryFile & { base64: string }> {
-    const job = await this.getJob(jobId, true);
-    const listed = (job.result?.files ?? []).find(file => file.sha256 === sha256) ??
+  async jobFile(jobId: string, sha256: string, agentId?: string): Promise<DeliveryFile & { base64: string }> {
+    const job = await this.getJob(jobId, agentId === undefined, agentId);
+    const record = this.#store.state.jobs[jobId];
+    if (record && privateRequirementFromSpec(record.jobSpec) && record.outcome === "paid") {
+      if (agentId !== undefined && record.payer !== "agent") throw new WalletError("NOT_ALLOWED", "Only the buyer can collect the delivery.");
+      const bundle = await this.#settledPrivateOutput(record);
+      const file = bundle.files.find(f => f.sha256 === sha256);
+      if (!file || deliveryFileProblem(file.name, Buffer.from(file.base64, "base64"))) throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
+      return { ...file, type: deliveryFileType(file.name)! };
+    }
+    if ((agentId !== undefined && record?.outcome !== "paid" && job.role === "buying") || (record && privateRequirementFromSpec(record.jobSpec))) {
+      const { evidence } = await this.#deliveryEvidence(jobId, agentId);
+      const file = evidence.files.find(f => f.sha256 === sha256);
+      if (!file) throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
+      return { ...file, base64: evidence.parts.get(file.name)!.toString("base64") };
+    }
+    const scoped = agentId === undefined ? null : await this.jobDelivery(jobId, false, agentId);
+    const listed = ((scoped ?? job.result)?.files ?? []).find(file => file.sha256 === sha256) ??
       this.#store.state.jobs[jobId]?.contestEntries?.flatMap(entry => entry.files ?? []).find(file => file.sha256 === sha256);
     if (listed === undefined) {
+      if (agentId !== undefined) throw new WalletError("NOT_FOUND", "That file is not part of this delivery.");
       let reference: ReviewAttachment | undefined;
       let before: string | undefined;
       const seen = new Set<string>();
