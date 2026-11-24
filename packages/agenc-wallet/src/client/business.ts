@@ -114,6 +114,9 @@ export interface BusinessMethods {
 }
 
 declare module "./types.js" {
+  interface JobTerms {
+    inquiry?: Awaited<ReturnType<typeof import("./listing-exchange.js").selectedListingTerms>>;
+  }
   interface WalletOverview {
     businessVersion?: 1;
   }
