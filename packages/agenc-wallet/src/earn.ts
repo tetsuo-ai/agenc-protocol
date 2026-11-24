@@ -929,7 +929,8 @@ export class EarnHost {
         return executor.argv.flatMap(part => {
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
-            return room && (receipt || bundleDir || (paired && pin)) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
+            // The agreed outputs alone also need the scope, so a public post without a reservation still enforces them.
+            return room && (receipt || bundleDir || (paired && pin) || outputs) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
               ...(paired && { privateProcessing: privateProcessing ?? null }), ...(outputs && { outputs }) })] : [source];
           }
           if (part === "{task}") return [address];

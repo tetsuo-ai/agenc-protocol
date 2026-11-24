@@ -133,3 +133,26 @@ it("hands the room the verified job's agreed outputs and refuses a malformed agr
   expect(await scope(["Name the source."])).not.toHaveProperty("outputs");
   await expect(scope(["Agreed outputs v1: anything goes"])).rejects.toThrow();
 });
+
+it("hands a local room the agreed outputs even without a reservation or a pinned service", async () => {
+  const room: EarnExecutor = { argv: ["/node", "/job-room.mjs", "job", "/room", "agenc", "900", "/assets", "/out", "/files", "{pay}", "{requestSource}", "{prompt}"],
+    mode: "sandboxed", isolatedJobRoom: true, envAllowlist: [], timeoutMs: 60_000 } as EarnExecutor;
+  const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
+  folders.push(dataDir);
+  const earn = new EarnHost({ dataDir, chain: { clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
+    services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices,
+    options: { executor: room, pollIntervalMs: 10, maxIdlePollIntervalMs: 10 }, log: vi.fn(), notify: vi.fn() });
+  void earn.start({ agentId: "solo", signer: { address: "x" } as unknown as KeyPairSigner, minRewardLamports: 0n, solUsd: async () => 100 });
+  await vi.waitFor(() => expect(seen.contexts.length).toBeGreaterThan(0));
+  earn.stopAll?.();
+  const ctx = seen.contexts.at(-1) as { executorForTask: (...args: unknown[]) => Promise<string[]> };
+  const task = { creator: "Buyer1111111111111111111111111111111111111", deadline: 99n, rewardAmount: 100_000_000n, requiredCapabilities: 1n };
+  const address = "Task11111111111111111111111111111111111111";
+  const argv = await ctx.executorForTask(task, address, undefined, null, null, "Make the table.",
+    [outputAgreementCriterion({ requiredFiles: ["report.csv"], allowTextOnly: false })]);
+  const scope = JSON.parse(argv[argv.indexOf("external") + 1]!);
+  expect(scope).toMatchObject({ receipt: null, pin: null, task: address, outputs: { requiredFiles: ["report.csv"], allowTextOnly: false } });
+  // Without agreed outputs nothing changes for an ordinary public job.
+  const plain = await ctx.executorForTask(task, address, undefined, null, null, "Make the table.", ["Name the source."]);
+  expect(plain.some(part => part.startsWith('{"'))).toBe(false);
+});
