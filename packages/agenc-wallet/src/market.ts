@@ -8,9 +8,8 @@ import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
-import { hireCostAssertions, submissionAssertions } from "./money-assertions.js";
+import { claimGeneration, decisionAssertions, hireCostAssertions, laterRentWithinApproval, recordCostGuards, type BoundDelivery } from "./money-assertions.js";
 import { reviewMemo } from "./review-memo.js";
-import type { ReviewedDelivery } from "./client/reviews.js";
 import { withListingOperation } from "./transport-scope.js";
 import { address, getAddressEncoder, type Address, type KeyPairSigner, type Instruction, type TransactionPartialSigner, type TransactionSigner } from "@solana/kit";
 import {
@@ -83,6 +82,7 @@ import {
   type ServiceListing,
   type Task,
   type TaskSubmission,
+  lighthouse,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "./chain.js";
 import { SYSTEM_PROGRAM_ADDRESS } from "./chain.js";
@@ -761,17 +761,30 @@ export async function sendActivation(
   buyer: KeyPairSigner,
   input: { task: Address; jobSpecHash: Uint8Array; jobSpecUri: string },
   gate: GateAccounts,
+  /** Approved Rent bytes (hex) of a hire. The job spec's deposit is checked against them, also at landing. */
+  approvedRentTerms?: string,
 ): Promise<string> {
   const client = chain.clientFor(buyer);
-  const result = await client.setTaskJobSpec({
+  const spec = {
     task: input.task,
     creator: buyer,
     jobSpecHash: input.jobSpecHash,
     jobSpecUri: input.jobSpecUri,
     ...gateArgs(gate),
     ...(gate.record !== undefined ? { taskModeration: gate.record } : {}),
-  });
-  return result.signature;
+  };
+  if (approvedRentTerms === undefined) return (await client.setTaskJobSpec(spec)).signature;
+  const current = await laterRentWithinApproval(chain, approvedRentTerms, [TASK_JOB_SPEC_SPACE]);
+  if (current === null) throw new LaterRentRose();
+  const guard = lighthouse.assertBytes(lighthouse.RENT, 0, Buffer.from(current, "hex"));
+  return (await client.send([guard, await facade.setTaskJobSpec(spec)])).signature;
+}
+
+/** A hire's later account would cost more than the buyer approved. */
+export class LaterRentRose extends WalletError {
+  constructor() {
+    super("PRICE_CHANGED", "The network's account deposits rose after you approved this job.");
+  }
 }
 
 const STATUS_NAMES: Record<number, ChainTaskStatus> = {
@@ -1004,19 +1017,23 @@ async function settlementPayees(
 
 async function sendBuyerDecision(
   chain: Chain, payer: KeyPairSigner, task: Address, provider: Address,
-  action: "approve" | "change" | "reject", ix: Instruction, expected: ReviewedDelivery,
+  action: "approve" | "change" | "reject", ix: Instruction, expected: BoundDelivery, costGuards: readonly Instruction[] = [],
 ) {
   const [claim] = await findClaimPda({ task, bidder: provider });
   const [submission] = await findTaskSubmissionPda({ claim });
-  const guards = submissionAssertions(submission, expected);
+  const account = await readTask(chain, task);
+  if (!account) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  // Cost checks come first. The receipt reader expects the three decision
+  // guards immediately before the memo.
+  const guards = [...costGuards, ...decisionAssertions(task, account, submission, expected)];
   let refusal: WalletError | undefined;
   // The SDK obtains a fresh lifetime and assembles the message before calling
   // this signer. Keep the claim read here, after uploads, quotes and RPC setup.
   const signer: TransactionPartialSigner = {
     address: payer.address,
     async signTransactions(transactions, config) {
-      const current = (await readSubmission(chain, task, provider))?.account;
-      if (!current || current.claim !== claim || current.worker !== provider || current.status !== SubmissionStatus.Submitted ||
+      const [current, now] = await Promise.all([readSubmission(chain, task, provider).then(found => found?.account), readTask(chain, task)]);
+      if (!current || !now || claimGeneration(now) !== expected.claimGeneration || current.claim !== claim || current.worker !== provider || current.status !== SubmissionStatus.Submitted ||
           current.submissionCount !== expected.submissionCount || values.bytesToHex(Uint8Array.from(current.proofHash)) !== expected.deliveryHash) {
         refusal = new WalletError("NOT_ALLOWED", "The delivery changed before signing. Open the new delivery and review it again.");
         throw refusal;
@@ -1038,7 +1055,7 @@ export async function sendApproval(
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
-  expected: ReviewedDelivery,
+  expected: BoundDelivery,
   approvedPayees?: Pick<Payees, "workerAuthority" | "treasury">,
 ): Promise<string> {
   const account = await readTask(chain, task);
@@ -1080,7 +1097,7 @@ export async function sendChangesRequest(
   task: Address,
   providerAgent: Address,
   changesHash: Uint8Array,
-  expected: ReviewedDelivery,
+  expected: BoundDelivery,
 ): Promise<string> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
   const ix = await facade.requestChanges({ task, claim, creator: buyer, changesHash });
@@ -1163,18 +1180,16 @@ export async function sendRejectAndFreeze(
   providerAgent: Address,
   rejectionHash: Uint8Array,
   words: AmountWords = SOL_AMOUNT_WORDS,
-  expected: ReviewedDelivery,
+  expected: BoundDelivery,
+  /** The record lamports the buyer approved. A higher current charge is refused. */
+  approvedRecordLamports?: bigint,
 ): Promise<{ signature: string; recordLamports: bigint }> {
   // The revision first, so a person on the wrong one is not asked for money.
   await chain.assertSigningRevision?.();
-  const cost = await facade.missingRecordCost(
-    snapshotReader(chain),
-    (space) => chain.getMinimumBalanceForRentExemption(space),
-    { creator: buyer.address, workerAgent: providerAgent },
-  );
+  const cost = await recordCostGuards(chain, { creator: buyer.address, workerAgent: providerAgent }, approvedRecordLamports);
   await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words, chain.transferFeeLamports);
   const ix = await facade.rejectAndFreeze({ task, worker: providerAgent, creator: buyer, rejectionHash });
-  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "reject", ix, expected);
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "reject", ix, expected, cost.guards);
   return { signature: result.signature, recordLamports: cost.lamports };
 }
 

@@ -1137,11 +1137,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         jobSpecUri: `agenc://job-spec/sha256/${hash.hex}`,
         moderator: market.moderator.address,
       });
-      async function practiceDelivery(worker: Address): Promise<ReviewedDelivery> {
-        const { readSubmission } = await import("./market.js");
+      async function practiceDelivery(worker: Address): Promise<ReviewedDelivery & { claimGeneration: string }> {
+        const { readSubmission, readTask } = await import("./market.js");
         const submission = await readSubmission(chain, task, worker);
         if (!submission) throw new Error("No practice delivery to review");
-        return { submissionCount: submission.account.submissionCount, deliveryHash: Buffer.from(submission.account.proofHash).toString("hex") };
+        const current = await readTask(chain, task);
+        return { submissionCount: submission.account.submissionCount, deliveryHash: Buffer.from(submission.account.proofHash).toString("hex"),
+          claimGeneration: current ? Buffer.from(current.reserved).readBigUInt64LE(3).toString() : "0" };
       }
       return {
         task,
@@ -1185,7 +1187,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
             .find((entry) => entry.task === task);
           if (claim === undefined) throw new Error("nobody has taken the sandbox job");
           const reason = (await values.sha256(`house buyer turned down ${task}`)) as Uint8Array;
-          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason, undefined, await practiceDelivery(claim.worker));
+          // The house buyer approves the record cost it reads now.
+          const record = await facade.missingRecordCost(async key => chain.readRawAccount(key), size => chain.getMinimumBalanceForRentExemption(size),
+            { creator: buyer.address, workerAgent: claim.worker });
+          await sendRejectAndFreeze(chain, buyer, task, claim.worker, reason, undefined, await practiceDelivery(claim.worker), record.lamports);
         },
       };
     },

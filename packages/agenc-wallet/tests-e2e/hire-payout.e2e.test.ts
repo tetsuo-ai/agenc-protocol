@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { type Address } from "@solana/kit";
-import { findProtocolConfigPda, getProtocolConfigDecoder, getProtocolConfigEncoder, getServiceListingDecoder, getServiceListingEncoder } from "@tetsuo-ai/marketplace-sdk";
-import { startWorld, type World } from "./harness.js";
+import { getCompiledTransactionMessageDecoder, type Address } from "@solana/kit";
+import { findProtocolConfigPda, findTaskJobSpecPda, getSetTaskJobSpecDiscriminatorBytes, getProtocolConfigDecoder, getProtocolConfigEncoder, getServiceListingDecoder, getServiceListingEncoder } from "@tetsuo-ai/marketplace-sdk";
+import { eventually, startWorld, type World } from "./harness.js";
 
 let world: World;
 afterEach(async () => { await world?.wallet.close(); });
@@ -108,3 +108,45 @@ it.each(["protocol fee", "rent", "unrelated counter"])("binds the quote across a
   expect(getServiceListingDecoder().decode(raw.data).openJobs).toBe(0);
   expect(await world.balance(operator.address)).toBe(0n);
 });
+
+it.each(["moderation record", "job spec"] as const)("never pays a later %s above the approved rent and refunds the hire", async stage => {
+  let bump: "after hire" | "at activation" | null = null;
+  let sends = 0;
+  const activation = Buffer.from(getSetTaskJobSpecDiscriminatorBytes());
+  world = await startWorld({ transport: base => ({ ...base, async sendAndConfirm(signed) {
+    const message = getCompiledTransactionMessageDecoder().decode(signed.messageBytes);
+    const activates = ("instructions" in message ? message.instructions : []).some(ix => Buffer.from(ix.data ?? []).subarray(0, 8).equals(activation));
+    // Signed with the old rate, landing at the new one.
+    if (bump === "at activation" && activates) raiseRent();
+    const result = await base.sendAndConfirm(signed);
+    if (bump === "after hire" && ++sends === 1) raiseRent();
+    return result;
+  } }) });
+  const { wallet, listing, sandbox } = world;
+  const svm = sandbox.market.svm;
+  const raiseRent = () => {
+    bump = null;
+    const rent = svm.getRent();
+    rent.lamportsPerByteYear += 1n;
+    svm.setRent(rent);
+  };
+  const buyer = await wallet.createAgent("Buyer");
+  await wallet.fundAgent(buyer.id, { usdCents: 500 });
+  const quote = (await wallet.hire({ agentId: buyer.id, listing, request: "Edit a line." }, true)).approval!;
+  const funds = async () => await world.balance(wallet.mainAddress) + await world.balance(buyer.address);
+  const before = await funds();
+  bump = stage === "moderation record" ? "after hire" : "at activation";
+  const outcome = await wallet.decideApproval(quote.id, true);
+  const job = await eventually(async () => {
+    await wallet.tick();
+    const current = await wallet.getJob(outcome.id, true);
+    return current.error && /deposits rose/.test(current.error) ? current : null;
+  });
+  expect(bump).toBeNull();
+  const [spec] = await findTaskJobSpecPda({ task: job.task as Address });
+  expect(svm.getAccount(spec).exists).toBe(false);
+  expect(job.status).not.toBe("active");
+  // Everything that left the buyer stays within the approved total, price included.
+  const approvedTotal = BigInt(quote.price.lamports) + BigInt(quote.deposits.lamports);
+  expect(before - await funds()).toBeLessThanOrEqual(approvedTotal);
+}, 60_000);

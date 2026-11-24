@@ -135,9 +135,12 @@ export async function quoteReview(chain: Chain, jobId: string, task: Address, pr
   const deliveryHash = Buffer.from(submission.account.proofHash).toString("hex");
   const reviewEndsAt = Number(submission.account.reviewDeadlineAt) * 1000;
   const reviewWindowSeconds = Number(terms.reviewWindowSecs);
-  const id = createHash("sha256").update(JSON.stringify([jobId, task, provider, funding, actions, deliveryHash, submission.account.submissionCount,
+  // A released and retaken claim reopens round one at the same addresses. The
+  // generation tells the claims apart and the decision asserts it.
+  const claimGeneration = Buffer.from(account.reserved).readBigUInt64LE(3).toString();
+  const id = createHash("sha256").update(JSON.stringify([jobId, task, provider, funding, actions, deliveryHash, submission.account.submissionCount, claimGeneration,
     reviewEndsAt, reviewWindowSeconds, String(held?.expiresAt), String(account.deadline), String(record.lamports), String(disputeRent), String(bond), String(chain.transferFeeLamports)])).digest("hex");
-  quote = { ...funding, ...(buying && { submissionBound: true }), id, actions, deliveryHash, submissionCount: submission.account.submissionCount, canPay, reviewEndsAt, reviewWindowSeconds, bond: money(bond, rate), fee: money(chain.transferFeeLamports, rate),
+  quote = { ...funding, ...(buying && { submissionBound: true }), id, actions, deliveryHash, submissionCount: submission.account.submissionCount, claimGeneration, canPay, reviewEndsAt, reviewWindowSeconds, bond: money(bond, rate), fee: money(chain.transferFeeLamports, rate),
     estimatedResubmitBy: due === null || now === null ? null : Math.max(due, now + Math.max(86400, reviewWindowSeconds)) * 1000,
     rejectionTotal: money(chain.transferFeeLamports + record.lamports, rate),
     disputeTotal: money(chain.transferFeeLamports + bond + disputeRent, rate),

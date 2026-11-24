@@ -23,11 +23,12 @@ import {
   getTaskMarkerSize,
   taskThread,
   values,
+  getTaskModerationSize,
 } from "@tetsuo-ai/marketplace-sdk";
 import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms, releaseQuoteLifetime } from "./worker-jobs.js";
 import type { WorkerQuote, WorkAction } from "./client/types.js";
 import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, type WorkerDispatch, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, readReviewEnvelope, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
-import { assertionFailed, readHireRent } from "./money-assertions.js";
+import { assertionFailed, laterRentWithinApproval, readHireRent } from "./money-assertions.js";
 import { deliveryNotice } from "./review-history.js";
 import { publishReviewFiles, reviewChargeCents, quoteReview, reviewRead, reviewAttachments, reviewNote } from "./review.js";
 import type { ReviewAction, ReviewAttachment, ReviewConfirmation, ReviewDraft, ReviewQuote, ReviewRecord } from "./client/reviews.js";
@@ -104,6 +105,8 @@ import {
   requestLanded,
   requestWorker,
   sendActivation,
+  LaterRentRose,
+  TASK_JOB_SPEC_SPACE,
   sendApproval,
   sendCancel,
   sendChangesRequest,
@@ -171,6 +174,13 @@ const HIRE_RECONCILE_GRACE_MS = 150_000;
 const HIRE_BUSY_RETRIES = 8;
 /** A hired job that cannot be posted is refunded after this long. */
 const POSTING_GIVE_UP_MS = 30 * 60_000;
+
+/** A hire stopped before a later account would cost more than approved. */
+function laterRentText(request: boolean) {
+  return request
+    ? "The network's account deposits rose after you approved this request, so it was cancelled and the reward came back."
+    : "The network's account deposits rose after you approved this job, so it was cancelled and the price returned.";
+}
 /** A provider who started is given this long past the deadline to deliver. */
 const NO_SHOW_GRACE_SECS = 120;
 /**
@@ -2889,6 +2899,12 @@ export class AgencWallet {
           payer: payer.address,
         });
         if (payment !== null) {
+          // The moderator signs this transaction, so it cannot carry our Rent
+          // check. Compare the rate with the approval right before signing.
+          if (!await this.#laterRentApproved(job, [getTaskModerationSize(), TASK_JOB_SPEC_SPACE])) {
+            await this.#cancelUnposted(job, laterRentText(request));
+            return;
+          }
           // The buyer pays for the check of its own request.
           const signature = await this.#payApproval(
             payer,
@@ -2936,13 +2952,24 @@ export class AgencWallet {
     }
     let signature: string;
     try {
-      signature = await sendActivation(this.#chain, payer, { task, jobSpecHash: hash, jobSpecUri }, gate);
+      signature = await sendActivation(this.#chain, payer, { task, jobSpecHash: hash, jobSpecUri }, gate,
+        request ? undefined : job.approvedCosts?.rentTerms);
     } catch (error) {
+      if (error instanceof LaterRentRose) {
+        await this.#cancelUnposted(job, laterRentText(request));
+        return;
+      }
       this.#log(`job ${job.id} activate: ${describeError(error)}`);
       if (await isActivated(this.#chain, task)) await activate();
       return;
     }
     await activate(signature);
+  }
+
+  /** A hire pays later accounts at the landing rate. True while that stays within its approved Rent. */
+  async #laterRentApproved(job: JobRecord, spaces: readonly number[]) {
+    const approved = isRequest(job) ? undefined : job.approvedCosts?.rentTerms;
+    return approved === undefined || await laterRentWithinApproval(this.#chain, approved, spaces) !== null;
   }
 
   /** The job's provider, or null for a request nobody is known to have taken. */
@@ -4308,7 +4335,7 @@ export class AgencWallet {
             break;
           }
           case "reject": {
-            const { signature } = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash, await this.#amountWords(), quote);
+            const { signature } = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash, await this.#amountWords(), quote, BigInt(quote.rejectionRent.lamports));
             this.#forgetRecordCost(job);
             const frozen = await this.#readFreezeBack(task, provider);
             this.#patchJob(jobId, (entry, state) => {

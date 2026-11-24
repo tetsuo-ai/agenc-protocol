@@ -27,6 +27,8 @@ export interface ReviewQuote {
   submissionBound?: true;
   submissionCount: number;
   deliveryHash: string;
+  /** The task's claim generation for the reviewed claim. The decision checks it during execution. */
+  claimGeneration?: string;
   reviewEndsAt: number;
   reviewWindowSeconds: number;
   estimatedResubmitBy: number | null;

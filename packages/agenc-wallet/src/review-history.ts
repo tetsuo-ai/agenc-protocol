@@ -1,12 +1,12 @@
 import { AccountRole, signature as toSignature, type Address, type Signature } from "@solana/kit";
 import {
-  AgencCoordinationInstruction as Ix, AGENC_COORDINATION_PROGRAM_ADDRESS, findTaskSubmissionPda,
+  AgencCoordinationInstruction as Ix, AGENC_COORDINATION_PROGRAM_ADDRESS, findTaskSubmissionPda, lighthouse,
   parseAgencCoordinationEvents, parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
 import { closedRevisionDeadline } from "./review-deadline.js";
 import { settledDeliveryFromLogs } from "./delivery-history.js";
 import { reviewRead } from "./review.js";
-import { submissionAssertions } from "./money-assertions.js";
+import { isGenerationGuard, submissionAssertions } from "./money-assertions.js";
 import { intendedDelivery } from "./review-memo.js";
 import type { ReviewEntry, ReviewedDelivery } from "./client/reviews.js";
 import { sentInstruction, type SentInstruction, type SettlementHistoryRpc } from "./settlement.js";
@@ -146,20 +146,28 @@ async function identifyAppliedDelivery(rpc: SettlementHistoryRpc, task: Address,
 }
 
 // A legacy wallet put the memo immediately after its compute budget. A bound
-// decision adds exactly two checks on this claim's submission before the memo.
+// decision ends with exactly three checks before the memo: the round and hash
+// on this claim's submission, then the claim generation on the task. Cost
+// checks (Rent, record balances) may come before them and are only checks.
 // Other batches cannot establish the affected delivery from the memo alone.
-async function decisionBinding(prefix: unknown[], claim: Address, intended: ReviewedDelivery) {
+async function decisionBinding(prefix: unknown[], task: Address, claim: Address, intended: ReviewedDelivery) {
   const first = prefix.findIndex(raw =>
     (raw as { programId?: string } | null)?.programId !== "ComputeBudget111111111111111111111111111111");
   if (first < 0) return "legacy";
-  if (prefix.length - first !== 2) return "unrecognized";
+  const checks = prefix.slice(first);
+  if (checks.length < 3) return "unrecognized";
+  const sent = checks.map(raw => sentInstruction(raw));
+  if (sent.some(ix => ix?.programAddress !== lighthouse.LIGHTHOUSE)) return "unrecognized";
   const [submission] = await findTaskSubmissionPda({ claim });
+  const bound = sent.slice(-3);
   const matches = submissionAssertions(submission, intended).every((expected, i) => {
-    const actual = sentInstruction(prefix[first + i]);
+    const actual = bound[i];
     return actual?.programAddress === expected.programAddress && actual.accounts.length === 1 &&
       actual.accounts[0] === submission && Buffer.from(actual.data).equals(Buffer.from(expected.data!));
   });
-  return matches ? "guarded" : "unrecognized";
+  const generation = bound[2]!;
+  return matches && generation.accounts[0] === task &&
+    isGenerationGuard(generation.programAddress, generation.accounts, Uint8Array.from(generation.data)) ? "guarded" : "unrecognized";
 }
 
 export function deliveryNotice(entry: ReviewAnchor): string | undefined {
@@ -234,7 +242,7 @@ export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address
         const memo = index > 0 && index === outer.length - 1 ? outer[index - 1] : undefined;
         let anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs, memo);
         if (anchor?.intendedDelivery) {
-          const binding = await decisionBinding(outer.slice(0, index - 1), claim, anchor.intendedDelivery);
+          const binding = await decisionBinding(outer.slice(0, index - 1), task, claim, anchor.intendedDelivery);
           if (binding === "unrecognized") anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs);
           else {
             await identifyAppliedDelivery(rpc, task, claim, meta.logMessages!, anchor, binding === "guarded");
