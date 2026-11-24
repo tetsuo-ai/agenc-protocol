@@ -686,6 +686,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     category: string;
     inputs: string[];
     outputs: string[];
+    fulfilment?: ReturnType<typeof listingDetails>["fulfilment"];
   }> = [];
   const providers: HouseProvider[] = [];
 
@@ -801,6 +802,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           operator: account.operator === SYSTEM_PROGRAM_ADDRESS ? null : account.operator,
           inputs: entry.inputs,
           outputs: entry.outputs,
+          ...(entry.fulfilment && { fulfilment: entry.fulfilment }),
           terms: [],
           // The practice marketplace keeps the words itself; nothing is fetched.
           details: "ready",
@@ -871,6 +873,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         category: typeof input.spec.category === "string" ? input.spec.category : "other",
         inputs: details.inputs,
         outputs: details.outputs,
+        // Practice listings keep their verified fulfilment (supplier policy, private inputs) like the real catalog.
+        ...(details.fulfilment && { fulfilment: details.fulfilment }),
       };
       const at = listed.findIndex((item) => item.listing === input.listing);
       if (at === -1) listed.push(entry);
