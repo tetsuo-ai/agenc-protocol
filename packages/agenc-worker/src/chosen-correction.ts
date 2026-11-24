@@ -6,6 +6,7 @@ import { heldWork } from "./chosen.js";
 import { loadState, saveState } from "./state.js";
 import { readTaskAccount } from "./upkeep.js";
 import { spendClaimRound } from "./revision-budget.js";
+import { correctionCutoff, correctionRunSeconds } from "./chosen-release.js";
 
 /** Run on the same serialized worker lane as submit/release. Charge a slice
  * held back from the original claim before invoking the isolated executor.
@@ -33,9 +34,13 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     const reviewInputs = await inputs(Buffer.from(marker.execution.resultBytesBase64, "base64"));
     const argv = await executorForTask(read.task, task, cents);
     const now = await ctx.clusterTime!();
-    const end = Math.min(held.expiresAt || Infinity, held.deadline || Infinity);
-    const timeoutMs = Math.min(ctx.config.executorTimeoutMs, (end - now) * 1000);
-    if (timeoutMs <= 0) throw new Error("The correction deadline has passed.");
+    // Stop early enough to submit, and before the early release pause, so the
+    // owner can still deliver or give the claim back after the correction.
+    const cutoff = correctionCutoff(held);
+    const end = cutoff ?? Infinity;
+    const seconds = correctionRunSeconds(cutoff, now, ctx.config.executorTimeoutMs / 1000);
+    if (seconds === null) throw new Error("Too little time is left for a correction. Submit or give back the claim.");
+    const timeoutMs = Math.floor(seconds * 1000);
     stop.throwIfAborted();
     spendClaimRound(modelSpendDir, ctx.signer.address, held.claimAccount, -1);
     delete budget.correctionCents;

@@ -14,7 +14,7 @@ import {
 import { cleanupClaimInstruction, readTaskAccount } from "./upkeep.js";
 import { bytesToHex, hexToBytes, loadState, saveState, type SubmissionIntent } from "./state.js";
 import { decodeHostedBrief } from "./hosted-brief.js";
-import { chosenReleaseWindow } from "./chosen-release.js";
+import { chosenReleaseWindow, correctionCutoff } from "./chosen-release.js";
 import { resultDataFromHashHex, resultPlaceholderUri, uploadResult } from "./result.js";
 
 export type WorkerAction = "claim" | "submit" | "release";
@@ -230,6 +230,8 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
     title: marker.title ?? "Chosen job",
     claimedAt: Number(claim.claimedAt), expiresAt, releaseBy: terms.contest || cleanup ? null : releaseBy, depositReturns,
     releaseWindow: terms.contest || cleanup ? null : { ...window, lateRecipient },
+    correctionEndsAt: marker.modelBudget?.correctionCents && !cleanup
+      ? correctionCutoff({ expiresAt, deadline: terms.deadline, releaseWindow: terms.contest ? null : window }) : null,
     release, submit, canRelease: !!release, canSubmit: !!submit, resultHash: marker.execution?.resultHashHex ?? null,
     resultBytes: marker.execution ? Buffer.byteLength(marker.execution.resultBytesBase64, "base64") : null,
     preview: marker.execution ? Buffer.from(marker.execution.resultBytesBase64, "base64").toString("utf8").slice(0, 4000) : null };
