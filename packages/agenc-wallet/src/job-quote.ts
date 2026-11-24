@@ -1,3 +1,4 @@
+import { OUTPUT_AGREEMENT_CRITERION } from "./client/job-exchange.js";
 import { ceilingLamports, microcents, type JobDeposits } from "./job-money.js";
 import type { HirePayoutQuote } from "./client/hire-quote.js";
 import { sellerProceeds } from "./seller-terms.js";
@@ -23,10 +24,17 @@ export function checkPriceLimit(lamports: bigint, cap: number | undefined, rate:
 /** Recover the absent cap of a pre-upgrade chat hire when its stored inputs prove it. */
 export function legacyRefreshLimit(job: JobRecord): number | undefined {
   if (job.kind === "hire" && job.terms && job.inputFingerprint) {
-    const input = { request: job.request, listing: job.listing, acceptance: job.acceptance };
-    for (const deadline of [{}, { deadline: job.terms.deadline }]) {
-      for (const review of [{}, { reviewWindowSecs: job.terms.reviewWindowSecs }]) {
-        if (jobIdentity({ ...input, ...deadline, ...review }, false) === job.inputFingerprint) return undefined;
+    // Newer jobs end their checks with the wallet-written output agreement, which the
+    // caller's fingerprinted input did not contain.
+    const written = job.acceptance?.filter(line => !line.startsWith(OUTPUT_AGREEMENT_CRITERION));
+    const acceptances = written && written.length !== job.acceptance!.length
+      ? [job.acceptance, written, ...(written.length === 0 ? [undefined] : [])] : [job.acceptance];
+    for (const acceptance of acceptances) {
+      const input = { request: job.request, listing: job.listing, ...(acceptance !== undefined && { acceptance }) };
+      for (const deadline of [{}, { deadline: job.terms.deadline }]) {
+        for (const review of [{}, { reviewWindowSecs: job.terms.reviewWindowSecs }]) {
+          if (jobIdentity({ ...input, ...deadline, ...review }, false) === job.inputFingerprint) return undefined;
+        }
       }
     }
   }

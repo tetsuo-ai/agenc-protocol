@@ -12,8 +12,9 @@ describe("correction cutoff", () => {
   it("stops before the early release pause while giving the claim back is open", () => {
     const releaseBy = now + 3600;
     const held = { expiresAt: now + 7200, deadline: now + 7200, releaseWindow: chosenReleaseWindow(releaseBy, now) };
-    expect(correctionCutoff(held)).toBe(releaseBy - 600 - CORRECTION_RELEASE_MARGIN_SECS);
-    expect(correctionRunSeconds(correctionCutoff(held), now, 86_400)).toBe(3600 - 600 - CORRECTION_RELEASE_MARGIN_SECS);
+    // Revision 9's Clock guard: the early phase lasts through releaseBy, so pauseAt is releaseBy + 1.
+    expect(correctionCutoff(held)).toBe(releaseBy + 1 - CORRECTION_RELEASE_MARGIN_SECS);
+    expect(correctionRunSeconds(correctionCutoff(held), now, 86_400)).toBe(3600 + 1 - CORRECTION_RELEASE_MARGIN_SECS);
   });
   it("leaves time to submit before the claim expires or the deadline passes", () => {
     const late = chosenReleaseWindow(now - 100, now);
