@@ -8,7 +8,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { PortableBusiness } from "./client/business.js";
-import { parseBusinessManifest } from "./client/business-manifest.js";
+import {
+  serviceRehearsalKey,
+  parseBusinessManifest,
+} from "./client/business-manifest.js";
 import { sellerTermsProblem } from "./client/seller-terms.js";
 import { WalletError } from "./errors.js";
 import type { WalletState } from "./store.js";
@@ -234,7 +237,9 @@ export function requireFreshRehearsals(
   business?: PortableBusiness,
 ) {
   const expected = [
-    ...new Set(business?.services.map((s) => s.manifest)),
+    ...new Set(
+      business?.services.map((s) => serviceRehearsalKey(s.agentId, s.manifest)),
+    ),
   ].sort();
   if (!expected.length) return;
   try {
@@ -243,7 +248,7 @@ export function requireFreshRehearsals(
     );
     if (
       receipt.restoredAt === restoredAt &&
-      JSON.stringify(receipt.digests) === JSON.stringify(expected)
+      JSON.stringify(receipt.services) === JSON.stringify(expected)
     )
       return;
   } catch {

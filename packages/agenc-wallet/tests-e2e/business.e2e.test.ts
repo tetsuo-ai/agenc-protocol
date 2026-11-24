@@ -330,7 +330,7 @@ it("restores a verified draft and assets, reconciles a pending signature and wai
     path.join(dir, "business-rehearsals.json"),
     JSON.stringify({
       restoredAt: recovery!.restoredAt,
-      digests: [digest(bytes)],
+      services: [JSON.stringify([buyer.id, digest(bytes)])],
     }),
   );
   await expect(

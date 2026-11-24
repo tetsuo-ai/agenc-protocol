@@ -58,3 +58,7 @@ export function parseBusinessManifest(value: unknown): BusinessManifest {
     throw new Error("The service manifest is invalid.");
   return m;
 }
+
+/** Service sources are installed in the seller's own room directory. */
+export const serviceRehearsalKey = (agentId: string, manifest: string) =>
+  JSON.stringify([agentId, manifest]);
