@@ -44,7 +44,7 @@ import {
 import { defaultSocketPath, serveWallet } from "./server.js";
 import { openDetailsCache } from "./listing-details.js";
 import { createHostedServices, type MarketServices } from "./services.js";
-import { restoreBackup } from "./backup.js";
+import { readBackupFile, restoreBackup } from "./backup.js";
 import { hideFromLog, logSafe } from "./log.js";
 import { listenForUnlock } from "./unlock-server.js";
 import { withAgentExecutors } from "./agent-executors.js";
@@ -579,7 +579,7 @@ async function restore(values: Record<string, string | boolean | undefined>): Pr
   const { header, replaced } = await restoreBackup({
     dataDir,
     unlockSecret: secret,
-    text: readFileSync(path.resolve(values.file), "utf8"),
+    text: readBackupFile(path.resolve(values.file)),
     password,
     network,
     now: Date.now(),
