@@ -5246,31 +5246,12 @@ export class AgencWallet {
     return { ...saved, listing: offer?.listing ?? null, stage: offer?.status ?? "problem", error: offer?.error ?? null };
   }
 
-  async quoteManualWork(agentId: string) {
-    const agent = this.#agentRecord(agentId);
-    const quote = await this.quoteEarn(agentId, undefined, undefined, agent.earn.minPayCents);
-    const entry = this.#fundingQuotes.get(quote.quoteId)!;
-    this.#store.update(state => {
-      const saved = state.setupQuotes ??= {};
-      for (const [id, q] of Object.entries(saved)) if (q.quote.expiresAt <= this.#now()) delete saved[id];
-      saved[quote.quoteId] = { quote: structuredClone(quote), before: entry.before, offers: entry.offers,
-        action: JSON.stringify(["enable-manual", agent.earn.minPayCents]) };
-    });
-    this.#fundingQuotes.delete(quote.quoteId);
-    return quote;
-  }
-
-  async startManualWork(agentId: string, fundingQuoteId: string) {
-    if (!fundingQuoteId || !this.#earn.chosenRoom) throw new WalletError("NOT_AVAILABLE", "Prepare the job room and review the worker quote.");
-    return this.#lock(`seller-confirm:${agentId}`, () => this.#setEarn(agentId, true, this.#agentRecord(agentId).earn.minPayCents, fundingQuoteId, true));
-  }
-
   async setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string): Promise<AgentView> {
     const apply = () => this.#setEarn(agentId, enabled, minPayCents, fundingQuoteId);
     return this.#lock(`seller-confirm:${agentId}`, apply);
   }
 
-  async #setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string, manual = false): Promise<AgentView> {
+  async #setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string): Promise<AgentView> {
     if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const agent = this.#agentRecord(agentId);
     this.#checkPendingFunding(agentId, enabled ? undefined : {});
@@ -5288,8 +5269,8 @@ export class AgencWallet {
       }
       if (fundingQuoteId !== undefined) {
         const decision = await this.#consumeFunding(fundingQuoteId, {
-          agentId, action: JSON.stringify([manual ? "enable-manual" : "enable", minPayCents ?? null]),
-          effect: { ...(manual && { manual }), minPayCents: minPayCents ?? agent.earn.minPayCents },
+          agentId, action: JSON.stringify(["enable", minPayCents ?? null]),
+          effect: { minPayCents: minPayCents ?? agent.earn.minPayCents },
         });
         if (decision.replayed) return this.#oneAgentView(agentId);
       } else await this.#fundEarning(agent);

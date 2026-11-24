@@ -1,6 +1,6 @@
 import { agentOffers, type AgentRecord, type OfferRecord } from "./store.js";
 
-export type SellerEffect = { offer: OfferRecord; enableEarns?: true; setupId?: string } | { minPayCents: number; manual?: boolean };
+export type SellerEffect = { offer: OfferRecord; enableEarns?: true; setupId?: string } | { minPayCents: number };
 interface SellerSetupReceipt {
   action: string;
   quoteId: string;
@@ -63,8 +63,7 @@ export function applySellerDecision(agent: AgentRecord, decision: SellerDecision
       if (offer.wanted) offer.fundingConfirmed = true;
     }
     agent.earn.enabled = agent.earn.retiredAt == null;
-    if (decision.effect.manual) agent.earn.chooseOpenJobs = true;
-    else if (agentOffers(agent).length === 0) agent.earn.chooseOpenJobs ??= false;
+    if (agentOffers(agent).length === 0) agent.earn.chooseOpenJobs ??= false;
     agent.earn.minPayCents = decision.effect.minPayCents;
     agent.earn.lastError = null;
   }
