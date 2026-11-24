@@ -3,7 +3,7 @@ import { unwrapOption, type Address } from "@solana/kit";
 import {
   lighthouse, facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
-  getTaskClaimDecoder, getTaskSubmissionDecoder, getTaskValidationConfigDecoder,
+  getTaskClaimDecoder, getTaskEncoder, getTaskSubmissionDecoder, getTaskValidationConfigDecoder,
   listDirectClaimableTasks, SubmissionStatus, TaskStatus, TaskType, ValidationMode, values, type Task,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
@@ -161,8 +161,39 @@ function releaseInstruction(ctx: WorkerContext, agent: WorkerAgent, terms: Terms
     ...(terms.direct && { taskValidationConfig: null }) });
 }
 
-function releaseGuards(window: ReturnType<typeof chosenReleaseWindow> | null) {
-  return window?.phase === "early" ? [lighthouse.assertClockBefore(window.resumeAt)] : [];
+/**
+ * What revision 9's release_claim reads to move the deposit: the landing
+ * clock against the grace, this claim (its claimed_at changes when it is
+ * released and taken again), the claim's balance and Rent (the surplus above
+ * rent is the deposit, and a smaller surplus forfeits nothing), and the task's
+ * dispute flag (set, a late release refunds the worker). The quote was
+ * computed from exactly these values.
+ */
+export interface ReleaseState { claimedAt: string; claimLamports: string; rentTerms: string; disputeOffset: number; disputeFlag: number }
+
+function le64(value: bigint) {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(value);
+  return bytes;
+}
+
+function rentMinimum(terms: Buffer, space: number) {
+  // Rent::minimum_balance, with its 128 bytes of storage overhead.
+  const amount = Math.trunc(Number(BigInt(space + 128) * terms.readBigUInt64LE(0)) * terms.readDoubleLE(8));
+  if (!Number.isSafeInteger(amount) || amount < 0) throw new Error("The rent settings are out of range.");
+  return BigInt(amount);
+}
+
+function releaseGuards(window: ReturnType<typeof chosenReleaseWindow> | null, state: ReleaseState | null,
+  accounts: { task: Address; claimAccount: Address }) {
+  if (!window || !state) return [];
+  return [
+    window.phase === "early" ? lighthouse.assertClockBefore(window.resumeAt) : lighthouse.assertClockAtLeast(window.resumeAt),
+    lighthouse.assertBytes(accounts.claimAccount, 8 + 32 + 32, le64(BigInt(state.claimedAt))),
+    lighthouse.assertLamports(accounts.claimAccount, BigInt(state.claimLamports)),
+    lighthouse.assertBytes(lighthouse.RENT, 0, Buffer.from(state.rentTerms, "hex")),
+    lighthouse.assertBytes(accounts.task, state.disputeOffset, Buffer.from([state.disputeFlag])),
+  ];
 }
 
 export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
@@ -192,11 +223,21 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   if (!terms) return null;
   // Revision 9 can forfeit the posted deposit only if the claim still holds
   // that much above rent. A prior delivery normally returned it already.
+  let releaseState: ReleaseState | null = null;
   if (!terms.contest || cleanup) {
-    const [balance, rent] = await Promise.all([
-      ctx.getBalance!(claimPda), ctx.getMinimumBalanceForRentExemption!(data.length),
+    const [balance, rent, rentBytes] = await Promise.all([
+      ctx.getBalance!(claimPda), ctx.getMinimumBalanceForRentExemption!(data.length), ctx.readAccount(lighthouse.RENT),
     ]);
     if (balance - rent < BigInt(terms.deposit)) terms.deposit = "0";
+    if (!terms.contest && !cleanup) {
+      if (rentBytes?.length !== 17) throw new Error("The current rent settings could not be verified.");
+      const rentTerms = Buffer.from(rentBytes.subarray(0, 16));
+      // Transactions assert these Rent bytes, so the quote must use them too.
+      if (rentMinimum(rentTerms, data.length) !== rent) throw new Error("The current rent settings could not be verified.");
+      const encoded = getTaskEncoder().encode(read.task);
+      releaseState = { claimedAt: claim.claimedAt.toString(), claimLamports: balance.toString(), rentTerms: rentTerms.toString("hex"),
+        disputeOffset: encoded.length - 32 - 2 - 16 + 13, disputeFlag: read.task.reserved[13] ?? 0 };
+    }
   }
   const releaseBy = Number(claim.claimedAt + values.CLAIM_RELEASE_GRACE_SECS);
   const window = chosenReleaseWindow(releaseBy, now);
@@ -210,7 +251,7 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt;
   const [release, submit] = await Promise.all([
     noPendingSend && cleanup && (live || terminal) ? ctx.simulateWork(await cleanupClaimInstruction(ctx, agent, task, read.task, terms.treasury, terminal)) :
-      idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms), releaseGuards(window)) : null,
+      idle && !terms.contest && enoughTime ? ctx.simulateWork(await releaseInstruction(ctx, agent, terms), releaseGuards(window, releaseState, terms)) : null,
     canDeliver && room ? ctx.simulateWork(await deliveryInstruction(ctx, agent, terms, read.task, marker.execution!.resultHashHex)) : null,
   ]);
   // Expiry can return the deposit to the worker (for example after a dispute),
@@ -221,7 +262,7 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   return { ...terms, cleanup, terminal, cleanupRecipient, ownerDecision: marker.ownerDecision === true,
     title: marker.title ?? "Chosen job",
     claimedAt: Number(claim.claimedAt), expiresAt, releaseBy: terms.contest || cleanup ? null : releaseBy, depositReturns,
-    releaseWindow: terms.contest || cleanup ? null : { ...window, lateRecipient },
+    releaseWindow: terms.contest || cleanup ? null : { ...window, lateRecipient }, releaseState,
     release, submit, canRelease: !!release, canSubmit: !!submit, resultHash: marker.execution?.resultHashHex ?? null,
     resultBytes: marker.execution ? Buffer.byteLength(marker.execution.resultBytesBase64, "base64") : null,
     preview: marker.execution ? Buffer.from(marker.execution.resultBytesBase64, "base64").toString("utf8").slice(0, 4000) : null };
@@ -256,7 +297,7 @@ export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, s
       : await releaseInstruction(ctx, agent, held);
   }
   signal.throwIfAborted();
-  const guards = action === "release" ? releaseGuards(held.releaseWindow) : [];
+  const guards = action === "release" && !held.cleanup ? releaseGuards(held.releaseWindow, held.releaseState, held) : [];
   await ctx.client.send([...guards, ix], { maxRetries: 0 });
   await resumeOpenClaim(ctx, agent);
 }

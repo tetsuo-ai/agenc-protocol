@@ -180,11 +180,13 @@ it.each([3600, 3601])("discloses both recipients and reconciles a release landin
         const message = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
         if (message.version !== 0) throw new Error("Expected a version 0 release transaction.");
         const guards = message.instructions.filter(ix => message.staticAccounts[ix.programAddressIndex] === lighthouse.LIGHTHOUSE);
-        expect(guards).toHaveLength(1);
-        const indices = guards[0]!.accountIndices!;
-        expect(indices).toHaveLength(1);
-        expect(message.staticAccounts[indices[0]!]).toBe("SysvarC1ock11111111111111111111111111111111");
-        expect(indices[0]!).toBeGreaterThanOrEqual(message.header.numSignerAccounts);
+        // Clock, then the claim (identity and balance), Rent and the task's dispute flag.
+        expect(guards).toHaveLength(5);
+        for (const guard of guards) {
+          expect(guard.accountIndices).toHaveLength(1);
+          expect(guard.accountIndices![0]!).toBeGreaterThanOrEqual(message.header.numSignerAccounts);
+        }
+        expect(message.staticAccounts[guards[0]!.accountIndices![0]!]).toBe("SysvarC1ock11111111111111111111111111111111");
         verifiedClock = true;
         world!.sandbox.advanceClock(delay);
       }
@@ -727,4 +729,74 @@ it("recovers a previously archived expired claim with Earns off, subject to the 
   await world!.wallet.setBudget(id, 500);
   await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
   expect(await world!.balance(claim)).toBe(0n);
+});
+
+it.each(["rent falls", "claim topped up", "dispute filed"] as const)("refuses a signed late release when the %s before it lands", async change => {
+  let mutate: (() => void) | null = null;
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (mutate) { mutate(); mutate = null; }
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  const svm = sandbox.market.svm;
+  const claim = address((await wallet.quoteWork(id, task, "release")).flows.find(row => row.label === "Claim deposit returned or paid")!.from);
+  if (change !== "dispute filed") {
+    // One lamport below a full forfeitable deposit: the late quote pays nothing to the buyer.
+    const raw = svm.getAccount(claim);
+    if (!raw.exists) throw new Error("Missing claim");
+    svm.setAccount({ ...raw, lamports: raw.lamports - 1n } as never);
+  }
+  sandbox.advanceClock(3601);
+  const quote = await wallet.quoteWork(id, task, "release");
+  expect(quote.job.releaseWindow?.phase).toBe("late");
+  expect(quote.job.deposit.lamports).toBe(change === "dispute filed" ? quote.job.deposit.lamports : "0");
+  if (change === "dispute filed") expect(quote.job.depositReturns).toBe(false);
+  const buyer = await world!.balance(quote.job.buyer);
+  const held = await world!.balance(claim);
+  mutate = () => {
+    if (change === "rent falls") {
+      const rent = svm.getRent();
+      rent.lamportsPerByteYear -= 1n;
+      svm.setRent(rent);
+    } else if (change === "claim topped up") {
+      const raw = svm.getAccount(claim);
+      if (raw.exists) svm.setAccount({ ...raw, lamports: raw.lamports + 1n } as never);
+    } else {
+      const raw = svm.getAccount(address(task))!;
+      if (!raw.exists) throw new Error("Missing task");
+      const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+      const reserved = Uint8Array.from(data.reserved);
+      reserved[13] = 1;
+      svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, reserved })) } as never);
+    }
+  };
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+  expect(mutate).toBeNull();
+  // The quoted recipient and amount never changed: nothing moved.
+  expect(await world!.balance(quote.job.buyer)).toBe(buyer);
+  expect(await world!.balance(claim)).toBe(held + (change === "claim topped up" ? 1n : 0n));
+  expect(journal(id).openClaim?.task).toBe(task);
+});
+
+it("pays exactly the late quote when nothing changed, with the landing clock asserted at or after the boundary", async () => {
+  let guards: string[] = [];
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      const message = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+      if ("instructions" in message) guards = message.instructions.filter(ix => message.staticAccounts[ix.programAddressIndex] === lighthouse.LIGHTHOUSE)
+        .map(ix => message.staticAccounts[ix.accountIndices![0]!]!);
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  sandbox.advanceClock(3601);
+  const quote = await wallet.quoteWork(id, task, "release");
+  expect(quote.job.depositReturns).toBe(false);
+  const buyer = await world!.balance(quote.job.buyer);
+  await assertBalances(quote);
+  expect(await world!.balance(quote.job.buyer) - buyer).toBe(BigInt(quote.job.deposit.lamports));
+  const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+  expect(guards).toEqual(["SysvarC1ock11111111111111111111111111111111", claim, claim, lighthouse.RENT, task]);
 });
