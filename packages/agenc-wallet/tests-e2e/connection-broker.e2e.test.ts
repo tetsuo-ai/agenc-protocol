@@ -175,6 +175,17 @@ it("keeps project budgets, operations, subscriptions and handoffs scoped across 
     await expect(read("handoff.status", { jobId: job.id })).rejects.toThrow();
     await owner.call("connections.revoke", { id: second.id });
     await expect(read("connections.info", {})).rejects.toThrow();
+    const audit = (await owner.call("connections.list", {})).audit;
+    expect(
+      audit
+        .filter((row) => row.installation === second.id)
+        .map((row) => row.action),
+    ).toEqual(["handoff", "handoff", "revoke"]);
+    expect(audit[0]).toMatchObject({
+      payer: a.id,
+      jobId: job.id,
+      permissions: ["status"],
+    });
     const expired = new ConnectionGrants(
       options.grantFile,
       "unused",

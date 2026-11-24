@@ -114,6 +114,8 @@ describe("market_post", () => {
       "deadline",
       "deadline_days",
       "min_reputation",
+      "operation_id",
+      "private_commitment",
       "request",
       "required_capabilities",
       "review_window_secs",

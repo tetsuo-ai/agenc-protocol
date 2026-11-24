@@ -35,7 +35,15 @@ export async function featureCall<T>(
   return (await Reflect.apply(method, provider, args)) as T;
 }
 
-export function featureRoutes(wallet: AgencWallet): Routes {
+export function featureRoutes(
+  wallet: AgencWallet,
+  rooms?: import("./assigned-room.js").AssignedRooms,
+): Routes {
+  const assignment = () => {
+    if (!rooms)
+      throw new WalletError("NOT_AVAILABLE", "No verified room is assigned.");
+    return rooms;
+  };
   const child = <T>(method: string, ...args: unknown[]) =>
     featureCall<T>(Reflect.get(wallet, "childHires"), method, ...args);
   const agent = (s: Caller, requested?: string) => {
@@ -111,6 +119,16 @@ export function featureRoutes(wallet: AgencWallet): Routes {
         );
       return featureCall(wallet, "postListingMessage", p.agentId, p.message);
     },
+    "jobs.exchange": (p, s) =>
+      assignment().dispatch(wallet, s, p.jobId, p.request),
+    "jobs.bindRoom": async (p, s) => {
+      if (s.role !== "owner")
+        throw new WalletError(
+          "NOT_ALLOWED",
+          "Only the room host can assign a verified room.",
+        );
+      return assignment().bind(await wallet.getJob(p.jobId, true), p.room);
+    },
     "jobs.stageInputs": (p) =>
       featureCall(
         wallet,
@@ -120,12 +138,14 @@ export function featureRoutes(wallet: AgencWallet): Routes {
         p.processing,
         p.outputs,
       ),
-    "jobs.readDeliveryChunk": (p, s) =>
+    "jobs.readDeliveryChunk": async (p, s) =>
       featureCall(
         wallet,
         "readDeliveryChunk",
         p.jobId,
-        agent(s),
+        s.role === "owner"
+          ? (await wallet.getJob(p.jobId, true)).agentId
+          : agent(s),
         p.part,
         p.offset,
       ),

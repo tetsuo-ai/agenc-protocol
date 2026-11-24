@@ -26,6 +26,7 @@ import { createLineReader, WalletClientError, type WalletClient } from "./client
 import { describeError, toWalletErrorShape, WalletError } from "./errors.js";
 import type { AgencWallet } from "./wallet.js";
 
+import { AssignedRooms } from "./assigned-room.js";
 import { featureCall, featureRoutes } from "./feature-dispatch.js";
 import { ConnectionGrants } from "./connection-grants.js";
 import { listenWindowsPipe } from "./client/windows-pipe.js";
@@ -86,6 +87,7 @@ export interface ServeWalletOptions {
   agentExists: (agentId: string) => boolean;
   grantFile?: string;
   network?: string;
+  exchangeOrigin?: string;
   background?: boolean;
   log?: (line: string) => void;
 }
@@ -133,8 +135,13 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
   };
   const owner = (session: Session): boolean => session.role === "owner";
   const scope = (session: Session): string | undefined => session.agentId ?? undefined;
+  const purchaseTerms = (p:{privateCommitment?:string;childPolicyDigest?:string;listingAgreement?:unknown})=>{
+    if ((p.privateCommitment!==undefined || p.childPolicyDigest!==undefined || p.listingAgreement!==undefined) &&
+        typeof Reflect.get(wallet,"postListingMessage")!=="function") throw new WalletError("NOT_AVAILABLE","Update Market to verify these purchase terms.");
+  };
   const table: Handlers = {
-    ...featureRoutes(wallet),
+    ...featureRoutes(wallet, options.grantFile ? new AssignedRooms(path.join(path.dirname(options.grantFile),"assigned-rooms"),
+      options.network==="mainnet" ? "https://agenc.ag" : options.exchangeOrigin) : undefined),
     "connections.invite": async p => {
       if (!wallet.hasAgent(p.agentId)) throw new WalletError("NOT_FOUND", "Choose an existing wallet agent.");
       return book().invite(p);
@@ -212,7 +219,9 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     "handoff.propose": async (p,s) => {
       const g = book().permission(installation(s).id,p.jobId,"propose");
       if (!["change","reject","dispute"].includes(p.action)) throw new WalletError("BAD_REQUEST", "Choose a review proposal.");
-      return { draft: await wallet.draftReview(g.jobId,p.action,text(p.note,"note"),undefined,g.payer) };
+      const draft = await wallet.draftReview(g.jobId,p.action,text(p.note,"note"),undefined,g.payer);
+      book().proposed(g.connectionId,g.jobId,g.payer);
+      return {draft};
     },
     overview: () => wallet.overview(),
     "work.list": (p, session) => wallet.openWork(session.agentId ?? text(p.agentId, "agent"), p.offset, p.task),
@@ -238,6 +247,7 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     "market.find": (params) => wallet.findPage(params),
     "market.hire": (params, session) => {
       if (owner(session)) throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before hiring.");
+      purchaseTerms(params);
       return wallet.hire({
         ...params,
         // An agent can only ever hire as itself.
@@ -246,10 +256,12 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     },
     "market.postContest": (params, session) => {
       if (owner(session)) throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before posting.");
+      purchaseTerms(params);
       return wallet.post({ ...params, contestEntries: params.contestEntries ?? 0, agentId: session.agentId ?? text(params.agentId, "agent") });
     },
     "market.post": (params, session) => {
       if (owner(session)) throw new WalletError("NOT_ALLOWED", "Request a quote and approve its ID before posting.");
+      purchaseTerms(params);
       return wallet.post({
         ...params,
         // An agent can only ever post as itself, from its own money.
@@ -257,8 +269,11 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
       });
     },
     "wallet.post": async (params) => ({ job: await wallet.postFromBalance(params) }),
-    "wallet.quoteHire": (params) => wallet.hire(params, true),
-    "wallet.quotePost": (params) => wallet.quotePost(params),
+    "wallet.quoteHire": (params) => {
+      purchaseTerms(params);
+      return wallet.hire(params, true);
+    },
+    "wallet.quotePost": (params) => {purchaseTerms(params);return wallet.quotePost(params);},
     "jobs.callOutcome": (params, session) => wallet.callOutcome(session.agentId ?? text(params.agentId, "agent"), params.kind, text(params.key, "call key")),
     "approvals.page": params => wallet.approvalPage(params.after),
     "approvals.get": params => wallet.getApproval(text(params.approvalId, "request")),
@@ -287,9 +302,11 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     "jobs.delivery": async (params, session) => ({
       result: await wallet.jobDelivery(text(params.jobId, "job"), owner(session), scope(session), params.entryId),
     }),
-    "jobs.file": async (params) => ({
-      file: await wallet.jobFile(text(params.jobId, "job"), text(params.sha256, "file")),
-    }),
+    "jobs.file": async (params, session) => {
+      const id = text(params.jobId,"job");
+      await wallet.getJob(id,owner(session),scope(session));
+      return {file:await featureCall(wallet,"jobFile",id,text(params.sha256,"file"),scope(session))};
+    },
     "jobs.wait": (params, session) =>
       wallet.waitJob(
         text(params.jobId, "job"),
@@ -301,7 +318,7 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     "jobs.approve": async (params, session) => ({
       job: await featureCall(wallet, "approveJob",
         text(params.jobId, "job"),
-        params.rating,
+        params.ratingQuoteId ? params.rating : undefined,
         owner(session),
         scope(session),
         params.quoteId, params.ratingQuoteId,
@@ -352,7 +369,7 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
       ),
     "wallet.withdraw": (params) => wallet.withdraw(text(params.to, "address"), params.amount),
     "backup.export": (params) =>
-      featureCall(wallet, "exportBackup", text(params.password, "password"), text(params.file, "file"), params.business),
+      featureCall(wallet, "exportBackup", text(params.password, "password"), text(params.file, "file"), params.businessSnapshot),
     "backup.check": (params) =>
       wallet.checkBackup(text(params.password, "password"), text(params.file, "file")),
   };

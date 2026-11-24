@@ -10,6 +10,7 @@ import {
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type {
   ConnectionScope,
+  ConnectionAudit,
   JobHandoff,
   HandoffPermission,
 } from "./client/connections.js";
@@ -29,6 +30,7 @@ interface State {
   brokerSecret: string;
   entries: Entry[];
   handoffs: JobHandoff[];
+  audit?: ConnectionAudit[];
 }
 const digest = (text: string) =>
   createHash("sha256").update(text).digest("hex");
@@ -245,7 +247,32 @@ export class ConnectionGrants {
         )
         .map(publicScope),
       handoffs: this.#state.handoffs,
+      audit: this.#state.audit ?? [],
     };
+  }
+  #audit(
+    id: string,
+    action: ConnectionAudit["action"],
+    details: Pick<ConnectionAudit, "jobId" | "payer" | "permissions"> = {},
+  ) {
+    const grant = this.#state.entries.find((e) => e.id === id)!;
+    return [
+      ...(this.#state.audit ?? []).slice(-4095),
+      {
+        at: this.now(),
+        installation: id,
+        project: grant.project,
+        agentId: grant.agentId,
+        action,
+        ...details,
+      },
+    ];
+  }
+  proposed(id: string, jobId: string, payer: string) {
+    this.#save({
+      ...this.#state,
+      audit: this.#audit(id, "propose", { jobId, payer }),
+    });
   }
   revoke(id: string) {
     const entries = this.#state.entries.filter((e) => e.id !== id);
@@ -255,6 +282,7 @@ export class ConnectionGrants {
       ...this.#state,
       entries,
       handoffs: this.#state.handoffs.filter((h) => h.connectionId !== id),
+      audit: this.#audit(id, "revoke"),
     });
     return { revoked: true };
   }
@@ -279,7 +307,12 @@ export class ConnectionGrants {
             changes: e.changes.filter((c) => c.jobId !== jobId),
           },
     );
-    this.#save({ ...this.#state, entries, handoffs });
+    this.#save({
+      ...this.#state,
+      entries,
+      handoffs,
+      audit: this.#audit(id, "handoff", { jobId, payer, permissions }),
+    });
     return { saved: true };
   }
   permission(id: string, jobId: string, permission: HandoffPermission) {

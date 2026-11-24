@@ -16,6 +16,16 @@ export interface JobHandoff {
   permissions: HandoffPermission[];
   grantedAt: number;
 }
+export interface ConnectionAudit {
+  at: number;
+  installation: string;
+  project: string;
+  agentId: string;
+  action: "handoff" | "revoke" | "propose";
+  jobId?: string;
+  payer?: string;
+  permissions?: HandoffPermission[];
+}
 export interface ConnectionMethods {
   "connections.invite": {
     params: Pick<ConnectionScope, "label" | "project" | "agentId" | "access">;
@@ -29,7 +39,11 @@ export interface ConnectionMethods {
   };
   "connections.list": {
     params: Record<string, never>;
-    result: { connections: ConnectionScope[]; handoffs: JobHandoff[] };
+    result: {
+      connections: ConnectionScope[];
+      handoffs: JobHandoff[];
+      audit: ConnectionAudit[];
+    };
   };
   "connections.revoke": {
     params: { id: string };
