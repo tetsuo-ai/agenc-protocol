@@ -7,7 +7,8 @@ import {
   randomUUID,
   verify,
 } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   ConnectionScope,
   ConnectionAudit,
@@ -267,6 +268,55 @@ export class ConnectionGrants {
         ...details,
       },
     ];
+  }
+  purchase(
+    id: string,
+    operationId: string,
+    tool: string,
+    terms: Record<string, unknown>,
+    lookup: boolean,
+  ) {
+    const scope = this.scope(id);
+    if (scope.access !== "trade") throw denied();
+    const stable = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(stable)
+        : value !== null && typeof value === "object"
+          ? Object.fromEntries(
+              Object.entries(value)
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([key, v]) => [key, stable(v)]),
+            )
+          : value;
+    const binding = digest(
+      JSON.stringify([id, scope.agentId, scope.project, tool, stable(terms)]),
+    );
+    const dir = this.file + ".operations",
+      file = join(dir, digest(operationId));
+    try {
+      if (readFileSync(file, "utf8") !== binding) throw denied();
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (lookup) return false;
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, binding, { flag: "wx", mode: 0o600, flush: true });
+    this.#save({
+      ...this.#state,
+      audit: [
+        ...(this.#state.audit ?? []).slice(-4095),
+        {
+          at: this.now(),
+          installation: id,
+          project: scope.project,
+          agentId: scope.agentId,
+          action: "purchase",
+          operationId,
+        },
+      ],
+    });
+    return true;
   }
   proposed(id: string, jobId: string, payer: string) {
     this.#save({

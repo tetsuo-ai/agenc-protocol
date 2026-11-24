@@ -123,6 +123,13 @@ it("keeps project budgets, operations, subscriptions and handoffs scoped across 
     expect((await read("connections.tool", purchase)).ok).toBe(false);
     const placed = await trade("connections.tool", purchase);
     expect(placed.ok).toBe(true);
+    await expect(
+      trade("connections.tool", {
+        ...purchase,
+        args: { ...args, request: "A different hire" },
+      }),
+    ).rejects.toThrow();
+
     const jobs = await owner.call("jobs.list", { agentId: a.id });
     expect(jobs.jobs).toHaveLength(1);
     const job = jobs.jobs[0]!;
@@ -181,7 +188,11 @@ it("keeps project budgets, operations, subscriptions and handoffs scoped across 
         .filter((row) => row.installation === second.id)
         .map((row) => row.action),
     ).toEqual(["handoff", "handoff", "revoke"]);
-    expect(audit[0]).toMatchObject({
+    expect(audit.find((row) => row.action === "purchase")).toMatchObject({
+      operationId: purchase.operationId,
+      agentId: a.id,
+    });
+    expect(audit.find((row) => row.action === "handoff")).toMatchObject({
       payer: a.id,
       jobId: job.id,
       permissions: ["status"],

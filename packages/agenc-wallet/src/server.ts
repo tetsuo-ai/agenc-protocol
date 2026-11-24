@@ -168,6 +168,20 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
       if (purchase && (typeof p.operationId !== "string" ||
           !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(p.operationId)))
         throw new WalletError("BAD_REQUEST", "A purchase needs a stable operation ID.");
+      if (purchase && grant.access==="read") return {ok:false,message:"This connection has read access only."};
+      if (purchase) {
+        const matches = book().purchase(grant.id, p.operationId!, p.name, object(p.args), true);
+        if (!matches && p.lookup) return null;
+        if (!matches) {
+          try {
+            await wallet.callOutcome(grant.agentId, p.name === "market_hire" ? "hire" : "request", p.operationId!);
+            throw new WalletError("NOT_ALLOWED", "This operation belongs to another connection.");
+          } catch (error) {
+            if (!(error instanceof WalletError && error.code === "NOT_FOUND")) throw error;
+          }
+          book().purchase(grant.id, p.operationId!, p.name, object(p.args), false);
+        }
+      }
       if (p.lookup && !purchase) throw new WalletError("BAD_REQUEST", "Choose a purchase to look up.");
       if (p.lookup) {
         try { await wallet.callOutcome(grant.agentId, p.name === "market_hire" ? "hire" : "request", p.operationId!); }

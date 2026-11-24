@@ -21,7 +21,8 @@ export interface ConnectionAudit {
   installation: string;
   project: string;
   agentId: string;
-  action: "handoff" | "revoke" | "propose";
+  operationId?: string;
+  action: "handoff" | "revoke" | "propose" | "purchase";
   jobId?: string;
   payer?: string;
   permissions?: HandoffPermission[];
