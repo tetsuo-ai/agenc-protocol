@@ -1,5 +1,6 @@
 import { operationTransport } from "./operation-transport.js";
 import { readChangePage, readAccountChange, type AccountChange, type ChangePage } from "./money-history.js";
+import { readEscrowReceipt, type EscrowReceipt } from "./child-escrow.js";
 import { BASE_FEE_LAMPORTS } from "./network-fee.js";
 import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // The one seam between the wallet and a Solana cluster. Everything above this
@@ -47,7 +48,7 @@ import {
 } from "./settlement.js";
 import { readProtocolConfig } from "./market.js";
 import { reviewBlockhash } from "./review-blockhash.js";
-import { readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
+import { deliveryBeforeDecision, readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
 import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
@@ -68,6 +69,7 @@ export interface Chain {
   operationBlockhashValid?(blockhash: Blockhash): Promise<boolean>;
   contestHistory?(task: Address, since: string | null, checkpoint?: import("./contest-history.js").ContestCheckpoint): Promise<import("./contest-history.js").ContestHistory>;
   readonly network: WalletNetwork;
+  balanceAfter?(tx: Transaction, payer: Address): Promise<bigint | null>;
   simulateWork?(payer: Address, ix: Instruction, guards?: readonly Instruction[]): Promise<WorkSimulation | null>;
   workOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome | "expired">;
   /**
@@ -120,10 +122,12 @@ export interface Chain {
    */
   readonly transferFeeLamports: bigint;
   /** Most recent verified settlement transaction for a task, when known. */
+  escrowReceipt?(task: Address, creator?: Address): Promise<EscrowReceipt | null>;
   findSettlementSignature?(task: Address): Promise<string | null>;
   /** Confirmed review instructions and costs from the claim history. */
   reviewHistory?(task: Address, claim: Address, before?: string): Promise<ReviewHistory>;
   /** Delivery commitment from a settled task's authenticated transaction history. */
+  settledChildRound?(task: Address, claim: Address, signature: string): Promise<import("./client/reviews.js").ReviewedDelivery | undefined>;
   findSettledDelivery?(task: Address, creator: Address): Promise<SettledDelivery | null>;
   /**
    * The agent the transaction that settled a finished task paid, read from
@@ -430,6 +434,13 @@ export function createRpcChain(options: RpcChainOptions): Chain {
       return { fee: tx.meta.fee, debit: debit > 0n ? debit : 0n };
     },
     workOutcome: reviewSendOutcome,
+    async balanceAfter(tx, payer) {
+      const {value} = await rpc.simulateTransaction(getBase64EncodedWireTransaction(tx), {
+        encoding:"base64", commitment:"confirmed", sigVerify:false, replaceRecentBlockhash:true,
+        accounts:{addresses:[payer], encoding:"base64"},
+      }).send();
+      return value.err === null ? value.accounts?.[0]?.lamports ?? null : null;
+    },
     async simulateWork(payer, ix, guards) {
       const { blockhash } = await transport.getLatestBlockhash();
       const { tx, accounts } = workSimulationMessage(payer, ix, blockhash, options.computeUnitPrice === undefined ? undefined : PRICED_COMPUTE_UNIT_LIMIT, options.computeUnitPrice, guards);
@@ -542,9 +553,11 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     },
     gpa: rpc,
     contestHistory: (task, since, checkpoint) => network(() => readContestHistory(rpc, task, since, checkpoint)),
+    escrowReceipt: (task, creator) => network(() => readEscrowReceipt(rpc, task, creator)),
     findSettlementSignature: (task) => findVerifiedSettlementSignature(rpc, task),
     reviewHistory: (task, claim, before) => network(() => readReviewHistory(rpc, task, claim, reviewTransactions, before,
       async () => (await readProtocolConfig(chain)).maxClaimDuration)),
+    settledChildRound: (task, claim, signature) => network(() => deliveryBeforeDecision(rpc, task, claim, {signature})),
     findSettledDelivery: (task, creator) => network(() => readSettledDelivery(rpc, task, creator)),
     findSettlementWorker: (task) => network(() => readSettlementWorker(rpc, task)),
     findSettlement: (task, creator, options) =>

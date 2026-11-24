@@ -1056,12 +1056,14 @@ export async function sendApproval(
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
-  expected: BoundDelivery,
+  expected: BoundDelivery & {treasury?: string},
   approvedPayees?: Pick<Payees, "workerAuthority" | "treasury">,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
   const payees = await settlementPayees(chain, account, providerAgent);
+  if (expected.treasury && payees.treasury !== expected.treasury)
+    throw new WalletError("PRICE_CHANGED", "The treasury changed. Review the current settlement quote.");
   if (approvedPayees && (payees.workerAuthority !== approvedPayees.workerAuthority || payees.treasury !== approvedPayees.treasury ||
       payees.operator !== null || payees.referrer !== null)) {
     throw new WalletError("PRICE_CHANGED", "The payout recipients changed. Review a new quote.");
@@ -1208,6 +1210,7 @@ export async function sendFrozenExpiry(
   sender: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  expectedTreasury?: string,
 ): Promise<{ signature: string; paidProvider: boolean }> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -1216,6 +1219,8 @@ export async function sendFrozenExpiry(
     throw new WalletError("NOT_ALLOWED", "This turned-down job cannot be settled yet.");
   }
   const payees = await settlementPayees(chain, account, providerAgent);
+  if (expectedTreasury && payees.treasury !== expectedTreasury)
+    throw new WalletError("PRICE_CHANGED", "The treasury changed. Review the settlement recipient.");
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
   const [hireRecord] = await findHireRecordPda({ task });
   const client = chain.clientFor(sender);

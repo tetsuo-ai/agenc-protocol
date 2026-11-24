@@ -1,5 +1,6 @@
 import { operationTransport } from "./operation-transport.js";
 import type { AccountChange } from "./money-history.js";
+import { escrowEvent } from "./child-escrow.js";
 import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // A whole marketplace in this process, for practice and for tests: the REAL
 // compiled marketplace program running in litesvm, play money, a local
@@ -402,6 +403,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   };
   // The agent each settled job paid, and the log of the transaction that
   // settled it: the history the live network keeps and litesvm does not.
+  const escrowHistory = new Map<Address, {signature: string; logs: readonly string[]}[]>();
   const frozenReceipts = new Map<Address, { worker: Address; operator?: Address; logs: readonly string[] }>();
   const settlements = new Map<Address, Settlement>();
   const submissions = new Map<Address, ReviewedDelivery>();
@@ -482,6 +484,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         for (const account of message.staticAccounts) {
           known.add(account);
           rememberHire(account);
+          const entries = escrowHistory.get(account) ?? [];
+          entries.unshift({signature: result.signature, logs: result.logs});
+          escrowHistory.set(account, entries.slice(0,20));
         }
         const instructions = "instructions" in message ? message.instructions : [];
         for (const [index, instruction] of instructions.entries()) {
@@ -591,6 +596,14 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
     listingSendSettled: async () => true,
     workOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : failedWorkSends.has(signature) ? "failed" : inFlight.has(signature) ? "pending" : "expired",
+    async balanceAfter(tx, payer) {
+      syncClock();
+      svm.withSigverify(false);
+      try {
+        const result = svm.simulateTransaction(tx);
+        return "postAccounts" in result ? BigInt(result.postAccounts().find(a => a.address === payer)?.lamports ?? 0) : null;
+      } finally { svm.withSigverify(true); }
+    },
     async simulateWork(payer, ix, guards) {
       syncClock();
       const { tx, accounts } = workSimulationMessage(payer, ix, svm.latestBlockhash(), undefined, undefined, guards);
@@ -636,8 +649,16 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const fresh = log.slice(log.findIndex(item => item.signature === since) + 1);
       return { cursor: fresh.at(-1)?.signature ?? since, events: fresh.flatMap(item => contestEvents(task, item.logs, item.signature, item.changes)) };
     },
+    async escrowReceipt(task, creator) {
+      for (const row of escrowHistory.get(task) ?? []) {
+        const status = await escrowEvent(row.logs, task, creator);
+        if (status) return {status, signature: row.signature};
+      }
+      return null;
+    },
     findSettlementWorker: async (task) => settlements.get(task)?.worker ?? null,
     reviewHistory: async (_task, claim) => ({ entries: reviewEntries.get(claim) ?? [], complete: true }),
+    settledChildRound: async (_task, claim) => submissions.get(claim),
     findSettledDelivery: async (task, creator) => {
       const worker = settlements.get(task)?.worker;
       const logs = settledLogs.get(task);

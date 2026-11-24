@@ -1,5 +1,5 @@
 import type { ChildHireView, ChildRoomGrant, ChildHirePolicy } from "./client/child-hire.js";
-import type { ApprovalRecord, JobRecord, WalletState } from "./store.js";
+import type { AgentRecord, ApprovalRecord, JobRecord, WalletState } from "./store.js";
 
 /** Part of the existing atomic, wallet-locked journal. No separate balance or signer. */
 export interface ChildHireRecord {
@@ -10,9 +10,22 @@ export interface ChildHireRecord {
   view: ChildHireView;
   /** Private until the exact Market decision. A normal approvals.decide cannot spend this draft. */
   draft?: { job: JobRecord; approval: ApprovalRecord };
-  delivered?: { receipt: string; hash: string; round: number };
+  delivered?: { kind?: "room-import"; receipt: string; hash: string; round: number };
   send?: import("./transport-scope.js").PendingListingSend;
   approvedAt?: number;
+  dispatch?: {
+    signature: string;
+    outcome: "landed" | "expired" | "failed";
+    fee: string | null;
+    debit?: string;
+  };
+  purchaseSends?: import("./child-publication.js").PurchaseSend[];
+  shareGrant?: string;
+  parentCreator?: string;
+  settlementAttempts?: import("./child-settlement.js").ChildSettlementAttempt[];
+  settlementTreasury?: string;
+  maximumReviewFees?: string;
+  reviewFeesSpent?: string;
   /** Seller-local B staging, scoped to this original buyer grant and supplier. */
   supplierCommitment?: string;
   reviewSpent?: string;
@@ -40,6 +53,8 @@ export interface ChildHold {
   review: string;
   rate: number;
   funded: boolean;
+  futurePurchase?: string;
+  pending?: Record<string, string>;
 }
 export function childHolds(agent: import("./store.js").AgentRecord) {
   return agent as typeof agent & { childHolds?: Record<string, ChildHold> };
@@ -69,4 +84,16 @@ export function childHireActions(state: WalletState, now: number, agentId?: stri
       },
     ];
   });
+}
+
+/** Unresolved debits survive rate changes, restart and the daily window. */
+export function reservedLamports(agent: AgentRecord, exceptJob?: string): bigint {
+  let held = 0n;
+  for (const [id, hold] of Object.entries(childHolds(agent).childHolds ?? {})) {
+    if (id !== exceptJob)
+      held += BigInt(hold.review) + BigInt(hold.funded ? (hold.futurePurchase ?? "0") : hold.purchase);
+    for (const pending of Object.values(hold.pending ?? {})) held += BigInt(pending);
+  }
+  for (const charge of agent.refills) if (charge.work) held += BigInt(charge.lamports);
+  return held;
 }

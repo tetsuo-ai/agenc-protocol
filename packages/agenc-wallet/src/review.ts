@@ -84,7 +84,7 @@ export function resubmissionDeadline(taskDeadline: bigint, claimExpiry: bigint):
   return limits.length ? Math.min(...limits) : null;
 }
 
-export async function quoteReview(chain: Chain, jobId: string, task: Address, provider: Address, buying: boolean, rate: number | null, funding?: { payer: string; dailyLimitCents: number | null }) {
+export async function quoteReview(chain: Chain, jobId: string, task: Address, provider: Address, buying: boolean, rate: number | null, funding?: { treasury?: string; payer: string; dailyLimitCents: number | null }) {
   const [account, submission, [validation], [claim]] = await Promise.all([
     readTask(chain, task), readSubmission(chain, task, provider), findTaskValidationConfigPda({ task }), findClaimPda({ task, bidder: provider }),
   ]);

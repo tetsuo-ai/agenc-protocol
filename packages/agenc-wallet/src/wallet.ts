@@ -19,6 +19,13 @@ import { checkWorkFiles, correctionInputs, inspectWorkChunk, workFileSource } fr
 import { readJobParties } from "./job-parties.js";
 import { projectInbox } from "./action-inbox.js";
 import type { PortableBusiness, RecoveryView } from "./client/business.js";
+import { withPurchaseStep, reconcilePurchaseSends, finishChildReserve } from "./child-publication.js";
+import { reservedForPayer, reservationSigner, spendingChain } from "./child-reservations.js";
+import { withChildSettlement, remainingChildFees, reconcileChildSettlement } from "./child-settlement.js";
+import { childRatingSigner } from "./child-rating.js";
+import { signChildShare, stageChildShare } from "./child-share.js";
+import { ChildHires, childDigest, childPolicyFor, readChildEvidence, refuseChild } from "./child-hire.js";
+import { childForJob, childHolds, childOwnsKey, childState } from "./child-hire-store.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
 // every job. It accepts plain requests ("hire this", "approve that"), decides
@@ -581,6 +588,7 @@ export class AgencWallet {
   readonly #retiring = new Set<string>();
   readonly #quotedContinuation = new AsyncLocalStorage<{ agentId: string; active: boolean }>();
   readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; target: bigint; action: string; before: string; offers: OfferRecord[] }>();
+  readonly #spendingJob = new AsyncLocalStorage<string>();
   readonly #workQuotes = new Map<string, { quote: WorkerQuote; terms: string }>();
   /**
    * An agent's waiting hires, found when stopping it for good was refused for
@@ -601,7 +609,9 @@ export class AgencWallet {
     releaseLock: () => void,
   ) {
     this.#config = config;
-    this.#chain = scopedChainReads(config.chain);
+    // Spending helpers see free SOL. Overview uses the actual multi-account balances.
+    this.#chain = scopedChainReads(spendingChain(config.chain, store, () => this.#spendingJob.getStore(),
+      (payer, run) => this.#lock("debit:" + payer, run)));
     this.#services = scopeAdapterRequests(config.services, ["trustedModerators", "publishListing", "attestListing"]);
     this.#vault = vault;
     this.#store = store;
@@ -678,6 +688,11 @@ export class AgencWallet {
     }
   }
 
+  async #signer(key: string) {
+    const signer = await this.#vault.signer(key);
+    return reservationSigner(signer, this.#config.chain, () => reservedForPayer(this.#store, signer.address, this.#spendingJob.getStore()));
+  }
+
   /** The address money is sent to in order to add it to the main balance. */
   get mainAddress(): Address {
     return this.#vault.address(MAIN_KEY);
@@ -740,7 +755,7 @@ export class AgencWallet {
 
   async #startDrain(agent: AgentRecord): Promise<void> {
     if (this.#closed || agent.earn.retiredAt != null || !this.#earn.hasUnfinishedJob(agent.id)) return;
-    const signer = await this.#vault.signer(agent.keyId);
+    const signer = await this.#signer(agent.keyId);
     if (this.#closed || this.#agentRecord(agent.id).earn.enabled) return;
     this.#earn.start({ agentId: agent.id, signer, minRewardLamports: 0n,
       solUsd: () => this.#freshRate() }, true);
@@ -890,6 +905,42 @@ export class AgencWallet {
   }
 
   /** The balances have changed: read them again next time, but keep the last ones to fall back on. */
+  /** The authenticated room can propose. Only the Market owner can decide. */
+  #children?: ChildHires;
+  get childHires(): ChildHires {
+    return this.#children ??= new ChildHires({
+      chain: this.#chain, services: this.#services, store: this.#store,
+      agent: id => this.#agentRecord(id), now: this.#now, rate: async () => (await this.#freshRate(true))!,
+      room: (agent, rate, except) => this.#dailyRoom(agent, rate, except), lock: (key, run) => this.#lock(key, run),
+      quote: async params => {
+        const fingerprint = jobIdentity(params, true);
+        const { approval } = await this.#singleJobCall(params.agentId, "hire", params.idempotencyKey, fingerprint,
+          () => this.#hire(params, true, fingerprint));
+        const draft = approval && this.#panelQuotes.get(approval.id);
+        if (!draft || !approval) return refuseChild("There is no fresh supplier quote.");
+        this.#panelQuotes.delete(approval.id);
+        return { ...draft, view: approval };
+      },
+      reserve: (id, run) => this.#lock("wallet:" + id, () => this.#lock("debit:" + this.#agentRecord(id).address, run)),
+      reconcileDispatch: id => this.#lock("job:" + id, async () => {
+        const job = this.#store.state.jobs[id];
+        if (!job || !childForJob(this.#store.state, job)?.send) return;
+        if (job.hiredAt === null) await this.#reconcileCreation(job, () => this.#childLanded(job), "order");
+        else await this.#reconcileFundedChild(job);
+      }),
+      advance: id => this.#advance(id, true),
+      notify: id => { this.#emit({ type: "approval", approvalId: id }); this.#emit({ type: "overview" }); },
+      authorizeShare: async (job, binding) => {
+        const signer = await this.#payerSigner(job);
+        if ((await readTask(this.#chain, binding.parentTask as Address))?.creator !== signer.address)
+          refuseChild("Only the original order payer can approve this share.");
+        return signChildShare(signer, binding);
+      },
+      privateStage: (grant, request, supplier, proof, saved) => stageChildShare(this as object, grant, request, supplier, proof, saved),
+      evidence: (job, names, grant) => readChildEvidence(this as object, job, names, grant),
+    });
+  }
+
   #dropBalances(): void {
     if (this.#balances !== null) this.#balances = { ...this.#balances, at: 0 };
   }
@@ -1450,7 +1501,7 @@ export class AgencWallet {
 
   /** Send lamports between two of this wallet's own keys, or out of it. */
   async #send(fromKey: string, to: Address, lamports: bigint, singleAttempt = false): Promise<string> {
-    const signer = await this.#vault.signer(fromKey);
+    const signer = await this.#signer(fromKey);
     try {
       const result = await this.#chain
         .clientFor(signer)
@@ -1951,6 +2002,8 @@ export class AgencWallet {
     acceptance?: string[];
     idempotencyKey?: string;
   }, quoteOnly = false): Promise<{ job: JobView; approval: ApprovalView | null }> {
+    if (childOwnsKey(this.#store.state, params.idempotencyKey))
+      refuseChild("Use the existing supplier purchase in Market.");
     const fingerprint = jobIdentity(params, quoteOnly);
     return this.#singleJobCall(params.agentId, "hire", params.idempotencyKey, fingerprint, () => this.#hire(params, quoteOnly, fingerprint));
   }
@@ -2840,7 +2893,9 @@ export class AgencWallet {
   // ---------------------------------------------------- purchase engine
 
   async #payerSigner(job: JobRecord, decisionExpiry?: number): Promise<KeyPairSigner> {
-    const signer = await this.#vault.signer(job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
+    const signer = await this.#signer(job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
+    if (job.outcome === "paid" && childForJob(this.#store.state, job))
+      return childRatingSigner(signer, job, () => this.#store.state, this.#now);
     if (decisionExpiry !== undefined) return contestSigner(signer, decisionExpiry, this.#now);
     return job.terms?.contest && ["cleared", "hiring", "hired"].includes(job.phase)
       ? contestSigner(signer, job.approvedCosts?.expiresAt ?? 0, this.#now) : signer;
@@ -2855,6 +2910,7 @@ export class AgencWallet {
       const job = draft.jobs[jobId];
       if (job === undefined) return;
       patch(job, draft);
+      finishChildReserve(draft, job);
       job.updatedAt = this.#now();
     });
     this.#emit({ type: "job", jobId });
@@ -2864,6 +2920,10 @@ export class AgencWallet {
     this.#patchJob(jobId, (job, draft) => {
       const agent = draft.agents[job.agentId];
       if (agent?.jobSpends && job.hireAttemptAt === null) agent.jobSpends = agent.jobSpends.filter(entry => entry.id !== jobId);
+      const hold = agent && childHolds(agent).childHolds;
+      if (hold) delete hold[job.id];
+      const child = childForJob(draft, job);
+      if (child) child.view.phase = "failed";
       job.phase = "failed";
       job.error = message;
     });
@@ -2871,12 +2931,40 @@ export class AgencWallet {
   }
 
   /** Move one job as far as it can go right now. Safe to call at any time. */
-  #advance(jobId: string, fundContest = false): Promise<void> {
+  #advance(jobId: string, fundContest = false, observed = false): Promise<void> {
     return this.#lock(`job:${jobId}`, async () => {
       for (let step = 0; step < 6; step += 1) {
         const before = this.#store.state.jobs[jobId];
         if (before === undefined || before.role !== "buying") return;
         try {
+          const child = childForJob(this.#store.state, before);
+          if (child) {
+            await reconcilePurchaseSends(this.#store, this.#chain, before);
+            await this.#reconcileFundedChild(before);
+            if (before.phase === "failed" && child.send && before.hiredAt === null)
+              await this.#reconcileCreation(before, () => this.#childLanded(before), "order");
+          }
+          if (child && (child.settlementAttempts?.some(a => !a.outcome) || Object.keys(child.reviewDebits ?? {}).length)) {
+            // A terminal account can arrive before the fee receipt. Keep its hold
+            // and reconcile on reads and subsequent ticks, even after settlement.
+            await this.#lock(this.#payerLock(before), async () => {
+              await reconcileChildSettlement(this.#store, this.#chain, before, this.#now());
+              await this.#reconcileReview(jobId);
+            }).catch(error => this.#log(`supplier receipt ${jobId}: ${describeError(error)}`));
+          }
+          if (observed && before.phase !== "active") {
+            if (child && before.phase === "hiring" && before.hireAttemptAt !== null)
+              await this.#reconcileCreation(before, () => this.#childLanded(before), "order");
+            if (before.terms?.contest) await this.#refreshContest(before);
+            if (before.phase === "done") await this.#stepTidy(before, !!child);
+            return;
+          }
+          if (child && !fundContest && ["cleared", "hiring"].includes(before.phase)) {
+            if (before.phase === "hiring" && before.hireAttemptAt !== null) {
+              await this.#reconcileCreation(before, () => this.#childLanded(before), "order");
+            }
+            return;
+          }
           if (before.terms?.contest && (before.phase === "done" || (!fundContest && before.phase === "hired"))) {
             await this.#refreshContest(before);
             return;
@@ -2892,10 +2980,11 @@ export class AgencWallet {
               const expiry = before.approvedCosts?.expiresAt ?? 0;
               const signal = AbortSignal.timeout(Math.max(1, expiry - this.#now()));
               await inTransportScope({ signal, sending: () => beforeContestExpiry(expiry, this.#now), confirmed() {} }, advanceFunding);
-            } else await advanceFunding();
+            } else if (child) await this.#spendingJob.run(jobId, advanceFunding);
+            else await advanceFunding();
           }
-          else if (before.phase === "active") await this.#stepTrack(before);
-          else if (before.phase === "done") await this.#stepTidy(before);
+          else if (before.phase === "active") await this.#stepTrack(before, observed);
+          else if (before.phase === "done") await this.#spendingJob.run(jobId, () => this.#stepTidy(before));
           else return;
         } catch (error) {
           if (before.phase === "cleared" && error instanceof WalletError && error.code !== "NETWORK") this.#failJob(jobId, error.message);
@@ -3018,7 +3107,28 @@ export class AgencWallet {
 
   #markHired(jobId: string, signature?: string): void {
     const job = this.#store.state.jobs[jobId];
-    this.#patchJob(jobId, (entry) => {
+    this.#patchJob(jobId, (entry, state) => {
+      const child = childForJob(state, entry);
+      if (child) {
+        const hold = childHolds(state.agents[entry.agentId]!).childHolds?.[jobId];
+        if (hold) {
+          hold.funded = true;
+          // Until the funding receipt is readable, protect the whole purchase.
+          hold.futurePurchase = hold.purchase;
+        }
+        child.view.child.task = entry.task;
+        child.view.phase = "awaiting-publication";
+        const funding = signature ?? child.send?.signature;
+        if (funding) {
+          entry.signatures.hire = funding;
+          child.view.child.fundingSignature = funding;
+          child.dispatch = {signature: funding, outcome: "landed", fee: null};
+          delete child.send;
+        }
+        const spend = state.agents[entry.agentId]!.jobSpends?.find(row => row.id === entry.id);
+        if (spend) spend.at = this.#now();
+        else if (hold) reserveJobSpend(state.agents[entry.agentId]!, entry.id, microcents(BigInt(hold.purchase), hold.rate), 0n, this.#now(), true);
+      }
       entry.phase = "hired";
       entry.hiredAt = this.#now();
       if (signature !== undefined) entry.signatures.hire = signature;
@@ -3032,6 +3142,36 @@ export class AgencWallet {
     this.#emit({ type: "overview" });
   }
 
+  async #reconcileFundedChild(job: JobRecord) {
+    const child = childForJob(this.#store.state, job);
+    const signature = job.signatures.hire ?? child?.send?.signature;
+    if (!child || !signature || job.hiredAt === null || child.dispatch?.fee != null) return;
+    const charge = await this.#chain.reviewDebit?.(signature, child.view.payer as Address);
+    if (!charge) return;
+    this.#store.update(state => {
+      const r = childForJob(state, job)!;
+      r.dispatch = {signature,outcome:"landed",fee:String(charge.fee),debit:String(charge.debit)};
+      delete r.send;
+      r.view.child.fundingSignature = signature;
+      r.view.child.signature = job.signatures.accept ?? job.signatures.cancel ?? null;
+      r.view.phase = job.phase === "hired" ? "awaiting-publication" : r.view.importReceipt ? "imported" : "funded";
+      const hold = childHolds(state.agents[job.agentId]!).childHolds?.[job.id];
+      if (hold) {
+        const spent = (r.purchaseSends ?? []).reduce((n,a) => n + BigInt(a.debit ?? "0"), charge.debit);
+        const left = BigInt(hold.purchase) - spent;
+        hold.futurePurchase = String(left > 0n ? left : 0n);
+      }
+      finishChildReserve(state, state.jobs[job.id]!);
+    });
+  }
+
+  async #childLanded(job: JobRecord) {
+    if (!job.task) return false;
+    return hireLanded(this.#chain, this.#agentRecord(job.agentId).address as Address, job.task as Address, {
+      listing: job.listing as Address, priceLamports: BigInt(job.priceLamports), jobSpecHash: values.hexToBytes(job.jobSpecHashHex),
+    });
+  }
+
   /**
    * A creation that may already have been sent: the chain says whether it
    * landed. True when that was the case to settle, so nothing is sent again.
@@ -3043,7 +3183,27 @@ export class AgencWallet {
   ): Promise<boolean> {
     if (job.hireAttemptAt === null) return false;
     if (await landed()) this.#markHired(job.id);
-    else if (this.#now() - job.hireAttemptAt > HIRE_RECONCILE_GRACE_MS) {
+    else if (childForJob(this.#store.state, job)) {
+      const marker = childForJob(this.#store.state, job)!.send;
+      const outcome = marker && await this.#chain.workOutcome?.(marker);
+      if (marker && (outcome === "expired" || outcome === "failed")) {
+        const agent = this.#agentRecord(job.agentId);
+        const debit = outcome === "expired" ? 0n : (await this.#chain.reviewDebit?.(marker.signature, agent.address as Address))?.fee;
+        if (debit === undefined) return true;
+        this.#patchJob(job.id, (entry, state) => {
+          const agent = state.agents[entry.agentId]!;
+          const holds = childHolds(agent).childHolds;
+          const child = childForJob(state, entry)!;
+          const rate = holds?.[job.id]?.rate ?? state.approvals[child.view.quote.id]?.quoteRate;
+          if (rate) reserveJobSpend(agent, job.id, microcents(debit, rate), 0n, this.#now(), true);
+          if (holds) delete holds[job.id];
+          entry.phase = child.view.phase = "failed";
+          entry.error = "The supplier hire did not land.";
+          child.dispatch = {signature: marker.signature, outcome, fee: String(debit), debit: String(debit)};
+          delete child.send;
+        });
+      }
+    } else if (this.#now() - job.hireAttemptAt > HIRE_RECONCILE_GRACE_MS) {
       this.#failJob(
         job.id,
         what === "order"
@@ -3066,7 +3226,8 @@ export class AgencWallet {
     send: () => Promise<string>,
   ): Promise<void> {
     // Written before the send: after a crash the chain decides the outcome.
-    this.#patchJob(job.id, (entry) => {
+    // A child writes its signed receipt and this timestamp together in the pre-broadcast hook.
+    if (!childForJob(this.#store.state, job)) this.#patchJob(job.id, (entry) => {
       entry.hireAttemptAt = this.#now();
     });
     try {
@@ -3075,6 +3236,8 @@ export class AgencWallet {
       this.#log(`job ${job.id} ${what}: ${describeError(error)}`);
       if (await landed().catch(() => false)) {
         this.#markHired(job.id);
+      } else if (childForJob(this.#store.state, job)?.send) {
+        await this.#reconcileCreation(this.#jobRecord(job.id), landed, what);
       } else if (sendDefinitelyFailed(error)) {
         if (isNetworkTrouble(error) && (job.hireRetries ?? 0) < HIRE_BUSY_RETRIES) {
           // The network turned it away before taking it. Nothing moved, and
@@ -3193,10 +3356,38 @@ export class AgencWallet {
         return;
       }
       try {
+        const child = childForJob(this.#store.state, job);
+        if (child) await this.childHires.checkFunding(child, job);
         if (!await this.#authorizeCreation(job, deposits)) return;
       } catch (error) {
         if (!(error instanceof WalletError) || error.code === "NETWORK") throw error;
         this.#failJob(job.id, error.message);
+        return;
+      }
+      const child = childForJob(this.#store.state, job);
+      if (child) {
+        const expiry = child.view.quote.expiresAt;
+        await inTransportScope({
+          signal: AbortSignal.timeout(Math.max(1, expiry - this.#now())),
+          beforeSend: async () => {
+            if ((await readProtocolConfig(this.#chain)).treasury !== child.view.treasury)
+              refuseChild("The treasury changed. Review the supplier quote again.");
+          },
+          sending: receipt => {
+            if (this.#now() >= expiry) refuseChild("The supplier quote expired before dispatch.");
+            const live = childForJob(this.#store.state, job)!;
+            const policy = childPolicyFor(childState(this.#store.state), this.#agentRecord(job.agentId), live.parentListing);
+            if (!policy || childDigest(policy) !== childDigest(live.view.policy)) refuseChild("The supplier policy changed before dispatch.");
+            const agent = this.#agentRecord(job.agentId);
+            const held = childHolds(agent).childHolds?.[job.id];
+            if (!held || BigInt(live.view.maxDebit.lamports) > this.#dailyRoom(agent, held.rate, job.id))
+              refuseChild("The daily allowance changed before dispatch.");
+            this.#store.update(draft => {
+              childForJob(draft, job)!.send = receipt;
+              draft.jobs[job.id]!.hireAttemptAt = this.#now();
+            });
+          }, confirmed() {},
+        }, () => this.#sendCreation(job, "order", landed, () => sendHire(this.#chain, payer, intent, gate, job.approvedCosts!.protocolFeeBps, job.approvedCosts!.rentTerms!)));
         return;
       }
       await this.#sendCreation(job, "order", landed, () => sendHire(this.#chain, payer, intent, gate, job.approvedCosts!.protocolFeeBps, job.approvedCosts!.rentTerms!));
@@ -3224,6 +3415,8 @@ export class AgencWallet {
         : chainRefundAt === null ? timeoutAt : Math.min(timeoutAt, chainRefundAt);
       this.#patchJob(job.id, (entry, draft) => {
         entry.phase = "active";
+        const child = childForJob(draft, entry);
+        if (child) { child.view.phase = "funded"; entry.error = null; }
         entry.chainStatus = "open";
         entry.autoRefundAt = refundAt;
         if (timeoutAt !== null) entry.autoRefundTimeoutAt = timeoutAt;
@@ -3298,7 +3491,7 @@ export class AgencWallet {
             return;
           }
           // The buyer pays for the check of its own request.
-          const signature = await this.#payApproval(
+          const signature = await withPurchaseStep(this.#store, this.#chain, job, "attest", APPROVAL_FEE_LAMPORTS, () => this.#payApproval(
             payer,
             payment,
             { kind: "task", task, hash },
@@ -3307,7 +3500,7 @@ export class AgencWallet {
                 entry.approvalAttemptAt = this.#now();
               });
             },
-          );
+          ));
           this.#patchJob(job.id, (entry) => {
             entry.signatures.approval = signature;
           });
@@ -3316,6 +3509,12 @@ export class AgencWallet {
         const refused = error instanceof WalletError && error.code === "NOT_ALLOWED";
         const stuck =
           job.hiredAt !== null && this.#now() - job.hiredAt > POSTING_GIVE_UP_MS;
+        if (childForJob(this.#store.state, job)) {
+          this.#patchJob(job.id, entry => {
+            entry.error = "The escrow is funded. Finish publication or recover this purchase.";
+          });
+          return;
+        }
         if (refused || stuck) {
           await this.#cancelUnposted(
             job,
@@ -3344,8 +3543,11 @@ export class AgencWallet {
     }
     let signature: string;
     try {
-      signature = await sendActivation(this.#chain, payer, { task, jobSpecHash: hash, jobSpecUri }, gate,
-        request ? undefined : job.approvedCosts?.rentTerms);
+      const activationGate = gate;
+      const uri = jobSpecUri;
+      const rentTerms = request ? undefined : job.approvedCosts?.rentTerms;
+      signature = await withPurchaseStep(this.#store, this.#chain, job, "activate", this.#chain.transferFeeLamports,
+        () => sendActivation(this.#chain, payer, { task, jobSpecHash: hash, jobSpecUri: uri }, activationGate, rentTerms));
     } catch (error) {
       if (error instanceof LaterRentRose) {
         await this.#cancelUnposted(job, laterRentText(request));
@@ -3369,20 +3571,33 @@ export class AgencWallet {
     return job.providerAgent === "" ? null : (job.providerAgent as Address);
   }
 
+  async #settleChild<T>(job: JobRecord, action: "cancel" | "expiry", send: () => Promise<T>) {
+    if (!childForJob(this.#store.state, job)) return send();
+    return this.#lock(this.#payerLock(job), () => this.#spendingJob.run(job.id, async () => {
+      await this.#reconcileReview(job.id);
+      const rent = action === "cancel" ? await creatorRecordCost(this.#chain, this.#agentRecord(job.agentId).address as Address) : 0n;
+      return withChildSettlement(this.#store, this.#chain, job, action, rent, this.#now, (await this.#freshRate(true))!, send);
+    }));
+  }
+
   /** Cancel a hired job that never got posted, and record the refund. */
   async #cancelUnposted(job: JobRecord, message: string): Promise<void> {
+    if (childForJob(this.#store.state, job)) {
+      this.#patchJob(job.id, record => { record.error = "Publication stopped. Review the funded supplier escrow."; });
+      return;
+    }
     if (job.terms?.contest) {
       this.#patchJob(job.id, record => { record.error = "Publication stopped. Review a cancellation quote to recover the prize."; });
       return;
     }
     const payer = await this.#payerSigner(job);
-    const signature = await sendCancel(
+    const signature = await this.#settleChild(job, "cancel", async () => sendCancel(
       this.#chain,
       payer,
       job.task as Address,
       this.#provider(job),
       await this.#amountWords(),
-    );
+    ));
     this.#recordRefund(job.id, signature, message);
   }
 
@@ -3467,7 +3682,7 @@ export class AgencWallet {
   }
 
   /** active: mirror the chain, refund a job nobody takes, fetch a delivery. */
-  async #stepTrack(job: JobRecord): Promise<void> {
+  async #stepTrack(job: JobRecord, observed = false): Promise<void> {
     const task = job.task as Address;
     const request = isRequest(job);
     let provider = this.#provider(job);
@@ -3571,10 +3786,10 @@ export class AgencWallet {
       // autoRefundAt. A queued hire keeps its agreed start window on upgrade.
       const deadlineDue = seen.deadline > 0 && (await this.#chain.clusterTime()) >= seen.deadline;
       const due = deadlineDue || (configuredAt !== null && this.#now() >= configuredAt);
-      if (due) {
+      if (due && !observed) {
         const payer = await this.#payerSigner(job);
-        if (await this.#refundBlocked(job, payer.address)) return;
-        const signature = await sendCancel(this.#chain, payer, task, null);
+        if (await this.#spendingJob.run(job.id, () => this.#refundBlocked(job, payer.address))) return;
+        const signature = await this.#settleChild(job, "cancel", () => sendCancel(this.#chain, payer, task, null));
         this.#recordRefund(
           job.id,
           signature,
@@ -3589,10 +3804,10 @@ export class AgencWallet {
     if (seen.status === "in_progress" && seen.deadline > 0 && seen.completions === 0 && provider !== null) {
       const clock = await this.#chain.clusterTime();
       const waitingOnBuyer = seen.submission !== null && seen.submission.status === 1;
-      if (!waitingOnBuyer && clock > seen.deadline + NO_SHOW_GRACE_SECS) {
+      if (!observed && !waitingOnBuyer && clock > seen.deadline + NO_SHOW_GRACE_SECS) {
         const payer = await this.#payerSigner(job);
-        if (await this.#refundBlocked(job, payer.address)) return;
-        const signature = await sendCancel(this.#chain, payer, task, provider);
+        if (await this.#spendingJob.run(job.id, () => this.#refundBlocked(job, payer.address))) return;
+        const signature = await this.#settleChild(job, "cancel", () => sendCancel(this.#chain, payer, task, provider));
         this.#recordRefund(
           job.id,
           signature,
@@ -3613,13 +3828,13 @@ export class AgencWallet {
       // recorded: a refund is never recorded as a payment.
       const recently =
         job.settleAttemptAt != null && this.#now() - job.settleAttemptAt < FROZEN_SETTLE_RETRY_MS;
-      if (seen.turnDown.expiryDue !== null && !recently) {
+      if (!observed && seen.turnDown.expiryDue !== null && !recently) {
         this.#patchJob(job.id, (entry) => {
           entry.settleAttemptAt = this.#now();
         });
         try {
           const payer = await this.#payerSigner(job);
-          const settled = await sendFrozenExpiry(this.#chain, payer, task, provider);
+          const settled = await this.#settleChild(job, "expiry", () => sendFrozenExpiry(this.#chain, payer, task, provider!, childForJob(this.#store.state, job)?.settlementTreasury ?? childForJob(this.#store.state, job)?.view.treasury));
           this.#patchJob(job.id, (entry) => {
             entry.signatures.settle = settled.signature;
           });
@@ -3981,7 +4196,7 @@ export class AgencWallet {
   }
 
   /** done: collect what can come back and free the provider's slot. */
-  async #stepTidy(job: JobRecord): Promise<void> {
+  async #stepTidy(job: JobRecord, observed = false): Promise<void> {
     // Downloads still retry after payment, including records made by older builds.
     if (!job.terms?.contest && job.outcome === "paid" && (!job.finalDeliveryChecked || !job.result?.verified)) {
       if (!job.finalDeliveryChecked) {
@@ -4012,7 +4227,7 @@ export class AgencWallet {
       // Do not destroy the last on-chain pointer before retaining the delivery.
       if (!this.#jobRecord(job.id).result?.verified) return;
     }
-    if (job.tidied || job.task === null) return;
+    if (observed || job.tidied || job.task === null) return;
     if (job.terms?.contest) return;
     // A paid hire stays open for a while so it can be rated. A request has
     // no service to rate, so it is tidied at once.
@@ -4022,11 +4237,14 @@ export class AgencWallet {
     }
     const payer = await this.#payerSigner(job);
     const tidy = async (): Promise<string | null> => {
-      const sent = await sendTidy(this.#chain, payer, job.task as Address, this.#provider(job));
+      const confirmedTidy = childForJob(this.#store.state, job)?.purchaseSends?.find(a => a.step === "tidy" && a.outcome === "landed");
+      const sent = confirmedTidy?.signature ?? await withPurchaseStep(this.#store, this.#chain, job, "tidy", this.#chain.transferFeeLamports,
+        () => sendTidy(this.#chain, payer, job.task as Address, this.#provider(job)));
       this.#store.update((draft) => {
         const entry = draft.jobs[job.id];
         if (entry === undefined) return;
         entry.tidied = true;
+        finishChildReserve(draft, entry);
         // What came back to the main balance is not money that arrived.
         if (entry.payer === "main") {
           entry.balanceSettled = false;
@@ -4121,7 +4339,7 @@ export class AgencWallet {
           try {
             await sendFrozenExpiry(
               this.#chain,
-              await this.#vault.signer(agent.keyId),
+              await this.#signer(agent.keyId),
               entry.task as Address,
               provider,
             );
@@ -4356,7 +4574,7 @@ export class AgencWallet {
       throw new WalletError("NOT_FOUND", "That job does not exist.");
     }
     if (job.phase !== "needs_approval" && job.phase !== "declined" && job.phase !== "failed") {
-      await this.#advance(jobId);
+      await this.#advance(jobId, false, true);
     }
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
@@ -4726,9 +4944,10 @@ export class AgencWallet {
     return new WalletError(owner ? "APPROVAL_REQUIRED" : "NOT_ALLOWED", "Review the current delivery and confirm this decision in Market.");
   }
 
-  #quoteReview(job: JobRecord, provider: Address, rate: number | null) {
+  async #quoteReview(job: JobRecord, provider: Address, rate: number | null) {
     const agent = job.payer === "main" ? null : this.#agentRecord(job.agentId);
     return quoteReview(this.#chain, job.id, job.task as Address, provider, job.role === "buying", rate, {
+      ...(childForJob(this.#store.state, job) && {treasury: (await readProtocolConfig(this.#chain)).treasury}),
       payer: agent?.address ?? this.mainAddress,
       dailyLimitCents: agent ? (agent.policy.refill.enabled ? agent.policy.refill.perDayCents : 0) : null,
     });
@@ -4834,6 +5053,19 @@ export class AgencWallet {
     this.#store.update(state => {
       const intent = state.reviewIntents![jobId]!;
       if (intent.receipt?.signature !== receipt.signature) return;
+      const job = state.jobs[jobId];
+      const child = job && childForJob(state, job);
+      const reserved = child?.reviewDebits?.[receipt.signature];
+      if (child && reserved && prior.agentId && (paid || outcome === "expired")) {
+        const actual = !paid ? 0n : prior.action === "approve" || outcome === "failed" ? paid.fee : paid.debit;
+        const held = childHolds(state.agents[prior.agentId]!).childHolds?.[jobId];
+        if (held && BigInt(reserved) > actual) held.review = String(BigInt(held.review) + BigInt(reserved) - actual);
+        if (held?.pending) delete held.pending[receipt.signature];
+        child.reviewFeesSpent = String(BigInt(child.reviewFeesSpent ?? child.reviewSpent ?? "0") + (paid?.fee ?? 0n));
+        if (job) finishChildReserve(state, job);
+        child.reviewSpent = String(BigInt(child.reviewSpent ?? "0") + actual);
+        delete child.reviewDebits![receipt.signature];
+      }
       if (prior.agentId && outcome === "expired" && !paid) {
         const agent = state.agents[prior.agentId];
         if (agent) agent.refills = agent.refills.filter(entry => entry.signature !== receipt.signature);
@@ -4843,6 +5075,11 @@ export class AgencWallet {
           const actual = prior.action === "approve" || outcome === "failed" ? paid.fee : paid.debit;
           entry.lamports = String(actual);
           entry.usdCents = reviewChargeCents(actual, prior.rate);
+          if (child) entry.ts = this.#now();
+        } else if (child) {
+          const actual = prior.action === "approve" || outcome === "failed" ? paid.fee : paid.debit;
+          this.#reserveCharge(state.agents[prior.agentId]!, {id:"review:" + jobId + ":" + receipt.signature,
+            ts:this.#now(), lamports:String(actual), usdCents:reviewChargeCents(actual,prior.rate)}, receipt.signature);
         }
       }
       if (outcome === "landed") {
@@ -4863,18 +5100,22 @@ export class AgencWallet {
     const payer = await this.#payerSigner(job);
     const agentId = job.payer === "main" ? null : job.agentId;
     await this.#lock(this.#payerLock(job), async () => {
+      await reconcileChildSettlement(this.#store, this.#chain, job, this.#now());
       await this.#reconcileReview(jobId);
       const prior = this.#store.state.reviewIntents?.[jobId];
       if (prior?.confirmed && prior.quoteId === quote.id) throw new WalletError("NOT_ALLOWED", "This decision is already confirmed.");
       await this.#chain.assertSigningRevision?.();
-      const balance = await this.#chain.getBalance(payer.address);
+      const balance = await this.#spendingJob.run(job.id, () => this.#chain.getBalance(payer.address));
       if (balance < cost) {
         const words = await this.#amountWords();
         throw new WalletError("NOT_ENOUGH_MONEY", `This decision needs ${words.cost(cost)}. Add at least ${words.add(cost - balance)}.`);
       }
       const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
       const checkRoom = () => {
-        if (agentId !== null && cost > this.#dailyRoom(this.#agentRecord(agentId), rate)) {
+        const child = childForJob(this.#store.state, job);
+        const held = child && agentId && childHolds(this.#agentRecord(agentId)).childHolds?.[job.id];
+        if (child && (!held || cost > BigInt(held.review) || this.#chain.transferFeeLamports > remainingChildFees(child))) refuseChild("This decision exceeds the supplier review provision.");
+        if (agentId !== null && cost > this.#dailyRoom(this.#agentRecord(agentId), rate, undefined, child ? job.id : undefined)) {
           throw new WalletError("NOT_ALLOWED", "This review would exceed the agent's daily allowance.");
         }
       };
@@ -4893,6 +5134,14 @@ export class AgencWallet {
             const intent = state.reviewIntents![jobId]!;
             if (intent.receipt) throw new WalletError("NETWORK", "The review transaction is awaiting confirmation.");
             intent.receipt = receipt;
+            const child = childForJob(state, job);
+            if (child && agentId) {
+              const held = childHolds(state.agents[agentId]!).childHolds?.[job.id];
+              if (!held || BigInt(held.review) < cost) refuseChild("This decision exceeds the supplier review provision.");
+              held.review = String(BigInt(held.review) - cost);
+              (held.pending ??= {})[receipt.signature] = String(cost);
+              (child.reviewDebits ??= {})[receipt.signature] = cost.toString();
+            }
             if (agentId !== null && rate !== null) {
               this.#reserveCharge(state.agents[agentId]!, { id: "review:" + jobId + ":" + receipt.signature,
                 ts: this.#now(), lamports: String(cost),
@@ -4905,7 +5154,7 @@ export class AgencWallet {
           const intent = state.reviewIntents![jobId]!;
           if (intent.receipt?.signature === signature) intent.confirmed = true;
         }),
-      }, () => work(payer));
+      }, () => this.#spendingJob.run(job.id, () => work(payer)));
       await this.#reconcileReview(jobId);
     });
   }
@@ -5074,7 +5323,7 @@ export class AgencWallet {
       this.#emit({ type: "overview" });
       return this.#jobView(this.#jobRecord(jobId), isOwner);
     }
-    await this.#advance(jobId);
+    await this.#advance(jobId, false, true);
     await this.#lock(`job:${jobId}`, async () => {
       const job = this.#jobRecord(jobId);
       if (job.outcome === "refunded") return;
@@ -5095,13 +5344,13 @@ export class AgencWallet {
       try {
         // Before anyone takes a request there is nobody to name; afterwards
         // the cancel names whoever holds it, once their deadline has passed.
-        const signature = await sendCancel(
+        const signature = await this.#settleChild(job, "cancel", async () => sendCancel(
           this.#chain,
           payer,
           task,
           this.#provider(job),
           await this.#amountWords(),
-        );
+        ));
         this.#recordRefund(jobId, signature, null);
       } catch (error) {
         if (error instanceof WalletError) throw error;
@@ -5267,7 +5516,7 @@ export class AgencWallet {
       // A stopped-wallet reconciliation takes the journal lock. Queue it with
       // startup so opening the picker cannot lock the worker out on restart.
       return this.#earn.activeHeldLane(agentId, readonly) ?? (work => this.#lock(`earn-start:${agentId}`, () =>
-        this.#earn.heldLane(agentId, () => this.#vault.signer(agent.keyId), readonly)(work)));
+        this.#earn.heldLane(agentId, () => this.#signer(agent.keyId), readonly)(work)));
     }
     if (!this.#agentRecord(agentId).earn.enabled || this.#closed || this.#closing)
       throw new WalletError("NOT_ALLOWED", "Turn on Earns for this agent to choose work.");
@@ -5473,7 +5722,7 @@ export class AgencWallet {
     const { agentId, action, job, charge } = entry.quote;
     const task = workAddress(job.task);
     const dispatch = this.#workLane(agentId, action === "release");
-    await dispatch(async (ctx, agent, signal) => {
+    await dispatch((ctx, agent, signal) => this.#lock(`wallet:${agentId}`, async () => {
       let rate: number | undefined;
       let sent = false;
       let delivery: SubmissionIntent | undefined;
@@ -5496,6 +5745,8 @@ export class AgencWallet {
         if (workAuthorizationTerms(current, action) !== entry.terms ||
           JSON.stringify(quoteTransfers(current, action, rate).flows) !== JSON.stringify(entry.quote.flows))
           throw new WalletError("NOT_ALLOWED", "The job or its quote changed. Review a new quote.");
+        if (amount > await this.#chain.getBalance(this.#agentRecord(agentId).address as Address))
+          throw new WalletError("NOT_ENOUGH_MONEY", "Other jobs have reserved this money.");
         check();
       };
       const sending = (receipt: { signature: string; lastValidBlockHeight: string }) => {
@@ -5538,7 +5789,7 @@ export class AgencWallet {
       } finally {
         if (sent) await this.#reconcileWorkAllowance(agentId);
       }
-    });
+    }));
     this.#emit({ type: "overview" });
     return { approved: true };
   }
@@ -5555,6 +5806,7 @@ export class AgencWallet {
         const current = agent.refills.find(c => c.id === charge.id && c.signature === charge.signature);
         if (!current?.work) return;
         delete current.work;
+        current.ts = this.#now();
         if (outcome === "expired") agent.refills = agent.refills.filter(c => c !== current);
         if (outcome === "failed") {
           current.lamports = fee;
@@ -5575,23 +5827,11 @@ export class AgencWallet {
   }
 
   /** One allowance shared by refills, registration, listings and upkeep. */
-  #dailyRoom(agent: AgentRecord, rate: number | null): bigint {
+  #dailyRoom(agent: AgentRecord, rate: number | null, except?: string, reviewFor?: string): bigint {
     const rule = agent.policy.refill;
     if (rate === null || !rule.enabled || rule.perDayCents <= 0) return 0n;
     const rateMicros = BigInt(Math.ceil(rate * 1_000_000));
-    let usedMicros = 0n;
-    for (const entry of agent.refills) {
-      if (!entry.work && entry.ts <= this.#now() - 86_400_000) continue;
-      // An approved transfer with no dollar price must not open automatic room.
-      if (entry.usdCents === null) return 0n;
-      usedMicros +=
-        entry.usdCents === undefined
-          ? (BigInt(entry.lamports) * rateMicros + 9_999_999n) / 10_000_000n
-          : BigInt(Math.round(entry.usdCents * 1_000_000));
-    }
-    const transferRoom = BigInt(rule.perDayCents) * 1_000_000n - usedMicros;
-    const jobRoom = remainingJobMicrocents(agent, this.#now());
-    const remaining = transferRoom < jobRoom ? transferRoom : jobRoom;
+    const remaining = remainingJobMicrocents(agent, this.#now(), except, reviewFor, rate);
     return remaining <= 0n ? 0n : (remaining * 10_000_000n) / rateMicros;
   }
 
@@ -6011,7 +6251,7 @@ export class AgencWallet {
     if (this.#closed) return;
     if (registration !== null && this.#noticeRetired(agent.id, registration.account)) return;
     try {
-      const signer = await this.#vault.signer(agent.keyId);
+      const signer = await this.#signer(agent.keyId);
       const rate = await startupRead(() => this.#freshRate()).catch(() => null);
       if (rate === null) throw new WalletError("NETWORK", "A current dollar price is needed before taking jobs.");
       const minRewardLamports = centsToLamports(agent.earn.minPayCents, rate);
@@ -6291,7 +6531,7 @@ export class AgencWallet {
     // then bring its own jobs up to date: what was paid meanwhile, a buyer
     // who let the review time pass, a job it gave up whose time is over.
     await this.#earn.stop(agentId);
-    const signer = await this.#vault.signer(agent.keyId);
+    const signer = await this.#signer(agent.keyId);
     await this.#earn.tidyUp({ agentId, signer, minRewardLamports: 0n });
     const now = await unreachable(() => readAgent(this.#chain, providerAgent));
     if (now === null) {
@@ -6580,7 +6820,7 @@ export class AgencWallet {
     const uri = await this.#services.publishListing({
       spec: offer.spec,
       specHashHex: offer.specHashHex,
-      signer: await this.#vault.signer(agent.keyId),
+      signer: await this.#signer(agent.keyId),
     });
     if (uri !== null) {
       this.#patchOffer(agent.id, offer.id, (entry) => {
@@ -6823,7 +7063,7 @@ export class AgencWallet {
       if (listings.length < 2) continue;
       await sendListingStates(
         this.#chain,
-        await this.#vault.signer(agent.keyId),
+        await this.#signer(agent.keyId),
         providerAgent,
         listings,
         state,
@@ -6894,7 +7134,7 @@ export class AgencWallet {
       const wanted = agentOffers(latest).find((item) => item.id === offerId);
       if (!wanted || !this.#wantsLive(latest, wanted)) return settle("paused");
       await withListingOperation({ kind: "create", listing, offerId, listingId: offer.listingIdHex, name: offer.name, lamports: deposit.toString() },
-        async () => sendCreateListing(this.#chain, await this.#vault.signer(agent.keyId), {
+        async () => sendCreateListing(this.#chain, await this.#signer(agent.keyId), {
           providerAgent, listingId, name: offer.name, category: offer.category,
           specHash: values.hexToBytes(offer.specHashHex), specUri,
           priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.pendingDeliverySecs ?? offer.deliverySecs, terms: storedTerms(offer),
@@ -6938,7 +7178,7 @@ export class AgencWallet {
       if (state === LISTING_STATE_ACTIVE) {
         await sendListingState(
           this.#chain,
-          await this.#vault.signer(agent.keyId),
+          await this.#signer(agent.keyId),
           { listing, providerAgent, state: "Paused" },
         );
         this.#dropBalances();
@@ -6953,7 +7193,7 @@ export class AgencWallet {
     const terms = { ...storedTerms(offer), deliverySecs: offer.pendingDeliverySecs ?? landedPeriod };
     const reducingCapacity = reducesListingCapacity(account.maxOpenJobs, terms.maxOpenJobs);
     if (reducingCapacity && state === LISTING_STATE_ACTIVE) {
-      await sendListingState(this.#chain, await this.#vault.signer(agent.keyId), {
+      await sendListingState(this.#chain, await this.#signer(agent.keyId), {
         listing, providerAgent, state: "Paused",
       });
       this.#patchOffer(agentId, offerId, (entry) => { entry.status = "paused"; });
@@ -6981,7 +7221,7 @@ export class AgencWallet {
           : null;
       await sendUpdateListing(
         this.#chain,
-        await this.#vault.signer(agent.keyId),
+        await this.#signer(agent.keyId),
         { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec, terms },
       );
       this.#dropBalances();
@@ -6994,7 +7234,7 @@ export class AgencWallet {
       if (!latest || !this.#wantsLive(current, latest)) return settle("paused");
       await sendListingState(
         this.#chain,
-        await this.#vault.signer(agent.keyId),
+        await this.#signer(agent.keyId),
         { listing, providerAgent, state: "Active" },
       );
       this.#earn.listingsReconciled(agentId);
@@ -7039,7 +7279,7 @@ export class AgencWallet {
       });
       if (payment !== null) {
         await this.#payApproval(
-          await this.#vault.signer(agent.keyId),
+          await this.#signer(agent.keyId),
           payment,
           { kind: "listing", listing, hash: values.hexToBytes(offer.specHashHex) },
           () => {
@@ -7118,7 +7358,7 @@ export class AgencWallet {
         await this.#lock(`earn-start:${agent.id}`, () => this.#startDrain(agent));
         await this.#earn.tidyUp({
           agentId: agent.id,
-          signer: await this.#vault.signer(agent.keyId),
+          signer: await this.#signer(agent.keyId),
           minRewardLamports: 0n,
         }).catch((error) => this.#log(`earn upkeep ${agent.id}: ${describeError(error)}`));
       }

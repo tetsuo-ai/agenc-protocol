@@ -108,7 +108,7 @@ export function submittedDelivery(logs: readonly string[], task: Address, claim:
 // A revision 9 receipt does not always carry the delivery. Read backwards
 // from this exact decision, never from the current account or the current tip.
 // A missing intervening receipt could itself be a resubmission.
-async function deliveryBeforeDecision(rpc: SettlementHistoryRpc, task: Address, claim: Address, decision: ReviewAnchor) {
+export async function deliveryBeforeDecision(rpc: SettlementHistoryRpc, task: Address, claim: Address, decision: Pick<ReviewAnchor, "signature" | "round">) {
   let before = toSignature(decision.signature);
   const until = performance.now() + 2000;
   while (performance.now() < until) {
