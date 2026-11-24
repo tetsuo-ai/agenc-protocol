@@ -8,6 +8,8 @@ export interface JobParties {
   workerWallet: string | null;
   claimedAt: number | null; // Unix ms from the claim account
   workerProfile: string | null;
+  /** The stock task's claim generation (Task._reserved[3..11]) when the claim was read. A release and reclaim changes it. */
+  claimGeneration?: string;
 }
 
 export interface JobLink {

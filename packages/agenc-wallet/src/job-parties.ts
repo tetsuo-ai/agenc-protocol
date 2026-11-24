@@ -9,6 +9,7 @@ import {
 import type { JobParties } from "./client/business.js";
 import type { Chain } from "./chain.js";
 import { readAgent, readProgramAccount, readTask } from "./market.js";
+import { claimGeneration } from "./money-assertions.js";
 
 /** Display facts exclusively from program-owned canonical accounts. */
 export async function readJobParties(
@@ -57,6 +58,7 @@ export async function readJobParties(
     workerWallet: registration.authority,
     workerRegistration: worker,
     claimedAt: Number(claim.claimedAt) * 1000,
+    claimGeneration: claimGeneration(data),
     workerProfile:
       chain.network === "mainnet" ? "https://agenc.ag/agents/" + worker : null,
   };

@@ -5,9 +5,11 @@ import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
 import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { currentSubmission, verifiedEvidence, readEvidenceChunk, acknowledgeEvidenceChunk, requireInspection } from "./delivery-evidence.js";
+import { reviewerScope, roomImportEvidence, type RoomImportScope } from "./delivery-evidence.js";
 import { localExchangeHistory, rememberExchange } from "./exchange-history.js";
 import { JobExchangeSession } from "./job-exchange-session.js";
 import { ExchangeRelay } from "./exchange-relay.js";
+import { approvedRecipient } from "./private-inputs.js";
 import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, openBuyerOutput, openLegacyBuyerOutput, digest, type Parties, type PrivateBundle } from "./private-inputs.js";
 import type { DeliveryBinding, DeliveryChunkAck, OutputAgreement, PrivateInputPart } from "./client/job-exchange.js";
 import { startProviderHeartbeat, type ServingListing } from "./client/provider-heartbeat.js";
@@ -23,8 +25,8 @@ import { withPurchaseStep, reconcilePurchaseSends, finishChildReserve } from "./
 import { reservedForPayer, reservationSigner, spendingChain } from "./child-reservations.js";
 import { withChildSettlement, remainingChildFees, reconcileChildSettlement } from "./child-settlement.js";
 import { childRatingSigner } from "./child-rating.js";
-import { signChildShare, stageChildShare } from "./child-share.js";
-import { ChildHires, childDigest, childPolicyFor, readChildEvidence, refuseChild } from "./child-hire.js";
+import { deliveredChildShare, signChildShare, stageChildShare } from "./child-share.js";
+import { ChildHires, childDigest, childPolicyFor, readChildEvidence, refuseChild, sameGrant } from "./child-hire.js";
 import { childForJob, childHolds, childOwnsKey, childState } from "./child-hire-store.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
@@ -193,7 +195,7 @@ import {
   agentOffers,
 } from "./store.js";
 import { admitQuotedService, serviceEconomics } from "./service-economics.js";
-import { purchaseAdmission, purchaseCriteria, type PurchaseAttachments } from "./purchase-admission.js";
+import { purchaseAdmission, purchaseCriteria, refuseReservedPurchase, type PurchaseAttachments } from "./purchase-admission.js";
 import { readAvailability, currentListingIdentity, publishListingMessage, readListingExchange, verifyAgreedTerms } from "./listing-inquiry.js";
 import { publicListingBrief, type ListingAgreement, type ListingMessage } from "./client/listing-exchange.js";
 import { ServiceDiscovery, recordRow, type ServiceContext } from "./service-discovery.js";
@@ -650,6 +652,7 @@ export class AgencWallet {
         return agent !== undefined && agentOffers(agent).some((offer) => offer.wanted && offer.listed);
       },
       ownAddresses: () => this.#walletIds().map((entry) => entry.address),
+      privateProcessing: (agentId, task) => this.#verifiedProcessing(agentId, task),
     });
   }
 
@@ -933,11 +936,36 @@ export class AgencWallet {
         const signer = await this.#payerSigner(job);
         if ((await readTask(this.#chain, binding.parentTask as Address))?.creator !== signer.address)
           refuseChild("Only the original order payer can approve this share.");
-        return signChildShare(signer, binding);
+        const proof = await signChildShare(signer, binding);
+        await this.#sendChildShare(job, signer, binding, proof);
+        return proof;
       },
+      deliveredShare: (grant, supplier, request) => deliveredChildShare(this as object, grant, supplier, request),
       privateStage: (grant, request, supplier, proof, saved) => stageChildShare(this as object, grant, request, supplier, proof, saved),
       evidence: (job, names, grant) => readChildEvidence(this as object, job, names, grant),
     });
+  }
+
+  /** The processing in the buyer's verified private inputs for this seller's current claim and room, or null. */
+  async #verifiedProcessing(agentId: string, task: string): Promise<string | null> {
+    const jobId = "earn_" + agentId + "_" + task;
+    const journal = await ExchangeJournal.open(this.#config.dataDir, await this.#vault.signer(this.#agentRecord(agentId).keyId));
+    const latest = (journal.read<Parties[]>("job-contexts/" + jobId) ?? []).filter(p => p.generation && p.task === task).at(-1);
+    if (!latest) return null;
+    const session = await this.jobExchangeSession(jobId, latest.room, this.#services.exchangeRelay as ExchangeRelay, agentId);
+    const { bundle } = await session.roomInputs().catch(() => ({ bundle: null }));
+    return typeof bundle?.processing === "string" ? bundle.processing : null;
+  }
+
+  /** E: the seller receives the owner-signed share through the funded order's authenticated exchange. */
+  async #sendChildShare(job: JobRecord, signer: KeyPairSigner, binding: import("./client/child-hire.js").ChildShareBinding, proof: string) {
+    const relay = this.#services.exchangeRelay;
+    if (!relay) return;
+    const journal = await ExchangeJournal.open(this.#config.dataDir, signer);
+    const latest = (journal.read<Parties[]>("job-contexts/" + job.id) ?? []).filter(p => p.generation && p.task === binding.parentTask).at(-1);
+    if (!latest) throw new WalletError("NOT_AVAILABLE", "Open the private exchange with the provider first.");
+    const session = await this.jobExchangeSession(job.id, latest.room, relay);
+    await session.sendChildShare(binding, proof);
   }
 
   #dropBalances(): void {
@@ -2009,6 +2037,7 @@ export class AgencWallet {
 
   async #hire(params: Parameters<AgencWallet["hire"]>[0], quoteOnly: boolean, fingerprint: string): Promise<{ job: JobView; approval: ApprovalView | null }> {
     const agent = this.#agentRecord(params.agentId);
+    refuseReservedPurchase(params as unknown as Record<string, unknown>);
     const request = typeof params.request === "string" ? params.request.trim() : "";
     if (request.length === 0 || request.length > 4_000) {
       throw new WalletError("BAD_REQUEST", "Say what you want done, in up to 4,000 characters.");
@@ -2397,6 +2426,7 @@ export class AgencWallet {
 
   async #post(params: Parameters<AgencWallet["post"]>[0], fingerprint: string): Promise<{ job: JobView; approval: ApprovalView | null }> {
     const agent = this.#agentRecord(params.agentId);
+    refuseReservedPurchase(params as unknown as Record<string, unknown>);
     const key = params.idempotencyKey?.trim() || null;
     const again = await this.#sameCall(agent.id, key, "request", fingerprint, () => jobIdentity(params, false, "raw"));
     if (again !== null) return again;
@@ -2442,6 +2472,7 @@ export class AgencWallet {
   }
 
   async #postFromBalance(params: Parameters<AgencWallet["postFromBalance"]>[0], quoteOnly: boolean, fingerprint: string) {
+    refuseReservedPurchase(params as unknown as Record<string, unknown>);
     const key = params.idempotencyKey?.trim() || null;
     const again = await this.#sameCall("", key, "request", fingerprint, () => jobIdentity(params, quoteOnly, "raw"));
     if (again !== null) return again;
@@ -3728,7 +3759,9 @@ export class AgencWallet {
     // ordinary post may later have a different claimant.
     // A worker may release and reclaim between two reads of an open request.
     const liveRequestClaim = request && seen.status === "in_progress" && seen.workers > 0;
-    if (!job.parties || job.parties.workerRegistration !== provider || liveRequestClaim) {
+    // Records saved before parties carried the claim generation read it once.
+    const missingGeneration = !!job.parties?.workerRegistration && job.parties.claimGeneration === undefined;
+    if (!job.parties || job.parties.workerRegistration !== provider || liveRequestClaim || missingGeneration) {
       const parties = await readJobParties(this.#chain, task, provider).catch(() => null);
       if (parties && (parties.workerRegistration || !provider || !job.parties?.workerRegistration)
           && JSON.stringify(job.parties) !== JSON.stringify(parties)) {
@@ -4451,7 +4484,7 @@ export class AgencWallet {
     const id = "earn_" + agentId + "_" + task;
     const record = this.#store.state.workRecords?.[id];
     const existing = record?.parties;
-    if ((existing?.workerRegistration || record?.partiesFinal) && !freshClaim) return existing ?? null;
+    if (((existing?.workerRegistration && existing.claimGeneration !== undefined) || record?.partiesFinal) && !freshClaim) return existing ?? null;
     const registration = await this.#earn.marketplaceAgent(agentId);
     let failed = false;
     const parties = await readJobParties(this.#chain, task as Address, registration).catch(() => { failed = true; return null; });
@@ -4651,10 +4684,11 @@ export class AgencWallet {
     return { journal, evidence, payer: signer.address };
   }
 
-  async readDeliveryChunk(jobId: string, agentId: string, part: string, offset: number) {
-    if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+  /** connectionId names the outside connection that reads; its receipt is its own. */
+  async readDeliveryChunk(jobId: string, agentId: string, part: string, offset: number, connectionId?: string) {
+    const scope = reviewerScope(agentId, connectionId);
     const { journal, evidence } = await this.#deliveryEvidence(jobId, agentId);
-    return readEvidenceChunk(journal, agentId, evidence, part, offset);
+    return readEvidenceChunk(journal, scope, evidence, part, offset);
   }
 
   async readOwnerDeliveryChunk(jobId: string, part: string, offset: number) {
@@ -4662,18 +4696,35 @@ export class AgencWallet {
     return readEvidenceChunk(journal, null, evidence, part, offset);
   }
 
-  async acknowledgeDeliveryChunk(jobId: string, agentId: string, ack: DeliveryChunkAck) {
-    if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+  async acknowledgeDeliveryChunk(jobId: string, agentId: string, ack: DeliveryChunkAck, connectionId?: string) {
+    const scope = reviewerScope(agentId, connectionId);
     const { journal, evidence } = await this.#deliveryEvidence(jobId, agentId);
-    return acknowledgeEvidenceChunk(journal, agentId, evidence, ack);
+    return acknowledgeEvidenceChunk(journal, scope, evidence, ack);
   }
 
-  async requireDeliveryInspection(jobId: string, agentId: string, hash: string, round: number) {
-    if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+  /** The approving reviewer (agent, or agent through one outside connection) must have read this claim generation, round, hash and manifest. */
+  async requireDeliveryInspection(jobId: string, agentId: string, hash: string, round: number, connectionId?: string) {
+    const scope = reviewerScope(agentId, connectionId);
     const { journal, evidence, payer } = await this.#deliveryEvidence(jobId, agentId);
-    requireInspection(journal, agentId, evidence, hash, round);
+    requireInspection(journal, scope, evidence, hash, round);
     const current = await currentSubmission(this.#chain, evidence.binding.task as Address, evidence.binding.worker as Address, payer);
     if (JSON.stringify(current.binding) !== JSON.stringify(evidence.binding)) throw new WalletError("NOT_ALLOWED", "The delivery changed during inspection.");
+  }
+
+  /** G's room import: one verified snapshot of the seller-funded child delivery. No payer inspection is created. */
+  async readRoomImportEvidence(jobId: string, scope: RoomImportScope, outputs: string[]) {
+    const job = this.#ownedJob(jobId, scope.sellerAgentId);
+    const record = childState(this.#store.state).childHires?.[scope.parentTask];
+    // Only the supplier job this live room's parent hired, for the same room grant.
+    if (scope.kind !== "room-import" || job.payer !== "agent" || !record || record.view.child.jobId !== jobId || !sameGrant(record.grant, scope))
+      throw new WalletError("NOT_ALLOWED", "This supplier delivery belongs to another room or claim.");
+    const { journal, evidence } = await this.#deliveryEvidence(jobId, scope.sellerAgentId);
+    return roomImportEvidence(journal, scope, evidence, outputs);
+  }
+
+  /** The provider authority the staged files were approved for, or null for any provider. */
+  async approvedJobInputRecipient(commitment: string) {
+    return approvedRecipient(await this.#stagingJournal(), commitment);
   }
 
   async #buyerOutput(job: JobRecord, hash: string, journal: ExchangeJournal, signer: KeyPairSigner, relay?: ExchangeRelay, live?: DeliveryBinding) {
@@ -4862,6 +4913,8 @@ export class AgencWallet {
     agentId?: string,
     quoteId?: string,
     ratingQuoteId?: string,
+    /** The outside connection approving for the agent, when not the agent's own chat. */
+    reviewerConnection?: string,
   ): Promise<JobView> {
     if (this.#ownedJob(jobId, agentId).terms?.contest) return contestUnavailable("Review the contest payout quote in Jobs.");
     const initial = this.#ownedJob(jobId, agentId);
@@ -4886,9 +4939,9 @@ export class AgencWallet {
       }
       await this.#withReviewPayment(job, quote, "approve", async payer => {
         if (!isOwner) {
-          const guard = (this as AgencWallet & { requireDeliveryInspection?: (jobId: string, agentId: string, hash: string, count: number) => Promise<void> }).requireDeliveryInspection;
+          const guard = (this as AgencWallet & { requireDeliveryInspection?: (jobId: string, agentId: string, hash: string, count: number, connection?: string) => Promise<void> }).requireDeliveryInspection;
           if (!guard) throw new WalletError("NOT_ALLOWED", "Read and verify the complete current delivery before payment.");
-          await guard.call(this, job.id, job.agentId, quote.deliveryHash, quote.submissionCount);
+          await guard.call(this, job.id, agentId!, quote.deliveryHash, quote.submissionCount, reviewerConnection);
         }
         if (stars) this.#store.update(s => { (s.requestedRatings ??= {})[jobId] = { quoteId: stars.id }; });
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);

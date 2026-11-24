@@ -309,6 +309,12 @@ interface ChildWalletPorts {
     names: string[],
     grant: ChildRoomGrant,
   ): Promise<Pick<ChildResult, "text" | "files" | "round" | "deliveryHash"> | null>;
+  /** E: the buyer's signed share approval delivered through the authenticated order exchange. */
+  deliveredShare?(
+    grant: ChildRoomGrant,
+    supplier: string,
+    request: ChildHireRequest,
+  ): Promise<{ request: ChildHireRequest; proof: string } | undefined>;
 }
 
 /** C's reviewed offer stores its policy and the exact published listing payload.
@@ -392,15 +398,20 @@ export class ChildHires {
     )
       refuseChild("Choose an independent supplier.");
     let supplierCommitment: string | undefined;
+    let request = input;
     if (input.privateCommitment || parent.privateInputs) {
-      if (policy.sharing !== "buyer-approved-input" || !input.privateCommitment || !proof)
+      if (policy.sharing === "buyer-approved-input" && !proof) {
+        const delivered = await this.p.deliveredShare?.(grant, supplier.authority, input);
+        if (delivered) ({ request, proof } = { request: checkedChildRequest(delivered.request), proof: delivered.proof });
+      }
+      if (policy.sharing !== "buyer-approved-input" || !request.privateCommitment || !proof)
         refuseChild("The original buyer must approve this input and public brief for this supplier.");
       await verifyChildShare(
         parent.creator,
-        { parentTask: parent.task, supplier: supplier.authority, request: input },
+        { parentTask: parent.task, supplier: supplier.authority, request },
         proof,
       );
-      supplierCommitment = await this.p.privateStage(grant, input, supplier.authority, proof, saved);
+      supplierCommitment = await this.p.privateStage(grant, request, supplier.authority, proof, saved);
     }
     const cutoff = parent.deadline - policy.returnBeforeSecs;
     if (!service.deliverySecs || parent.now + service.deliverySecs + policy.reviewWindowSecs > cutoff)
@@ -413,6 +424,8 @@ export class ChildHires {
       policy,
       cutoff,
       supplierCommitment,
+      request,
+      proof,
     };
   }
   async request(
@@ -422,7 +435,9 @@ export class ChildHires {
     refreshQuote?: string,
   ): Promise<ChildHireView> {
     const input = checkedChildRequest(request);
-    const fingerprint = childDigest(input);
+    // The buyer's delivered approval may supply the private commitment the room never sees.
+    const { privateCommitment: _commitment, ...publicRequest } = input;
+    const fingerprint = childDigest(publicRequest);
     return this.p.lock("child:" + address(grant.parentTask), async () => {
       const existing = childState(this.p.store.state).childHires?.[grant.parentTask];
       if (refreshQuote && (existing?.view.quote.id !== refreshQuote || !existing.draft))
@@ -437,12 +452,14 @@ export class ChildHires {
         )
           return this.timeline(grant.parentTask);
       }
-      const { parent, service, supplier, policy, payer, cutoff, supplierCommitment } = await this.#context(
+      const resolved = await this.#context(
         grant,
         input,
         shareGrant ?? existing?.shareGrant,
         existing?.supplierCommitment,
       );
+      const { parent, service, supplier, policy, payer, cutoff, supplierCommitment } = resolved;
+      shareGrant = resolved.proof ?? shareGrant;
       if (
         Object.values(childState(this.p.store.state).childHires ?? {}).some(
           (r) => r.view.child.task === parent.task,
@@ -518,7 +535,7 @@ export class ChildHires {
         supplierAuthority: supplier,
         treasury: config.treasury,
         parentSellerNet: childParentNet(parent, rate),
-        request: input,
+        request: resolved.request,
         policy,
         quote,
         payout: childPayout(quote, service, rate, this.p.chain.network === "sandbox"),
@@ -960,6 +977,12 @@ export async function readChildEvidence(
   return wallet.readRoomImportEvidence?.(job.id, { ...grant, kind: "room-import" }, outputs) ?? null;
 }
 
+/** A room or chat cannot hand the wallet a share grant. The buyer's own wallet sends it through the order exchange. */
+export function refuseCallerShare(shareGrant: unknown) {
+  if (shareGrant !== undefined)
+    refuseChild("The buyer approves shared files in Market. The approval arrives with the order.");
+}
+
 /** Dispatch for D's owner-only socket methods; no method is granted to paired chats. */
 export function childHireHandlers(wallet: AgencWallet) {
   type Params<K extends keyof import("./client/child-hire.js").ChildHireMethods> =
@@ -967,8 +990,10 @@ export function childHireHandlers(wallet: AgencWallet) {
   return {
     "child.policy": (p: Params<"child.policy">) =>
       wallet.childHires.setPolicy(p.sellerAgentId, p.listing, p.policy),
-    "child.request": (p: Params<"child.request">) =>
-      wallet.childHires.request(p.grant, p.request, p.shareGrant),
+    "child.request": (p: Params<"child.request">) => {
+      refuseCallerShare(p.shareGrant);
+      return wallet.childHires.request(p.grant, p.request);
+    },
     "child.authorizeShare": (p: Params<"child.authorizeShare">) =>
       wallet.childHires.authorizeShare(p.jobId, p.binding),
     "child.refresh": (p: Params<"child.refresh">) => wallet.childHires.refresh(p.parentTask, p.quoteId),

@@ -1,6 +1,11 @@
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { jobMessageIdPattern, type JobMessage } from "./client/job-exchange.js";
 import { JobExchange, digest, type Parties } from "./private-inputs.js";
+import { CHILD_SHARE_MESSAGE, reservedPurchaseText } from "./purchase-admission.js";
+
+/** The buyer wallet's signed supplier share approval rides the order exchange as a progress message.
+ * Older wallets show it as a progress note. Newer wallets keep it out of the thread. */
+export const isShareMessage = (m: JobMessage) => typeof m?.body === "string" && m.body.startsWith(CHILD_SHARE_MESSAGE + ":");
 
 export interface ConversationEntry { author: string; message: JobMessage }
 /** Even maximally escaped message text fits in a single wallet response. */
@@ -65,12 +70,15 @@ export class JobConversation {
   }
 
   /** Commit the parked state and signed outbox together before relay I/O. */
-  async send(message: JobMessage, peerKey: taskThread.SignedPacket): Promise<taskThread.SignedPacket> {
+  async send(message: JobMessage, peerKey: taskThread.SignedPacket, walletShare = false): Promise<taskThread.SignedPacket> {
+    // Chat cannot write the wallet's reserved private-input, supplier or share grant text.
+    if (!walletShare && reservedPurchaseText(message?.body)) throw new Error("Approve shared files for a supplier in Market.");
+    if (walletShare && !isShareMessage(message)) throw new Error("Invalid job message.");
     const p = await this.exchange.live();
     const packet = await this.exchange.prepare(p, "message", message, peerKey, message.id);
     const thread = this.state(p);
     if (this.now() >= thread.deadline) throw new Error("The original job deadline passed.");
-    this.apply(thread, p, this.exchange.signer.address, message);
+    if (!walletShare) this.apply(thread, p, this.exchange.signer.address, message);
     if (!thread.outbox.some(it => it.header.id === packet.header.id)) thread.outbox.push(packet);
     this.exchange.journal.write(threadId(p), thread);
     return packet;
@@ -84,7 +92,7 @@ export class JobConversation {
     const thread = this.state(p);
     if (cursor <= thread.cursor) return;
     if (cursor !== thread.cursor + 1) throw new Error("Read the preceding job event first.");
-    if (incoming) this.apply(thread, p, packet.header.sender, incoming);
+    if (incoming && !isShareMessage(incoming)) this.apply(thread, p, packet.header.sender, incoming);
     if (own) thread.outbox = thread.outbox.filter(it => it.signature !== packet.signature);
     thread.cursor = cursor;
     this.exchange.journal.write(threadId(p), thread);

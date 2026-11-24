@@ -238,6 +238,12 @@ export async function openLegacyBuyerOutput(journal: ExchangeJournal, parties: P
   return bundle;
 }
 
+export function approvedRecipient(journal: ExchangeJournal, commitment: string): string | null {
+  const staged = journal.read<Staged>("stage/" + commitment);
+  if (!staged || bundleManifest(staged.bundle) !== commitment) return fail();
+  return staged.recipient;
+}
+
 export function approvedRequirement(journal: ExchangeJournal, commitment: string): PrivateRequirement {
   const staged = journal.read<Staged>("stage/" + commitment);
   if (!staged || bundleManifest(staged.bundle) !== commitment) return fail();

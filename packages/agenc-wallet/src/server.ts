@@ -345,6 +345,8 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
         owner(session),
         scope(session),
         params.quoteId, params.ratingQuoteId,
+        // The reviewer that inspected the bytes must be the one approving.
+        session.connection?.id,
       ),
     }),
     "jobs.reviewRecord": (params, session) => wallet.reviewRecord(text(params.jobId, "job"), scope(session), params),

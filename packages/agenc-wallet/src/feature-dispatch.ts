@@ -14,7 +14,7 @@ type Features = MoneyMethods &
   BusinessMethods &
   ChildHireMethods &
   ExchangeMethods;
-type Caller = { role: "owner" | "agent"; agentId: string | null };
+type Caller = { role: "owner" | "agent"; agentId: string | null; connection?: { id: string } };
 type Routes = {
   [K in keyof Features]: (
     input: WalletMethods[K]["params"],
@@ -104,15 +104,20 @@ export function featureRoutes(
     "jobs.readDeliveryChunk": (p, s) =>
       s.role === "owner"
         ? featureCall(wallet, "readOwnerDeliveryChunk", p.jobId, p.part, p.offset)
-        : featureCall(wallet, "readDeliveryChunk", p.jobId, agent(s), p.part, p.offset),
+        : featureCall(wallet, "readDeliveryChunk", p.jobId, agent(s), p.part, p.offset, s.connection?.id),
     "jobs.acknowledgeDeliveryChunk": async (p, s) => {
       if (s.role !== "agent")
         throw new WalletError("NOT_ALLOWED", "Only the paying agent can confirm it received a delivery.");
-      return featureCall(wallet, "acknowledgeDeliveryChunk", p.jobId, agent(s), p.ack);
+      return featureCall(wallet, "acknowledgeDeliveryChunk", p.jobId, agent(s), p.ack, s.connection?.id);
     },
     "child.policy": (p) =>
       child("setPolicy", p.sellerAgentId, p.listing, p.policy),
-    "child.request": (p) => child("request", p.grant, p.request, p.shareGrant),
+    // E: a caller-written share grant is refused; the buyer's signed approval arrives through the order exchange.
+    "child.request": async (p) => {
+      if (p.shareGrant !== undefined)
+        throw new WalletError("NOT_ALLOWED", "The buyer approves shared files in Market. The approval arrives with the order.");
+      return child("request", p.grant, p.request);
+    },
     // Consent and refresh stay on the owner channel (never in AGENT_METHODS or the paired allowlist).
     "child.authorizeShare": (p, s) => {
       if (s.role !== "owner") throw new WalletError("NOT_ALLOWED", "Only the owner can do this in Market.");

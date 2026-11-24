@@ -80,6 +80,12 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
   const staged = await stageChildResult(room, binding, result);
   expect(await stageChildResult(room, binding, result)).toEqual(staged);
   await wallet.childHires.acknowledgeImport(grant, result.receipt);
+  // The room import is not the paying agent's own inspection: its chat approval pays nothing.
+  const childQuote = (await wallet.reviewRecord(one.child.jobId)).quote!;
+  const imported = await world.balance(seller.address);
+  await expect(wallet.approveJob(one.child.jobId, undefined, false, seller.id, childQuote.id)).rejects.toThrow(/Read the complete/);
+  await expect(wallet.requireDeliveryInspection(one.child.jobId, seller.id, childQuote.deliveryHash, childQuote.submissionCount)).rejects.toThrow();
+  expect(await world.balance(seller.address)).toBe(imported);
   expect((await confirmPayout(wallet, one.child.jobId)).status).toBe("paid");
   await wallet.childHires.acknowledgeImport(grant, result.receipt);
   await expect(wallet.rateJob(one.child.jobId, 5, true)).rejects.toThrow(/rating|stars/i);

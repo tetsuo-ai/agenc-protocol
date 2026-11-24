@@ -364,6 +364,11 @@ export async function runMarketTool(
   const callOptions = signal ? { signal } : undefined;
   try {
     if (name === "market_find") return await findServices(client, args, callOptions);
+    if ((name === "market_hire" || name === "market_post") &&
+        ["share_grant", "shareGrant", "child_share", "childShare", "child_share_grant", "childShareGrant"].some(key => Object.hasOwn(args, key))) {
+      // The buyer approves shared files in Market; the wallet sends that signed approval with the order.
+      throw new ToolInputError("Approve shared files for a supplier in Market. They cannot be part of an order.");
+    }
 
     if (name === "market_hire") {
       const listing = text(args.service, "service", MAX_MARKET_ID_LENGTH, true)!;
