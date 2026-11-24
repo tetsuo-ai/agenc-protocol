@@ -4,6 +4,7 @@ import { stageChildResult } from "@tetsuo-ai/agenc-worker";
 import {
   CHILD_LINEAGE,
   childShareCriterion,
+  childPolicyFor,
   readChildDependency,
   withChildDependency,
 } from "../src/child-hire.js";
@@ -161,6 +162,17 @@ it("binds opt-in and supplier-specific disclosure to the seller, service, brief 
   const published = withChildDependency(spec, seller.address, policy);
   expect(readChildDependency(spec, seller.address)).toBeNull();
   expect(readChildDependency(published, seller.address)?.policy).toEqual(policy);
+  const offer = { listing, listed: true, wanted: true, terms: { childPolicy: policy }, spec: published };
+  const localSeller = { address: seller.address, earn: { offers: [offer] } } as unknown as Parameters<
+    typeof childPolicyFor
+  >[1];
+  expect(childPolicyFor({}, localSeller, listing)).toEqual(policy);
+  expect(childPolicyFor({ childPolicies: { [listing]: null } }, localSeller, listing)).toBeNull();
+  expect(
+    childPolicyFor({ childPolicies: { [listing]: { ...policy, returnBeforeSecs: 1 } } }, localSeller, listing),
+  ).toBeNull();
+  offer.wanted = false;
+  expect(childPolicyFor({}, localSeller, listing)).toBeNull();
   expect(() => readChildDependency(published, buyer.address)).toThrow(/seller/);
   await expect(
     world.wallet.childHires.setPolicy(seller.id, listing, {

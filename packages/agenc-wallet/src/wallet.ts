@@ -1,6 +1,6 @@
 import { childRatingSigner } from "./child-rating.js";
 import { stageChildShare } from "./child-share.js";
-import { ChildHires, childDigest, readChildEvidence, refuseChild } from "./child-hire.js";
+import { ChildHires, childDigest, childPolicyFor, readChildEvidence, refuseChild } from "./child-hire.js";
 import { childForJob, childHolds, childOwnsKey, childState } from "./child-hire-store.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
@@ -2860,7 +2860,7 @@ export class AgencWallet {
           sending: receipt => {
             if (this.#now() >= expiry) refuseChild("The supplier quote expired before dispatch.");
             const live = childForJob(this.#store.state, job)!;
-            const policy = childState(this.#store.state).childPolicies?.[live.parentListing];
+            const policy = childPolicyFor(childState(this.#store.state), this.#agentRecord(job.agentId), live.parentListing);
             if (!policy || childDigest(policy) !== childDigest(live.view.policy)) refuseChild("The supplier policy changed before dispatch.");
             const agent = this.#agentRecord(job.agentId);
             const held = childHolds(agent).childHolds?.[job.id];

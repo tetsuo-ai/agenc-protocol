@@ -19,7 +19,7 @@ export interface ChildHireRecord {
   reviewDebits?: Record<string, string>;
 }
 export interface ChildHireState {
-  childPolicies?: Record<string, ChildHirePolicy>;
+  childPolicies?: Record<string, ChildHirePolicy | null>;
   childHires?: Record<string, ChildHireRecord>;
 }
 export function childState(state: WalletState): WalletState & ChildHireState {

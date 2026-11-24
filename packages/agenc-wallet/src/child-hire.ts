@@ -27,10 +27,16 @@ import { sellerProceeds } from "./seller-terms.js";
 import type { MarketServices } from "./services.js";
 import { money } from "./views.js";
 
-import { childHolds, childState, type ChildHireRecord } from "./child-hire-store.js";
+import { childHolds, childState, type ChildHireRecord, type ChildHireState } from "./child-hire-store.js";
 import type { ChildHireView, ChildResult } from "./client/child-hire.js";
 import type { AgencWallet } from "./wallet.js";
-import type { StateStore, AgentRecord, ApprovalRecord, JobRecord } from "./store.js";
+import {
+  agentOffers,
+  type StateStore,
+  type AgentRecord,
+  type ApprovalRecord,
+  type JobRecord,
+} from "./store.js";
 import { microcents, reserveJobSpend, remainingJobMicrocents } from "./job-money.js";
 import {
   readAgent,
@@ -294,6 +300,26 @@ interface ChildWalletPorts {
   ): Promise<Pick<ChildResult, "text" | "files" | "round" | "deliveryHash"> | null>;
 }
 
+/** C's reviewed offer stores its policy and the exact published listing payload.
+ * An explicit local disable continues to apply through restart and offer refresh. */
+export function childPolicyFor(
+  state: ChildHireState,
+  seller: Pick<AgentRecord, "address" | "earn">,
+  listing: string,
+) {
+  const local = state.childPolicies?.[listing];
+  if (local === null) return null;
+  const offer = agentOffers(seller).find((o) => o.listing === listing);
+  if (offer && (!offer.wanted || !offer.listed)) return null;
+  const terms = offer?.terms as { childPolicy?: ChildHirePolicy | null } | undefined;
+  if (!offer || !terms || !Object.hasOwn(terms, "childPolicy")) return local ?? null;
+  if (!terms.childPolicy) return null;
+  const agreed = readChildDependency(offer.spec, seller.address);
+  const digest = childDigest(checkedChildPolicy(terms.childPolicy));
+  if (!agreed || childDigest(agreed.policy) !== digest || (local && childDigest(local) !== digest)) return null;
+  return agreed.policy;
+}
+
 export class ChildHires {
   constructor(private readonly p: ChildWalletPorts) {}
   #record(parent: string) {
@@ -310,8 +336,7 @@ export class ChildHires {
     if (policy?.allowedListings.includes(listing)) refuseChild("The parent service cannot supply itself.");
     this.p.store.update((state) => {
       const policies = (childState(state).childPolicies ??= {});
-      if (policy) policies[listing] = policy;
-      else delete policies[listing];
+      policies[listing] = policy;
     });
     return policy;
   }
@@ -321,7 +346,7 @@ export class ChildHires {
       parentClaim(this.p.chain, this.p.services, grant, payer.address),
       readHireableListing(this.p.chain, address(input.listing)),
     ]);
-    const policy = childState(this.p.store.state).childPolicies?.[parent.listing];
+    const policy = childPolicyFor(childState(this.p.store.state), payer, parent.listing);
     if (
       !policy ||
       !parent.criteria.includes(childPolicyCriterion(policy)) ||
