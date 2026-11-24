@@ -284,7 +284,13 @@ export function isTaskStateDirectlyClaimable(
   task: Task,
   nowUnixTimestamp: bigint,
 ): boolean {
-  if (task.taskType === TaskType.BidExclusive) return false;
+  return directClaimState(task, nowUnixTimestamp) === "available";
+}
+
+/** First revision 9 task-account refusal. Worker-specific checks follow separately. */
+export function directClaimState(task: Task, nowUnixTimestamp: bigint):
+  "available" | "bid_only" | "closed" | "expired" | "occupied" {
+  if (task.taskType === TaskType.BidExclusive) return "bid_only";
 
   const contest =
     (task.reserved[0] ?? 0) >= 1 && task.taskType === TaskType.Competitive;
@@ -296,15 +302,15 @@ export function isTaskStateDirectlyClaimable(
     task.status === TaskStatus.Open ||
     task.status === TaskStatus.InProgress ||
     claimableDuringPendingValidation;
-  if (!statusAllowsDirectClaim) return false;
+  if (!statusAllowsDirectClaim) return "closed";
 
-  if (task.deadline > 0n && nowUnixTimestamp >= task.deadline) return false;
+  if (task.deadline > 0n && nowUnixTimestamp >= task.deadline) return "expired";
 
   const effectiveMaxWorkers = Math.min(
     task.maxWorkers,
     DISPUTE_SAFE_MAX_WORKERS,
   );
-  return task.currentWorkers < effectiveMaxWorkers;
+  return task.currentWorkers < effectiveMaxWorkers ? "available" : "occupied";
 }
 
 /**

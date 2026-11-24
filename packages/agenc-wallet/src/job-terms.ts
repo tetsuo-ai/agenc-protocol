@@ -1,3 +1,5 @@
+import { listingMessageText } from "./client/listing-exchange.js";
+import type { PurchaseAttachments } from "./purchase-admission.js";
 import { facade } from "@tetsuo-ai/marketplace-sdk";
 import { createHash } from "node:crypto";
 import type { AmountInput } from "./client/protocol.js";
@@ -21,7 +23,7 @@ export function checkedAcceptance(list: readonly string[] | undefined): string[]
   return acceptance;
 }
 
-export interface TermsInput {
+export interface TermsInput extends PurchaseAttachments {
   contestEntries?: number;
   deadline?: number;
   deadlineDays?: number;
@@ -71,7 +73,7 @@ export function resolveJobTerms(input: TermsInput, clock: number, defaultReview:
 }
 
 /** Use the caller's amount and clock choice so a retry survives rate and clock changes. */
-export function jobIdentity(input: TermsInput & { request: string; acceptance?: string[]; listing?: string; expectedPriceLamports?: string; expectedSpecHash?: string; reward?: AmountInput; maxPriceCents?: number }, quoteOnly: boolean, acceptanceFormat: "normalized" | "raw" = "normalized"): string {
+export function jobIdentity(input: TermsInput & { request: string; acceptance?: string[]; listing?: string; listingAgreement?: import("./client/listing-exchange.js").ListingAgreement; expectedPriceLamports?: string; expectedSpecHash?: string; reward?: AmountInput; maxPriceCents?: number }, quoteOnly: boolean, acceptanceFormat: "normalized" | "raw" = "normalized"): string {
   if (typeof input.request !== "string") throw new WalletError("BAD_REQUEST", "Describe the work.");
   const reward = input.reward;
   if (reward !== undefined && (typeof reward !== "object" || reward === null || ("usdCents" in reward && "lamports" in reward))) {
@@ -82,6 +84,10 @@ export function jobIdentity(input: TermsInput & { request: string; acceptance?: 
     quoteOnly, input.request.trim(), acceptanceFormat === "raw" ? input.acceptance ?? [] : checkedAcceptance(input.acceptance), input.listing, amount, input.maxPriceCents,
     input.deadline, input.deadline === undefined && !input.listing ? input.deadlineDays ?? 7 : input.deadlineDays,
     input.reviewWindowSecs, input.minReputation ?? 0, input.requiredCapabilities ?? "1",
+    ...(input.privateCommitment !== undefined ? ["private", input.privateCommitment] : []),
+    ...(input.childPolicyDigest !== undefined ? ["supplier", input.childPolicyDigest] : []),
+    ...(input.listingAgreement ? ["inquiry", input.listingAgreement.question?.signature, input.listingAgreement.reply?.signature, input.listingAgreement.selected,
+      listingMessageText(input.listingAgreement.question.message), listingMessageText(input.listingAgreement.reply.message)] : []),
     ...(input.contestEntries === undefined ? [] : ["contest", input.contestEntries]),
     ...(input.expectedPriceLamports || input.expectedSpecHash ? [input.expectedPriceLamports, input.expectedSpecHash] : []),
   ])).digest("hex");

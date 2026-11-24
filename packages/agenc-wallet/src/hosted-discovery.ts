@@ -48,7 +48,6 @@ interface ListedService {
   listedTags: string[];
   /** Words the list itself carried, used when the description gives none. */
   listedCategory: string | null;
-  listedSummary: string | null;
   /** The hash the listing committed its description to. */
   specHashHex: string | null;
   /** Where that description is published, when it is a public https address. */
@@ -64,7 +63,8 @@ function describedRow(
     ...entry.base,
     specHashHex: entry.specHashHex,
     category: details.category ?? entry.listedCategory,
-    summary: summarize(entry.base.name, details.description) ?? entry.listedSummary,
+    summary: state === "ready" ? summarize(entry.base.name, details.description) : null,
+    ...(details.fulfilment && { fulfilment: details.fulfilment }),
     description:
       details.description === null ? null : withoutLeadingName(entry.base.name, details.description),
     tags: details.tags.length ? details.tags : entry.listedTags,
@@ -216,7 +216,6 @@ export function hostedDiscovery(options: HostedServicesOptions, read: ReadJson, 
       listedTags: (Array.isArray(item.tags) ? item.tags : typeof item.tags === "string" ? item.tags.split(",") : [])
         .flatMap((tag: unknown) => tidyText(tag, 64) ?? []),
       listedCategory: tidyText(item.category, 40),
-      listedSummary: tidyText(item.summary ?? item.description, 280),
       specHashHex: HEX64.test(specHash) ? specHash : null,
       specUri: /^https:\/\/[^\s]{1,500}$/.test(specUri) ? specUri : null,
     };

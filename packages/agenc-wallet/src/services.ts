@@ -31,6 +31,7 @@ export type DetailsState = "ready" | "loading" | "unavailable";
 
 /** One service as a catalog source reports it (chain-shaped, not display). */
 export interface CatalogRow {
+  fulfilment?: import("./listing-details.js").FulfilmentTerms;
   listingVersion?: string;
   maxOpenJobs?: number;
   operatorFeeBps?: number;

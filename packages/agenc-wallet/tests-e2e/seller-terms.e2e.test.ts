@@ -363,6 +363,7 @@ it("funds concurrent deliveries and reports both possible operator credits from 
       operator: operator.address, operatorFeeBps: 123, operatorFee: { lamports: "36912" },
       minimumSellerNet: { lamports: "2814038" }, minimumSellerNetIfOperatorCannotReceive: { lamports: "2850950" },
     });
+    expect(approval?.service?.operatorFeeBps).toBe(123);
     const job = await wallet.decideApproval(approval!.id, true);
     jobs.push(job.id);
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered");

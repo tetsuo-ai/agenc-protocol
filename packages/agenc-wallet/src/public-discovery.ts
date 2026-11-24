@@ -1,4 +1,4 @@
-
+import { readAvailability } from "./listing-inquiry.js";
 // Standalone catalog used before custody is initialized. It needs neither a data directory nor a signer.
 import { getTaskMarkerSize } from "@tetsuo-ai/marketplace-sdk";
 import { createRpcChain, type Chain } from "./chain.js";
@@ -18,7 +18,7 @@ export function createPublicCatalog(chain: Chain, services: MarketServices, pric
   const discovery = new ServiceDiscovery({
     publicNetwork: chain.network === "mainnet", now: Date.now, rate: () => prices.solUsd(),
     listServices: filters => services.listServices(filters), fillTerms: rows => fillCatalogTerms(chain, rows),
-    ownServices: async () => [],
+    ownServices: async () => [], availability: row => readAvailability(chain, row.listing, row.listingVersion),
     context: async (rows, rate) => {
       const [known, feeBps] = await Promise.all([
         records.read(rows.filter(row => !row.recordPending).map(recordRow), 4000),

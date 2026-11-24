@@ -56,6 +56,7 @@ export {
   COMPLETION_BOND_ROLE_WORKER,
   bidsByTask,
   fetchTaskGuarantee,
+  directClaimState,
   isTaskJobSpecPinned,
   isTaskStateDirectlyClaimable,
   listActiveListings,
