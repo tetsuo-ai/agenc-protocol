@@ -1,3 +1,4 @@
+import type {} from "./service-usage.js";
 // Turn the journal's records into what a person reads.
 import { contestPage } from "./contest-page.js";
 import { fractionalQuoteUsd } from "./job-money.js";
