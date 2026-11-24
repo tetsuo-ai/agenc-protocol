@@ -478,6 +478,13 @@ export class ChildHires {
           CHILD_LINEAGE + parent.task,
         ],
         ...(supplierCommitment && { privateCommitment: supplierCommitment }),
+        // A public supplier hire carries the same explicit output agreement as any purchase.
+        ...(!supplierCommitment && {
+          outputs: {
+            requiredFiles: input.outputs.filter((name) => name !== "text"),
+            allowTextOnly: input.outputs.includes("text"),
+          },
+        }),
         reviewWindowSecs: policy.reviewWindowSecs,
         deadline: parent.now + service.deliverySecs!,
         idempotencyKey: purchaseKey,
