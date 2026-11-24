@@ -135,7 +135,10 @@ it("returns the agreed request and acceptance criteria after purchase compaction
   await w.wallet.decideApproval(hire.approval!.id, true);
   await restart(s => compact(s, hire.job.id));
   const { receipt } = await w.wallet.callOutcome(a.id, "hire", args.idempotencyKey);
-  expect(receipt).toMatchObject({ request: args.request, acceptance: args.acceptance, signatures: { hire: expect.any(String) } });
+  // The wallet appends the explicit output agreement line to every new job's checks.
+  expect(receipt).toMatchObject({ request: args.request, signatures: { hire: expect.any(String) } });
+  expect(receipt!.acceptance.slice(0, args.acceptance.length)).toEqual(args.acceptance);
+  expect(receipt!.acceptance.slice(args.acceptance.length)).toEqual([expect.stringMatching(/^Agreed outputs v1: /)]);
 });
 
 it("keeps listing creation evidence through an offer edit and restart", async () => {
