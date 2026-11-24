@@ -1750,18 +1750,21 @@ export class AgencWallet {
       marketFeeBps: await this.#marketFeeBps(), operatorFeeBps: terms.operatorFeeBps });
     if (params.childPolicyDigest && fulfilment?.supplier?.payingSeller !== (await readListing(this.#chain, listing))?.authority)
       throw new WalletError("PRICE_CHANGED", "The supplier funding authority changed. Refresh the listing.");
-    const admission = await purchaseAdmission(params, this as Parameters<typeof purchaseAdmission>[1], fulfilment?.privateInputs === true, fulfilment?.supplier?.digest);
+    const admission = await purchaseAdmission(params, this as Parameters<typeof purchaseAdmission>[1], fulfilment?.privateInputs === true, fulfilment?.supplier?.digest,
+      params.privateCommitment === undefined ? undefined : (await readListing(this.#chain, listing))?.authority ?? null);
     const acceptance = purchaseCriteria(checks, admission);
     if (Object.keys(admission).length) jobTerms.admission = admission;
     const agreement = params.listingAgreement;
     const agreed = agreement && await this.#agreedTerms(agreement, listing, agent.address);
     if (agreed && agreed.version !== terms.version.toString())
       throw new WalletError("PRICE_CHANGED", "The listing changed. Request a fresh reply and quote.");
-    const approvedRequest = agreed ? publicListingBrief(request, agreed) : request;
+    // Bind the paying creator, who funds and reviews, next to the requester who agreed the terms.
+    const payingCreator = agreed ? await this.#hirePayerAddress(agent, terms.priceLamports) : undefined;
+    const approvedRequest = agreed ? publicListingBrief(request, agreed, payingCreator) : request;
     if (approvedRequest.length > 4000) throw new WalletError("BAD_REQUEST", "Shorten the request so the selected terms fit the brief.");
     const spec = buildJobSpec({ title: terms.name, request: approvedRequest, acceptance, listing, terms: jobTerms });
     if (admission.privateInputs) spec.privateInputs = admission.privateInputs;
-    if (agreed) { spec.agreedTerms = agreed; jobTerms.inquiry = agreed; }
+    if (agreed && payingCreator !== undefined) { spec.agreedTerms = { ...agreed, payingCreator }; jobTerms.inquiry = { ...agreed, payingCreator }; }
     const hash = await jobSpecHash(spec);
     const deposits = await purchaseDeposits(this.#chain, agent.address as Address);
     const floor = await this.#floor();
@@ -1772,6 +1775,8 @@ export class AgencWallet {
     const withinLimit = priceCents !== null && priceCents <= agent.policy.askAboveCents;
     const covered = agentBalance >= need;
     const autonomous = !agreement && !jobTerms.admission && !quoteOnly && withinLimit && covered && terms.operatorFeeBps === 0;
+    if (payingCreator !== undefined && payingCreator !== (covered ? agent.address : this.mainAddress))
+      throw new WalletError("PRICE_CHANGED", "The paying wallet changed while quoting. Request a new quote.");
     const taskId = values.randomId32();
     await checkHireOperator(terms.operator, terms.operatorFeeBps, covered ? agent.address as Address : this.mainAddress, taskId);
 
@@ -2421,6 +2426,13 @@ export class AgencWallet {
     return publishListingMessage(identity, message, await this.#vault.signer(agent.keyId), this.#now(), this.#config.listingRelay);
   }
 
+  /** The same choice the quote makes: the agent pays when it covers price, deposits and floor, else the main wallet. */
+  async #hirePayerAddress(agent: AgentRecord, priceLamports: bigint): Promise<string> {
+    const deposits = await purchaseDeposits(this.#chain, agent.address as Address);
+    const need = priceLamports + deposits.total + await this.#floor();
+    return await this.#chain.getBalance(agent.address as Address) >= need ? agent.address : this.mainAddress;
+  }
+
   async #agreedTerms(agreement: ListingAgreement, listing: Address, buyer: string) {
     const current = await readListing(this.#chain, listing);
     if (!current) throw new WalletError("NOT_FOUND", "The selected listing is unavailable.");
@@ -2430,14 +2442,17 @@ export class AgencWallet {
   async #checkJobQuote(job: JobRecord, deposits: JobDeposits) {
     if (job.listingAgreement) {
       const agreed = await this.#agreedTerms(job.listingAgreement, toAddress(job.listing ?? "", "service"), this.#agentRecord(job.agentId).address);
-      if (job.terms?.inquiry?.agreementHash !== agreed.agreementHash ||
-          !job.request.endsWith(publicListingBrief("", agreed)))
-        throw new WalletError("PRICE_CHANGED", "The agreed terms changed. Request a new quote.");
+      const payingCreator = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address;
+      if (job.terms?.inquiry?.agreementHash !== agreed.agreementHash || job.terms.inquiry.payingCreator !== payingCreator ||
+          !job.request.endsWith(publicListingBrief("", agreed, payingCreator)))
+        throw new WalletError("PRICE_CHANGED", "The agreed terms or paying wallet changed. Request a new quote.");
     }
     const admission = job.terms?.admission;
     if (admission) await purchaseAdmission({ ...(admission.privateInputs && { privateCommitment: admission.privateInputs.commitment }),
       ...(admission.childPolicyDigest && { childPolicyDigest: admission.childPolicyDigest }) }, this as Parameters<typeof purchaseAdmission>[1],
-      isRequest(job) || job.fulfilment?.privateInputs === true, job.fulfilment?.supplier?.digest);
+      isRequest(job) || job.fulfilment?.privateInputs === true, job.fulfilment?.supplier?.digest,
+      isRequest(job) || !admission.privateInputs ? undefined
+        : (await readListing(this.#chain, toAddress(job.listing ?? "", "service")))?.authority ?? null);
     const quote = job.approvedCosts;
     if (job.terms && await this.#chain.clusterTime() >= job.terms.deadline) {
       throw new WalletError("NOT_AVAILABLE", "The delivery deadline has passed.");

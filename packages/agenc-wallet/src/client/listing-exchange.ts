@@ -141,7 +141,10 @@ export async function selectedListingTerms(agreement: ListingAgreement, listing:
 }
 
 /** These exact words are preserved by both the hosted and practice brief formats. */
-export function publicListingBrief(request: string, agreed: Awaited<ReturnType<typeof selectedListingTerms>>) {
+export function publicListingBrief(request: string, agreed: Awaited<ReturnType<typeof selectedListingTerms>>, payingCreator?: string) {
   return [request, "Agreed terms", ...agreed.terms, "Listing " + agreed.listing + " version " + agreed.version,
-    "Provider " + agreed.provider, "Buyer " + agreed.buyer, "Agreement " + agreed.agreementHash].join("\n");
+    "Provider " + agreed.provider, "Buyer " + agreed.buyer,
+    // The requester agreed the terms; the paying creator funds and reviews the task. Both are named.
+    ...(payingCreator === undefined ? [] : ["Paying creator " + payingCreator]),
+    "Agreement " + agreed.agreementHash].join("\n");
 }

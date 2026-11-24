@@ -120,6 +120,9 @@ it("binds the two signers and only selected terms to a funded hire across a wall
   const quoted = await wallet.hire(params);
   expect(quoted.approval?.terms?.inquiry).toMatchObject({ ...identity, buyer: buyer.address, terms: ["Two variations"],
     agreementHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+  // The unfunded agent asked; the main wallet funds and reviews. Both are bound.
+  expect(buyer.address).not.toBe(wallet.mainAddress);
+  expect(quoted.approval?.terms?.inquiry?.payingCreator).toBe(wallet.mainAddress);
   const changed = { ...agreement, selected: [1] };
   await expect(wallet.hire({ ...params, listingAgreement: changed })).rejects.toThrow();
   const forged = { ...reply, message: { ...reply.message, terms: ["Different deliverable"] } };
@@ -131,6 +134,12 @@ it("binds the two signers and only selected terms to a funded hire across a wall
   expect(paid.status).toBe("waiting");
   expect(published).toContain(quoted.approval!.terms!.inquiry!.agreementHash);
   expect(published).toContain("Two variations");
+  expect(published).toContain("Buyer " + buyer.address);
+  expect(published).toContain("Paying creator " + wallet.mainAddress);
+  expect(paid.task).toBeTruthy();
+  const account = sandbox.market.svm.getAccount(paid.task as never);
+  if (!account.exists) throw new Error("The funded task is missing");
+  expect(String(getTaskDecoder().decode(account.data).creator)).toBe(wallet.mainAddress);
   expect(published).not.toContain("Additional revision");
   expect(published).not.toContain(question.message.question);
 });

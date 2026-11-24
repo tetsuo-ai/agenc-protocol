@@ -69,7 +69,10 @@ declare module "./types.js" {
     availability?: { identity: import("./listing-exchange.js").ListingIdentity; heartbeat: import("./listing-exchange.js").ListingHeartbeat | null };
   }
   interface JobTerms {
-    inquiry?: Awaited<ReturnType<typeof import("./listing-exchange.js").selectedListingTerms>>;
+    inquiry?: Awaited<ReturnType<typeof import("./listing-exchange.js").selectedListingTerms>> & {
+      /** The wallet that funds and reviews the task: the buyer agent or the main wallet. */
+      payingCreator?: string;
+    };
     admission?: import("./purchase-input.js").PublicPurchaseAdmission;
   }
 }
