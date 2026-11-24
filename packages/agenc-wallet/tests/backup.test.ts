@@ -1,3 +1,4 @@
+import { ExchangeJournal, JobExchange, digest, stagePrivateInputs, approvedOutputs } from "../src/private-inputs.js";
 import { address } from "@solana/kit";
 import { enrollClaimBudget, spendClaimRound } from "../../agenc-worker/src/revision-budget.js";
 // A backup: every key and the journal in one password-locked file, and a
@@ -68,6 +69,36 @@ describe("a wallet backup", () => {
       expect(() => spendClaimRound(path.join(dataDir, "model-spend"), wallet, claim, 1)).toThrow(/exhausted or unknown/);
     }
     expect(() => spendClaimRound(root, wallet, claim, 2)).not.toThrow();
+  });
+
+  it("restores both parties' original job keys and a maximum private input set in a fresh profile", async () => {
+    const folder = await walletFolder();
+    const { vault, dataDir } = folder;
+    const buyer = await vault.signer("main"), worker = await vault.signer("agent:a1");
+    const parties = { task: buyer.address, claim: worker.address, worker: worker.address, buyer: buyer.address,
+      authority: worker.address, claimedAt: "123", generation: "1", room: "a".repeat(64) };
+    const open = async (dir: string, signer: typeof buyer) => new JobExchange(await ExchangeJournal.open(dir, signer), signer, async () => parties);
+    const [b, w] = await Promise.all([open(dataDir, buyer), open(dataDir, worker)]);
+    const [bk, wk] = await Promise.all([b.announceKey(), w.announceKey()]);
+    const files = Array.from({ length: 8 }, (_, i) => {
+      const bytes = randomBytes(262144);
+      return { name: i + ".csv", bytes: bytes.length, base64: bytes.toString("base64"), sha256: digest(bytes) };
+    });
+    const terms = { requiredFiles: ["report.csv"], allowTextOnly: false };
+    const req = stagePrivateInputs(b.journal, files, worker.address, "Room model", terms);
+    await b.grant(req, parties, wk);
+    const sealed = await b.inputs(req);
+    const archive = await backupOf(folder);
+    const other = mkdtempSync(path.join(tmpdir(), "exchange-restore-"));
+    const secret = randomBytes(32);
+    await restoreBackup({ dataDir: other, unlockSecret: secret, text: archive.text, password: PASSWORD, network: "mainnet", now: 2 });
+    const restored = KeyVault.open({ file: path.join(other, "vault.json"), secret });
+    const rb = await open(other, await restored.signer("main")), rw = await open(other, await restored.signer("agent:a1"));
+    expect((await rb.announceKey()).payload).toBe(bk.payload);
+    expect((await rw.announceKey()).payload).toBe(wk.payload);
+    expect(approvedOutputs(rb.journal, req)).toEqual(terms);
+    expect((await rw.receiveBundle(await rb.inputs(req), "inputs", req.commitment)).files).toEqual(files);
+    expect((await rb.inputs(req)).signature).toBe(sealed.signature);
   });
 
   it("says what it is without the password and holds no key in the clear", async () => {

@@ -35,7 +35,6 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import path from "node:path";
 import { WalletError } from "./errors.js";
@@ -49,8 +48,8 @@ export const MIN_BACKUP_PASSWORD = 8;
 
 const SCRYPT = { N: 32_768, r: 8, p: 1, maxmem: 96 * 1024 * 1024 } as const;
 /** Largest backup file accepted for reading. */
-const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
-/** Largest single file carried in a backup. Anything bigger is left out. */
+const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
+/** Existing size bound for the state and work ledgers. Encrypted exchange records use the aggregate archive limit. */
 const MAX_CARRIED_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_CARRIED_FILES = 4_000;
 const MAIN_KEY = "main";
@@ -113,7 +112,7 @@ function assertPassword(password: unknown): asserts password is string {
 /** The journal and the work ledgers: everything but the keys and the lock. */
 function carriedFiles(dataDir: string): Record<string, string> {
   const files: Record<string, string> = {};
-  let count = 0;
+  let count = 0, total = 0;
   const take = (relative: string): void => {
     const absolute = path.join(dataDir, relative);
     let info;
@@ -127,7 +126,13 @@ function carriedFiles(dataDir: string): Record<string, string> {
       for (const name of readdirSync(absolute).sort()) take(path.posix.join(relative, name));
       return;
     }
-    if (!info.isFile() || info.size > MAX_CARRIED_FILE_BYTES) return;
+    if (!info.isFile()) return;
+    if (relative.startsWith("job-exchange/")) {
+      if (!isExchangeRecord(relative)) return;
+    } else if (info.size > MAX_CARRIED_FILE_BYTES) return;
+    total += info.size;
+    // Allow for two base64 encodings, JSON, and the vault keys before allocating.
+    if (total > MAX_BACKUP_BYTES / 2) throw new WalletError("NOT_AVAILABLE", "This wallet is too large for one backup.");
     count += 1;
     if (count > MAX_CARRIED_FILES) {
       throw new WalletError("INTERNAL", "This wallet has too many files to back up in one go.");
@@ -136,6 +141,7 @@ function carriedFiles(dataDir: string): Record<string, string> {
   };
   take("state.json");
   take("earn");
+  take("job-exchange");
   return files;
 }
 
@@ -197,7 +203,9 @@ export async function createBackup(input: {
         nonce: nonce.toString("base64"),
         sealed: sealed.toString("base64"),
       };
-      return { text: `${JSON.stringify(file)}\n`, header };
+      const text = `${JSON.stringify(file)}\n`;
+      if (text.length > MAX_BACKUP_BYTES) throw new WalletError("NOT_AVAILABLE", "This wallet is too large for one backup.");
+      return { text, header };
     } finally {
       key.fill(0);
     }
@@ -245,7 +253,7 @@ export function writeBackupFile(file: string, text: string): void {
   }
   try {
     try {
-      writeSync(fd, text);
+      writeFileSync(fd, text);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -394,6 +402,10 @@ function openBackup(text: string, password: string): { header: BackupHeader; con
   }
 }
 
+function isExchangeRecord(relative: string) {
+  return /^job-exchange\/[1-9A-HJ-NP-Za-km-z]{32,44}\/[a-f0-9]{64}$/.test(relative);
+}
+
 /** A carried path is safe to write when it stays inside the wallet folder. */
 function safeRelative(relative: string): string | null {
   if (relative.length === 0 || relative.length > 512 || relative.includes("\\") || relative.includes("\0")) {
@@ -401,7 +413,7 @@ function safeRelative(relative: string): string | null {
   }
   const parts = relative.split("/");
   if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return null;
-  if (relative !== "state.json" && parts[0] !== "earn") return null;
+  if (relative !== "state.json" && parts[0] !== "earn" && !isExchangeRecord(relative)) return null;
   return parts.join(path.sep);
 }
 
@@ -455,7 +467,7 @@ export async function restoreBackup(input: {
   try {
     // Move the wallet that is here out of the way. Nothing is deleted.
     let replaced: string | null = null;
-    const present = ["vault.json", "state.json", "earn"].filter((name) =>
+    const present = ["vault.json", "state.json", "earn", "job-exchange"].filter((name) =>
       existsSync(path.join(input.dataDir, name)),
     );
     if (present.length > 0) {
@@ -488,7 +500,7 @@ export async function restoreBackup(input: {
     } catch (error) {
       // Half a restore is worse than none: take out what was just written
       // and put the wallet that was here back exactly as it was.
-      for (const name of ["vault.json", "state.json", "earn"]) {
+      for (const name of ["vault.json", "state.json", "earn", "job-exchange"]) {
         rmSync(path.join(input.dataDir, name), { recursive: true, force: true });
       }
       if (replaced !== null) {
