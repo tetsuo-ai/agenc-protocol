@@ -1659,6 +1659,20 @@ export class AgencWallet {
   }
 
   async #checkMoneyPending(payer: string) {
+    // Seller setup uses the listing journal. Protect the same source and
+    // destination balances even when the new request is a plain transfer.
+    for (const agent of Object.values(this.#store.state.agents)) {
+      if (payer !== this.mainAddress && payer !== agent.address) continue;
+      for (const receipt of agent.earn.pendingListingSends ?? []) {
+        const operation = receipt.operation;
+        if (operation?.kind !== "funding") continue;
+        const outcome = operation.decision ? await this.#chain.listingSendOutcome?.(receipt) :
+          await this.#chain.reviewSendOutcome?.(receipt);
+        if (outcome !== "landed" && outcome !== "failed")
+          throw new WalletError("NOT_AVAILABLE", `Funding is awaiting confirmation. Check receipt ${receipt.signature}.`);
+        this.#finishListingSend(agent.id, receipt.signature, outcome === "landed");
+      }
+    }
     for (const op of Object.values(this.#store.state.moneyOperations ?? {})) {
       if (op.payer === payer && op.state === "pending" && (await this.operationOutcome(op.id))?.state === "pending")
         throw new WalletError("NOT_AVAILABLE", `Operation ${op.id} is awaiting confirmation. Check signature ${op.receipt.signature}.`);

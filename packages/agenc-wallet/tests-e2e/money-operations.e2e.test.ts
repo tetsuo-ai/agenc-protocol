@@ -250,3 +250,31 @@ it("keeps an expired signature with missing history reserved and rejects chat tr
   expect(sends).toBe(1);
   expect(await w.balance(request.to)).toBe(0n);
 });
+
+it("holds the main balance for an unresolved seller debit, including a different recipient", async () => {
+  let loseReply = false, uncertain = false;
+  w = await startWorld({
+    earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
+      mode: "sandboxed", envAllowlist: [], timeoutMs: 10000 } },
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      const answer = await base.sendAndConfirm(tx);
+      if (loseReply) { loseReply = false; throw Error("Reply lost"); }
+      return answer;
+    } }),
+    chain: base => ({ ...base, listingSendOutcome: r => uncertain ? Promise.resolve("pending") : base.listingSendOutcome!(r) }),
+  });
+  const seller = await w.wallet.createAgent("Seller");
+  const other = await w.wallet.createAgent("Other agent");
+  const offer = { name: "Index", summary: "Make an index", price: { usdCents: 15 }, setupId: "seller-index" };
+  const quote = await w.wallet.quoteEarn(seller.id, offer);
+  loseReply = uncertain = true;
+  await expect(w.wallet.setOffer(seller.id, offer, undefined, quote.quoteId)).rejects.toThrow();
+  expect(w.wallet.sellerOperation(seller.id, quote.quoteId)?.state).toBe("pending");
+  const request = { kind: "fund", agentId: other.id, amount: { lamports: String(SOL) } } as const;
+  const before = await w.balance(w.wallet.mainAddress);
+  await expect(w.wallet.quoteTransfer(request)).rejects.toThrow(/awaiting confirmation/);
+  uncertain = false;
+  await w.wallet.quoteTransfer(request);
+  expect(w.wallet.sellerOperation(seller.id, quote.quoteId)?.state).toBe("confirmed");
+  expect(await w.balance(w.wallet.mainAddress)).toBe(before);
+});
