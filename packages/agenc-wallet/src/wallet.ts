@@ -2,7 +2,7 @@ import { publishTaskReview } from "./task-review-publication.js";
 import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/task-review.js";
 import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
-import { operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
+import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The wallet: one main balance, one small wallet per agent, and a journal of
 // every job. It accepts plain requests ("hire this", "approve that"), decides
@@ -1627,7 +1627,20 @@ export class AgencWallet {
     const saved = await reconcileOperation(this.#chain, this.#store, id);
     if (!saved) return null;
     const { receipt, allowance: _allowance, ...outcome } = saved;
-    return { ...outcome, signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight };
+    return { ...outcome, signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight,
+      ...(saved.state === "pending" && { canRetry: await canRetryOperation(this.#chain, saved) }) };
+  }
+
+  async pendingTransfers() {
+    const state = this.#store.state;
+    const pending = [];
+    for (const op of Object.values(state.moneyOperations ?? {})) {
+      const entry = state.transferQuotes?.[op.id];
+      if (op.state !== "pending" || !entry || entry.quote.network !== this.#chain.network) continue;
+      pending.push({ quote: entry.quote, outcome: { id: op.id, state: op.state, signature: op.receipt.signature,
+        canRetry: await canRetryOperation(this.#chain, op) } });
+    }
+    return pending;
   }
 
   #checkQuoteExpiry(expiresAt: number) {

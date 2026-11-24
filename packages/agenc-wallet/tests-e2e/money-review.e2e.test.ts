@@ -148,3 +148,31 @@ it("advances the live head during a pruned backfill and later fills the gap", as
   expect(w.wallet.moneyHistory().gaps).toHaveLength(0);
   expect(w.wallet.moneyHistory().rows).toHaveLength(3);
 });
+
+it("restores owner-only pending transfers without sending, and disables retry after blockhash expiry", async () => {
+  let drop = false, valid = true, sends = 0;
+  w = await startWorld({
+    transport: base => ({ ...base, sendAndConfirm(tx) {
+      if (drop) { sends++; throw new Error("Connection lost before reply"); }
+      return base.sendAndConfirm(tx);
+    } }),
+    chain: base => ({ ...base, operationBlockhashValid: async () => valid, reviewSendOutcome: async () => "pending" })
+  });
+  const { moneyHandlers } = await import("../src/money-handlers.js");
+  const a = await w.wallet.createAgent();
+  const owner = { role: "owner", agentId: null } as const;
+  const q = await w.wallet.quoteTransfer({ kind: "fund", agentId: a.id, amount: { lamports: String(SOL) } });
+  drop = true;
+  const pending = await w.wallet.confirmTransfer(q.id);
+  await restart();
+  const methods = moneyHandlers(w.wallet);
+  await expect(methods["wallet.pendingTransfers"]({}, { role: "agent", agentId: a.id })).rejects.toThrow(/owner/);
+  expect(await methods["wallet.pendingTransfers"]({}, owner)).toEqual([{ quote: q, outcome: {
+    id: q.id, state: "pending", signature: pending.signature, canRetry: true,
+  } }]);
+  valid = false;
+  expect(await methods["wallet.operationOutcome"]({ id: q.id }, owner)).toMatchObject({ canRetry: false });
+  await w.wallet.confirmTransfer(q.id);
+  expect(sends).toBe(1);
+  expect(await w.balance(a.address)).toBe(0n);
+});

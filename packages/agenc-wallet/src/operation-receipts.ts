@@ -38,6 +38,11 @@ function savedTransaction(op: MoneyOperation) {
   return { ...tx, lifetimeConstraint: { blockhash, lastValidBlockHeight: BigInt(op.receipt.lastValidBlockHeight) } } as SignedTransaction;
 }
 
+export async function canRetryOperation(chain: Chain, op: MoneyOperation) {
+  const tx = savedTransaction(op);
+  return !!(tx && await chain.operationBlockhashValid?.(tx.lifetimeConstraint.blockhash).catch(() => false));
+}
+
 function settleOperation(store: StateStore, id: string, state: "confirmed" | "failed") {
   store.update(draft => {
     const row = draft.moneyOperations?.[id];

@@ -27,12 +27,14 @@ export interface ContestStakeQuote {
   reusedRegistration: boolean; obligations: string[]; stake: Money; retainedRent: Money; fee: Money; credit: Money; netCredit: Money;
 }
 export interface PaymentOutcome {
+  canRetry?: boolean;
   id: string; signature: string; state: "pending" | "confirmed" | "failed";
 }
 
 export interface MoneyMethods {
   "wallet.transferQuote": { params: TransferRequest; result: TransferQuote };
   "wallet.confirmTransfer": { params: { id: string }; result: PaymentOutcome };
+  "wallet.pendingTransfers": { params: Record<string, never>; result: { quote: TransferQuote; outcome: PaymentOutcome }[] };
   "wallet.operationOutcome": { params: { id: string }; result: PaymentOutcome | null };
   "wallet.moneyHistory": { params: { jobId?: string }; result: { rows: HistoryRow[]; gaps: { account: string; message: string }[] } };
   "jobs.ratingQuote": { params: { jobId: string; score: number }; result: RatingQuote };
