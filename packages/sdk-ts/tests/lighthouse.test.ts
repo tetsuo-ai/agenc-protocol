@@ -10,7 +10,9 @@ describe("Lighthouse assertion accounts", () => {
   it("declares only the inspected account, read-only and without a signer", () => {
     const builders = {
       assertClockBefore: [lighthouse.assertClockBefore(1), clock],
+      assertClockAtLeast: [lighthouse.assertClockAtLeast(1), clock],
       assertLamports: [lighthouse.assertLamports(target, 1n), target],
+      assertLamportsAtLeast: [lighthouse.assertLamportsAtLeast(target, 1n), target],
       assertDataHash: [lighthouse.assertDataHash(target, new Uint8Array(32), 0), target],
       assertBytes: [lighthouse.assertBytes(target, 0, new Uint8Array([1])), target],
     } as const;

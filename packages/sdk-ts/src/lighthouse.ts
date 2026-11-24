@@ -11,7 +11,7 @@ import { AccountRole, type Address, type Instruction } from "@solana/kit";
 export const LIGHTHOUSE = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95" as Address;
 export const RENT = "SysvarRent111111111111111111111111111111111" as Address;
 const CLOCK = "SysvarC1ock11111111111111111111111111111111" as Address;
-const silent = 0, equal = 0, lessThan = 3;
+const silent = 0, equal = 0, lessThan = 3, atLeast = 4; // IntegerOperator::GreaterThanOrEqual
 const assertData = 2, assertInfo = 5;
 function instruction(target: Address, encoded: number[]): Instruction {
   return { programAddress: LIGHTHOUSE, accounts: [{ address: target, role: AccountRole.READONLY }], data: Uint8Array.from(encoded) };
@@ -30,8 +30,18 @@ export function assertClockBefore(seconds: number) {
   return instruction(CLOCK, [assertData, silent, 32, 8, ...le64(BigInt(seconds)), lessThan]);
 }
 
+export function assertClockAtLeast(seconds: number) {
+  // The complement of assertClockBefore: unix_timestamp >= seconds.
+  if (!Number.isSafeInteger(seconds) || seconds < 0) throw new RangeError("Invalid clock boundary.");
+  return instruction(CLOCK, [assertData, silent, 32, 8, ...le64(BigInt(seconds)), atLeast]);
+}
+
 export function assertLamports(key: Address, lamports: bigint) {
   return instruction(key, [assertInfo, silent, 0, ...le64(lamports), equal]);
+}
+
+export function assertLamportsAtLeast(key: Address, lamports: bigint) {
+  return instruction(key, [assertInfo, silent, 0, ...le64(lamports), atLeast]);
 }
 
 function compact(n: number) {
