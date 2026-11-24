@@ -17,6 +17,9 @@ export interface AccountChange {
   signature: string; account: string; delta: string; payerFee: string; at: number | null;
   externalSender: string | null; failed: boolean;
 }
+export interface HistoryCursor { account: string; signature: string }
+export interface HistoryQuery { account?: string; jobId?: string; before?: HistoryCursor; limit?: number }
+
 export interface HistoryRow extends AccountChange {
   kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "other";
   jobId?: string;
@@ -27,16 +30,19 @@ export interface ContestStakeQuote {
   reusedRegistration: boolean; obligations: string[]; stake: Money; retainedRent: Money; fee: Money; credit: Money; netCredit: Money;
 }
 export interface PaymentOutcome {
+  canRetry?: boolean;
   id: string; signature: string; state: "pending" | "confirmed" | "failed";
 }
 
 export interface MoneyMethods {
   "wallet.transferQuote": { params: TransferRequest; result: TransferQuote };
   "wallet.confirmTransfer": { params: { id: string }; result: PaymentOutcome };
+  "wallet.pendingTransfers": { params: Record<string, never>; result: { quote: TransferQuote; outcome: PaymentOutcome }[] };
   "wallet.operationOutcome": { params: { id: string }; result: PaymentOutcome | null };
-  "wallet.moneyHistory": { params: { jobId?: string }; result: { rows: HistoryRow[]; gaps: { account: string; message: string }[] } };
+  "wallet.moneyHistory": { params: HistoryQuery; result: { query: Omit<HistoryQuery, "before">; next: HistoryCursor | null; rows: HistoryRow[]; gaps: { account: string; message: string }[] } };
   "jobs.ratingQuote": { params: { jobId: string; score: number }; result: RatingQuote };
   "jobs.publishReview": { params: { jobId: string; stars: number; text: string }; result: import("./task-review.js").SignedTaskReview };
+  "jobs.contestRegistrations": { params: Record<string, never>; result: { jobId: string; agentId: string }[] };
   "jobs.contestStake": { params: { jobId: string }; result: ContestStakeQuote };
   "jobs.retireRegistration": { params: { id: string }; result: PaymentOutcome & { actualCreditLamports: string | null; actualNetLamports: string | null } };
   "earn.operation": { params: { agentId: string; quoteId: string }; result: SellerOperationReceipt | null };
