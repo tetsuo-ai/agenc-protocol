@@ -83,7 +83,7 @@ import { beforeContestExpiry, contestSigner } from "./contest-deadline.js";
 import type { ContestAction, ContestQuote } from "./client/types.js";
 import { ceilingLamports, jobNetworkFees, microcents, remainingJobMicrocents, reserveJobSpend, type JobDeposits } from "./job-money.js";
 import { checkedAcceptance, jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
-import { legacyRefreshLimit, buildJobQuote, checkPriceLimit, jobCosts } from "./job-quote.js";
+import { legacyRefreshLimit, buildJobQuote, checkPriceLimit, jobCosts, buyerPriceLimit, allowanceRate } from "./job-quote.js";
 import type { JobTerms, ServiceView } from "./client/types.js";
 import { WALLET_CAPABILITIES } from "./client/types.js";
 import type {
@@ -2399,6 +2399,8 @@ export class AgencWallet {
     if (terms.terms.admission?.privateInputs) spec.privateInputs = terms.terms.admission.privateInputs;
     return {
       id: newId("job"),
+      // A dollar reward is converted once, at the quote. The quoted lamports are the price.
+      buyerMaxPriceCents: null,
       role: "buying",
       kind: "request",
       agentId,
@@ -2856,7 +2858,9 @@ export class AgencWallet {
     }
     if (quote.expiresAt <= this.#now()) throw new WalletError("NOT_AVAILABLE", "This quote has expired.");
     const rate = await this.#freshRate(true);
-    checkPriceLimit(BigInt(job.priceLamports), job.maxPriceCents, rate);
+    if (rate === null) throw new WalletError("NETWORK", "Dollar prices are not available right now, so the price limit cannot be checked.");
+    // Only a limit the buyer gave is a dollar bound. Without one the quoted lamports and expiry bind.
+    checkPriceLimit(BigInt(job.priceLamports), buyerPriceLimit(job), rate);
     const { protocolFeeBps } = await readProtocolConfig(this.#chain);
     if (!isRequest(job)) {
       const listing = await readHireableListing(this.#chain, toAddress(job.listing, "service"));
@@ -2900,7 +2904,9 @@ export class AgencWallet {
       if (!job.ownerApproved) throw new WalletError("NOT_ALLOWED", "Approve this quote before funding it.");
       return true;
     }
-    const charge = microcents(BigInt(job.priceLamports) + jobCosts(deposits).extra, rate);
+    // The daily allowance is in dollars: count this purchase at the higher of the quote's rate and the current one.
+    const chargeRate = allowanceRate(rate, this.#store.state.approvals[job.approvalId ?? ""]?.quoteRate);
+    const charge = microcents(BigInt(job.priceLamports) + jobCosts(deposits).extra, chargeRate);
     const approved = this.#store.update(draft => {
       const agent = draft.agents[job.agentId]!;
       if (job.terms?.contest) {
@@ -2909,7 +2915,7 @@ export class AgencWallet {
         }
         draft.jobs[job.id]!.contestCreditMicrocents = microcents(2n * this.#chain.transferFeeLamports + deposits.cancellationRent, rate).toString();
       }
-      if (reserveJobSpend(agent, job.id, charge, microcents(BigInt(job.priceLamports), rate), this.#now(), job.ownerApproved === true)) return true;
+      if (reserveJobSpend(agent, job.id, charge, microcents(BigInt(job.priceLamports), chargeRate), this.#now(), job.ownerApproved === true)) return true;
       agent.jobSpends = agent.jobSpends?.filter(entry => entry.id !== job.id) ?? [];
       draft.jobs[job.id]!.phase = "needs_approval";
       const approval = job.approvalId && draft.approvals[job.approvalId];
