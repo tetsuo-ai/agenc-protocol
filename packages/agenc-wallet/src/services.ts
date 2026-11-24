@@ -1,3 +1,4 @@
+import { ExchangeRelay } from "./exchange-relay.js";
 import { briefDeliverable as jobDeliverable, parseJobBrief } from "@tetsuo-ai/agenc-worker";
 import type { JobTerms } from "./client/types.js";
 // Everything the wallet needs from OUTSIDE the chain, behind one interface:
@@ -142,6 +143,7 @@ export interface ResultUploader {
 }
 
 export interface MarketServices {
+  readonly exchangeRelay?: ExchangeRelay;
   /**
    * Hireable offers. For discovery, keep all listing IDs until the caller has filtered
    * them, but only read descriptions that can match the supplied constraints.
@@ -498,6 +500,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     requestJson(fetchImpl, siteUrl + path, { method: "GET" }, { timeoutMs, maxBytes: 2 * 1024 * 1024 }), publicFetcher);
   return usesScopedRequests<MarketServices>({
     ...discovery,
+    exchangeRelay: new ExchangeRelay(new URL(siteUrl).origin, fetchImpl),
     ...(artifactBaseUrl !== null && artifactUploadUrl !== null ? {
       async postChangeRequest(this: MarketServices, envelope: taskThread.TaskThreadEnvelope, signer: KeyPairSigner) {
         const data = new TextEncoder().encode(taskThread.canonicalEnvelopeJson(taskThread.assertTaskThreadEnvelope(envelope)));

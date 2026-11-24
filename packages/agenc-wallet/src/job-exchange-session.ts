@@ -4,13 +4,12 @@ import { type ExchangeReceipt, type JobMessage, type RecipientGrantPreview, type
 import { acceptImportReceipt, ExchangeRelay, handoffView, importAndAcknowledge } from "./exchange-relay.js";
 import { deliveryFileProblem } from "./client/delivery-files.js";
 import { conversationPage, JobConversation } from "./job-conversation.js";
-import { collectOutput, digest, JobExchange, protectOutput, type Packet, type PrivateBundle } from "./private-inputs.js";
+import { digest, JobExchange, protectOutput, type Packet, type PrivateBundle } from "./private-inputs.js";
 
 interface Mailbox {
   peerKey?: Packet;
   inputs?: Packet;
   receipt?: ExchangeReceipt;
-  protectedOutputs: Packet[];
 }
 
 /** Scoped host controller used by the wallet broker and worker. The caller
@@ -19,13 +18,13 @@ interface Mailbox {
 export class JobExchangeSession {
   readonly conversation: JobConversation;
   constructor(private exchange: JobExchange, private relay: ExchangeRelay, private deadline: number,
-    private required?: PrivateRequirement, private now = Date.now) {
+    private required?: PrivateRequirement, private now = Date.now, private collect?: () => Promise<{ hash: string | null }>) {
     this.conversation = new JobConversation(exchange, deadline, now);
   }
 
-  private async mailbox() {
-    const id = "inbox/" + taskThread.exchangeContext(await this.exchange.live());
-    return { id, read: (): Mailbox => this.exchange.journal.read<Mailbox>(id) ?? { protectedOutputs: [] } };
+  private async mailbox(parties?: taskThread.ExchangeParties) {
+    const id = "inbox/" + taskThread.exchangeContext(parties ?? await this.exchange.live());
+    return { id, read: (): Mailbox => this.exchange.journal.read<Mailbox>(id) ?? {} };
   }
 
   async join() {
@@ -36,7 +35,6 @@ export class JobExchangeSession {
   /** Synchronize a bounded page. Apply each event durably before advancing
    * the cursor. Replaying after a crash repeats only idempotent writes. */
   async refresh() {
-    const { id, read } = await this.mailbox();
     for (let count = 0; count < 16; count++) {
       const thread = await this.conversation.view();
       const event = await this.relay.next(this.exchange, thread.cursor);
@@ -46,6 +44,7 @@ export class JobExchangeSession {
         const p = await this.exchange.live();
         const peer = this.exchange.signer.address === p.buyer ? p.authority : p.buyer;
         await taskThread.verifyPacket(packet, p, peer, packet.header.purpose);
+        const { id, read } = await this.mailbox(p);
         if (packet.header.purpose === "key") this.exchange.journal.write(id, { ...read(), peerKey: packet });
         if (packet.header.purpose === "inputs" && this.required) {
           await this.exchange.receiveBundle(packet, "inputs", this.required.commitment);
@@ -54,13 +53,6 @@ export class JobExchangeSession {
         if (packet.header.purpose === "receipt" && this.required) {
           const receipt = await acceptImportReceipt(this.exchange, this.required, packet);
           this.exchange.journal.write(id, { ...read(), receipt });
-        }
-        if (packet.header.purpose === "output") {
-          const box = read();
-          if (!box.protectedOutputs.some(old => old.signature === packet.signature)) {
-            // Only keep the few possible revision rounds for a revision 9 task.
-            this.exchange.journal.write(id, { ...box, protectedOutputs: [...box.protectedOutputs, packet].slice(-3) });
-          }
         }
       }
       await this.conversation.ingest(cursor, packet);
@@ -167,14 +159,13 @@ export class JobExchangeSession {
     return sealed.pointer;
   }
 
+  /** Compatibility with earlier room hosts. Only the buyer's current verified
+   * submission or settlement can select the output. */
   async collectOutput(commitment: string) {
-    const packets = (await this.mailbox()).read().protectedOutputs;
-    for (const packet of packets) {
-      try {
-        await collectOutput(this.exchange, commitment, packet);
-        return;
-      } catch { /* A previous revision may have a different commitment. */ }
+    if (!this.collect || !/^[a-f0-9]{64}$/.test(commitment)) throw new Error("A verified buyer delivery is required.");
+    const { hash } = await this.collect();
+    if (!["v1", "v2"].some(version => digest(`agenc.private-output.${version}:${commitment}`) === hash)) {
+      throw new Error("The private delivery commitment changed.");
     }
-    throw new Error("The current private output is unavailable. Retry.");
   }
 }

@@ -1,5 +1,5 @@
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
-import type { JobMessage } from "./client/job-exchange.js";
+import { jobMessageIdPattern, type JobMessage } from "./client/job-exchange.js";
 import { JobExchange, digest, type Parties } from "./private-inputs.js";
 
 export interface ConversationEntry { author: string; message: JobMessage }
@@ -19,6 +19,8 @@ interface Thread {
   outbox: taskThread.SignedPacket[];
 }
 
+const messageId = new RegExp(jobMessageIdPattern);
+
 function threadId(p: Parties) { return "thread/" + taskThread.exchangeContext(p); }
 
 export class JobConversation {
@@ -30,12 +32,13 @@ export class JobConversation {
       deadline: this.deadline, cursor: 0, entries: [], waiting: null, outbox: [],
     };
     thread.deadline = Math.min(this.deadline, thread.deadline);
+    if (this.exchange.signer.address === p.buyer && thread.waiting?.answer) thread.waiting = null;
     return thread;
   }
   async view() { return this.state(await this.exchange.live()); }
 
   private apply(thread: Thread, parties: Parties, author: string, m: JobMessage) {
-    if (!m || !/^[a-f0-9]{32}$/.test(m.id) || typeof m.body !== "string" || !m.body.trim() || m.body.length > 8000 ||
+    if (!m || !messageId.test(m.id) || typeof m.body !== "string" || !m.body.trim() || m.body.length > 8000 ||
         !["question", "reply", "progress", "ack"].includes(m.kind)) throw new Error("Invalid job message.");
     const previous = thread.entries.find(entry => entry.message.id === m.id);
     if (previous) {
@@ -53,7 +56,10 @@ export class JobConversation {
     }
     if (m.kind === "reply") {
       if (parent?.message.kind !== "question") throw new Error("Choose a question to answer.");
-      if (thread.waiting?.question === m.parent && !thread.waiting.answer) thread.waiting.answer = m.id;
+      if (thread.waiting?.question === m.parent && !thread.waiting.answer) {
+        if (this.exchange.signer.address === parties.buyer) thread.waiting = null;
+        else thread.waiting.answer = m.id;
+      }
     }
     thread.entries.push({ author, message: m });
   }

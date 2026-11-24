@@ -20,7 +20,7 @@ export async function confirmedParties(chain: Chain, task: Address, worker: Addr
   if (!job || !agent || !held || held.task !== task || held.worker !== worker || held.isCompleted ||
       ![TaskStatus.InProgress, TaskStatus.PendingValidation].includes(job.status) ||
       (job.status === TaskStatus.InProgress && (now === null || [held.expiresAt, job.deadline].some(end => end > 0n && BigInt(now) >= end)))) return fail();
-  const parties = { task, worker, claim, room, authority: agent.authority, buyer: job.creator, claimedAt: String(held.claimedAt) };
+  const parties = { task, worker, claim, room, authority: agent.authority, buyer: job.creator, generation: Buffer.from(job.reserved).readBigUInt64LE(3).toString(), claimedAt: String(held.claimedAt) };
   taskThread.exchangeContext(parties);
   return parties;
 }
@@ -72,7 +72,7 @@ export function bundleManifest(bundle: PrivateBundle) {
   const names = new Set<string>();
   const manifest = bundle.files.map(file => {
     if (typeof file.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(file.name) || file.name.includes("..") ||
-        (file.name.toLowerCase() === "agenc-private-inputs.json" || names.has(file.name.toLowerCase())) || !Number.isSafeInteger(file.bytes) || file.bytes < 1 || file.bytes > 262144) return fail();
+        names.has(file.name.toLowerCase()) || !Number.isSafeInteger(file.bytes) || file.bytes < 1 || file.bytes > 262144) return fail();
     names.add(file.name.toLowerCase());
     const bytes = taskThread.decodeExchangeBase64(file.base64, file.bytes);
     if (bytes.length !== file.bytes || digest(bytes) !== file.sha256) return fail();
@@ -156,15 +156,17 @@ export class JobExchange {
     return this.prepare(parties, "inputs", staged.bundle, recipient, requirement.commitment);
   }
 
-  async prepare(parties: Parties, purpose: Exclude<Purpose, "read" | "key">, value: unknown, recipient: Packet, operation: string): Promise<Packet> {
+  async prepare(parties: Parties, purpose: Exclude<Purpose, "read" | "collect" | "key">, value: unknown, recipient: Packet, operation: string): Promise<Packet> {
     if (taskThread.exchangeContext(await this.live()) !== taskThread.exchangeContext(parties)) return fail();
-    const id = digest(JSON.stringify([taskThread.exchangeContext(parties), this.signer.address, purpose, operation, recipient.payload])).slice(0, 32);
+    const id = purpose === "output" ? digest(operation) : digest(JSON.stringify([taskThread.exchangeContext(parties), this.signer.address, purpose, operation, recipient.payload])).slice(0, 32);
     const body = JSON.stringify(value);
     const fingerprint = digest(body);
     const saved = () => this.journal.read<{ packet: Packet; fingerprint: string }>("out/" + id);
     const previous = saved();
     if (previous && previous.fingerprint !== fingerprint) return fail();
-    const packet = previous?.packet ?? await taskThread.sealPacket({ ...parties, purpose, sender: this.signer.address, id }, Buffer.from(body), recipient, this.signer);
+    const header = { ...parties, purpose, sender: this.signer.address, id,
+      ...(purpose === "output" && { manifest: bundleManifest(value as PrivateBundle) }) };
+    const packet = previous?.packet ?? await taskThread.sealPacket(header, Buffer.from(body), recipient, this.signer);
     const winner = saved();
     if (winner && winner.fingerprint !== fingerprint) return fail();
     if (winner) return winner.packet;
@@ -172,7 +174,7 @@ export class JobExchange {
     return packet;
   }
 
-  async receive<T>(packet: Packet, purpose: Exclude<Purpose, "read" | "key">): Promise<T> {
+  async receive<T>(packet: Packet, purpose: Exclude<Purpose, "read" | "collect" | "key">): Promise<T> {
     const parties = await this.live();
     if (![parties.buyer, parties.authority].includes(this.signer.address)) return fail();
     const peer = this.signer.address === parties.buyer ? parties.authority : parties.buyer;
@@ -197,21 +199,43 @@ export class JobExchange {
   }
 }
 
-export const privateOutputPointer = (bundle: PrivateBundle) => "agenc.private-output.v1:" + bundleManifest(bundle);
+export function privateOutputPointer(bundle: PrivateBundle, parties?: Parties) {
+  const manifest = bundleManifest(bundle);
+  return parties ? "agenc.private-output.v2:" + digest(JSON.stringify([taskThread.exchangeContext(parties), manifest]))
+    : "agenc.private-output.v1:" + manifest;
+}
 
 export async function protectOutput(exchange: JobExchange, bundle: PrivateBundle, buyerKey: Packet): Promise<{ pointer: string; packet: Packet }> {
   const parties = await exchange.live();
   if (exchange.signer.address !== parties.authority) return fail();
-  const pointer = privateOutputPointer(bundle);
+  const pointer = privateOutputPointer(bundle, parties);
   const packet = await exchange.prepare(parties, "output", bundle, buyerKey, pointer);
   return { pointer, packet };
 }
 
-export async function collectOutput(exchange: JobExchange, commitment: string, packet: Packet) {
-  const bundle = await exchange.receiveBundle(packet, "output", commitment);
-  const { task, claim, claimedAt, sender } = packet.header;
-  exchange.journal.write(JSON.stringify(["output", task, claim, claimedAt, sender, commitment]), bundle);
-  exchange.journal.write(JSON.stringify(["settled-output", task, digest(privateOutputPointer(bundle))]), { claim, claimedAt, sender, commitment });
+/** The original buyer can use its retained decryption key after claim closure.
+ * Only a packet matching the submission or paid proof can enter this cache. */
+export async function openBuyerOutput(journal: ExchangeJournal, parties: Parties, proofHash: string, packet: Packet) {
+  if (packet.header.id !== proofHash) return fail();
+  const key = journal.read<Awaited<ReturnType<typeof taskThread.createExchangeKey>>>("key/" + taskThread.exchangeContext(parties));
+  if (!key) return fail();
+  const bytes = await taskThread.openPacket(packet, parties, parties.authority, "output", key.privateKey);
+  const bundle: PrivateBundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  if (digest(privateOutputPointer(bundle, parties)) !== proofHash) return fail();
+  journal.write(JSON.stringify(["collected", parties.task, proofHash]), { parties, bundle });
+  return bundle;
+}
+
+export async function openLegacyBuyerOutput(journal: ExchangeJournal, parties: Parties, pointer: string, key: Awaited<ReturnType<typeof taskThread.createExchangeKey>>, packet: Packet) {
+  const id = digest(JSON.stringify([taskThread.legacyOutputContext(parties), parties.authority, "output", pointer, key.publicKey])).slice(0, 32);
+  const bytes = await taskThread.openLegacyPaidOutput(packet, parties, id, key.privateKey);
+  const bundle: PrivateBundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  if (privateOutputPointer(bundle) !== pointer) return fail();
+  const commitment = bundleManifest(bundle);
+  const { task, claim, claimedAt, authority: sender } = parties;
+  journal.write(JSON.stringify(["output", task, claim, claimedAt, sender, commitment]), bundle);
+  journal.write(JSON.stringify(["settled-output", task, digest(pointer)]), { claim, claimedAt, sender, commitment });
+  return bundle;
 }
 
 export function approvedRequirement(journal: ExchangeJournal, commitment: string): PrivateRequirement {

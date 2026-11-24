@@ -9,7 +9,7 @@ export function rememberExchange(journal: ExchangeJournal, jobId: string, partie
   const key = "job-contexts/" + jobId;
   const contexts = journal.read<Parties[]>(key) ?? [];
   const context = taskThread.exchangeContext(parties);
-  if (!contexts.some(p => taskThread.exchangeContext(p) === context)) journal.write(key, [...contexts, parties]);
+  if (!contexts.some(p => p.generation && taskThread.exchangeContext(p) === context)) journal.write(key, [...contexts, parties]);
 }
 
 export interface ExchangeHistoryEntry {
@@ -30,7 +30,9 @@ export function localExchangeHistory(journal: ExchangeJournal, jobId: string, ta
   const index = contextIndex ?? contexts.length - 1;
   if (!Number.isSafeInteger(index) || index < 0 || index >= contexts.length) throw new Error("Invalid job history page.");
   const parties = contexts[index]!;
-  const context = taskThread.exchangeContext(parties);
+  // Pre-generation records remain available only in the local transcript.
+  const context = parties.generation ? taskThread.exchangeContext(parties) :
+    taskThread.legacyOutputContext(parties);
   const box = journal.read<{ receipt?: ExchangeReceipt }>("inbox/" + context);
   const thread = journal.read<{ entries: ConversationEntry[]; cursor: number; deadline: number; waiting: WaitingQuestion | null }>("thread/" + context);
   return [{ parties, contextIndex: index, previousContext: index ? index - 1 : null,

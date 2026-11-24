@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { generateKeyPairSigner } from "@solana/kit";
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it } from "vitest";
-import { ExchangeJournal, JobExchange, stagePrivateInputs, digest, bundleManifest, collectOutput, protectOutput, requireHandoff } from "../src/private-inputs.js";
+import { ExchangeJournal, JobExchange, stagePrivateInputs, digest, bundleManifest, openBuyerOutput, protectOutput, requireHandoff } from "../src/private-inputs.js";
 import { acceptImportReceipt, handoffView, importAndAcknowledge } from "../src/exchange-relay.js";
 import { JobConversation } from "../src/job-conversation.js";
 const roots: string[] = [];
@@ -13,7 +13,7 @@ afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: tr
 async function setup() {
   const buyer = await generateKeyPairSigner(), worker = await generateKeyPairSigner();
   const parts = { buyer: buyer.address, authority: worker.address, task: (await generateKeyPairSigner()).address,
-    worker: (await generateKeyPairSigner()).address, claim: (await generateKeyPairSigner()).address, claimedAt: "1234", room: "a".repeat(64) };
+    worker: (await generateKeyPairSigner()).address, claim: (await generateKeyPairSigner()).address, generation: "1", claimedAt: "1234", room: "a".repeat(64) };
   const dir = mkdtempSync(join(tmpdir(), "job-exchange-"));
   roots.push(dir);
   const connect = async (signer: typeof buyer) => new JobExchange(await ExchangeJournal.open(dir, signer), signer, async () => ({ ...parts }));
@@ -47,27 +47,30 @@ it("stages only approved bytes, requires the selected confirmed claim and room, 
       for (const secret of [file.name, file.base64, "Customer supplied"]) expect(raw.includes(secret)).toBe(false);
     }
   }
-  parts.claimedAt = "1240";
+  parts.generation = "2"; // Same claimant, PDA, room and chain second.
+  expect((await receive.announceKey()).payload).not.toBe(wk.payload);
+  await expect(send.grant(requirement, parts, wk)).rejects.toThrow();
   await expect(send.inputs(requirement)).rejects.toThrow();
   await expect(receive.receiveBundle(packet, "inputs", requirement.commitment)).rejects.toThrow();
 });
 
 it("protects returned text, names and bytes and refuses a different public commitment", async () => {
-  const { receive, send, file, bk } = await setup();
+  const { receive, send, file, bk, parts } = await setup();
   const bundle = { version: 1, salt: "f".repeat(64), text: "private return", files: [file] };
   const output = await protectOutput(receive, bundle, bk);
-  expect(output.pointer).toMatch(/^agenc\.private-output\.v1:[a-f0-9]{64}$/);
+  expect(output.pointer).toMatch(/^agenc\.private-output\.v2:[a-f0-9]{64}$/);
   for (const term of [file.name, bundle.text, file.base64]) expect(JSON.stringify(output)).not.toContain(term);
-  await expect(collectOutput(send, "0".repeat(64), output.packet)).rejects.toThrow();
-  await collectOutput(send, bundleManifest(bundle), output.packet);
+  await expect(openBuyerOutput(send.journal, parts, "0".repeat(64), output.packet)).rejects.toThrow();
+  await openBuyerOutput(send.journal, parts, digest(output.pointer), output.packet);
 });
 
-it("parks a question through restart, ingests ordered authenticated replies, and enqueues one continuation under the original deadline", async () => {
+it.each(["compact", "UUID"])("resumes each question once and advances past a second %s question after restart", async format => {
+  const messageId = () => format === "compact" ? taskThread.newExchangeId() : crypto.randomUUID();
   const { receive, send, worker, bk, wk, connect } = await setup();
   const deadline = 2000;
   const workerThread = new JobConversation(receive, deadline, () => 1000);
   const buyerThread = new JobConversation(send, deadline, () => 1000);
-  const question = { kind: "question" as const, id: taskThread.newExchangeId(), body: "Which quarter?", parent: null };
+  const question = { kind: "question" as const, id: messageId(), body: "Which quarter?", parent: null };
   const posted = await workerThread.send(question, bk);
   await buyerThread.ingest(1, posted);
   await workerThread.ingest(1, posted);
@@ -84,6 +87,11 @@ it("parks a question through restart, ingests ordered authenticated replies, and
   await restarted.resume(async (id, body, due) => { runs.add(id); expect(body).toBe(reply.body); expect(due).toBe(deadline); });
   expect(runs.size).toBe(1);
   expect(await restarted.resume(async () => { throw Error("duplicate"); })).toBe(false);
+  await buyerThread.ingest(2, answered);
+  const next = { ...question, id: messageId(), body: "Which currency?" };
+  const second = await restarted.send(next, bk);
+  await buyerThread.ingest(3, second);
+  expect((await buyerThread.view()).waiting?.question).toBe(next.id);
   const expired = new JobConversation(receive, deadline, () => deadline);
   await expect(expired.send({ ...question, id: taskThread.newExchangeId() }, bk)).rejects.toThrow(/deadline/);
 });
@@ -142,4 +150,15 @@ it("pages persisted conversations by entry and claim within the wallet frame", a
   const [earlier] = localExchangeHistory(send.journal, "job", parts.task, last!.contextIndex, last!.beforeEntry!);
   expect(earlier!.entries).toEqual(entries.slice(2,18));
   expect(localExchangeHistory(send.journal, "job", parts.task, last!.previousContext!)[0]!.parties.claimedAt).toBe("99");
+});
+
+it("opens an exact paid v1 output with its original key without reactivating its grant", async () => {
+  const { openLegacyBuyerOutput } = await import("../src/private-inputs.js");
+  const archived = JSON.parse(readFileSync(new URL("./fixtures/paid-exchange-v1.json", import.meta.url), "utf8"));
+  const { pointer, key, packet, parties } = archived;
+  const { send } = await setup();
+  expect((await openLegacyBuyerOutput(send.journal, parties, pointer, key, packet)).text).toBe("Paid archive fixture");
+  await expect(openLegacyBuyerOutput(send.journal, parties, pointer, key, { ...packet, signature: "" })).rejects.toThrow();
+  await expect(openLegacyBuyerOutput(send.journal, parties, pointer + "0", key, packet)).rejects.toThrow();
+  expect(() => taskThread.exchangeContext(parties)).toThrow();
 });

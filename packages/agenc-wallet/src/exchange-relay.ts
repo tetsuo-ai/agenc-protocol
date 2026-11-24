@@ -1,3 +1,4 @@
+import type { KeyPairSigner } from "@solana/kit";
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { type ExchangeReceipt, type PrivateRequirement } from "./client/job-exchange.js";
 import { type Packet, type PrivateBundle, bundleManifest, JobExchange } from "./private-inputs.js";
@@ -8,7 +9,7 @@ export class ExchangeRelay {
   private base: URL;
   constructor(origin: string, private fetcher = fetch) {
     this.base = new URL(origin);
-    if ((this.base.protocol !== "https:" && !(this.base.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(this.base.hostname))) ||
+    if ((this.base.protocol !== "https:" && !(this.base.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(this.base.hostname))) ||
         this.base.username || this.base.password || this.base.pathname !== "/" || this.base.search || this.base.hash) throw new Error("Invalid job exchange origin.");
   }
   private async request(packet: Packet) {
@@ -34,6 +35,18 @@ export class ExchangeRelay {
     await taskThread.verifyPacket(packet, await exchange.live(), exchange.signer.address, packet.header.purpose);
     return (await this.request(packet)).cursor;
   }
+  async output(parties: taskThread.ExchangeParties, buyer: KeyPairSigner, proofHash: string, paidSignature?: string, legacy?: { pointer: string; publicKey: string }): Promise<Packet | null> {
+    if (parties.buyer !== buyer.address) throw new Error("Only the buyer can collect the delivery.");
+    const packet = await taskThread.signPacket({ ...parties, sender: buyer.address, purpose: "collect", id: taskThread.newExchangeId() },
+      JSON.stringify([proofHash, Date.now(), paidSignature ?? null, legacy ?? null]), buyer);
+    const reply = await this.request(packet);
+    if (!reply.packet) return null;
+    if (legacy) return reply.packet; // Verified against the v1 signature by the archive reader.
+    await taskThread.verifyPacket(reply.packet, parties, parties.authority, "output");
+    if (reply.packet.header.id !== proofHash) throw new Error("The delivery commitment changed.");
+    return reply.packet;
+  }
+
   async next(exchange: JobExchange, after: number): Promise<{ packet: Packet; cursor: number } | null> {
     const p = await exchange.live();
     const request = await taskThread.signPacket({ ...p, sender: exchange.signer.address, purpose: "read", id: taskThread.newExchangeId() },

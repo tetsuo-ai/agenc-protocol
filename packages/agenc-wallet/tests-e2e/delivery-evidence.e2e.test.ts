@@ -1,3 +1,4 @@
+import { deliveryChunkAck } from "../src/client/job-exchange.js";
 import { address } from "@solana/kit";
 import { findClaimPda, findTaskSubmissionPda, getTaskSubmissionDecoder, getTaskSubmissionEncoder } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it } from "vitest";
@@ -30,11 +31,19 @@ it.each(["post", "hire"] as const)("inspects every byte of a %s on stock revisio
   await expect(guard()).rejects.toThrow();
   await expect(wallet.readDeliveryChunk(job.id, "other", "text", 0)).rejects.toThrow();
   await expect(wallet.readDeliveryChunk(job.id, agent.id, "text", 1)).rejects.toThrow();
+  expect((await wallet.readOwnerDeliveryChunk(job.id, "text", 0)).challenge).toBeNull();
+  await expect(guard()).rejects.toThrow();
   const text = await wallet.readDeliveryChunk(job.id, agent.id, "text", 0);
   expect(Buffer.from(text.base64, "base64").toString()).toEqual(delivered.result!.text);
+  await expect(guard()).rejects.toThrow();
+  const ack = await deliveryChunkAck(text);
+  await expect(wallet.acknowledgeDeliveryChunk(job.id, agent.id, { ...ack, proof: "0".repeat(64) })).rejects.toThrow();
+  await wallet.acknowledgeDeliveryChunk(job.id, agent.id, ack);
   for (const file of delivered.result!.files) {
     await expect(guard()).rejects.toThrow();
     const chunk = await wallet.readDeliveryChunk(job.id, agent.id, file.name, 0);
+    await expect(guard()).rejects.toThrow();
+    await wallet.acknowledgeDeliveryChunk(job.id, agent.id, await deliveryChunkAck(chunk));
     expect(chunk.totalBytes).toEqual(file.bytes);
   }
   await wallet.close();
