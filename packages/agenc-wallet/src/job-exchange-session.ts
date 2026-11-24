@@ -1,9 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { type ExchangeReceipt, type JobMessage, type RecipientGrantPreview, type PrivateRequirement } from "./client/job-exchange.js";
 import { acceptImportReceipt, ExchangeRelay, handoffView, importAndAcknowledge } from "./exchange-relay.js";
 import { deliveryFileProblem } from "./client/delivery-files.js";
 import { conversationPage, JobConversation } from "./job-conversation.js";
-import { collectOutput, JobExchange, protectOutput, type Packet, type PrivateBundle } from "./private-inputs.js";
+import { collectOutput, digest, JobExchange, protectOutput, type Packet, type PrivateBundle } from "./private-inputs.js";
 
 interface Mailbox {
   peerKey?: Packet;
@@ -96,6 +97,16 @@ export class JobExchangeSession {
     return this.relay.put(this.exchange, await this.exchange.inputs(this.required));
   }
 
+  /** Host-only. Rebuild the private input disk for each fresh guest, including
+   * when a previous boot already delivered a signed receipt. */
+  async roomInputs() {
+    const box = (await this.mailbox()).read();
+    if (!this.required || !box.inputs || !box.peerKey) throw new Error("Waiting for buyer.");
+    if (this.now() >= this.deadline) throw new Error("The original job deadline passed.");
+    const bundle = await this.exchange.receiveBundle(box.inputs, "inputs", this.required.commitment);
+    return { requirement: this.required, bundle };
+  }
+
   /** Worker-only. The callback reads the privileged guest import receipt. */
   async importInputs(importInRoom: (bundle: PrivateBundle) => Promise<ExchangeReceipt>) {
     const { id, read } = await this.mailbox();
@@ -125,6 +136,20 @@ export class JobExchangeSession {
     const thread = await this.conversation.view();
     if (this.now() >= thread.deadline) throw new Error("The original job deadline passed.");
     for (const packet of thread.outbox) await this.relay.put(this.exchange, packet);
+  }
+
+  /** Re-exporting the same bytes after a lost acknowledgement reuses the
+   * original protected pointer. A changed file or text gets a fresh salt. */
+  async returnRoomOutput(text: string, files: PrivateBundle["files"]) {
+    const parties = await this.exchange.live();
+    if (parties.authority !== this.exchange.signer.address) throw new Error("A confirmed worker is required.");
+    const id = JSON.stringify(["output-salt", taskThread.exchangeContext(parties), digest(text), files.map(f => [f.name, f.bytes, f.sha256])]);
+    let salt = this.exchange.journal.read<string>(id);
+    if (!salt) {
+      salt = randomBytes(32).toString("hex");
+      this.exchange.journal.write(id, salt);
+    }
+    return this.returnOutput({ version: 1, salt, text, files });
   }
 
   async returnOutput(bundle: PrivateBundle) {
