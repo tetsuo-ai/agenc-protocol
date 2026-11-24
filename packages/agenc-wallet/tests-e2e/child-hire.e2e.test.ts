@@ -59,7 +59,9 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
   );
   expect(await world.balance(seller.address)).toBe(reopenedBalance);
   expect(await world.sandbox.workOnce()).toBe(1);
-  await expect(wallet.childHires.delivery({ ...grant, roomId: "other-room" })).rejects.toThrow(/another room/);
+  await expect(wallet.childHires.delivery({ ...grant, roomId: "other-room" })).rejects.toThrow(
+    /another room/,
+  );
   const childJob = await wallet.getJob(one.child.jobId, true);
   const pic = childJob.result!.files[0]!;
   const artifacts = world.sandbox.deliveries as Map<string, Uint8Array>;
@@ -79,6 +81,7 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
   expect(await stageChildResult(room, binding, result)).toEqual(staged);
   await wallet.childHires.acknowledgeImport(grant, result.receipt);
   expect((await confirmPayout(wallet, one.child.jobId)).status).toBe("paid");
+  await wallet.childHires.acknowledgeImport(grant, result.receipt);
   await expect(wallet.rateJob(one.child.jobId, 5, true)).rejects.toThrow(/rating|stars/i);
   const quoteRating = Reflect.get(wallet, "quoteRating");
   if (typeof quoteRating === "function") {
@@ -169,7 +172,11 @@ it("binds opt-in and supplier-specific disclosure to the seller, service, brief 
   expect(childPolicyFor({}, localSeller, listing)).toEqual(policy);
   expect(childPolicyFor({ childPolicies: { [listing]: null } }, localSeller, listing)).toBeNull();
   expect(
-    childPolicyFor({ childPolicies: { [listing]: { ...policy, returnBeforeSecs: 1 } } }, localSeller, listing),
+    childPolicyFor(
+      { childPolicies: { [listing]: { ...policy, returnBeforeSecs: 1 } } },
+      localSeller,
+      listing,
+    ),
   ).toBeNull();
   offer.wanted = false;
   expect(childPolicyFor({}, localSeller, listing)).toBeNull();
@@ -258,4 +265,291 @@ it("keeps an unknown signed hire reserved across a restart and daily rollover, t
   await wallet.getJob(ask.child.jobId, true);
   expect((await wallet.childHires.timeline(grant.parentTask)).child.task).toBeTruthy();
   expect(sends).toBe(1);
+}, 90000);
+
+it("recovers an awaiting-publication escrow after restart without a second hire", async () => {
+  let offline = false;
+  const { grant, request } = await parent({
+    world: {
+      services: (base) => ({
+        ...base,
+        attestTask(input) {
+          if (offline) throw new Error("Local attestation is temporarily unavailable");
+          return base.attestTask(input);
+        },
+      }),
+    },
+  });
+  const ask = await world.wallet.childHires.request(grant, request);
+  offline = true;
+  const pending = await world.wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  expect(pending.phase).toBe("awaiting-publication");
+  await world.wallet.close();
+  world.wallet = await world.reopen();
+  offline = false;
+  await world.wallet.tick();
+  const active = await world.wallet.childHires.timeline(grant.parentTask);
+  expect(active.phase).toBe("funded");
+  expect(active.child.task).toBe(pending.child.task);
+  expect(active.child.signature).toBeNull();
+  expect(active.child.fundingSignature).toBeTruthy();
+  expect(await world.sandbox.workOnce()).toBe(1);
+}, 90000);
+
+it("keeps overdue status reads observational and leaves the owner able to recover the escrow", async () => {
+  const { grant, request, seller } = await parent();
+  const ask = await world.wallet.childHires.request(grant, request);
+  await world.wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  const balance = await world.balance(seller.address);
+  world.sandbox.advanceClock(601);
+  world.clock.now += 601000;
+  expect((await world.wallet.getJob(ask.child.jobId, true)).status).toBe("waiting");
+  expect(await world.balance(seller.address)).toBe(balance);
+  expect((await world.wallet.refundJob(ask.child.jobId, true)).status).toBe("refunded");
+}, 90000);
+
+it("refreshes an expired quote by purchase key and declines its replacement without funding", async () => {
+  const { grant, request } = await parent();
+  const ask = await world.wallet.childHires.request(grant, request);
+  world.clock.now = ask.quote.expiresAt + 1;
+  const fresh = await world.wallet.childHires.refresh(grant.parentTask, ask.quote.id);
+  expect(fresh.purchaseKey).toBe(ask.purchaseKey);
+  expect(fresh.quote.id).not.toBe(ask.quote.id);
+  world.clock.now = fresh.quote.expiresAt + 1;
+  expect((await world.wallet.childHires.decide(grant.parentTask, fresh.quote.id, false)).phase).toBe(
+    "declined",
+  );
+}, 90000);
+
+it("replaces unacknowledged staging and refuses an older submission at acknowledgement", async () => {
+  const { grant, request } = await parent();
+  const wallet = world.wallet;
+  const ask = await wallet.childHires.request(grant, request);
+  await wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  await world.sandbox.workOnce();
+  const first = await wallet.childHires.delivery(grant);
+  // Simulate a replacement landing between the two host calls. The room has
+  // already copied round one and the supplier may reuse the same file bytes.
+  const { address } = await import("@solana/kit");
+  const { findClaimPda, findTaskSubmissionPda, getTaskSubmissionEncoder, getTaskSubmissionDecoder } =
+    await import("@tetsuo-ai/marketplace-sdk");
+  const [claim] = await findClaimPda({ task: address(first.childTask), bidder: address(ask.supplier) });
+  const [submission] = await findTaskSubmissionPda({ claim });
+  const svm = world.sandbox.market.svm;
+  const original = svm.getAccount(submission)!;
+  if (!original.exists) throw new Error("Missing supplier submission");
+  const data = getTaskSubmissionDecoder().decode(original.data);
+  svm.setAccount({
+    ...original,
+    data: getTaskSubmissionEncoder().encode({ ...data, submissionCount: data.submissionCount + 1 }),
+  } as never);
+  await expect(wallet.childHires.acknowledgeImport(grant, first.receipt)).rejects.toThrow();
+  const next = await wallet.childHires.delivery(grant);
+  expect(next.round).toBeGreaterThan(first.round);
+  await expect(wallet.childHires.acknowledgeImport(grant, first.receipt)).rejects.toThrow();
+  await wallet.childHires.acknowledgeImport(grant, next.receipt);
+}, 90000);
+
+it("serves bounded local parts after a single verified stage", async () => {
+  let reads = 0;
+  const { grant, request } = await parent({
+    world: {
+      services: (base) => ({
+        ...base,
+        fetchFile(hash) {
+          reads++;
+          return base.fetchFile(hash);
+        },
+      }),
+    },
+  });
+  const wallet = world.wallet;
+  const ask = await wallet.childHires.request(grant, request);
+  await wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  await world.sandbox.workOnce();
+  const { childHireHandlers } = await import("../src/child-hire.js");
+  const handlers = childHireHandlers(wallet);
+  const manifest = await handlers["child.delivery"]({ grant });
+  const count = reads;
+  expect(count).toBeGreaterThan(0);
+  expect((await handlers["child.delivery"]({ grant })).receipt).toBe(manifest.receipt);
+  for (const offset of [0, 1, 0]) {
+    const part = await handlers["child.part"]({
+      grant,
+      receipt: manifest.receipt,
+      part: "postcard.png",
+      offset,
+    });
+    expect(Buffer.from(part.base64, "base64").length).toBeLessThanOrEqual(24576);
+  }
+  expect(reads).toBe(count);
+}, 90000);
+
+it("persists a failed dispatch outcome with its fee and clears the pending marker", async () => {
+  let lost = false;
+  const { grant, request } = await parent({
+    world: {
+      transport: (base) => ({
+        ...base,
+        sendAndConfirm(tx) {
+          if (lost) throw new Error("Disconnected after dispatch");
+          return base.sendAndConfirm(tx);
+        },
+      }),
+      chain: (base) => ({
+        ...base,
+        workOutcome: async () => "failed",
+        reviewDebit: async () => ({ fee: 5000n, debit: 5000n }),
+      }),
+    },
+  });
+  const ask = await world.wallet.childHires.request(grant, request);
+  lost = true;
+  await world.wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  await world.wallet.getJob(ask.child.jobId, true);
+  const { StateStore } = await import("../src/store.js");
+  const { childState } = await import("../src/child-hire-store.js");
+  const stored = childState(StateStore.open(world.dataDir + "/state.json", world.clock.now).state)
+    .childHires![grant.parentTask]!;
+  expect(stored.view.phase).toBe("failed");
+  expect(stored.send).toBeUndefined();
+  expect(stored.dispatch).toMatchObject({ outcome: "failed", fee: "5000", signature: expect.any(String) });
+}, 90000);
+
+it("stops failed frozen settlements at the quoted fee limit across restart", async () => {
+  let fail = false,
+    attempts = 0,
+    childTask = "";
+  const { getCompiledTransactionMessageDecoder } = await import("@solana/kit");
+  const { grant, request } = await parent({
+    world: {
+      transport: (base) => ({
+        ...base,
+        sendAndConfirm(tx) {
+          if (
+            fail &&
+            getCompiledTransactionMessageDecoder()
+              .decode(tx.messageBytes)
+              .staticAccounts.some((a) => a === childTask)
+          ) {
+            attempts++;
+            throw new Error("Synthetic execution failure");
+          }
+          return base.sendAndConfirm(tx);
+        },
+      }),
+      chain: (base) => ({
+        ...base,
+        reviewSendOutcome: (r) => (fail ? Promise.resolve("failed") : base.reviewSendOutcome!(r)),
+        reviewDebit: (s, p) =>
+          fail ? Promise.resolve({ fee: 5000n, debit: 5000n }) : base.reviewDebit!(s, p),
+      }),
+    },
+  });
+  const wallet = world.wallet;
+  const ask = await wallet.childHires.request(grant, request);
+  childTask = (await wallet.childHires.decide(grant.parentTask, ask.quote.id, true)).child.task!;
+  await world.sandbox.workOnce();
+  await wallet.confirmReview(
+    ask.child.jobId,
+    await wallet.draftReview(ask.child.jobId, "reject", "The report is incomplete."),
+    true,
+  );
+  world.sandbox.advanceClock(4 * 86400);
+  fail = true;
+  await wallet.getJob(ask.child.jobId, true);
+  expect(attempts).toBe(0);
+  for (let i = 0; i < 6; i++) {
+    world.clock.now += 300000;
+    await world.wallet.tick();
+    if (i === 1) {
+      await world.wallet.close();
+      world.wallet = await world.reopen();
+    }
+  }
+  expect(attempts).toBeGreaterThan(0);
+  expect(attempts).toBeLessThanOrEqual(2);
+}, 90000);
+
+it("binds the quoted treasury at funding and rotates the settlement quote when it changes", async () => {
+  const { grant, request, buyer, seller } = await parent();
+  const wallet = world.wallet,
+    svm = world.sandbox.market.svm;
+  const { findProtocolConfigPda, getProtocolConfigDecoder, getProtocolConfigEncoder } =
+    await import("@tetsuo-ai/marketplace-sdk");
+  const [id] = await findProtocolConfigPda();
+  const original = svm.getAccount(id)!;
+  if (!original.exists) throw new Error("Missing protocol configuration");
+  const config = getProtocolConfigDecoder().decode(new Uint8Array(original.data));
+  function rotate() {
+    svm.setAccount({
+      ...original,
+      data: Uint8Array.from(
+        getProtocolConfigEncoder().encode({ ...config, treasury: buyer.address as typeof config.treasury }),
+      ),
+    } as never);
+  }
+  const ask = await wallet.childHires.request(grant, request);
+  const before = await world.balance(seller.address);
+  rotate();
+  await expect(wallet.childHires.decide(grant.parentTask, ask.quote.id, true)).rejects.toThrow(/changed/);
+  expect(await world.balance(seller.address)).toBe(before);
+  svm.setAccount(original as never);
+  await wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  await world.sandbox.workOnce();
+  const read = async () =>
+    (await wallet.reviewRecord(ask.child.jobId, undefined, { termsOnly: true })).quote!;
+  const prior = await read();
+  rotate();
+  const fresh = await read();
+  expect(fresh.id).not.toBe(prior.id);
+  expect(fresh.treasury).toBe(buyer.address);
+  await expect(wallet.approveJob(ask.child.jobId, undefined, true, undefined, prior.id)).rejects.toThrow();
+  await wallet.confirmReview(
+    ask.child.jobId,
+    await wallet.draftReview(ask.child.jobId, "reject", "Missing the requested document."),
+    true,
+  );
+  const frozen = await wallet.childHires.timeline(grant.parentTask);
+  expect(frozen.settlementRecipient?.treasury).toBe(buyer.address);
+  svm.setAccount(original as never);
+  await expect(
+    wallet.childHires.decide(grant.parentTask, frozen.settlementRecipient!.quoteId, true),
+  ).rejects.toThrow(/quote/);
+  rotate();
+  await wallet.childHires.decide(grant.parentTask, frozen.settlementRecipient!.quoteId, true);
+  world.sandbox.advanceClock(4 * 86400);
+  await wallet.tick();
+  expect((await wallet.childHires.timeline(grant.parentTask)).child.status).toBe("refunded");
+}, 90000);
+
+it("rejects a matching public criterion before calling private staging", async () => {
+  const { address } = await import("@solana/kit");
+  const { readAgent, readHireableListing } = await import("../src/market.js");
+  const commitment = "ab".repeat(32);
+  const { grant, request } = await parent({
+    privateInputs: true,
+    prepareCriteria: async (w, input) => {
+      const listing = await readHireableListing(w.sandbox.chain, address(input.listing));
+      const supplier = (await readAgent(w.sandbox.chain, listing.providerAgent))!.authority;
+      return [childShareCriterion(supplier, { ...input, privateCommitment: commitment })];
+    },
+  });
+  await expect(
+    world.wallet.childHires.request(grant, { ...request, privateCommitment: commitment }),
+  ).rejects.toThrow(/original buyer/);
+}, 90000);
+
+it("keeps another child's review SOL when the owner reclaims a specific amount", async () => {
+  const { grant, request, seller } = await parent();
+  const wallet = world.wallet;
+  const ask = await wallet.childHires.request(grant, request);
+  await wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  const before = await world.balance(seller.address);
+  const floor = await world.sandbox.chain.getMinimumBalanceForRentExemption(0);
+  const amount = before - floor - world.sandbox.chain.transferFeeLamports;
+  await expect(wallet.reclaimFromAgent(seller.id, { lamports: String(amount) })).rejects.toThrow(
+    /much to give back/,
+  );
+  expect(await world.balance(seller.address)).toBe(before);
 }, 90000);

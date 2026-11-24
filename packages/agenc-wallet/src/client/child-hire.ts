@@ -22,7 +22,12 @@ export interface ChildHireRequest {
   outputs: string[];
   privateCommitment?: string;
 }
-/** Canonical fields for the buyer-approved public criterion. File names remain behind the hash. */
+export interface ChildShareBinding {
+  parentTask: string;
+  supplier: string;
+  request: ChildHireRequest;
+}
+/** Legacy criterion prefix for admission filters. It conveys no authority. */
 export function childSharePayload(supplier: string, request: ChildHireRequest) {
   return JSON.stringify([
     supplier,
@@ -54,11 +59,20 @@ export interface ChildEscrow {
   reviewEndsAt: number | null;
   action: string | null;
   signature: string | null;
+  fundingSignature?: string | null;
 }
 export interface ChildHireView {
   parent: ChildEscrow;
   child: ChildEscrow;
-  phase: "approval" | "declined" | "dispatching" | "funded" | "imported" | "expired" | "failed";
+  phase:
+    | "approval"
+    | "declined"
+    | "dispatching"
+    | "awaiting-publication"
+    | "funded"
+    | "imported"
+    | "expired"
+    | "failed";
   purchaseKey: string;
   payer: string;
   sellerAgentId: string;
@@ -76,6 +90,8 @@ export interface ChildHireView {
   cap: Money;
   cutoff: number;
   importReceipt: string | null;
+  settlementRecipient?: { treasury: string; quoteId: string };
+  returnTimedOut?: boolean;
 }
 export interface ChildResult {
   parentTask: string;
@@ -101,9 +117,17 @@ export interface ChildHireMethods {
     params: { sellerAgentId: string; listing: string; policy: ChildHirePolicy | null };
     result: ChildHirePolicy | null;
   };
-  "child.request": { params: { grant: ChildRoomGrant; request: ChildHireRequest }; result: ChildHireView };
+  "child.authorizeShare": { params: { jobId: string; binding: ChildShareBinding }; result: string };
+  "child.refresh": { params: { parentTask: string; quoteId: string }; result: ChildHireView };
+  "child.request": {
+    params: { grant: ChildRoomGrant; request: ChildHireRequest; shareGrant?: string };
+    result: ChildHireView;
+  };
   "child.timeline": { params: { parentTask: string }; result: ChildHireView };
-  "child.decide": { params: { parentTask: string; quoteId: string; approve: boolean }; result: ChildHireView };
+  "child.decide": {
+    params: { parentTask: string; quoteId: string; approve: boolean };
+    result: ChildHireView;
+  };
   "child.delivery": { params: { grant: ChildRoomGrant }; result: ChildResultManifest };
   "child.part": {
     params: { grant: ChildRoomGrant; receipt: string; part: string; offset: number };

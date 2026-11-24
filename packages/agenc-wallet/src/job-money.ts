@@ -43,25 +43,44 @@ export function microcents(lamports: bigint, usdPerSol: number): bigint {
 }
 
 /** Unknown charges from an older wallet require approval until they age out. */
-export function remainingJobMicrocents(agent: AgentRecord, now: number, except?: string, reviewFor?: string): bigint {
+export function remainingJobMicrocents(agent: AgentRecord, now: number, except?: string, reviewFor?: string, rate?: number): bigint {
   let room = BigInt(agent.policy.refill.perDayCents) * 1_000_000n;
   const holds = childHolds(agent).childHolds;
   for (const [id, hold] of Object.entries(holds ?? {})) {
-    if (id !== except) room -= microcents((reviewFor === id ? 0n : BigInt(hold.review)) + (hold.funded ? 0n : BigInt(hold.purchase)), hold.rate);
+    if (id === except) continue;
+    const alreadyCounted = hold.funded && agent.jobSpends?.some(entry => entry.id === id && entry.at > now - 86_400_000);
+    const purchase = !hold.funded ? hold.purchase : alreadyCounted ? "0" : hold.futurePurchase ?? "0";
+    room -= microcents((reviewFor === id ? 0n : BigInt(hold.review)) + BigInt(purchase), hold.rate);
   }
+  let purchases = 0n;
   for (const entry of agent.jobSpends ?? []) {
     if (holds?.[entry.id]?.funded === false) continue;
     if (entry.id === except || entry.at <= now - 86_400_000) continue;
     if (entry.microcents === null) return 0n;
-    room -= BigInt(entry.microcents);
+    purchases += BigInt(entry.microcents);
   }
-  // Review fees and deposits come out of the same payer as the job.
-  // The review receipt reconciles this charge in place, including after restart.
+  const pending = new Set<string>();
+  for (const hold of Object.values(holds ?? {})) {
+    for (const [signature, amount] of Object.entries(hold.pending ?? {})) {
+      pending.add(signature);
+      room -= microcents(BigInt(amount), hold.rate);
+    }
+  }
+  let incoming = 0n;
   for (const charge of agent.refills) {
-    if (!charge.id?.startsWith("review:") || charge.ts <= now - 86_400_000) continue;
-    if (charge.usdCents == null) return 0n;
-    room -= BigInt(Math.round(charge.usdCents * 1_000_000));
+    if (charge.signature && pending.has(charge.signature)) continue;
+    if (!charge.work && charge.ts <= now - 86_400_000) continue;
+    // Refills move buying power from main to agent. Its later purchase spends
+    // that same principal. Both the transfer limit and outgoing limit apply.
+    const funding = !charge.work && (!charge.id || charge.id.startsWith("refill_"));
+    if (funding && rate === undefined) continue;
+    if (charge.usdCents === null || (charge.usdCents === undefined && !rate)) return 0n;
+    const amount = charge.usdCents === undefined ? microcents(BigInt(charge.lamports), rate!)
+      : BigInt(Math.round(charge.usdCents * 1_000_000));
+    if (funding) incoming += amount;
+    else room -= amount;
   }
+  room -= incoming > purchases ? incoming : purchases;
   return room > 0n ? room : 0n;
 }
 

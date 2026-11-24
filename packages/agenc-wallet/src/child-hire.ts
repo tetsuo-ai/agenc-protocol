@@ -1,3 +1,4 @@
+import { verifyChildShare } from "./child-share.js";
 import { createHash, randomUUID } from "node:crypto";
 import { address, type Address } from "@solana/kit";
 import {
@@ -9,6 +10,7 @@ import {
   getTaskClaimDecoder,
   getTaskClaimDiscriminatorBytes,
   TaskStatus,
+  SubmissionStatus,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
 import { fetchAndVerifyJobSpec, parseJobBrief } from "@tetsuo-ai/agenc-worker";
@@ -226,15 +228,15 @@ export async function escrowStatus(
   cached: ChildEscrow,
   worker: Address,
   creatorRole: boolean,
+  creator?: string,
 ): Promise<ChildEscrow> {
   if (!cached.task) return cached;
   const seen = await inspectJob(chain, address(cached.task), worker);
   if (!seen) {
-    if (cached.status === "paid" || cached.status === "refunded") return { ...cached, action: null };
-    const paid = await chain.findSettlementSignature?.(address(cached.task));
-    return paid
-      ? { ...cached, status: "paid", signature: paid, action: null }
-      : { ...cached, status: "unknown", action: "Check receipt" };
+    const receipt = await chain.escrowReceipt?.(address(cached.task), creator ? address(creator) : undefined);
+    return receipt
+      ? { ...cached, ...receipt, action: null }
+      : { ...cached, status: "unknown", signature: null, action: "Check receipt" };
   }
   const status = (
     {
@@ -257,14 +259,15 @@ export async function escrowStatus(
         : status === "in_review"
           ? "View review options"
           : null;
+  const terminal = status === "paid" || status === "refunded";
+  const receipt = terminal
+    ? await chain.escrowReceipt?.(address(cached.task), creator ? address(creator) : undefined)
+    : null;
   return {
     ...cached,
     status,
     deadline,
-    ...(status === "paid" && {
-      signature:
-        (await chain.findSettlementSignature?.(address(cached.task)).catch(() => null)) ?? cached.signature,
-    }),
+    signature: terminal && receipt?.status === status ? receipt.signature : null,
     reviewEndsAt:
       seen.turnDown?.rulingUntil ??
       seen.turnDown?.disputeUntil ??
@@ -285,18 +288,26 @@ interface ChildWalletPorts {
   quote(
     input: Parameters<AgencWallet["hire"]>[0],
   ): Promise<{ job: JobRecord; approval: ApprovalRecord; view: ApprovalView }>;
+  reserve<T>(agentId: string, action: () => Promise<T>): Promise<T>;
+  reconcileDispatch(jobId: string): Promise<void>;
   advance(jobId: string): Promise<void>;
+  authorizeShare(
+    job: JobRecord,
+    binding: import("./client/child-hire.js").ChildShareBinding,
+  ): Promise<string>;
   notify(id: string): void;
-  /** B's reader completes inspection against the current round, including protected files. */
+  /** Authenticated private exchange from the original buyer. */
   privateStage(
     grant: ChildRoomGrant,
     request: ChildHireRequest,
     supplier: string,
+    proof: string,
     saved?: string,
   ): Promise<string>;
   evidence?(
     job: JobRecord,
     names: string[],
+    grant: ChildRoomGrant,
   ): Promise<Pick<ChildResult, "text" | "files" | "round" | "deliveryHash"> | null>;
 }
 
@@ -316,12 +327,31 @@ export function childPolicyFor(
   if (!terms.childPolicy) return null;
   const agreed = readChildDependency(offer.spec, seller.address);
   const digest = childDigest(checkedChildPolicy(terms.childPolicy));
-  if (!agreed || childDigest(agreed.policy) !== digest || (local && childDigest(local) !== digest)) return null;
+  if (!agreed || childDigest(agreed.policy) !== digest || (local && childDigest(local) !== digest))
+    return null;
   return agreed.policy;
 }
 
 export class ChildHires {
+  readonly #staged = new Map<string, { result: ChildResult; text: Buffer; files: Map<string, Buffer> }>();
   constructor(private readonly p: ChildWalletPorts) {}
+
+  async authorizeShare(jobId: string, binding: import("./client/child-hire.js").ChildShareBinding) {
+    const job = this.p.store.state.jobs[jobId];
+    const request = checkedChildRequest(binding.request);
+    if (
+      !job ||
+      job.role !== "buying" ||
+      job.task !== binding.parentTask ||
+      !request.privateCommitment ||
+      !job.acceptance.includes("Private input handoff v1: " + request.privateCommitment)
+    )
+      refuseChild("Choose the funded parent order and its original private files.");
+    const service = await readHireableListing(this.p.chain, address(request.listing));
+    if ((await readAgent(this.p.chain, service.providerAgent))?.authority !== binding.supplier)
+      refuseChild("The selected supplier changed.");
+    return this.p.authorizeShare(job, { ...binding, request });
+  }
   #record(parent: string) {
     const record = childState(this.p.store.state).childHires?.[address(parent)];
     if (!record) throw new WalletError("NOT_FOUND", "No supplier request exists for this parent.");
@@ -340,7 +370,7 @@ export class ChildHires {
     });
     return policy;
   }
-  async #context(grant: ChildRoomGrant, input: ChildHireRequest, saved?: string) {
+  async #context(grant: ChildRoomGrant, input: ChildHireRequest, proof?: string, saved?: string) {
     const payer = this.p.agent(grant.sellerAgentId);
     const [parent, service] = await Promise.all([
       parentClaim(this.p.chain, this.p.services, grant, payer.address),
@@ -363,13 +393,14 @@ export class ChildHires {
       refuseChild("Choose an independent supplier.");
     let supplierCommitment: string | undefined;
     if (input.privateCommitment || parent.privateInputs) {
-      if (
-        policy.sharing !== "buyer-approved-input" ||
-        !input.privateCommitment ||
-        !parent.criteria.includes(childShareCriterion(supplier.authority, input))
-      )
+      if (policy.sharing !== "buyer-approved-input" || !input.privateCommitment || !proof)
         refuseChild("The original buyer must approve this input and public brief for this supplier.");
-      supplierCommitment = await this.p.privateStage(grant, input, supplier.authority, saved);
+      await verifyChildShare(
+        parent.creator,
+        { parentTask: parent.task, supplier: supplier.authority, request: input },
+        proof,
+      );
+      supplierCommitment = await this.p.privateStage(grant, input, supplier.authority, proof, saved);
     }
     const cutoff = parent.deadline - policy.returnBeforeSecs;
     if (!service.deliverySecs || parent.now + service.deliverySecs + policy.reviewWindowSecs > cutoff)
@@ -384,21 +415,32 @@ export class ChildHires {
       supplierCommitment,
     };
   }
-  async request(grant: ChildRoomGrant, request: ChildHireRequest): Promise<ChildHireView> {
+  async request(
+    grant: ChildRoomGrant,
+    request: ChildHireRequest,
+    shareGrant?: string,
+    refreshQuote?: string,
+  ): Promise<ChildHireView> {
     const input = checkedChildRequest(request);
     const fingerprint = childDigest(input);
     return this.p.lock("child:" + address(grant.parentTask), async () => {
       const existing = childState(this.p.store.state).childHires?.[grant.parentTask];
+      if (refreshQuote && (existing?.view.quote.id !== refreshQuote || !existing.draft))
+        refuseChild("Review the current supplier quote in Market.");
       if (existing) {
         if (!sameGrant(existing.grant, grant) || existing.fingerprint !== fingerprint)
           refuseChild("This parent already requested its one supplier.");
         await parentClaim(this.p.chain, this.p.services, grant, this.p.agent(grant.sellerAgentId).address);
-        if (existing.view.phase !== "approval" || existing.view.quote.expiresAt > this.p.now())
+        if (
+          existing.view.phase !== "approval" ||
+          (!refreshQuote && existing.view.quote.expiresAt > this.p.now())
+        )
           return this.timeline(grant.parentTask);
       }
       const { parent, service, supplier, policy, payer, cutoff, supplierCommitment } = await this.#context(
         grant,
         input,
+        shareGrant ?? existing?.shareGrant,
         existing?.supplierCommitment,
       );
       if (
@@ -427,7 +469,9 @@ export class ChildHires {
       });
       if (
         supplierCommitment &&
-        !parseJobBrief(draft.job.jobSpec).acceptance.includes("Private input handoff v1: " + supplierCommitment)
+        !parseJobBrief(draft.job.jobSpec).acceptance.includes(
+          "Private input handoff v1: " + supplierCommitment,
+        )
       )
         refuseChild("The supplier service must support the approved private handoff.");
       const quote = draft.view;
@@ -489,6 +533,9 @@ export class ChildHires {
         (childState(state).childHires ??= {})[parent.task] = {
           grant: { ...grant },
           parentListing: parent.listing,
+          parentCreator: parent.creator,
+          maximumReviewFees: String(3n * this.p.chain.transferFeeLamports),
+          ...((shareGrant ?? existing?.shareGrant) && { shareGrant: (shareGrant ?? existing?.shareGrant)! }),
           parentWorker: parent.worker,
           view,
           fingerprint,
@@ -507,6 +554,7 @@ export class ChildHires {
     const { service, policy, supplier, cutoff, payer } = await this.#context(
       record.grant,
       view.request,
+      record.shareGrant,
       record.supplierCommitment,
     );
     const rate = await this.p.rate();
@@ -518,6 +566,7 @@ export class ChildHires {
       job.idempotencyKey !== view.purchaseKey ||
       view.payer !== payer.address ||
       view.supplierAuthority !== supplier ||
+      (await readProtocolConfig(this.p.chain)).treasury !== view.treasury ||
       cutoff !== view.cutoff ||
       childDigest(policy) !== childDigest(view.policy) ||
       service.version.toString() !== payout.listingVersion ||
@@ -556,10 +605,45 @@ export class ChildHires {
     if (!approvedRate || rate > approvedRate)
       refuseChild("The dollar cost changed. Review the supplier quote again.");
   }
+  async refresh(parentTask: string, quoteId: string) {
+    const r = this.#record(parentTask);
+    return this.request(r.grant, r.view.request, r.shareGrant, quoteId);
+  }
+  async #settlementRecipient(r: ChildHireRecord) {
+    const job = this.p.store.state.jobs[r.view.child.jobId];
+    if (
+      !job?.task ||
+      job.outcome ||
+      (await readTask(this.p.chain, address(job.task)))?.status !== TaskStatus.RejectFrozen
+    )
+      return;
+    const { treasury } = await readProtocolConfig(this.p.chain);
+    if (treasury === (r.settlementTreasury ?? r.view.treasury)) return;
+    return {
+      treasury,
+      quoteId: childDigest([
+        "frozen-settlement",
+        r.view.quote.id,
+        job.task,
+        treasury,
+        r.view.reviewReserve.lamports,
+      ]),
+    };
+  }
+
   async decide(parentTask: string, quoteId: string, approve: boolean) {
     return this.p.lock("child:" + address(parentTask), async () => {
       const record = this.#record(parentTask);
       const { view } = record;
+      if (approve === true && view.quote.id !== quoteId) {
+        const terms = await this.#settlementRecipient(record);
+        if (terms?.quoteId === quoteId) {
+          this.p.store.update((state) => {
+            childState(state).childHires![parentTask]!.settlementTreasury = terms.treasury;
+          });
+          return this.timeline(parentTask);
+        }
+      }
       if (typeof approve !== "boolean" || view.quote.id !== quoteId)
         refuseChild("Review the current supplier quote in Market.");
       if (view.phase === "declined" || view.phase === "imported" || view.phase === "funded")
@@ -575,7 +659,7 @@ export class ChildHires {
       } else {
         if (record.draft) {
           const { job, approval } = record.draft;
-          await this.p.lock("wallet:" + job.agentId, async () => {
+          await this.p.reserve(job.agentId, async () => {
             await this.checkFunding(record, job);
             const rate = approval.quoteRate!;
             const max = BigInt(view.maxDebit.lamports);
@@ -626,7 +710,11 @@ export class ChildHires {
     });
   }
   async timeline(parentTask: string): Promise<ChildHireView> {
-    const record = this.#record(parentTask);
+    let record = this.#record(parentTask);
+    if (record.send) {
+      await this.p.reconcileDispatch(record.view.child.jobId);
+      record = this.#record(parentTask);
+    }
     const view = structuredClone(record.view);
     const state = this.p.store.state;
     const job =
@@ -634,12 +722,15 @@ export class ChildHires {
       state.callReceipts?.[JSON.stringify([view.sellerAgentId, "hire", view.purchaseKey])];
     if (job) {
       view.child.task = job.hiredAt !== null ? job.task : null;
-      view.child.signature = job.signatures.accept ?? job.signatures.cancel ?? job.signatures.hire ?? null;
+      view.child.fundingSignature = job.signatures.hire ?? record.dispatch?.signature ?? null;
+      view.child.signature = job.signatures.accept ?? job.signatures.cancel ?? job.signatures.settle ?? null;
       view.phase =
         job.hiredAt !== null
-          ? view.importReceipt
-            ? "imported"
-            : "funded"
+          ? job.phase === "hired"
+            ? "awaiting-publication"
+            : view.importReceipt
+              ? "imported"
+              : "funded"
           : job.phase === "failed"
             ? "failed"
             : "dispatching";
@@ -657,12 +748,22 @@ export class ChildHires {
       ...s,
       status: "unknown",
       action: "Check receipt",
+      signature: null,
     });
     const parentWorker = address(record.parentWorker);
     [view.parent, view.child] = await Promise.all([
-      escrowStatus(this.p.chain, view.parent, parentWorker, false).catch(() => unknown(view.parent)),
-      escrowStatus(this.p.chain, view.child, address(view.supplier), true).catch(() => unknown(view.child)),
+      escrowStatus(this.p.chain, view.parent, parentWorker, false, record.parentCreator).catch(() =>
+        unknown(view.parent),
+      ),
+      escrowStatus(this.p.chain, view.child, address(view.supplier), true, view.payer).catch(() =>
+        unknown(view.child),
+      ),
     ]);
+    if (view.child.status === "in_review") {
+      const terms = await this.#settlementRecipient(record);
+      if (terms) view.settlementRecipient = terms;
+    }
+    view.returnTimedOut = (await this.p.chain.clusterTime()) >= view.cutoff;
     return view;
   }
   async delivery(grant: ChildRoomGrant): Promise<ChildResult> {
@@ -674,8 +775,16 @@ export class ChildHires {
       const job = this.p.store.state.jobs[r.view.child.jobId];
       if (!job?.task || job.hiredAt === null || job.agentId !== grant.sellerAgentId)
         refuseChild("The supplier hire has no confirmed task yet.");
+      const cached = this.#staged.get(grant.parentTask);
+      if (
+        cached &&
+        r.delivered?.receipt === cached.result.receipt &&
+        (await this.#matchesSubmission(r, cached.result))
+      )
+        return structuredClone(cached.result);
       const data =
-        (await this.p.evidence?.(job, r.view.request.outputs)) ?? (await this.#practiceEvidence(job, r.view));
+        (await this.p.evidence?.(job, r.view.request.outputs, grant)) ??
+        (await this.#practiceEvidence(job, r.view));
       if (data.round === 0 && r.delivered && r.delivered.hash === data.deliveryHash)
         data.round = r.delivered.round;
       const receipt = childDigest([
@@ -688,16 +797,9 @@ export class ChildHires {
         childDigest(data.text),
         data.files.map((f) => [f.name, f.bytes, f.sha256]),
       ]);
-      if (r.delivered && r.delivered.receipt !== receipt)
+      if (r.view.importReceipt && r.view.importReceipt !== receipt)
         refuseChild("The supplier delivery changed after import was prepared.");
-      this.p.store.update((state) => {
-        childState(state).childHires![grant.parentTask]!.delivered = {
-          receipt,
-          hash: data.deliveryHash,
-          round: data.round,
-        };
-      });
-      return {
+      const result = {
         ...data,
         parentTask: grant.parentTask,
         claimedAt: grant.claimedAt,
@@ -706,8 +808,74 @@ export class ChildHires {
         purchaseKey: r.view.purchaseKey,
         receipt,
       };
+      await this.#currentSubmission(r, result);
+      this.p.store.update((state) => {
+        childState(state).childHires![grant.parentTask]!.delivered = {
+          kind: "room-import",
+          receipt,
+          hash: data.deliveryHash,
+          round: data.round,
+        };
+      });
+      this.#staged.delete(grant.parentTask);
+      if (this.#staged.size >= 16) this.#staged.delete(this.#staged.keys().next().value!);
+      this.#staged.set(grant.parentTask, {
+        result,
+        text: Buffer.from(result.text),
+        files: new Map(result.files.map((f) => [f.name, Buffer.from(f.base64, "base64")])),
+      });
+      return structuredClone(result);
     });
   }
+
+  async #matchesSubmission(r: ChildHireRecord, result: Pick<ChildResult, "deliveryHash" | "round">) {
+    const job = this.p.store.state.jobs[r.view.child.jobId];
+    const task = address(job!.task!);
+    const worker = address(r.view.supplier);
+    const live = await readSubmission(this.p.chain, task, worker);
+    if (
+      live &&
+      live.account.worker === worker &&
+      live.account.claim === live.claim &&
+      live.account.submissionCount === result.round &&
+      [SubmissionStatus.Submitted, SubmissionStatus.Accepted].includes(live.account.status) &&
+      Buffer.from(live.account.proofHash).toString("hex") === result.deliveryHash
+    )
+      return true;
+    if (job?.outcome === "paid" && !live) {
+      const final = await this.p.chain.findSettledDelivery?.(task, address(r.view.payer));
+      if (final?.worker === worker && final.proofHashHex === result.deliveryHash) {
+        const [claim] = await findClaimPda({ task, bidder: worker });
+        const paid = await this.p.chain.escrowReceipt?.(task, address(r.view.payer));
+        if (!paid || paid.status !== "paid") return false;
+        const round = await this.p.chain.settledChildRound?.(task, claim, paid.signature);
+        return round?.deliveryHash === result.deliveryHash && round.submissionCount === result.round;
+      }
+    }
+    return false;
+  }
+
+  async #currentSubmission(r: ChildHireRecord, result: Pick<ChildResult, "deliveryHash" | "round">) {
+    if (!(await this.#matchesSubmission(r, result)))
+      refuseChild("The supplier submission changed. Read the current delivery again.");
+  }
+
+  part(grant: ChildRoomGrant, receipt: string, name: string, offset: number) {
+    const record = this.#record(grant.parentTask);
+    const staged = this.#staged.get(grant.parentTask);
+    if (
+      !sameGrant(record.grant, grant) ||
+      !staged ||
+      staged.result.receipt !== receipt ||
+      record.delivered?.receipt !== receipt
+    )
+      refuseChild("Read the current supplier manifest again.");
+    const bytes = name === "text" ? staged.text : staged.files.get(name);
+    if (!bytes || !Number.isSafeInteger(offset) || offset < 0 || offset > bytes.length)
+      refuseChild("The selected supplier part changed.");
+    return { base64: bytes.subarray(offset, offset + 24 * 1024).toString("base64"), total: bytes.length };
+  }
+
   async #practiceEvidence(job: JobRecord, view: ChildHireView) {
     if (this.p.chain.network !== "sandbox" || view.request.privateCommitment)
       refuseChild("The verified delivery reader is required for this job.");
@@ -757,110 +925,37 @@ export class ChildHires {
     return { deliveryHash, round: sub.account.submissionCount, text, files };
   }
   async acknowledgeImport(grant: ChildRoomGrant, receipt: string) {
-    const r = this.#record(grant.parentTask);
-    if (!sameGrant(r.grant, grant) || !r.delivered || r.delivered.receipt !== receipt)
-      refuseChild("The room did not import this verified delivery.");
-    await parentClaim(this.p.chain, this.p.services, grant, r.view.payer);
-    if ((await this.p.chain.clusterTime()) >= r.view.cutoff)
-      refuseChild("The supplier return cutoff has passed.");
-    this.p.store.update((state) => {
-      childState(state).childHires![grant.parentTask]!.view.importReceipt = receipt;
+    return this.p.lock("child:" + address(grant.parentTask), async () => {
+      const r = this.#record(grant.parentTask);
+      if (!sameGrant(r.grant, grant) || !r.delivered || r.delivered.receipt !== receipt)
+        refuseChild("The room did not import this verified delivery.");
+      await parentClaim(this.p.chain, this.p.services, grant, r.view.payer);
+      if (!r.view.importReceipt && (await this.p.chain.clusterTime()) >= r.view.cutoff)
+        refuseChild("The supplier return cutoff has passed.");
+      await this.#currentSubmission(r, { deliveryHash: r.delivered.hash, round: r.delivered.round });
+      this.p.store.update((state) => {
+        childState(state).childHires![grant.parentTask]!.view.importReceipt = receipt;
+        childState(state).childHires![grant.parentTask]!.view.phase = "imported";
+      });
     });
   }
 }
 
-/** Use B's payer-scoped reader when present in the installed wallet. */
+/** B supplies one verified snapshot without creating a payer inspection. */
 interface DeliveryReader {
-  jobDelivery?: AgencWallet["jobDelivery"];
-  jobFile?(jobId: string, sha256: string, agentId: string): ReturnType<AgencWallet["jobFile"]>;
-  readDeliveryChunk?(
+  readRoomImportEvidence?(
     jobId: string,
-    agentId: string,
-    part: string,
-    offset: number,
-  ): Promise<{
-    binding: {
-      task: string;
-      worker: string;
-      round: number;
-      deliveryHash: string;
-    };
-    manifest: string;
-    totalBytes: number;
-    offset: number;
-    base64: string;
-  }>;
-  requireDeliveryInspection?(jobId: string, agentId: string, hash: string, round: number): Promise<void>;
+    scope: ChildRoomGrant & { kind: "room-import" },
+    outputs: string[],
+  ): Promise<Pick<ChildResult, "round" | "deliveryHash" | "text" | "files">>;
 }
-export async function readChildEvidence(wallet: DeliveryReader, job: JobRecord, outputs: string[]) {
-  if (!wallet.readDeliveryChunk || !wallet.requireDeliveryInspection || !wallet.jobDelivery || !wallet.jobFile)
-    return null;
-  const metadata = await wallet.jobDelivery!(job.id, false, job.agentId);
-  if (!metadata.verified || !metadata.hash || metadata.textTruncated)
-    refuseChild("The supplier delivery has no verified manifest.");
-  if (job.outcome === "paid") {
-    const files: ChildResult["files"] = [];
-    for (const f of metadata.files) {
-      const file = await wallet.jobFile!(job.id, f.sha256, job.agentId);
-      if (file.sha256 !== f.sha256 || file.bytes !== f.bytes || file.name !== f.name)
-        refuseChild("The settled supplier file changed.");
-      files.push(file);
-    }
-    const text = metadata.text ?? "";
-    if (!outputs.every((name) => (name === "text" ? !!text.trim() : files.some((f) => f.name === name))))
-      refuseChild("The supplier omitted a required output.");
-    // The settled commitment is final. Round zero denotes a delivery authenticated from a settlement receipt.
-    return { text, files, round: 0, deliveryHash: metadata.hash };
-  }
-  let manifest: string | undefined;
-  let hash = "";
-  let round = 0;
-  async function read(part: string) {
-    const chunks: Buffer[] = [];
-    let offset = 0;
-    let size: number | undefined;
-    do {
-      const chunk = await wallet.readDeliveryChunk!(job.id, job.agentId, part, offset);
-      const bytes = Buffer.from(chunk.base64, "base64");
-      if (
-        (manifest !== undefined && manifest !== chunk.manifest) ||
-        chunk.binding.task !== job.task ||
-        chunk.binding.worker !== job.providerAgent ||
-        chunk.offset !== offset ||
-        !Number.isSafeInteger(chunk.totalBytes) ||
-        chunk.totalBytes < 0 ||
-        chunk.totalBytes > 262144 ||
-        (size !== undefined && size !== chunk.totalBytes) ||
-        offset + bytes.length > chunk.totalBytes ||
-        (!bytes.length && offset !== chunk.totalBytes)
-      )
-        refuseChild("The supplier evidence changed while it was being read.");
-      manifest = chunk.manifest;
-      round = chunk.binding.round;
-      hash = chunk.binding.deliveryHash;
-      size = chunk.totalBytes;
-      chunks.push(bytes);
-      offset += bytes.length;
-    } while (offset < size);
-    return Buffer.concat(chunks);
-  }
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(await read("text"));
-  if (outputs.includes("text") && !text.trim()) refuseChild("The supplier omitted the required text.");
-  const files = [];
-  const names = new Set([...outputs.filter((s) => s !== "text"), ...metadata.files.map((f) => f.name)]);
-  for (const name of names) {
-    const bytes = await read(name);
-    if (deliveryFileProblem(name, bytes)) refuseChild("The supplier file could not be verified.");
-    files.push({
-      name,
-      bytes: bytes.length,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      base64: bytes.toString("base64"),
-    });
-  }
-  if (hash !== metadata.hash) refuseChild("The supplier delivery was replaced.");
-  await wallet.requireDeliveryInspection(job.id, job.agentId, hash, round);
-  return { text, files, deliveryHash: hash, round };
+export async function readChildEvidence(
+  wallet: DeliveryReader,
+  job: JobRecord,
+  outputs: string[],
+  grant: ChildRoomGrant,
+) {
+  return wallet.readRoomImportEvidence?.(job.id, { ...grant, kind: "room-import" }, outputs) ?? null;
 }
 
 /** Dispatch for D's owner-only socket methods; no method is granted to paired chats. */
@@ -870,9 +965,14 @@ export function childHireHandlers(wallet: AgencWallet) {
   return {
     "child.policy": (p: Params<"child.policy">) =>
       wallet.childHires.setPolicy(p.sellerAgentId, p.listing, p.policy),
-    "child.request": (p: Params<"child.request">) => wallet.childHires.request(p.grant, p.request),
+    "child.request": (p: Params<"child.request">) =>
+      wallet.childHires.request(p.grant, p.request, p.shareGrant),
+    "child.authorizeShare": (p: Params<"child.authorizeShare">) =>
+      wallet.childHires.authorizeShare(p.jobId, p.binding),
+    "child.refresh": (p: Params<"child.refresh">) => wallet.childHires.refresh(p.parentTask, p.quoteId),
     "child.timeline": (p: Params<"child.timeline">) => wallet.childHires.timeline(p.parentTask),
-    "child.decide": (p: Params<"child.decide">) => wallet.childHires.decide(p.parentTask, p.quoteId, p.approve),
+    "child.decide": (p: Params<"child.decide">) =>
+      wallet.childHires.decide(p.parentTask, p.quoteId, p.approve),
     "child.delivery": async (p: Params<"child.delivery">) => {
       const { text, files, ...binding } = await wallet.childHires.delivery(p.grant);
       return {
@@ -882,21 +982,7 @@ export function childHireHandlers(wallet: AgencWallet) {
       };
     },
     "child.part": async (p: Params<"child.part">) => {
-      const result = await wallet.childHires.delivery(p.grant);
-      const file = result.files.find((f) => f.name === p.part);
-      const bytes = p.part === "text" ? Buffer.from(result.text) : file && Buffer.from(file.base64, "base64");
-      if (
-        result.receipt !== p.receipt ||
-        !bytes ||
-        !Number.isSafeInteger(p.offset) ||
-        p.offset < 0 ||
-        p.offset > bytes.length
-      )
-        return refuseChild("The selected supplier part changed.");
-      return {
-        base64: bytes.subarray(p.offset, p.offset + 24 * 1024).toString("base64"),
-        total: bytes.length,
-      };
+      return wallet.childHires.part(p.grant, p.receipt, p.part, p.offset);
     },
     "child.imported": async (p: Params<"child.imported">) => {
       await wallet.childHires.acknowledgeImport(p.grant, p.receipt);

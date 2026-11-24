@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { address } from "@solana/kit";
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { expect, it } from "vitest";
-import { childShareCriterion } from "../src/child-hire.js";
 import { stageChildShare } from "../src/child-share.js";
 import { readAgent, readHireableListing } from "../src/market.js";
 import { openParentFixture } from "./child-hire-fixture.js";
@@ -39,10 +38,7 @@ it.skipIf(!("exchangeContext" in taskThread))(
           seller,
           "Use the figures in the approved report.",
         );
-        return [
-          privateInputCriterion(requirement),
-          childShareCriterion(supplier, { ...request, privateCommitment: requirement.commitment }),
-        ];
+        return [privateInputCriterion(requirement)];
       },
     });
     try {
@@ -71,24 +67,31 @@ it.skipIf(!("exchangeContext" in taskThread))(
       await buyer.release(preview.parties, preview.keySignature);
       await seller.refresh();
       const request = { ...f.request, privateCommitment: requirement!.commitment };
-      await expect(stageChildShare(wallet as object, f.grant, request, supplier)).rejects.toThrow();
+      const proof = await wallet.childHires.authorizeShare(f.job.id, {
+        parentTask: f.grant.parentTask,
+        supplier,
+        request,
+      });
+      await expect(stageChildShare(wallet as object, f.grant, request, supplier, proof)).rejects.toThrow();
       await seller.importInputs(async (bundle: { version: number }) => ({
         room: f.grant.roomId,
         commitment: requirement.commitment,
         manifest: requirement.commitment,
         version: bundle.version,
       }));
-      const derived = await stageChildShare(wallet as object, f.grant, request, supplier);
+      const derived = await stageChildShare(wallet as object, f.grant, request, supplier, proof);
       expect(derived).not.toEqual(requirement!.commitment);
-      expect(await stageChildShare(wallet as object, f.grant, request, supplier, derived)).toEqual(derived);
+      expect(await stageChildShare(wallet as object, f.grant, request, supplier, proof, derived)).toEqual(
+        derived,
+      );
       await expect(
-        stageChildShare(wallet as object, { ...f.grant, roomId: "b".repeat(64) }, request, supplier),
+        stageChildShare(wallet as object, { ...f.grant, roomId: "b".repeat(64) }, request, supplier, proof),
       ).rejects.toThrow();
       await expect(
         wallet.childHires.request(f.grant, { ...request, brief: "Publish all figures" }),
       ).rejects.toThrow(/original buyer/);
       if (typeof Reflect.get(wallet, "postListingMessage") === "function") {
-        const q = await wallet.childHires.request(f.grant, request);
+        const q = await wallet.childHires.request(f.grant, request, proof);
         expect(JSON.stringify(q.quote.terms)).not.toContain("source.csv");
         const funded = await wallet.childHires.decide(f.grant.parentTask, q.quote.id, true);
         expect(funded.child.task).toBeTruthy();

@@ -1,5 +1,14 @@
 // Copy only the parent's authenticated, already-imported bundle into B's seller-local
 // staging area. The supplier gets a fresh commitment and its own confirmed-claim grant.
+import {
+  address,
+  getPublicKeyFromAddress,
+  verifySignature,
+  signatureBytes,
+  type KeyPairSigner,
+} from "@solana/kit";
+import type { ChildShareBinding } from "./client/child-hire.js";
+import { childSharePayload } from "./client/child-hire.js";
 import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import type { ChildHireRequest, ChildRoomGrant } from "./client/child-hire.js";
 import { WalletError } from "./errors.js";
@@ -40,11 +49,44 @@ interface ShareWallet {
 const unavailable = () =>
   new WalletError("NOT_ALLOWED", "The buyer's confirmed private handoff is unavailable for this supplier.");
 
+function shareMessage(binding: ChildShareBinding) {
+  return new TextEncoder().encode(
+    JSON.stringify([
+      "agenc.child-share.v1",
+      address(binding.parentTask),
+      childSharePayload(address(binding.supplier), binding.request),
+    ]),
+  );
+}
+
+export async function signChildShare(signer: KeyPairSigner, binding: ChildShareBinding) {
+  const [signed] = await signer.signMessages([{ content: shareMessage(binding), signatures: {} }]);
+  return Buffer.from(signed![signer.address]!).toString("base64");
+}
+
+export async function verifyChildShare(buyer: string, binding: ChildShareBinding, proof?: string) {
+  if (
+    !proof ||
+    !/^[A-Za-z0-9+/]{86}==$/.test(proof) ||
+    !binding.request.privateCommitment ||
+    !(await verifySignature(
+      await getPublicKeyFromAddress(address(buyer)),
+      signatureBytes(Uint8Array.from(Buffer.from(proof, "base64"))),
+      shareMessage(binding),
+    ))
+  )
+    throw new WalletError(
+      "NOT_ALLOWED",
+      "The original buyer must approve these files for this order and supplier.",
+    );
+}
+
 export async function stageChildShare(
   wallet: ShareWallet,
   grant: ChildRoomGrant,
   request: ChildHireRequest,
   supplier: string,
+  proof: string,
   saved?: string,
 ) {
   const context = (taskThread as { exchangeContext?: (parties: Parties) => string }).exchangeContext;
@@ -63,6 +105,7 @@ export async function stageChildShare(
     parties.room !== grant.roomId
   )
     throw unavailable();
+  await verifyChildShare(parties.buyer, { parentTask: parties.task, supplier, request }, proof);
   const box = exchange.journal.read<{
     inputs: unknown;
     receipt?: {

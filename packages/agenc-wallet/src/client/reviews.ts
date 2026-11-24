@@ -20,6 +20,7 @@ export interface ReviewQuote {
   rejectionRent: Money;
   disputeRent: Money;
   bond: Money;
+  treasury?: string;
   payer?: string;
   dailyLimitCents?: number | null;
   canPay: boolean;
