@@ -57,11 +57,6 @@ describe("feature routes use the feature owners' handlers", () => {
     }
   });
 
-  it("answers NOT_AVAILABLE, not a crash, until the feature's wallet method is merged", async () => {
-    expect(await code(() => routes()["wallet.transferQuote"]({ kind: "fund", amount: "all" }, owner))).toBe("NOT_AVAILABLE");
-    expect(await code(() => routes()["listings.inquiries"]({ listing: "x" }, agent))).toBe("NOT_AVAILABLE");
-  });
-
   it("reaches real wallet methods for every money and listing route (no stand-in left)", () => {
     const methods = [
       "quoteTransfer", "confirmTransfer", "pendingTransfers", "operationOutcome", "moneyHistory", "quoteRating",

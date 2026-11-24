@@ -121,8 +121,9 @@ it("refuses a correction that would run into the early release pause, and keeps 
   const held = (await wallet.openWork(id)).held!;
   const pauseAt = held.releaseWindow!.pauseAt;
   expect(held.correctionEndsAt).toBe(pauseAt - 120);
-  // The claim was taken at pauseAt - 3000 on the unmoving practice clock.
-  world.sandbox.advanceClock(held.correctionEndsAt! - (pauseAt - 3000) - 30);
+  // The claim was taken an hour before releaseBy on the unmoving practice clock. Since the
+  // money track's revision 9 Clock guard, the early phase runs to releaseBy + 1 (pauseAt).
+  world.sandbox.advanceClock(held.correctionEndsAt! - (pauseAt - 3601) - 30);
   await expect(wallet.correctWork(id, task, hash, "Fix the final line.")).rejects.toThrow(/Too little time/);
   expect(correct).not.toHaveBeenCalled();
   const after = (await wallet.openWork(id)).held!;
