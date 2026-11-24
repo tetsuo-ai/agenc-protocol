@@ -104,7 +104,7 @@ export class JobExchangeSession {
     if (!this.required || !box.inputs || !box.peerKey) throw new Error("Waiting for buyer.");
     if (this.now() >= this.deadline) throw new Error("The original job deadline passed.");
     const bundle = await this.exchange.receiveBundle(box.inputs, "inputs", this.required.commitment);
-    return { requirement: this.required, bundle };
+    return { requirement: this.required, room: box.inputs.header.room, bundle };
   }
 
   /** Worker-only. The callback reads the privileged guest import receipt. */
