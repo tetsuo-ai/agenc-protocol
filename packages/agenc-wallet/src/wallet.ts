@@ -4868,7 +4868,7 @@ export class AgencWallet {
     this.#refuseIfRetired(agent);
     if (minPayCents !== undefined && (input !== undefined || !Number.isSafeInteger(minPayCents) || minPayCents < 0))
       throw new WalletError("BAD_REQUEST", "Give a valid minimum job payment when turning on Earns.");
-    if (input?.setupId !== undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(input.setupId))
+    if (input?.setupId !== undefined && (typeof input.setupId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.setupId) || Object.hasOwn(Object.prototype, input.setupId)))
       throw new WalletError("BAD_REQUEST", "Invalid service setup identifier.");
     let offers = agentOffers(agent);
     let price: bigint | null = null;

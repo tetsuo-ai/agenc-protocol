@@ -10,6 +10,8 @@ export interface VerifiedRoomWork {
   spec: Record<string, unknown>;
   listing: Address | null;
   privateInputs: boolean;
+  /** Service metadata read against the listing's committed digest. */
+  listingMetadata?: Uint8Array | null;
 }
 
 export function needsPrivateRoom(spec: Record<string, unknown>): boolean {

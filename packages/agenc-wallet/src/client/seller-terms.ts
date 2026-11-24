@@ -46,7 +46,15 @@ export interface SellerFundingRows {
   feeReserve: Money;
 }
 
+export interface ServiceUsage {
+  reservedCents: number;
+  unknownReservedCents?: number;
+  costUsd: number | null;
+  runs: number;
+}
+
 declare module "./types.js" {
+  interface JobView { modelUsage?: ServiceUsage; settledSellerCredit?: Money | null }
   interface EarnFundingQuote {
     sellerFunding?: SellerFundingRows;
     serviceAdmission?: { minimumPriceLamports: string; modelBudgetCents: number; capabilities: string };

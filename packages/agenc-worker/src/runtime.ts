@@ -1897,7 +1897,7 @@ async function executeAndSubmit(
     saveState(ctx.stateDir, evidenceState);
   }
   const privateInputs = needsPrivateRoom(payload);
-  const binding = { task, seller: agent.agentPda, deadline: decodedTask.deadline, spec: payload, privateInputs,
+  const binding = { task, seller: agent.agentPda, deadline: decodedTask.deadline, spec: payload, privateInputs, listingMetadata: serviceMetadata ?? null,
     listing: (evidenceState.openClaim?.listing as Address | undefined) ?? null };
   let stdout: Buffer;
   try {
@@ -2160,8 +2160,13 @@ export async function processCandidate(
   const privateInputs = needsPrivateRoom(verifiedSpec);
   if (privateInputs && !ctx.roomWork) return { status: "skipped", task, reason: "A verified private room is required." };
   try {
+    // The production guest dedicates its read-only inbox to the verified
+    // private manifest. A scripted bundle needs that inbox for its own assets.
+    if (privateInputs && listingMetadata &&
+        JSON.parse(new TextDecoder().decode(listingMetadata)).custom?.listingMetadata?.fulfilment?.servicePin)
+      return { status: "skipped", task, reason: "This service cannot combine a pinned script and private attachments." };
     await ctx.roomWork?.admit({ task, seller: agent.agentPda, deadline: decodedTask.deadline,
-      listing: hireBinding.listing, spec: verifiedSpec, privateInputs });
+      listing: hireBinding.listing, spec: verifiedSpec, privateInputs, listingMetadata });
   } catch {
     return { status: "skipped", task, reason: "The room cannot fulfil the verified job terms.", retryable: true };
   }

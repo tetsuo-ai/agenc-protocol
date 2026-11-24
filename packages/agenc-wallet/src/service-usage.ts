@@ -2,21 +2,12 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import type { Money } from "./client/types.js";
+import type { ServiceUsage } from "./client/seller-terms.js";
+export type { ServiceUsage } from "./client/seller-terms.js";
 
 declare module "./store.js" {
   interface JobRecord { modelUsage?: ServiceUsage; settledSellerLamports?: string | null }
 }
-declare module "./client/types.js" {
-  interface JobView { modelUsage?: ServiceUsage; settledSellerCredit?: Money | null }
-}
-
-export interface ServiceUsage {
-  reservedCents: number;
-  costUsd: number | null;
-  runs: number;
-}
-
 /** This path goes only to the trusted room process. The guest sees no host path. */
 export function reserveServiceRun(stateDir: string, task: string, reservedCents: number) {
   const dir = path.join(stateDir, "service-usage", task);
@@ -33,15 +24,21 @@ export function serviceUsage(stateDir: string, task: string): ServiceUsage | nul
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   let costUsd: number | null = 0;
   let reservedCents = 0;
+  let unknownReservedCents = 0;
   for (const file of files) {
     const cap = Number(readFileSync(path.join(dir, file), "utf8"));
     if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error("Invalid service cost reservation.");
     reservedCents += cap;
+    let measured: unknown;
     try {
-      const cost = JSON.parse(readFileSync(path.join(dir, file.replace(/\.reserve$/, ".receipt")), "utf8")).costUsd;
-      if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) costUsd = null;
-      else if (costUsd !== null) costUsd += cost;
-    } catch { costUsd = null; }
+      measured = JSON.parse(readFileSync(path.join(dir, file.replace(/\.reserve$/, ".receipt")), "utf8")).costUsd;
+    } catch { /* An unfinished run keeps its reservation. */ }
+    if (typeof measured === "number" && Number.isFinite(measured) && measured >= 0) {
+      if (costUsd !== null) costUsd += measured;
+    } else {
+      unknownReservedCents += cap;
+      costUsd = null;
+    }
   }
-  return files.length ? { reservedCents, costUsd, runs: files.length } : null;
+  return files.length ? { reservedCents, unknownReservedCents, costUsd, runs: files.length } : null;
 }

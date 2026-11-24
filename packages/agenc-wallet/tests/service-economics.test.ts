@@ -24,8 +24,8 @@ describe("service fulfilment", () => {
     const root = mkdtempSync(path.join(tmpdir(), "usage-"));
     const first = reserveServiceRun(root, "task", 3);
     writeFileSync(first, JSON.stringify({ costUsd: 0.012 }));
-    expect(serviceUsage(root, "task")).toEqual({ costUsd: 0.012, runs: 1, reservedCents: 3 });
+    expect(serviceUsage(root, "task")).toEqual({ costUsd: 0.012, runs: 1, reservedCents: 3, unknownReservedCents: 0 });
     reserveServiceRun(root, "task", 2);
-    expect(serviceUsage(root, "task")).toEqual({ costUsd: null, runs: 2, reservedCents: 5 });
+    expect(serviceUsage(root, "task")).toEqual({ costUsd: null, runs: 2, reservedCents: 5, unknownReservedCents: 2 });
   });
 });
