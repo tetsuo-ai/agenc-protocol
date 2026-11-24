@@ -13,6 +13,17 @@ import type { EarnOptions } from "../src/earn.js";
 import { startSandbox, type HouseService, type Sandbox, type StartSandboxOptions } from "../src/sandbox.js";
 import type { MarketServices } from "../src/services.js";
 import { AgencWallet, type WalletConfig } from "../src/wallet.js";
+import { runExecutor } from "@tetsuo-ai/agenc-worker";
+
+/** A local stand-in for the host's verified isolated room: it admits the
+ * verified terms and runs the configured executor for every turn. */
+export function privateRoomDouble(): NonNullable<EarnOptions["roomWork"]> {
+  return () => ({
+    admit: async () => {},
+    open: async () => ({ state: "ready" as const, execute: async (input: Parameters<typeof runExecutor>[0]) =>
+      ({ state: "delivered" as const, stdout: (await runExecutor(input)).stdout }) }),
+  });
+}
 
 /** Play money: one cent is exactly this many lamports in the sandbox. */
 export const CENT = 100_000n;

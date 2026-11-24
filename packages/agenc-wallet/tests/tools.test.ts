@@ -118,8 +118,10 @@ describe("market_post", () => {
       "private_commitment",
       "request",
       "required_capabilities",
+      "required_files",
       "review_window_secs",
       "reward_usd",
+      "text_only_allowed",
     ]);
     // The model is told, in the tool and in its instructions, that a request is public.
     expect(post.description).toMatch(/The request is public: anyone can read it/);
@@ -322,6 +324,21 @@ describe("a service as an agent reads it", () => {
     expect(calls.map(([, params]) => params)).toEqual([
       expect.objectContaining({ maxPriceCents: 19.9 }), expect.objectContaining({ maxPriceCents: 19.9 }),
     ]);
+  });
+
+  it("hands the agreed required files and text-only permission to hire and post", async () => {
+    const { client, calls } = wallet({
+      "market.hire": { approval: null, job: job() },
+      "market.post": { approval: null, job: job() },
+    });
+    await runMarketTool(client, "agent_1", "market_hire", { service: SERVICE.listing, request: "A table", required_files: ["report.csv"] });
+    await runMarketTool(client, "agent_1", "market_post", { request: "A table", reward_usd: 1, required_files: ["report.csv"], text_only_allowed: true });
+    await runMarketTool(client, "agent_1", "market_post", { request: "A line", reward_usd: 1 });
+    expect(calls.map(([, params]) => (params as { outputs?: unknown }).outputs)).toEqual([
+      { requiredFiles: ["report.csv"], allowTextOnly: false }, { requiredFiles: ["report.csv"], allowTextOnly: true }, undefined,
+    ]);
+    expect((await runMarketTool(client, "agent_1", "market_post", { request: "A", reward_usd: 1, required_files: ["../x"] })).ok).toBe(false);
+    expect(calls).toHaveLength(3);
   });
 
   it("rejects invalid filters or offsets without making a wallet call", async () => {

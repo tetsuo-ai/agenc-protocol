@@ -63,6 +63,9 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
         operation_id: { type: "string", format: "uuid", description: "A stable purchase ID. Reuse on retry." },
         private_commitment: {type:"string",pattern:"^[a-f0-9]{64}$"},
         child_policy_digest: {type:"string",pattern:"^[a-f0-9]{64}$"},
+        required_files: { type: "array", maxItems: 8, items: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+          description: "File names the delivery must include, for example report.csv. Payment is refused until each one is delivered." },
+        text_only_allowed: { type: "boolean", description: "Whether a delivery with text and no files is accepted. Default: true when no files are required." },
         service: {
           type: "string",
           minLength: 32,
@@ -129,6 +132,9 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
         deadline: { type: "integer", minimum: 1, description: "Exact delivery deadline in Unix seconds. For a hire this is the buyer's deadline in the brief, within the listing's delivery period." },
         review_window_secs: { type: "integer", minimum: 1, maximum: 604800, description: "Review setting in seconds. Default 86400. Contest selection ends 48 hours after delivery is due." },
         private_commitment: {type:"string",pattern:"^[a-f0-9]{64}$"},
+        required_files: { type: "array", maxItems: 8, items: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+          description: "File names the delivery must include, for example report.csv. Payment is refused until each one is delivered." },
+        text_only_allowed: { type: "boolean", description: "Whether a delivery with text and no files is accepted. Default: true when no files are required." },
         min_reputation: { type: "integer", minimum: 0, maximum: 10000, description: "Minimum worker reputation. Default 0." },
         required_capabilities: { type: "string", pattern: "^[1-9][0-9]{0,19}$", description: "Required capability mask as nonzero unsigned 64-bit decimal text. Default 1." },
         acceptance: {
@@ -313,6 +319,18 @@ function optionalInteger(value: unknown, name: string, min: number, max: number)
   return value;
 }
 
+/** The agreed outputs from required_files and text_only_allowed, or none for the wallet default. */
+function outputsOf(args: Record<string, unknown>): { requiredFiles: string[]; allowTextOnly: boolean } | undefined {
+  const files = args.required_files, textOnly = args.text_only_allowed;
+  if ((files === undefined || files === null) && (textOnly === undefined || textOnly === null)) return undefined;
+  if (files !== undefined && files !== null && (!Array.isArray(files) || files.length > 8 ||
+      files.some(name => typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name) || name.includes(".."))))
+    throw new ToolInputError("required_files must be up to 8 plain file names.");
+  if (textOnly !== undefined && textOnly !== null && typeof textOnly !== "boolean") throw new ToolInputError("text_only_allowed must be true or false.");
+  const requiredFiles = (files ?? []) as string[];
+  return { requiredFiles, allowTextOnly: typeof textOnly === "boolean" ? textOnly : requiredFiles.length === 0 };
+}
+
 function acceptanceOf(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value) || value.length > 8) {
@@ -386,6 +404,7 @@ export async function runMarketTool(
           request,
           ...(typeof args.private_commitment==="string" && {privateCommitment:args.private_commitment}),
           ...(typeof args.child_policy_digest==="string" && {childPolicyDigest:args.child_policy_digest}),
+          ...((outputs => outputs ? { outputs } : {})(outputsOf(args))),
           ...(maxPriceCents !== undefined ? { maxPriceCents } : {}),
           ...jobClockArgs(args),
           ...(acceptance !== undefined ? { acceptance } : {}),
@@ -450,6 +469,7 @@ export async function runMarketTool(
         request,
         reward: { usdCents: rewardCents },
         ...(typeof args.private_commitment==="string" && {privateCommitment:args.private_commitment}),
+        ...((outputs => outputs ? { outputs } : {})(outputsOf(args))),
         ...(minReputation !== undefined && { minReputation }),
         ...(mask !== undefined && { requiredCapabilities: mask }),
         ...(typeof days === "number" ? { deadlineDays: days } : {}),

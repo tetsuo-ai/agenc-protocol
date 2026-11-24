@@ -268,7 +268,8 @@ export type WorkerContext = {
   /** Discover cheap service hires, then verify their provider before waiving the open-job floor. */
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string) => Promise<string[]>;
+  /** `acceptance` is the verified spec's criteria, including the wallet's agreed-outputs line. */
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[]) => Promise<string[]>;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
   reserveRevisionBudget?: boolean;
   /** Only the isolated job-room adapter supplies its input validator. */
@@ -1942,7 +1943,7 @@ async function executeAndSubmit(
       if (!execute) throw new Error("This revision needs an isolated job room.");
       const executeTurn = turn?.state === "ready" ? turn.execute : execute;
       const result = await executeTurn({
-        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request),
+        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance),
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
         timeoutMs: ctx.config.executorTimeoutMs,
@@ -1953,7 +1954,8 @@ async function executeAndSubmit(
       if ("state" in result && result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     }
-    if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v1:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
+    // B binds the v2 pointer to the claim generation; v1 remains for earlier rooms.
+    if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v[12]:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
       throw new Error("The room has not produced a protected delivery.");
   } catch (error) {
     const reason = formatDiagnosticError(error);

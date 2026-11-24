@@ -8,6 +8,8 @@ import { startWorld, SOL, type World } from "./harness.js";
 let world: World;
 afterEach(async () => { await world?.wallet.close(); });
 const brief = { request: "Read the poem.", acceptance: ["Name its author."], reward: { usdCents: 20 } };
+// Every new job carries an explicit output agreement, text allowed by default.
+const agreed = [...brief.acceptance, "Agreed outputs v1: text-only delivery allowed; no required files"];
 
 it.each(["agent", "main"] as const)("pins the %s post's exact terms to the task, spec and settlement record", async payer => {
   world = await startWorld();
@@ -20,7 +22,7 @@ it.each(["agent", "main"] as const)("pins the %s post's exact terms to the task,
   const input = { ...brief, deadline: clock + 719, reviewWindowSecs: 17, minReputation, requiredCapabilities, idempotencyKey: "brief" };
   const prepare = () => payer === "main" ? wallet.quotePost(input) : wallet.post({ ...input, agentId: agent.id });
   const quoted = await prepare();
-  expect(quoted.approval).toMatchObject({ acceptance: brief.acceptance, terms: { deadline: input.deadline, reviewWindowSecs: 17, eligibility: { minReputation, requiredCapabilities } } });
+  expect(quoted.approval).toMatchObject({ acceptance: agreed, terms: { deadline: input.deadline, reviewWindowSecs: 17, eligibility: { minReputation, requiredCapabilities } } });
   expect(quoted.job.task).toBeNull();
   expect((await prepare()).approval?.id).toBe(quoted.approval!.id);
   sandbox.advanceClock(9);
@@ -33,7 +35,7 @@ it.each(["agent", "main"] as const)("pins the %s post's exact terms to the task,
   const [pointer] = await findTaskJobSpecPda({ task });
   const spec = getTaskJobSpecDecoder().decode((await sandbox.chain.readAccount(pointer))!);
   const published = JSON.parse(new TextDecoder().decode(await sandbox.services.resolveAgencUri!(spec.jobSpecUri)));
-  expect(published.payload).toMatchObject({ instructions: brief.request, acceptance: brief.acceptance });
+  expect(published.payload).toMatchObject({ instructions: brief.request, acceptance: agreed });
   expect(published.payload.deliverable).toContain(new Date(input.deadline * 1000).toISOString());
   expect(published.payload.deliverable).toContain(`capability mask ${requiredCapabilities}`);
   expect((await wallet.getJob(posted.id, true)).terms).toEqual(quoted.approval!.terms);
@@ -70,7 +72,7 @@ it("quotes a funded hire without spending and retains its payer, brief, price ca
   expect(getTaskValidationConfigDecoder().decode((await sandbox.chain.readAccount(validation))!).reviewWindowSecs).toBe(1n);
   expect(await sandbox.workOnce()).toBe(1);
   const delivered = await wallet.getJob(job.id, true);
-  expect(delivered).toMatchObject({ acceptance: brief.acceptance, terms: approval!.terms, status: "delivered" });
+  expect(delivered).toMatchObject({ acceptance: agreed, terms: approval!.terms, status: "delivered" });
   expect(delivered.marketplaceDeadline).toBe(Number(getTaskDecoder().decode((await sandbox.chain.readAccount(task))!).deadline));
   expect(delivered.autoApproveAt).toBe(((await sandbox.chain.clusterTime()) + 1) * 1000);
   await wallet.close();

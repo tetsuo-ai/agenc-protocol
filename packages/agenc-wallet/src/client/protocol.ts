@@ -107,6 +107,8 @@ export interface WalletMethods extends ConnectionMethods, MoneyMethods, ListingM
       /** What the buyer wants done, in plain words. */
       request: string;
       privateCommitment?:string;
+      /** Required file names and whether a text-only delivery is accepted. Default: text allowed, no required files. */
+      outputs?: import("./job-exchange.js").OutputAgreement;
       /** Refuse if the service costs more than this. */
       maxPriceCents?: number;
       expectedPriceLamports?: string;
@@ -138,6 +140,8 @@ export interface WalletMethods extends ConnectionMethods, MoneyMethods, ListingM
       /** What is wanted, in plain words, written for whoever takes it. */
       request: string;
       privateCommitment?:string;
+      /** Required file names and whether a text-only delivery is accepted. Default: text allowed, no required files. */
+      outputs?: import("./job-exchange.js").OutputAgreement;
       /** What whoever does it is paid. */
       reward: AmountInput;
       /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
@@ -163,6 +167,8 @@ export interface WalletMethods extends ConnectionMethods, MoneyMethods, ListingM
       contestEntries?: number;
       request: string;
       privateCommitment?:string;
+      /** Required file names and whether a text-only delivery is accepted. Default: text allowed, no required files. */
+      outputs?: import("./job-exchange.js").OutputAgreement;
       reward: AmountInput;
       deadlineDays?: number;
       minReputation?: number;

@@ -71,14 +71,21 @@ export function resolveTerms(
   return terms;
 }
 
-export function sellerListingSpec(input: SellerTerms & { name: string; summary: string }, seller?: string) {
+/**
+ * `privateRoom` is the seller host's verified isolated room readiness. Only
+ * such a room may advertise B's private input handoff. A pinned script needs
+ * the guest inbox for its own assets, so it never advertises private inputs.
+ */
+export function sellerListingSpec(input: SellerTerms & { name: string; summary: string }, seller?: string, privateRoom = false) {
   const spec = buildListingSpec(input);
-  if (input.servicePin || input.minimumMarginCents || input.modelCapCents) {
+  const privateInputs = privateRoom && !input.servicePin;
+  if (input.servicePin || input.minimumMarginCents || input.modelCapCents || privateInputs) {
     const custom = spec.custom as { listingMetadata: Record<string, unknown> };
     custom.listingMetadata.fulfilment = {
       ...(input.servicePin && { servicePin: input.servicePin }),
-      minimumMarginCents: input.minimumMarginCents ?? 0,
+      ...((input.servicePin || input.minimumMarginCents || input.modelCapCents) && { minimumMarginCents: input.minimumMarginCents ?? 0 }),
       ...(input.modelCapCents && { modelCapCents: input.modelCapCents }),
+      ...(privateInputs && { privateInputs: true }),
     };
   }
   if (!input.childPolicy) return spec;
