@@ -391,6 +391,11 @@ export interface WalletConfig {
   rateWindowMs?: number;
   /** Deadline per listing transport request or confirmation wait. Default 30 seconds. */
   listingTimeoutMs?: number;
+  /**
+   * The owner-only folder of the wallet's own socket. A private job's per-run exchange socket and token file are
+   * made there, so whatever keeps other programs away from the wallet's socket keeps them away from these too.
+   */
+  privateSocketDir?: string;
 }
 
 interface BalanceSnapshot {
@@ -656,6 +661,7 @@ export class AgencWallet {
         roomWork: config.earn?.roomWork ?? (agentId => walletRoomWork({
           session: task => this.#roomSession(agentId, task),
           stateDir: path.join(config.dataDir, "earn", "room-work", agentId),
+          ...(config.privateSocketDir !== undefined && { exchangeDir: config.privateSocketDir }),
         })) },
       dataDir: path.join(config.dataDir, "earn"),
       log: this.#log,

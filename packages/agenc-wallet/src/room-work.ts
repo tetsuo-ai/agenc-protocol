@@ -2,10 +2,10 @@
 // program gets B's scoped exchange session for this claim and room through a
 // per-run socket, and a buyer's answer becomes one durable resume of that run.
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Address } from "@solana/kit";
 import { ExecutorError, runExecutor, type WorkerContext } from "@tetsuo-ai/agenc-worker";
@@ -15,15 +15,46 @@ type VerifiedRoomWork = Parameters<RoomWork["admit"]>[0];
 import type { JobExchangeSession } from "./job-exchange-session.js";
 import type { ExchangeReceipt, JobMessage } from "./client/job-exchange.js";
 import { bundleManifest, privateRequirementFromSpec } from "./private-inputs.js";
-import { ROOM_EXCHANGE_METHODS } from "./client/room-exchange.js";
+import { ROOM_EXCHANGE_METHODS, type RoomExchangeAddress } from "./client/room-exchange.js";
 
 type Execute = typeof runExecutor;
 type Input = Parameters<Execute>[0];
 
-/** Serve one session to one room run. The token is single-run; the socket lives in a private folder. */
-export async function serveRoomExchange(session: JobExchangeSession) {
-  const dir = mkdtempSync(join(tmpdir(), "agenc-rx-"));
-  const socket = join(dir, "x.sock");
+/** The folder a standalone wallet keeps its sockets in when its own folder is too deep (`defaultSocketPath`). */
+export function fallbackSocketDir(): string {
+  return join(tmpdir(), `agenc-wallet-${typeof process.getuid === "function" ? process.getuid() : 0}`);
+}
+
+/**
+ * The private folder a run's exchange socket and token file live in: the folder of the wallet's own socket, which
+ * a host that walls other programs in (Desktop's outside agents) already keeps them out of. Owner-only, or nothing
+ * is served. Never a fresh folder in the shared temp folder: no wall knows that one.
+ */
+export function roomExchangeDir(configured?: string): string {
+  if (process.platform === "win32") throw new Error("A private job room needs a Unix socket, which this system does not have.");
+  const dir = configured ?? fallbackSocketDir();
+  if (!isAbsolute(dir)) throw new Error("The private exchange needs an absolute folder.");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const info = lstatSync(dir);
+  if (!info.isDirectory() || (typeof process.getuid === "function" && info.uid !== process.getuid()) || (info.mode & 0o077) !== 0)
+    throw new Error("The private exchange folder is not private to this user.");
+  return dir;
+}
+
+/** Longest socket path every supported system accepts (macOS allows 103), as the wallet's own socket. */
+const MAX_SOCKET_PATH_BYTES = 100;
+
+/**
+ * Serve one session to one room run, in `dir` (see `roomExchangeDir`). The one-run token is written to an
+ * owner-only file beside the socket; the room program is told only the two paths, never the token: a program's
+ * arguments and environment are readable by every other program of the same user.
+ */
+export async function serveRoomExchange(session: JobExchangeSession, configuredDir?: string) {
+  const dir = roomExchangeDir(configuredDir);
+  const name = "rx-" + randomBytes(6).toString("hex");
+  const socket = join(dir, name + ".sock");
+  const tokenFile = join(dir, name + ".key");
+  if (Buffer.byteLength(socket) > MAX_SOCKET_PATH_BYTES) throw new Error("The private exchange folder's path is too long for a socket.");
   const token = randomBytes(32).toString("hex");
   const open = new Set<Socket>();
   const server: Server = createServer(conn => {
@@ -66,19 +97,25 @@ export async function serveRoomExchange(session: JobExchangeSession) {
       });
     });
   });
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  const remove = () => { rmSync(tokenFile, { force: true }); rmSync(socket, { force: true }); };
+  try {
+    writeFileSync(tokenFile, token, { flag: "wx", mode: 0o600 });
+    // The folder is owner-only, so the socket is never reachable by anyone else, also before this chmod.
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+    chmodSync(socket, 0o600);
+  } catch (error) { server.close(); remove(); throw error; }
   return {
-    address: { socket, token },
+    address: { socket, tokenFile },
     async close() {
       for (const conn of open) conn.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));
-      rmSync(dir, { recursive: true, force: true });
+      remove();
     },
   };
 }
 
-/** Add `exchange` to the wallet's scope JSON for this task. The room program reads it from there. */
-function withExchange(argv: readonly string[], task: string, address: { socket: string; token: string }) {
+/** Add `exchange` (two paths, no secret) to the wallet's scope JSON for this task. The room program reads it from there. */
+function withExchange(argv: readonly string[], task: string, address: RoomExchangeAddress) {
   let found = false;
   const out = argv.map(part => {
     if (found || !part.startsWith("{") || !part.includes(task)) return part;
@@ -98,6 +135,8 @@ export interface RoomWorkPorts {
   session(task: Address): Promise<JobExchangeSession | null>;
   /** Folder for this seller's durable room runs and continuations. */
   stateDir: string;
+  /** The wallet's private socket folder, where each run's exchange is served. Default: the standalone wallet's. */
+  exchangeDir?: string;
   execute?: Execute;
 }
 
@@ -114,7 +153,7 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
     return id ? id.slice(0, 64) : null;
   };
   const runRoom = async (binding: VerifiedRoomWork, session: JobExchangeSession, input: Input) => {
-    const link = await serveRoomExchange(session);
+    const link = await serveRoomExchange(session, ports.exchangeDir);
     try {
       return { state: "delivered" as const, stdout: (await execute({ ...input, argv: withExchange(input.argv, binding.task, link.address) })).stdout };
     } catch (error) {
