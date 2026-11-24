@@ -5444,9 +5444,14 @@ export class AgencWallet {
       this.#emit({ type: "overview" });
       return this.#jobView(this.#jobRecord(jobId), isOwner);
     }
+    // An agent cancels only what it paid for itself. A job the main balance
+    // paid is the owner's purchase: the main key never signs for an agent.
+    if (!isOwner && (!agentId || initial.payer !== "agent")) throw this.#reviewRequired(false);
     await this.#advance(jobId, false, true);
     await this.#lock(`job:${jobId}`, async () => {
       const job = this.#jobRecord(jobId);
+      // The payer is fixed at approval; checked again where the key is chosen.
+      if (!isOwner && job.payer !== "agent") throw this.#reviewRequired(false);
       if (job.outcome === "refunded") return;
       if (job.phase !== "active" && job.phase !== "hired") {
         throw new WalletError("NOT_ALLOWED", "This job can no longer be cancelled.");

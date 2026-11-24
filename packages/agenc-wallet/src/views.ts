@@ -370,7 +370,8 @@ export function jobView(
     canRefund:
       buying && (!job.terms?.contest || status === "needs_approval") &&
       (status === "needs_approval" ||
-        status === "waiting" ||
+        // An agent cancels only a job it paid for itself.
+        (status === "waiting" && (context.isOwner || job.payer === "agent")) ||
         // Turning down a delivery is a person's call, not an agent's.
         canTurnDown),
     canRate,
