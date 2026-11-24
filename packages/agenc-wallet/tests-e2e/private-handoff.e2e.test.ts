@@ -62,8 +62,9 @@ it.each([["post", false], ["hire", false], ["post", true], ["hire", true]] as co
     listing = await eventually(async () => { await seller!.tick(); return (await seller!.overview()).agents.find(a => a.id === provider.id)?.earn.offers[0]?.listing; });
   }
   const shared = { agentId: buyer.id, request: "Prepare a report.", acceptance, privateCommitment: req.commitment };
-  const { job, approval: pending } = kind === "post" ? await wallet.post({ ...shared, reward: { usdCents: 40 } }) : await wallet.hire({ ...shared, listing });
-  if (pending) await wallet.decideApproval(pending.id, true);
+  const { job: quoted, approval: pending } = kind === "post" ? await wallet.post({ ...shared, reward: { usdCents: 40 } }) : await wallet.hire({ ...shared, listing });
+  // A private hire is always the owner's decision. Read the job again for its task.
+  const job = pending ? await wallet.decideApproval(pending.id, true) : quoted;
   expect((await wallet.getJob(job.id, true)).acceptance).toContain(privateInputCriterion(approval));
   const room = "f".repeat(64);
   if (kind === "post") {
@@ -113,7 +114,7 @@ it.each([["post", false], ["hire", false], ["post", true], ["hire", true]] as co
   await relay.put(workerExchange, sealed.packet);
   writeFileSync(pointerFile, sealed.pointer);
   const delivered = await eventually(async () => { const d = await wallet.getJob(job.id, true); return d.status === "delivered" ? d : null; })
-    .catch(e => { console.log(log.filter(l => l.includes("earn")).slice(-15).join("\n")); throw e; });
+;
   expect(delivered.result?.text).toBe(sealed.pointer);
   if (paid) {
     await confirmPayout(wallet, job.id);
