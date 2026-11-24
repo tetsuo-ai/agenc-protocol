@@ -1,3 +1,4 @@
+import { listingMessageText } from "./client/listing-exchange.js";
 import type { PurchaseAttachments } from "./purchase-admission.js";
 import { facade } from "@tetsuo-ai/marketplace-sdk";
 import { createHash } from "node:crypto";
@@ -85,7 +86,8 @@ export function jobIdentity(input: TermsInput & { request: string; acceptance?: 
     input.reviewWindowSecs, input.minReputation ?? 0, input.requiredCapabilities ?? "1",
     ...(input.privateCommitment !== undefined ? ["private", input.privateCommitment] : []),
     ...(input.childPolicyDigest !== undefined ? ["supplier", input.childPolicyDigest] : []),
-    ...(input.listingAgreement ? ["inquiry", input.listingAgreement.question?.signature, input.listingAgreement.reply?.signature, input.listingAgreement.selected] : []),
+    ...(input.listingAgreement ? ["inquiry", input.listingAgreement.question?.signature, input.listingAgreement.reply?.signature, input.listingAgreement.selected,
+      listingMessageText(input.listingAgreement.question.message), listingMessageText(input.listingAgreement.reply.message)] : []),
     ...(input.contestEntries === undefined ? [] : ["contest", input.contestEntries]),
     ...(input.expectedPriceLamports || input.expectedSpecHash ? [input.expectedPriceLamports, input.expectedSpecHash] : []),
   ])).digest("hex");

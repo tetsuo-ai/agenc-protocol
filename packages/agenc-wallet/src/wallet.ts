@@ -1779,6 +1779,10 @@ export class AgencWallet {
     const jobId = newId("job");
     if (quoteOnly && listingRow) this.#discovery.rememberListing(listingRow, await this.#serviceContext([listingRow], 0, rate));
     const service = this.#discovery.describeHire(terms, rate, await this.#marketFeeBps());
+    if (quoteOnly && this.#chain.network === "mainnet") {
+      const signal = await readAvailability(this.#chain, listing, service.listingVersion).catch(() => undefined);
+      if (signal) service.availability = signal;
+    }
     const record: JobRecord = {
       id: jobId,
       inputFingerprint: fingerprint,
