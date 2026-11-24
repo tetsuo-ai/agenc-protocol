@@ -283,6 +283,13 @@ export class EarnHost {
     return own !== undefined && Object.hasOwn(own, agentId) ? own[agentId]! : this.#options.executor;
   }
 
+  /** Whether this agent's verified isolated room can receive B's private file handoff. */
+  supportsPrivateInputs(agentId: string): boolean {
+    const executor = this.executorFor(agentId);
+    return executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+      this.#options.roomWork?.(agentId) !== undefined;
+  }
+
   /** Whether only jobs from this wallet's own addresses are taken. */
   get ownJobsOnly(): boolean {
     return this.#options.ownJobsOnly === true;

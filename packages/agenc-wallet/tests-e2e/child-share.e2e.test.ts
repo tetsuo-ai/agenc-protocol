@@ -7,6 +7,7 @@ import { expect, it } from "vitest";
 import { stageChildShare } from "../src/child-share.js";
 import { readAgent, readHireableListing } from "../src/market.js";
 import { openParentFixture } from "./child-hire-fixture.js";
+import { privateRoomDouble } from "./harness.js";
 
 it.skipIf(!("exchangeContext" in taskThread))(
   "restages only the authenticated private parent bundle for the specifically authorized supplier",
@@ -29,6 +30,9 @@ it.skipIf(!("exchangeContext" in taskThread))(
     let supplier = "";
     const f = await openParentFixture({
       privateInputs: true,
+      // A private hire needs the seller's verified isolated room.
+      world: { earn: { executor: { argv: [process.execPath, "-e", "setTimeout(()=>{},60000)", "{prompt}"], mode: "sandboxed",
+        envAllowlist: [], timeoutMs: 60_000, isolatedJobRoom: true }, roomWork: privateRoomDouble(), pollIntervalMs: 150, serviceRefreshMs: 300 } },
       async prepareCriteria(world, request, seller, listing) {
         const registration = (await readHireableListing(world.sandbox.chain, address(listing))).providerAgent;
         supplier = (await readAgent(world.sandbox.chain, registration))!.authority;

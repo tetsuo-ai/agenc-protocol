@@ -1,4 +1,5 @@
 import { WalletError } from "./errors.js";
+import { OUTPUT_AGREEMENT_CRITERION, type OutputAgreement } from "./client/job-exchange.js";
 
 export const PRIVATE_CRITERION = "Private input handoff v1: ";
 export const CHILD_CRITERION = "Allow one seller-funded supplier under policy ";
@@ -6,6 +7,8 @@ const digest = /^[0-9a-f]{64}$/;
 export interface PurchaseAttachments {
   privateCommitment?: string;
   childPolicyDigest?: string;
+  /** Required file names and whether a text-only delivery is accepted. */
+  outputs?: OutputAgreement;
 }
 export type PrivateRequirement = { version: 1; required: true; commitment: string };
 export type PurchaseAdmission = { privateInputs?: PrivateRequirement; childPolicyDigest?: string };
@@ -45,7 +48,7 @@ export async function purchaseAdmission(input: PurchaseAttachments, source: Appr
 }
 
 export function purchaseCriteria(criteria: string[], admission: PurchaseAdmission) {
-  if (criteria.some(line => line.startsWith(PRIVATE_CRITERION) || line.startsWith(CHILD_CRITERION)))
+  if (criteria.some(line => line.startsWith(PRIVATE_CRITERION) || line.startsWith(CHILD_CRITERION) || line.startsWith(OUTPUT_AGREEMENT_CRITERION)))
     throw new WalletError("BAD_REQUEST", "Use the approved private input or supplier selection for these criteria.");
   const lines = [...criteria];
   if (admission.privateInputs) lines.push(PRIVATE_CRITERION + admission.privateInputs.commitment);

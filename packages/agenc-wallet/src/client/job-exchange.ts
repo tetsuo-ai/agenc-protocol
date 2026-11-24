@@ -124,3 +124,32 @@ export const jobExchangeChatSchema = {
 } as const;
 
 export const privatePurchaseNotice = "Anyone can read the brief and acceptance criteria. Add private files in Market. The owner chooses which confirmed worker and room receive them.";
+
+/** The explicit agreement written for a public job that names no outputs. */
+export const DEFAULT_OUTPUT_AGREEMENT: OutputAgreement = Object.freeze({ requiredFiles: Object.freeze([]) as readonly string[], allowTextOnly: true });
+
+/** Public jobs carry their agreed outputs as this exact acceptance line, which
+ * hosted and practice publication both preserve. Private jobs keep theirs in
+ * the staged bundle, bound by its commitment, so no file name is public. */
+export const OUTPUT_AGREEMENT_CRITERION = "Agreed outputs v1: ";
+
+export function outputAgreementCriterion(value: OutputAgreement): string {
+  const agreement = checkOutputAgreement(value);
+  return OUTPUT_AGREEMENT_CRITERION + (agreement.allowTextOnly ? "text-only delivery allowed" : "at least one file")
+    + (agreement.requiredFiles.length ? "; required files: " + agreement.requiredFiles.join(", ") : "; no required files");
+}
+
+/** The agreed outputs a verified job spec names, undefined for a legacy job.
+ * A malformed or repeated agreement line throws. */
+export function outputAgreementFromSpec(spec: Record<string, unknown>): OutputAgreement | undefined {
+  const criteria = spec.acceptance ?? spec.acceptanceCriteria ?? [];
+  if (!Array.isArray(criteria)) throw new Error("Invalid agreed outputs.");
+  const rows = criteria.filter((row): row is string => typeof row === "string" && row.startsWith(OUTPUT_AGREEMENT_CRITERION));
+  if (rows.length === 0) return undefined;
+  const match = rows.length === 1 && /^Agreed outputs v1: (text-only delivery allowed|at least one file); (?:no required files|required files: ([A-Za-z0-9._, -]{1,600}))$/.exec(rows[0]!);
+  if (!match) throw new Error("Invalid agreed outputs.");
+  const agreement = checkOutputAgreement({ allowTextOnly: match[1] === "text-only delivery allowed",
+    requiredFiles: match[2] === undefined ? [] : match[2].split(", ") });
+  if (outputAgreementCriterion(agreement) !== rows[0]) throw new Error("Invalid agreed outputs.");
+  return agreement;
+}

@@ -8,8 +8,9 @@ import { currentSubmission, verifiedEvidence, readEvidenceChunk, acknowledgeEvid
 import { localExchangeHistory, rememberExchange } from "./exchange-history.js";
 import { JobExchangeSession } from "./job-exchange-session.js";
 import { ExchangeRelay } from "./exchange-relay.js";
-import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, openBuyerOutput, openLegacyBuyerOutput, digest, type Parties, type PrivateBundle } from "./private-inputs.js";
+import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, approvedRecipient, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, openBuyerOutput, openLegacyBuyerOutput, digest, type Parties, type PrivateBundle } from "./private-inputs.js";
 import type { DeliveryBinding, DeliveryChunkAck, OutputAgreement, PrivateInputPart } from "./client/job-exchange.js";
+import { DEFAULT_OUTPUT_AGREEMENT, checkOutputAgreement, outputAgreementCriterion, outputAgreementFromSpec } from "./client/job-exchange.js";
 import { startProviderHeartbeat, type ServingListing } from "./client/provider-heartbeat.js";
 import { DEFAULT_EARN_IDLE_POLL_INTERVAL_MS } from "./earn.js";
 import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals, unresolvedChildDispatch } from "./business-backup.js";
@@ -193,7 +194,7 @@ import {
   agentOffers,
 } from "./store.js";
 import { admitQuotedService, serviceEconomics } from "./service-economics.js";
-import { purchaseAdmission, purchaseCriteria, type PurchaseAttachments } from "./purchase-admission.js";
+import { purchaseAdmission, purchaseCriteria, type PurchaseAdmission, type PurchaseAttachments } from "./purchase-admission.js";
 import { readAvailability, currentListingIdentity, publishListingMessage, readListingExchange, verifyAgreedTerms } from "./listing-inquiry.js";
 import { publicListingBrief, type ListingAgreement, type ListingMessage } from "./client/listing-exchange.js";
 import { ServiceDiscovery, recordRow, type ServiceContext } from "./service-discovery.js";
@@ -216,6 +217,12 @@ const HIRE_BUSY_RETRIES = 8;
 const POSTING_GIVE_UP_MS = 30 * 60_000;
 
 /** A hire stopped before a later account would cost more than approved. */
+/** The agreed outputs a public job spec names. A malformed agreement is refused. */
+function publishedOutputs(spec: Record<string, unknown>): OutputAgreement | undefined {
+  try { return outputAgreementFromSpec(spec); }
+  catch { throw new WalletError("NOT_ALLOWED", "This job's agreed outputs are invalid. Review it in Market."); }
+}
+
 function laterRentText(request: boolean) {
   return request
     ? "The network's account deposits rose after you approved this request, so it was cancelled and the reward came back."
@@ -2048,6 +2055,7 @@ export class AgencWallet {
     const admission = await purchaseAdmission(params, this as Parameters<typeof purchaseAdmission>[1], fulfilment?.privateInputs === true, fulfilment?.supplier?.digest,
       params.privateCommitment === undefined ? undefined : (await readListing(this.#chain, listing))?.authority ?? null);
     const acceptance = purchaseCriteria(checks, admission);
+    acceptance.push(...await this.#agreedOutputLine(params.outputs, admission));
     if (Object.keys(admission).length) jobTerms.admission = admission;
     const agreement = params.listingAgreement;
     const agreed = agreement && await this.#agreedTerms(agreement, listing, agent.address);
@@ -2403,6 +2411,7 @@ export class AgencWallet {
     const terms = await this.#requestTerms(params);
     const admission = await purchaseAdmission(params, this as Parameters<typeof purchaseAdmission>[1], true, undefined);
     terms.acceptance = purchaseCriteria(terms.acceptance, admission);
+    terms.acceptance.push(...await this.#agreedOutputLine(params.outputs, admission));
     if (Object.keys(admission).length) terms.terms.admission = admission;
     const rate = terms.rate;
     const deposits = await (terms.terms.contest
@@ -2448,6 +2457,7 @@ export class AgencWallet {
     const terms = await this.#requestTerms(params);
     const admission = await purchaseAdmission(params, this as Parameters<typeof purchaseAdmission>[1], true, undefined);
     terms.acceptance = purchaseCriteria(terms.acceptance, admission);
+    terms.acceptance.push(...await this.#agreedOutputLine(params.outputs, admission));
     if (Object.keys(admission).length) terms.terms.admission = admission;
     // Said at once here; checked again just before anything is sent.
     if (terms.terms.contest && !quoteOnly) throw new WalletError("NOT_ALLOWED", "Review the contest quote before posting.");
@@ -4583,11 +4593,38 @@ export class AgencWallet {
   }
 
   async stageJobInputs(files: PrivateInputPart[], recipient: string | null, processing: string, outputs?: OutputAgreement) {
-    return stagePrivateInputs(await this.#stagingJournal(), files, recipient, processing, outputs);
+    // Every new file set records an explicit output agreement, text allowed by default.
+    return stagePrivateInputs(await this.#stagingJournal(), files, recipient, processing, outputs ?? DEFAULT_OUTPUT_AGREEMENT);
+  }
+
+  /**
+   * One explicit output agreement per purchase. A public job publishes it as
+   * a canonical acceptance line, so the quote, the verified publication and
+   * the worker's brief all carry it. A private job keeps the staged agreement,
+   * bound by its commitment, and publishes no file name.
+   */
+  async #agreedOutputLine(requested: OutputAgreement | undefined, admission: PurchaseAdmission): Promise<string[]> {
+    let wanted: OutputAgreement | undefined;
+    try { wanted = requested === undefined ? undefined : checkOutputAgreement(requested); }
+    catch { throw new WalletError("BAD_REQUEST", "Name up to eight distinct required files and say whether a text-only delivery is accepted."); }
+    if (admission.privateInputs) {
+      const staged = approvedOutputs(await this.#stagingJournal(), admission.privateInputs);
+      if (!staged) throw new WalletError("NOT_ALLOWED", "Choose the private files again so their agreed outputs are recorded.");
+      if (wanted && JSON.stringify(wanted) !== JSON.stringify(checkOutputAgreement(staged)))
+        throw new WalletError("BAD_REQUEST", "The agreed outputs differ from the approved private files. Choose the files again.");
+      return [];
+    }
+    return [outputAgreementCriterion(wanted ?? DEFAULT_OUTPUT_AGREEMENT)];
   }
 
   async approvedJobInputs(commitment: string) {
     return approvedRequirement(await this.#stagingJournal(), commitment);
+  }
+
+  /** The provider authority the staged files were approved for, or null for any provider. */
+  async approvedJobInputRecipient(commitment: string): Promise<string | null> {
+    if (!/^[0-9a-f]{64}$/.test(commitment)) throw new WalletError("BAD_REQUEST", "Invalid approved file set.");
+    return approvedRecipient(await this.#stagingJournal(), commitment);
   }
 
   /** Host-only factory, never serialize the signer or expose it to a room. */
@@ -4645,10 +4682,11 @@ export class AgencWallet {
     const journal = await ExchangeJournal.open(this.#config.dataDir, signer);
     const current = await currentSubmission(this.#chain, job.task as Address, this.#knownProvider(job), signer.address);
     const privateInputs = privateRequirementFromSpec(job.jobSpec);
-    const terms = privateInputs ? approvedOutputs(await this.#stagingJournal(), privateInputs) : job.jobSpec.outputAgreement as OutputAgreement | undefined;
+    const terms = privateInputs ? approvedOutputs(await this.#stagingJournal(), privateInputs) : publishedOutputs(job.jobSpec);
     const bundle = privateInputs ? await this.#buyerOutput(job, current.binding.deliveryHash, journal, signer, relay, current.binding) : undefined;
-    const evidence = await verifiedEvidence(current, this.#services, bundle, terms ?? { requiredFiles: [], allowTextOnly: true }, !!privateInputs);
-    return { journal, evidence, payer: signer.address };
+    // A legacy job without an agreement stays readable; only payment needs one.
+    const evidence = await verifiedEvidence(current, this.#services, bundle, terms ?? DEFAULT_OUTPUT_AGREEMENT, !!privateInputs);
+    return { journal, evidence, payer: signer.address, job, privateInputs, terms };
   }
 
   async readDeliveryChunk(jobId: string, agentId: string, part: string, offset: number) {
@@ -4670,8 +4708,17 @@ export class AgencWallet {
 
   async requireDeliveryInspection(jobId: string, agentId: string, hash: string, round: number) {
     if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
-    const { journal, evidence, payer } = await this.#deliveryEvidence(jobId, agentId);
+    const { journal, evidence, payer, job, privateInputs, terms } = await this.#deliveryEvidence(jobId, agentId);
+    // Missing only means a legacy or altered job: an agent never pays one.
+    if (!terms) throw new WalletError("NOT_ALLOWED", "This job has no agreed outputs. Review the delivery and approve payment in Market.");
     requireInspection(journal, agentId, evidence, hash, round);
+    // The agreement must be the one the verified publication commits to.
+    const verified = await fetchAndVerifyJobSpec({ task: evidence.binding.task as Address, readAccount: key => this.#chain.readAccount(key),
+      ...(this.#services.resolveAgencUri && { resolveAgencUri: this.#services.resolveAgencUri }) }).catch(() => null);
+    const spec = verified && JSON.parse(new TextDecoder().decode(verified.content)) as Record<string, unknown>;
+    if (!spec || job.task !== evidence.binding.task || privateRequirementFromSpec(spec)?.commitment !== privateInputs?.commitment ||
+        (!privateInputs && JSON.stringify(publishedOutputs(spec)) !== JSON.stringify(terms)))
+      throw new WalletError("NOT_ALLOWED", "The agreed outputs differ from the published job. Review it in Market.");
     const current = await currentSubmission(this.#chain, evidence.binding.task as Address, evidence.binding.worker as Address, payer);
     if (JSON.stringify(current.binding) !== JSON.stringify(evidence.binding)) throw new WalletError("NOT_ALLOWED", "The delivery changed during inspection.");
   }
@@ -6008,7 +6055,7 @@ export class AgencWallet {
       this.#checkOfferPrice(price);
       const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, previous);
       quotedTerms = terms;
-      const spec = sellerListingSpec({ name, summary, ...terms }, agent.address);
+      const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
       action = this.#quotedOfferKey(offerId, name, summary, price, terms, input.enableEarns, input.setupId);
       const completed = input.setupId && Object.hasOwn(agent.serviceSetups ?? {}, input.setupId) ? agent.serviceSetups![input.setupId] : undefined;
       if (completed) throw new WalletError(completed.action !== action ? "PRICE_CHANGED" : "BAD_REQUEST",
@@ -6753,7 +6800,7 @@ export class AgencWallet {
       await this.#serviceAdmission(agentId, priceLamports, terms);
     }
     const category = terms.category;
-    const spec = sellerListingSpec({ name, summary, ...terms }, agent.address);
+    const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
     const hash = await jobSpecHash(spec);
     const price = priceLamports.toString();
     const id = current?.id ?? values.bytesToHex(values.randomId32());

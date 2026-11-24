@@ -86,6 +86,7 @@ export function jobIdentity(input: TermsInput & { request: string; acceptance?: 
     input.reviewWindowSecs, input.minReputation ?? 0, input.requiredCapabilities ?? "1",
     ...(input.privateCommitment !== undefined ? ["private", input.privateCommitment] : []),
     ...(input.childPolicyDigest !== undefined ? ["supplier", input.childPolicyDigest] : []),
+    ...(input.outputs !== undefined ? ["outputs", input.outputs] : []),
     ...(input.listingAgreement ? ["inquiry", input.listingAgreement.question?.signature, input.listingAgreement.reply?.signature, input.listingAgreement.selected,
       listingMessageText(input.listingAgreement.question.message), listingMessageText(input.listingAgreement.reply.message)] : []),
     ...(input.contestEntries === undefined ? [] : ["contest", input.contestEntries]),
