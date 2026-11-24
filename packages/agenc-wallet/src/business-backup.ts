@@ -281,9 +281,7 @@ export function pauseRestoredBusiness(
       Object.values(state.jobs ?? {}).some((j) =>
         ["hiring", "hired", "active", "cleared"].includes(j.phase),
       ) ||
-      Object.values(state.childHires ?? {}).some(
-        (child) => child.view.phase === "dispatching",
-      ) ||
+      Object.values(state.childHires ?? {}).some(unresolvedChildDispatch) ||
       business?.drafts.length ||
       business?.services.length ||
       agents.some(
@@ -321,4 +319,15 @@ export function pendingBusinessPayments(state: WalletState) {
   return Object.values(book.moneyOperations ?? {}).filter(
     (row) => row.state === "pending",
   );
+}
+
+/** A supplier purchase still waiting on its signed send. G archives a resolved
+ * send as `dispatch` (landed, expired or failed) and keeps it as history. */
+export function unresolvedChildDispatch(child: {
+  view: { phase: string };
+  send?: { signature: string };
+  dispatch?: { signature: string; outcome: string };
+}) {
+  if (child.dispatch && (!child.send || child.send.signature === child.dispatch.signature)) return false;
+  return child.view.phase === "dispatching" || child.send !== undefined;
 }

@@ -1,4 +1,4 @@
-import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals } from "./business-backup.js";
+import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals, unresolvedChildDispatch } from "./business-backup.js";
 import { checkBusinessRoom, restoredSeller } from "./business-room.js";
 import { correctChosenWork } from "@tetsuo-ai/agenc-worker";
 import { checkWorkFiles, correctionInputs, inspectWorkChunk, workFileSource } from "./work-inspection.js";
@@ -4664,7 +4664,7 @@ export class AgencWallet {
       .map(({id: jobId, role, task, title, agentId}) => ({jobId, role, task, title, agentId}));
     const pending = new Set(pendingBusinessPayments(state).map(payment => payment.receipt.signature));
     for (const child of Object.values(state.childHires ?? {})) {
-      if (child.view.phase !== "dispatching" || !child.send) continue;
+      if (!unresolvedChildDispatch(child) || !child.send) continue;
       const outcome = await this.#chain.reviewSendOutcome?.(child.send);
       if (outcome !== "landed" && outcome !== "failed") pending.add(child.send.signature);
     }
