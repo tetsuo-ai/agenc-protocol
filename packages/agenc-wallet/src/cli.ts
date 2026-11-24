@@ -47,6 +47,7 @@ import { createHostedServices, type MarketServices } from "./services.js";
 import { restoreBackup } from "./backup.js";
 import { hideFromLog, logSafe } from "./log.js";
 import { listenForUnlock } from "./unlock-server.js";
+import { withAgentExecutors } from "./agent-executors.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 import { AgencWallet } from "./wallet.js";
 
@@ -103,6 +104,8 @@ interface Bootstrap {
     ownJobsOnly?: boolean;
     /** Path of Desktop's non-secret earning preference, supplied only at bootstrap. */
     chosenRoomSetting?: string;
+    /** A different executor for named agents (a seller paired with a remote room). */
+    agentExecutors?: Record<string, NonNullable<NonNullable<Bootstrap["earn"]>["executor"]>>;
   } | null;
   hosted?: {
     siteUrl?: string;
@@ -314,7 +317,8 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
     chain,
     services,
     prices,
-    earn: earnOptions(bootstrap),
+    earn: withAgentExecutors(earnOptions(bootstrap), bootstrap.earn?.agentExecutors,
+      (executor) => earnOptions({ ...bootstrap, earn: { executor: executor as never } }).executor),
     log,
   });
   if (sandbox !== null) {
