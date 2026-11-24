@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { address } from "@solana/kit";
 import { enqueueChildResume, parkChildRun, stageChildResult, takeChildResume } from "@tetsuo-ai/agenc-worker";
+import assert from "node:assert/strict";
+import { connectWallet } from "../src/client/socket-client.js";
 import { childHireHandlers } from "../src/child-hire.js";
 import { openParentFixture } from "./child-hire-fixture.js";
 import { confirmPayout, eventually, HAIKU, type World } from "./harness.js";
@@ -43,6 +45,33 @@ async function main() {
     } satisfies World;
   });
   const { world, grant, request, room } = f;
+  const socketPath = join(room, "owner.sock");
+  const ownerToken = randomBytes(32).toString("hex");
+  const server =
+    process.env.AGENC_CHILD_SOCKET === "1"
+      ? await built.serveWallet({
+          wallet: world.wallet,
+          socketPath,
+          ownerToken,
+          agentExists: (id) => world.wallet.hasAgent(id),
+        })
+      : null;
+  const owner = server && (await connectWallet({ socketPath, token: ownerToken }));
+  if (owner) {
+    const paired = await connectWallet({
+      socketPath,
+      token: built.agentToken(ownerToken, grant.sellerAgentId),
+      actAs: grant.sellerAgentId,
+    });
+    try {
+      await assert.rejects(
+        paired.call("child.timeline" as never, { parentTask: grant.parentTask } as never),
+        /allowed|permission|owner/i,
+      );
+    } finally {
+      paired.close();
+    }
+  }
   let modelStarts = 0;
   async function run(method: string, params: Record<string, unknown>) {
     const { wallet } = world;
@@ -81,13 +110,17 @@ async function main() {
         return wallet.childHires.timeline(grant.parentTask);
       }
       case "close":
+        owner?.close();
+        await server?.close();
         await wallet.close();
         rmSync(room, { recursive: true, force: true });
         rmSync(world.dataDir, { recursive: true, force: true });
         return true;
       default: {
         if (!Object.hasOwn(handlers, method)) throw new Error("Unknown test operation.");
-        return handlers[method as keyof typeof handlers](params as never);
+        return owner
+          ? owner.call(method as never, params as never)
+          : handlers[method as keyof typeof handlers](params as never);
       }
     }
   }

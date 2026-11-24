@@ -1,3 +1,5 @@
+import { childRatingSigner } from "./child-rating.js";
+import { stageChildShare } from "./child-share.js";
 import { ChildHires, childDigest, readChildEvidence, refuseChild } from "./child-hire.js";
 import { childForJob, childHolds, childOwnsKey, childState } from "./child-hire-store.js";
 import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
@@ -836,10 +838,7 @@ export class AgencWallet {
       },
       advance: id => this.#advance(id, true),
       notify: id => { this.#emit({ type: "approval", approvalId: id }); this.#emit({ type: "overview" }); },
-      privateStage: async commitment => {
-        const wallet = this as typeof this & { approvedJobInputs?(id: string): Promise<{ version: 1; required: true; commitment: string }> };
-        return wallet.approvedJobInputs?.(commitment);
-      },
+      privateStage: (grant, request, supplier, saved) => stageChildShare(this as object, grant, request, supplier, saved),
       evidence: (job, names) => readChildEvidence(this as object, job, names),
     });
   }
@@ -2448,6 +2447,8 @@ export class AgencWallet {
 
   async #payerSigner(job: JobRecord, decisionExpiry?: number): Promise<KeyPairSigner> {
     const signer = await this.#vault.signer(job.payer === "main" ? MAIN_KEY : this.#agentRecord(job.agentId).keyId);
+    if (job.outcome === "paid" && childForJob(this.#store.state, job))
+      return childRatingSigner(signer, job, () => this.#store.state, this.#now);
     if (decisionExpiry !== undefined) return contestSigner(signer, decisionExpiry, this.#now);
     return job.terms?.contest && ["cleared", "hiring", "hired"].includes(job.phase)
       ? contestSigner(signer, job.approvedCosts?.expiresAt ?? 0, this.#now) : signer;
@@ -4265,6 +4266,7 @@ export class AgencWallet {
         const actual = !paid ? 0n : prior.action === "approve" || outcome === "failed" ? paid.fee : paid.debit;
         const held = childHolds(state.agents[prior.agentId]!).childHolds?.[jobId];
         if (held && BigInt(reserved) > actual) held.review = String(BigInt(held.review) + BigInt(reserved) - actual);
+        child.reviewSpent = String(BigInt(child.reviewSpent ?? "0") + actual);
         delete child.reviewDebits![receipt.signature];
       }
       if (prior.agentId && outcome === "expired" && !paid) {

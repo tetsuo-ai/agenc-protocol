@@ -12,7 +12,14 @@ import { CENT, eventually, startWorld, REVIEW_ALLOWANCE } from "./harness.js";
 
 export interface ChildFixtureOptions {
   cap?: string;
+  returnBeforeSecs?: number;
   criteria?: string[];
+  prepareCriteria?(
+    world: Awaited<ReturnType<typeof startWorld>>,
+    request: ChildHireRequest,
+    seller: string,
+    supplier: string,
+  ): Promise<string[]>;
   privateInputs?: boolean;
   world?: Parameters<typeof startWorld>[0];
 }
@@ -39,7 +46,10 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
   const seller = await wallet.createAgent("Selling studio");
   const buyer = await wallet.createAgent("Parent buyer");
   for (const agent of [seller, buyer]) {
-    await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { ...REVIEW_ALLOWANCE, perDayCents: 10000 } });
+    await wallet.setPolicy(agent.id, {
+      askAboveCents: 1000,
+      refill: { ...REVIEW_ALLOWANCE, perDayCents: 10000 },
+    });
     await wallet.fundAgent(agent.id, { lamports: String(5000n * CENT) });
   }
   const offer = {
@@ -68,20 +78,31 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
   const policy: ChildHirePolicy = {
     allowedListings: [supplier],
     maxDebitLamports: options.cap ?? "100000000",
-    returnBeforeSecs: 10,
+    returnBeforeSecs: options.returnBeforeSecs ?? 10,
     reviewWindowSecs: 5,
     sharing: options.privateInputs ? "buyer-approved-input" : "public-brief",
   };
   await wallet.childHires.setPolicy(seller.id, listing, policy);
   const worker = (await readHireableListing(sandbox.chain, address(listing))).providerAgent;
+  const request: ChildHireRequest = {
+    listing: supplier,
+    brief: "Supply the short report.",
+    outputs: ["text", "postcard.png"],
+  };
+  const extra = options.prepareCriteria
+    ? await options.prepareCriteria(world, request, seller.address, supplier)
+    : [];
   const { job } = await wallet.hire({
     agentId: buyer.id,
     listing,
     request: "Prepare the complete report.",
-    acceptance: [childPolicyCriterion(policy), ...(options.criteria ?? [])],
+    acceptance: [childPolicyCriterion(policy), ...(options.criteria ?? []), ...extra],
   });
   assert.equal(job.status, "waiting");
-  const [claimPda] = await findClaimPda({ task: address(job.task!), bidder: worker });
+  const [claimPda] = await findClaimPda({
+    task: address(job.task!),
+    bidder: worker,
+  });
   const claim = await eventually(async () =>
     readProgramAccount(sandbox.chain, claimPda, getTaskClaimDiscriminatorBytes(), (b) =>
       getTaskClaimDecoder().decode(b),
@@ -91,12 +112,18 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
     sellerAgentId: seller.id,
     parentTask: job.task!,
     claimedAt: String(claim.claimedAt),
-    roomId: "paid-room",
+    roomId: "f".repeat(64),
   };
-  const request: ChildHireRequest = {
-    listing: supplier,
-    brief: "Supply the short report.",
-    outputs: ["text", "postcard.png"],
+  return {
+    world,
+    room,
+    grant,
+    request,
+    seller,
+    buyer,
+    job,
+    finish,
+    policy,
+    listing,
   };
-  return { world, room, grant, request, seller, buyer, job, finish, policy, listing };
 }

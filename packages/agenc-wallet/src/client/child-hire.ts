@@ -22,6 +22,19 @@ export interface ChildHireRequest {
   outputs: string[];
   privateCommitment?: string;
 }
+/** Canonical fields for the buyer-approved public criterion. File names remain behind the hash. */
+export function childSharePayload(supplier: string, request: ChildHireRequest) {
+  return JSON.stringify([
+    supplier,
+    {
+      listing: request.listing,
+      brief: request.brief.trim(),
+      outputs: request.outputs,
+      ...(request.privateCommitment && { privateCommitment: request.privateCommitment }),
+    },
+  ]);
+}
+export const CHILD_SHARE_PREFIX = "Share the approved input with supplier under grant ";
 export interface ChildPayout {
   listingVersion: string;
   price: Money;

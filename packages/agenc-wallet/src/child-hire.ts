@@ -20,6 +20,7 @@ import type {
   ChildPayout,
   ChildRoomGrant,
 } from "./client/child-hire.js";
+import { CHILD_SHARE_PREFIX, childSharePayload } from "./client/child-hire.js";
 import type { ApprovalView, JobTerms } from "./client/types.js";
 import { WalletError } from "./errors.js";
 import { sellerProceeds } from "./seller-terms.js";
@@ -94,7 +95,9 @@ export function checkedChildRequest(value: ChildHireRequest): ChildHireRequest {
     listing: address(value.listing),
     brief: value.brief.trim(),
     outputs: [...value.outputs],
-    ...(value.privateCommitment && { privateCommitment: value.privateCommitment }),
+    ...(value.privateCommitment && {
+      privateCommitment: value.privateCommitment,
+    }),
   };
 }
 /** Plain agreed criteria survive both the hosted and practice spec publishers. */
@@ -103,8 +106,10 @@ export function childPolicyCriterion(policy: ChildHirePolicy) {
 }
 export function childShareCriterion(supplier: string, request: ChildHireRequest) {
   return (
-    "Share the approved input with supplier under grant " +
-    childDigest([address(supplier), checkedChildRequest(request)])
+    CHILD_SHARE_PREFIX +
+    createHash("sha256")
+      .update(childSharePayload(address(supplier), checkedChildRequest(request)))
+      .digest("hex")
   );
 }
 export const CHILD_LINEAGE = "Supplier job for parent ";
@@ -116,13 +121,20 @@ export function sameGrant(a: ChildRoomGrant, b: ChildRoomGrant) {
     a.roomId === b.roomId
   );
 }
-export async function parentClaim(chain: Chain, services: MarketServices, grant: ChildRoomGrant, payer: string) {
+export async function parentClaim(
+  chain: Chain,
+  services: MarketServices,
+  grant: ChildRoomGrant,
+  payer: string,
+) {
   if (!grant.roomId || grant.roomId.length > 128) refuseChild("The room grant is unavailable.");
   const task = address(grant.parentTask);
   const [hirePda] = await findHireRecordPda({ task });
   const [account, hire, now] = await Promise.all([
     readTask(chain, task),
-    readProgramAccount(chain, hirePda, getHireRecordDiscriminatorBytes(), (b) => getHireRecordDecoder().decode(b)),
+    readProgramAccount(chain, hirePda, getHireRecordDiscriminatorBytes(), (b) =>
+      getHireRecordDecoder().decode(b),
+    ),
     chain.clusterTime(),
   ]);
   if (!account || account.status !== TaskStatus.InProgress || !hire || hire.task !== task)
@@ -130,12 +142,16 @@ export async function parentClaim(chain: Chain, services: MarketServices, grant:
   const worker = hire.designatedProvider;
   const [claimPda] = await findClaimPda({ task, bidder: worker });
   const [claim, agent, spec] = await Promise.all([
-    readProgramAccount(chain, claimPda, getTaskClaimDiscriminatorBytes(), (b) => getTaskClaimDecoder().decode(b)),
+    readProgramAccount(chain, claimPda, getTaskClaimDiscriminatorBytes(), (b) =>
+      getTaskClaimDecoder().decode(b),
+    ),
     readAgent(chain, worker),
     fetchAndVerifyJobSpec({
       task,
       readAccount: chain.readAccount,
-      ...(services.resolveAgencUri && { resolveAgencUri: services.resolveAgencUri }),
+      ...(services.resolveAgencUri && {
+        resolveAgencUri: services.resolveAgencUri,
+      }),
     }),
   ]);
   if (
@@ -256,7 +272,12 @@ interface ChildWalletPorts {
   advance(jobId: string): Promise<void>;
   notify(id: string): void;
   /** B's reader completes inspection against the current round, including protected files. */
-  privateStage(commitment: string): Promise<{ required: true; version: 1; commitment: string } | undefined>;
+  privateStage(
+    grant: ChildRoomGrant,
+    request: ChildHireRequest,
+    supplier: string,
+    saved?: string,
+  ): Promise<string>;
   evidence?(
     job: JobRecord,
     names: string[],
@@ -266,10 +287,9 @@ interface ChildWalletPorts {
 export class ChildHires {
   constructor(private readonly p: ChildWalletPorts) {}
   #record(parent: string) {
-    return (
-      childState(this.p.store.state).childHires?.[address(parent)] ??
-      refuseChild("No supplier request exists for this parent.")
-    );
+    const record = childState(this.p.store.state).childHires?.[address(parent)];
+    if (!record) throw new WalletError("NOT_FOUND", "No supplier request exists for this parent.");
+    return record;
   }
   async setPolicy(sellerAgentId: string, listing: string, input: ChildHirePolicy | null) {
     const agent = this.p.agent(sellerAgentId);
@@ -285,7 +305,7 @@ export class ChildHires {
     });
     return policy;
   }
-  async #context(grant: ChildRoomGrant, input: ChildHireRequest) {
+  async #context(grant: ChildRoomGrant, input: ChildHireRequest, saved?: string) {
     const payer = this.p.agent(grant.sellerAgentId);
     const [parent, service] = await Promise.all([
       parentClaim(this.p.chain, this.p.services, grant, payer.address),
@@ -306,6 +326,7 @@ export class ChildHires {
       [payer.address, parent.creator].includes(supplier.authority)
     )
       refuseChild("Choose an independent supplier.");
+    let supplierCommitment: string | undefined;
     if (input.privateCommitment || parent.privateInputs) {
       if (
         policy.sharing !== "buyer-approved-input" ||
@@ -313,14 +334,20 @@ export class ChildHires {
         !parent.criteria.includes(childShareCriterion(supplier.authority, input))
       )
         refuseChild("The original buyer must approve this input and public brief for this supplier.");
-      const stage = await this.p.privateStage(input.privateCommitment);
-      if (!stage?.required || stage.version !== 1 || stage.commitment !== input.privateCommitment)
-        refuseChild("The approved protected handoff is unavailable for this supplier.");
+      supplierCommitment = await this.p.privateStage(grant, input, supplier.authority, saved);
     }
     const cutoff = parent.deadline - policy.returnBeforeSecs;
     if (!service.deliverySecs || parent.now + service.deliverySecs + policy.reviewWindowSecs > cutoff)
       refuseChild("The supplier's delivery and review would run past the parent cutoff.");
-    return { payer, parent, service, supplier: supplier.authority, policy, cutoff };
+    return {
+      payer,
+      parent,
+      service,
+      supplier: supplier.authority,
+      policy,
+      cutoff,
+      supplierCommitment,
+    };
   }
   async request(grant: ChildRoomGrant, request: ChildHireRequest): Promise<ChildHireView> {
     const input = checkedChildRequest(request);
@@ -334,7 +361,11 @@ export class ChildHires {
         if (existing.view.phase !== "approval" || existing.view.quote.expiresAt > this.p.now())
           return this.timeline(grant.parentTask);
       }
-      const { parent, service, supplier, policy, payer, cutoff } = await this.#context(grant, input);
+      const { parent, service, supplier, policy, payer, cutoff, supplierCommitment } = await this.#context(
+        grant,
+        input,
+        existing?.supplierCommitment,
+      );
       if (
         Object.values(childState(this.p.store.state).childHires ?? {}).some(
           (r) => r.view.child.task === parent.task,
@@ -347,17 +378,23 @@ export class ChildHires {
         listing: input.listing,
         request: input.brief,
         acceptance: [
-          ...(input.privateCommitment
-            ? ["Return the agreed protected outputs.", "Private input handoff v1: " + input.privateCommitment]
+          ...(supplierCommitment
+            ? ["Return the agreed protected outputs."]
             : input.outputs.map((name) => "Deliver " + name)),
           CHILD_LINEAGE + parent.task,
         ],
+        ...(supplierCommitment && { privateCommitment: supplierCommitment }),
         reviewWindowSecs: policy.reviewWindowSecs,
         deadline: parent.now + service.deliverySecs!,
         idempotencyKey: purchaseKey,
         expectedSpecHash: Buffer.from(service.specHash).toString("hex"),
         expectedPriceLamports: String(service.priceLamports),
       });
+      if (
+        supplierCommitment &&
+        !parseJobBrief(draft.job.jobSpec).acceptance.includes("Private input handoff v1: " + supplierCommitment)
+      )
+        refuseChild("The supplier service must support the approved private handoff.");
       const quote = draft.view;
       if (draft.job.payer !== "agent" || !quote.total || !draft.approval.quoteRate)
         refuseChild("Fund the selling agent before requesting a supplier.");
@@ -420,6 +457,7 @@ export class ChildHires {
           parentWorker: parent.worker,
           view,
           fingerprint,
+          ...(supplierCommitment && { supplierCommitment }),
           draft: { job: draft.job, approval: draft.approval },
         };
       });
@@ -429,7 +467,13 @@ export class ChildHires {
   }
   async checkFunding(record: ChildHireRecord, job: JobRecord) {
     const { view } = record;
-    const { service, policy, supplier, cutoff, payer } = await this.#context(record.grant, view.request);
+    if (view.request.privateCommitment && !record.supplierCommitment)
+      refuseChild("The supplier file approval is missing. Review the private handoff.");
+    const { service, policy, supplier, cutoff, payer } = await this.#context(
+      record.grant,
+      view.request,
+      record.supplierCommitment,
+    );
     const rate = await this.p.rate();
     const payout = view.payout;
     if (
@@ -464,7 +508,10 @@ export class ChildHires {
     if (
       !job.approvedCosts ||
       available <
-        BigInt(job.priceLamports) + BigInt(job.approvedCosts.total) + floor + BigInt(view.reviewReserve.lamports)
+        BigInt(job.priceLamports) +
+          BigInt(job.approvedCosts.total) +
+          floor +
+          BigInt(view.reviewReserve.lamports)
     )
       refuseChild("The selling agent cannot cover the hire and its review costs.");
     if (debit > this.p.room(this.p.agent(job.agentId), rate, job.id))
@@ -522,8 +569,15 @@ export class ChildHires {
                 rate,
                 funded: false,
               };
-              state.jobs[job.id] = { ...job, ownerApproved: true, phase: "cleared" };
-              state.approvals[approval.id] = { ...approval, status: "approved" };
+              state.jobs[job.id] = {
+                ...job,
+                ownerApproved: true,
+                phase: "cleared",
+              };
+              state.approvals[approval.id] = {
+                ...approval,
+                status: "approved",
+              };
               r.approvedAt = this.p.now();
               r.view.phase = "dispatching";
               delete r.draft;
@@ -557,7 +611,11 @@ export class ChildHires {
       view.child.status = job.phase === "failed" ? "failed" : job.hiredAt === null ? "starting" : "waiting";
       view.child.action = job.error ?? (view.phase === "dispatching" ? "Check purchase receipt" : null);
     } else if (view.phase === "approval" && view.quote.expiresAt <= this.p.now()) view.phase = "expired";
-    const unknown = (s: ChildEscrow): ChildEscrow => ({ ...s, status: "unknown", action: "Check receipt" });
+    const unknown = (s: ChildEscrow): ChildEscrow => ({
+      ...s,
+      status: "unknown",
+      action: "Check receipt",
+    });
     const parentWorker = address(record.parentWorker);
     [view.parent, view.child] = await Promise.all([
       parentWorker
@@ -627,7 +685,9 @@ export class ChildHires {
       createHash("sha256").update(result.bytes).digest("hex") !== deliveryHash
     )
       refuseChild("The supplier delivery could not be verified.");
-    const { text, files: listed } = splitDelivery(new TextDecoder("utf-8", { fatal: true }).decode(result.bytes));
+    const { text, files: listed } = splitDelivery(
+      new TextDecoder("utf-8", { fatal: true }).decode(result.bytes),
+    );
     if (
       !view.request.outputs.every((name) =>
         name === "text" ? !!text.trim() : listed.some((f) => f.name === name),
@@ -661,7 +721,8 @@ export class ChildHires {
     if (!sameGrant(r.grant, grant) || !r.delivered || r.delivered.receipt !== receipt)
       refuseChild("The room did not import this verified delivery.");
     await parentClaim(this.p.chain, this.p.services, grant, r.view.payer);
-    if ((await this.p.chain.clusterTime()) >= r.view.cutoff) refuseChild("The supplier return cutoff has passed.");
+    if ((await this.p.chain.clusterTime()) >= r.view.cutoff)
+      refuseChild("The supplier return cutoff has passed.");
     this.p.store.update((state) => {
       childState(state).childHires![grant.parentTask]!.view.importReceipt = receipt;
     });
@@ -678,7 +739,12 @@ interface DeliveryReader {
     part: string,
     offset: number,
   ): Promise<{
-    binding: { task: string; worker: string; round: number; deliveryHash: string };
+    binding: {
+      task: string;
+      worker: string;
+      round: number;
+      deliveryHash: string;
+    };
     manifest: string;
     totalBytes: number;
     offset: number;
@@ -787,7 +853,10 @@ export function childHireHandlers(wallet: AgencWallet) {
         p.offset > bytes.length
       )
         return refuseChild("The selected supplier part changed.");
-      return { base64: bytes.subarray(p.offset, p.offset + 24 * 1024).toString("base64"), total: bytes.length };
+      return {
+        base64: bytes.subarray(p.offset, p.offset + 24 * 1024).toString("base64"),
+        total: bytes.length,
+      };
     },
     "child.imported": async (p: Params<"child.imported">) => {
       await wallet.childHires.acknowledgeImport(p.grant, p.receipt);

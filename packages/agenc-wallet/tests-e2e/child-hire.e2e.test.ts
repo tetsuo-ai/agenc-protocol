@@ -1,7 +1,12 @@
 import { afterEach, expect, it } from "vitest";
 import { rmSync } from "node:fs";
 import { stageChildResult } from "@tetsuo-ai/agenc-worker";
-import { CHILD_LINEAGE } from "../src/child-hire.js";
+import {
+  CHILD_LINEAGE,
+  childShareCriterion,
+  readChildDependency,
+  withChildDependency,
+} from "../src/child-hire.js";
 import { openParentFixture, type ChildFixtureOptions } from "./child-hire-fixture.js";
 import { CENT, confirmPayout, REVIEW_ALLOWANCE, type World } from "./harness.js";
 let world: World;
@@ -30,7 +35,9 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
   ]);
   expect(one.quote.id).toBe(two.quote.id);
   expect(await world.balance(seller.address)).toBe(before);
-  await expect(wallet.childHires.request(grant, { ...request, brief: "Changed" })).rejects.toThrow(/one supplier/);
+  await expect(wallet.childHires.request(grant, { ...request, brief: "Changed" })).rejects.toThrow(
+    /one supplier/,
+  );
   await expect(wallet.decideApproval(one.quote.id, true)).rejects.toThrow();
   await expect(wallet.childHires.decide(grant.parentTask, "other", true)).rejects.toThrow(/quote/);
   const funded = await wallet.childHires.decide(grant.parentTask, one.quote.id, true);
@@ -70,6 +77,7 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
   expect(await stageChildResult(room, binding, result)).toEqual(staged);
   await wallet.childHires.acknowledgeImport(grant, result.receipt);
   expect((await confirmPayout(wallet, one.child.jobId)).status).toBe("paid");
+  await expect(wallet.rateJob(one.child.jobId, 5, true)).rejects.toThrow(/rating|stars/i);
   world.sandbox.advanceClock(8 * 86400);
   await wallet.refundJob(job.id, true);
   const end = await wallet.childHires.timeline(job.task!);
@@ -80,7 +88,10 @@ it("charges neither escrow on a decline and rejects an unapproved private share"
   const { grant, request, seller } = await parent({ privateInputs: true });
   const before = await world.balance(seller.address);
   await expect(
-    world.wallet.childHires.request(grant, { ...request, privateCommitment: "a".repeat(64) }),
+    world.wallet.childHires.request(grant, {
+      ...request,
+      privateCommitment: "a".repeat(64),
+    }),
   ).rejects.toThrow(/original buyer/);
   const proposal = await world.wallet.childHires.request(grant, request);
   await world.wallet.childHires.decide(grant.parentTask, proposal.quote.id, false);
@@ -92,16 +103,26 @@ it("refuses the all-in cap even when the price alone fits", async () => {
   await expect(world.wallet.childHires.request(grant, request)).rejects.toThrow(/cap or daily/);
 }, 90000);
 it("reads the funded parent lineage before considering a grandchild", async () => {
-  const { grant, request } = await parent({ criteria: [CHILD_LINEAGE + "earlier job"] });
+  const { grant, request } = await parent({
+    criteria: [CHILD_LINEAGE + "earlier job"],
+  });
   await expect(world.wallet.childHires.request(grant, request)).rejects.toThrow(/another supplier/);
 }, 90000);
 it("rechecks the allowance and refunds an unstarted supplier independently", async () => {
   const { grant, request, seller, job } = await parent();
   const wallet = world.wallet;
   const proposal = await wallet.childHires.request(grant, request);
-  await wallet.setPolicy(seller.id, { askAboveCents: 1000, refill: { ...REVIEW_ALLOWANCE, perDayCents: 1 } });
-  await expect(wallet.childHires.decide(grant.parentTask, proposal.quote.id, true)).rejects.toThrow(/allowance/);
-  await wallet.setPolicy(seller.id, { askAboveCents: 1000, refill: { ...REVIEW_ALLOWANCE, perDayCents: 10000 } });
+  await wallet.setPolicy(seller.id, {
+    askAboveCents: 1000,
+    refill: { ...REVIEW_ALLOWANCE, perDayCents: 1 },
+  });
+  await expect(wallet.childHires.decide(grant.parentTask, proposal.quote.id, true)).rejects.toThrow(
+    /allowance/,
+  );
+  await wallet.setPolicy(seller.id, {
+    askAboveCents: 1000,
+    refill: { ...REVIEW_ALLOWANCE, perDayCents: 10000 },
+  });
   await wallet.childHires.decide(grant.parentTask, proposal.quote.id, true);
   world.sandbox.advanceClock(601);
   world.clock.now += 601000;
@@ -109,6 +130,52 @@ it("rechecks the allowance and refunds an unstarted supplier independently", asy
   const seen = await wallet.childHires.timeline(job.task!);
   expect(seen.child.status).toBe("refunded");
   expect(seen.parent.status).toBe("working");
+}, 90000);
+
+it("binds opt-in and supplier-specific disclosure to the seller, service, brief and files", async () => {
+  const { grant, request, seller, buyer, policy, listing } = await parent({
+    privateInputs: true,
+  });
+  const spec = {
+    custom: { listingMetadata: { fulfilment: { privateInputs: true } } },
+  };
+  const published = withChildDependency(spec, seller.address, policy);
+  expect(readChildDependency(spec, seller.address)).toBeNull();
+  expect(readChildDependency(published, seller.address)?.policy).toEqual(policy);
+  expect(() => readChildDependency(published, buyer.address)).toThrow(/seller/);
+  await expect(
+    world.wallet.childHires.setPolicy(seller.id, listing, {
+      ...policy,
+      allowedListings: [listing],
+    }),
+  ).rejects.toThrow(/supply itself/);
+  const shared = { ...request, privateCommitment: "b".repeat(64) };
+  const consent = childShareCriterion(seller.address, shared);
+  expect(consent).not.toBe(childShareCriterion(buyer.address, shared));
+  expect(consent).not.toBe(childShareCriterion(seller.address, { ...shared, outputs: ["text"] }));
+  await expect(world.wallet.childHires.request(grant, shared)).rejects.toThrow(/original buyer/);
+}, 90000);
+
+it("reserves time for delivery and review before the parent cutoff", async () => {
+  const { grant, request, seller } = await parent({ returnBeforeSecs: 35900 });
+  const balance = await world.balance(seller.address);
+  await expect(world.wallet.childHires.request(grant, request)).rejects.toThrow(/cutoff/);
+  expect(await world.balance(seller.address)).toBe(balance);
+}, 90000);
+
+it("shows a rejected supplier's review deadline while the parent claim keeps working", async () => {
+  const { grant, request } = await parent();
+  const wallet = world.wallet;
+  const proposal = await wallet.childHires.request(grant, request);
+  await wallet.childHires.decide(grant.parentTask, proposal.quote.id, true);
+  await world.sandbox.workOnce();
+  const draft = await wallet.draftReview(proposal.child.jobId, "reject", "The agreed result is incomplete.");
+  await wallet.confirmReview(proposal.child.jobId, draft, true);
+  const end = await wallet.childHires.timeline(grant.parentTask);
+  expect(end.child.status).toBe("in_review");
+  expect(end.child.reviewEndsAt).toBeGreaterThan(0);
+  expect(end.child.action).toBe("View review options");
+  expect(end.parent.status).toBe("working");
 }, 90000);
 
 it("keeps an unknown signed hire reserved across a restart and daily rollover, then binds its one landed task", async () => {
@@ -128,7 +195,10 @@ it("keeps an unknown signed hire reserved across a restart and daily rollover, t
           throw new Error("Connection closed with the purchase outcome unknown.");
         },
       }),
-      chain: (chain) => ({ ...chain, workOutcome: async (r) => (!reveal ? "pending" : chain.workOutcome!(r)) }),
+      chain: (chain) => ({
+        ...chain,
+        workOutcome: async (r) => (!reveal ? "pending" : chain.workOutcome!(r)),
+      }),
     },
   });
   let wallet = world.wallet;
@@ -141,7 +211,10 @@ it("keeps an unknown signed hire reserved across a restart and daily rollover, t
   await wallet.close();
   wallet = world.wallet = await world.reopen();
   world.clock.now += 86400001;
-  await wallet.setPolicy(seller.id, { askAboveCents: 1000, refill: { ...REVIEW_ALLOWANCE, perDayCents: 1 } });
+  await wallet.setPolicy(seller.id, {
+    askAboveCents: 1000,
+    refill: { ...REVIEW_ALLOWANCE, perDayCents: 1 },
+  });
   await wallet.getJob(ask.child.jobId, true);
   const { StateStore } = await import("../src/store.js");
   const { remainingJobMicrocents } = await import("../src/job-money.js");
