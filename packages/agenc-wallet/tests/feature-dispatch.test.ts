@@ -69,3 +69,25 @@ describe("feature routes use the feature owners' handlers", () => {
     }
   });
 });
+
+describe("delivery reads and acknowledgements (track B wiring)", () => {
+  it("routes owner reads to the owner path and payer reads to the agent's own path", async () => {
+    const readOwnerDeliveryChunk = vi.fn(async () => ({ base64: "" }));
+    const readDeliveryChunk = vi.fn(async () => ({ base64: "", challenge: "c" }));
+    const table = routes({ readOwnerDeliveryChunk, readDeliveryChunk });
+    await table["jobs.readDeliveryChunk"]({ jobId: "job_1", part: "text", offset: 0 }, owner);
+    expect(readOwnerDeliveryChunk).toHaveBeenCalledWith("job_1", "text", 0);
+    await table["jobs.readDeliveryChunk"]({ jobId: "job_1", part: "text", offset: 0 }, agent);
+    expect(readDeliveryChunk).toHaveBeenCalledWith("job_1", "agent_1", "text", 0);
+  });
+
+  it("lets only the paying agent acknowledge received bytes", async () => {
+    const acknowledgeDeliveryChunk = vi.fn(async () => ({ inspected: true }));
+    const table = routes({ acknowledgeDeliveryChunk });
+    const ack = { manifest: "a".repeat(64), part: "text", offset: 0, proof: "b".repeat(64) };
+    expect(await code(() => table["jobs.acknowledgeDeliveryChunk"]({ jobId: "job_1", ack }, owner))).toBe("NOT_ALLOWED");
+    expect(await table["jobs.acknowledgeDeliveryChunk"]({ jobId: "job_1", ack }, agent)).toEqual({ inspected: true });
+    expect(acknowledgeDeliveryChunk).toHaveBeenCalledWith("job_1", "agent_1", ack);
+    expect(AGENT_METHODS).toContain("jobs.acknowledgeDeliveryChunk");
+  });
+});

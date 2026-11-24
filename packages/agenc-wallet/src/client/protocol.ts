@@ -346,7 +346,7 @@ export type MethodResult<M extends WalletMethod> = WalletMethods[M]["result"];
  * wallets, change its own rules, approve its own request, or withdraw.
  */
 export const AGENT_METHODS: readonly WalletMethod[] = [
-  "agents.self", "jobs.inbox", "jobs.dismiss", "listings.inquiries", "listings.message", "jobs.ratingQuote", "earn.operation", "jobs.readDeliveryChunk", "jobs.exchange",
+  "agents.self", "jobs.inbox", "jobs.dismiss", "listings.inquiries", "listings.message", "jobs.ratingQuote", "earn.operation", "jobs.readDeliveryChunk", "jobs.exchange", "jobs.acknowledgeDeliveryChunk",
   "work.list",
   "work.quote",
   "market.find",

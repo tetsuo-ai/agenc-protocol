@@ -101,17 +101,16 @@ export function featureRoutes(
         p.processing,
         p.outputs,
       ),
-    "jobs.readDeliveryChunk": async (p, s) =>
-      featureCall(
-        wallet,
-        "readDeliveryChunk",
-        p.jobId,
-        s.role === "owner"
-          ? (await wallet.getJob(p.jobId, true)).agentId
-          : agent(s),
-        p.part,
-        p.offset,
-      ),
+    // B: the owner reads through its own path; a paying agent reads, and is challenged, as itself.
+    "jobs.readDeliveryChunk": (p, s) =>
+      s.role === "owner"
+        ? featureCall(wallet, "readOwnerDeliveryChunk", p.jobId, p.part, p.offset)
+        : featureCall(wallet, "readDeliveryChunk", p.jobId, agent(s), p.part, p.offset),
+    "jobs.acknowledgeDeliveryChunk": async (p, s) => {
+      if (s.role !== "agent")
+        throw new WalletError("NOT_ALLOWED", "Only the paying agent can confirm it received a delivery.");
+      return featureCall(wallet, "acknowledgeDeliveryChunk", p.jobId, agent(s), p.ack);
+    },
     "child.policy": (p) =>
       child("setPolicy", p.sellerAgentId, p.listing, p.policy),
     "child.request": (p) => child("request", p.grant, p.request, p.shareGrant),

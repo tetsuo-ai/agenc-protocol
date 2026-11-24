@@ -28,6 +28,8 @@ export interface EvidenceChunk {
   totalBytes: number;
   base64: string;
   inspected: boolean;
+  /** B: present only for the paying agent; answer it with deliveryChunkAck after the bytes arrive. */
+  challenge?: string | null;
 }
 
 export type ConversationKind = "question" | "reply" | "progress" | "ack";
@@ -83,6 +85,23 @@ export interface RecipientGrantPreview {
   files: readonly PrivateFileView[];
 }
 
+// From track B (client/job-exchange.ts). The final merge takes B's whole file.
+export interface DeliveryChunkAck { manifest: string; part: string; offset: number; proof: string }
+
+/** Compute this in the authenticated reader after decoding the reply. */
+export async function deliveryChunkAck(chunk: EvidenceChunk): Promise<DeliveryChunkAck> {
+  if (!chunk.challenge) throw new Error("Only the paying agent can acknowledge a delivery.");
+  const bytes = Uint8Array.from(atob(chunk.base64), char => char.charCodeAt(0));
+  const nonce = new TextEncoder().encode(chunk.challenge);
+  const input = new Uint8Array(nonce.length + bytes.length);
+  input.set(nonce);
+  input.set(bytes, nonce.length);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  return { manifest: chunk.manifest, part: chunk.part, offset: chunk.offset, proof: Array.from(hash, byte => byte.toString(16).padStart(2, "0")).join("") };
+}
+
+export const jobMessageIdPattern = "^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$";
+
 /** Add these actions to the scoped chat job tool. Owner file picking and
  * release decisions stay in the Market panel. Use the earlier message ID on retry. */
 export const jobExchangeChatSchema = {
@@ -91,17 +110,19 @@ export const jobExchangeChatSchema = {
   required: ["jobId", "action"],
   properties: {
     jobId: { type: "string", minLength: 1 },
-    action: { enum: ["status", "history", "refresh", "join", "send", "retryMessages", "readDeliveryChunk"] },
+    action: { enum: ["status", "history", "refresh", "join", "send", "retryMessages", "collect", "readDeliveryChunk", "acknowledgeDeliveryChunk"] },
     message: {
       type: "object", additionalProperties: false, required: ["kind", "body", "id", "parent"],
       properties: {
         kind: { enum: ["question", "reply", "progress", "ack"] }, body: { type: "string", minLength: 1, maxLength: 8000 },
-        id: { type: "string", pattern: "^[a-f0-9]{32}$" }, parent: { anyOf: [{ type: "null" }, { type: "string", pattern: "^[a-f0-9]{32}$" }] },
+        id: { type: "string", pattern: jobMessageIdPattern }, parent: { anyOf: [{ type: "null" }, { type: "string", pattern: jobMessageIdPattern }] },
       },
     },
     contextIndex: { type: "integer", minimum: 0 }, beforeEntry: { type: "integer", minimum: 0 },
+    manifest: { type: "string", pattern: "^[a-f0-9]{64}$" }, proof: { type: "string", pattern: "^[a-f0-9]{64}$" },
     part: { type: "string", maxLength: 64 }, offset: { type: "integer", minimum: 0 },
   },
 } as const;
 
 export const privatePurchaseNotice = "Anyone can read the brief and acceptance criteria. Add private files in Market. The owner chooses which confirmed worker and room receive them.";
+

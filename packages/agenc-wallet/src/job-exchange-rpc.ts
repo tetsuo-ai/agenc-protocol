@@ -13,13 +13,14 @@ export type JobExchangeAction =
   | { action: "status"; beforeEntry?: number }
   | { action: "release"; preview: RecipientGrantPreview }
   | { action: "send"; message: JobMessage }
-  | { action: "collect"; commitment: string };
+  | { action: "collect" };
 
 export async function handleJobExchange(wallet: AgencWallet, host: Host, caller: Caller, jobId: string, request: JobExchangeAction) {
   if (!caller.owner && (!caller.agentId || ["grantPreview", "release", "retryInputs"].includes(request.action))) {
     throw new WalletError("NOT_ALLOWED", "This private handoff needs the owner in Market.");
   }
   if (request.action === "history") return wallet.jobExchangeHistory(jobId, caller.owner ? undefined : caller.agentId, request.contextIndex, request.beforeEntry);
+  if (request.action === "collect") return wallet.collectJobOutput(jobId, host.relay, caller.owner ? undefined : caller.agentId);
   const session = await wallet.jobExchangeSession(jobId, await host.roomFor(jobId), host.relay, caller.owner ? undefined : caller.agentId);
   switch (request.action) {
     case "status": return session.status(request.beforeEntry);
@@ -34,7 +35,6 @@ export async function handleJobExchange(wallet: AgencWallet, host: Host, caller:
     case "send": return session.send(request.message);
     case "retryMessages": return session.retryMessages();
     case "retryInputs": return session.retryInputs();
-    case "collect": return session.collectOutput(request.commitment);
     default: throw new WalletError("BAD_REQUEST", "Unknown job exchange action.");
   }
 }

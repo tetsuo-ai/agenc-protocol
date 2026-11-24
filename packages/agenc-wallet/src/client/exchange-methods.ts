@@ -24,7 +24,7 @@ export type ExchangeAction =
       preview: import("./job-exchange.js").RecipientGrantPreview;
     }
   | { action: "send"; message: import("./job-exchange.js").JobMessage }
-  | { action: "collect"; commitment: string };
+  | { action: "collect" };
 export interface ExchangeMethods {
   "jobs.bindRoom": {
     params: { jobId: string; room: string };
@@ -46,5 +46,10 @@ export interface ExchangeMethods {
   "jobs.readDeliveryChunk": {
     params: { jobId: string; part: string; offset: number };
     result: EvidenceChunk;
+  };
+  /** The paying agent confirms it received a part's bytes (B's challenge). Never the owner. */
+  "jobs.acknowledgeDeliveryChunk": {
+    params: { jobId: string; ack: import("./job-exchange.js").DeliveryChunkAck };
+    result: unknown;
   };
 }

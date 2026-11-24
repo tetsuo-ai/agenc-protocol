@@ -21,6 +21,8 @@ export interface ExchangeWallet {
     relay: ExchangeRelay,
     agent?: string,
   ): Promise<JobExchangeSession>;
+  /** B: the verified paid or current submission, selected by the wallet itself. No room lookup. */
+  collectJobOutput(id: string, relay: ExchangeRelay, agent?: string): Promise<unknown>;
 }
 export class AssignedRooms {
   constructor(
@@ -34,12 +36,15 @@ export class AssignedRooms {
         "NOT_AVAILABLE",
         "Waiting for a verified job claim.",
       );
+    // A new claim generation on the same task needs a fresh assignment.
+    const generation = (parties as { claimGeneration?: unknown }).claimGeneration;
     return createHash("sha256")
       .update(
         JSON.stringify([
           job.task,
           parties.workerRegistration,
           parties.claimedAt,
+          ...(typeof generation === "string" && generation.length > 0 ? [generation] : []),
         ]),
       )
       .digest("hex");
