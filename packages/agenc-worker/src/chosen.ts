@@ -12,9 +12,9 @@ import {
   type VerifiedCandidate, type WorkerAgent, type WorkerContext, type WorkSimulation,
 } from "./runtime.js";
 import { cleanupClaimInstruction, readTaskAccount } from "./upkeep.js";
-import { bytesToHex, hexToBytes, loadState, type SubmissionIntent } from "./state.js";
+import { bytesToHex, hexToBytes, loadState, saveState, type SubmissionIntent } from "./state.js";
 import { decodeHostedBrief } from "./hosted-brief.js";
-import { chosenReleaseWindow } from "./chosen-release.js";
+import { chosenReleaseWindow, correctionCutoff } from "./chosen-release.js";
 import { resultDataFromHashHex, resultPlaceholderUri, uploadResult } from "./result.js";
 
 export type WorkerAction = "claim" | "submit" | "release";
@@ -185,6 +185,18 @@ export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signa
     },
   }));
   if (result.status !== "held") throw new Error("The worker could not confirm the claim. Refresh the jobs list.");
+  // Leave the two buyer-requested revision slices intact. A crash before this
+  // write simply leaves this older claim without a pre-submission repair.
+  const state = loadState(ctx.stateDir);
+  const marker = state.openClaim;
+  const budget = marker?.modelBudget;
+  if (marker?.chosen && marker.task === task && marker.phase === "claimed" && ctx.reviewRoom && ctx.modelSpendDir &&
+      budget && budget.remainingCents >= 2) {
+    const heldBack = Math.max(1, Math.floor(budget.remainingCents / 4));
+    budget.remainingCents -= heldBack;
+    budget.correctionCents = heldBack;
+    saveState(ctx.stateDir, state);
+  }
 }
 
 type Terms = NonNullable<Awaited<ReturnType<typeof taskTerms>>>;
@@ -304,6 +316,8 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
     title: marker.title ?? "Chosen job",
     claimedAt: Number(claim.claimedAt), expiresAt, releaseBy: terms.contest || cleanup ? null : releaseBy, depositReturns,
     releaseWindow: terms.contest || cleanup ? null : { ...window, lateRecipient }, releaseState,
+    correctionEndsAt: marker.modelBudget?.correctionCents && !cleanup
+      ? correctionCutoff({ expiresAt, deadline: terms.deadline, releaseWindow: terms.contest ? null : window }) : null,
     release, submit, canRelease: !!release, canSubmit: !!submit, resultHash: marker.execution?.resultHashHex ?? null,
     resultBytes: marker.execution ? Buffer.byteLength(marker.execution.resultBytesBase64, "base64") : null,
     preview: marker.execution ? Buffer.from(marker.execution.resultBytesBase64, "base64").toString("utf8").slice(0, 4000) : null };
@@ -325,7 +339,7 @@ export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, s
   if (marker?.task !== task || !marker.chosen) throw new Error("The selected claim changed.");
   let ix;
   if (action === "submit") {
-    if (!marker.execution) throw new Error("The room has no result ready.");
+    if (!marker.execution || marker.execution.resultHashHex !== held.resultHash) throw new Error("The room result changed. Review it again.");
     const { resultHashHex, rewardAmount, resultBytesBase64 } = marker.execution;
     const resultUri = ctx.config.resultUploader ? await uploadResult({ uploaderUrl: ctx.config.resultUploader,
       body: new Uint8Array(Buffer.from(resultBytesBase64, "base64")), ...(ctx.uploadFetch && { fetchImpl: ctx.uploadFetch }) }) : resultPlaceholderUri(resultHashHex);

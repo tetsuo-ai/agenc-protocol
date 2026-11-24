@@ -1,5 +1,6 @@
 import { recordListingCreation } from "./seller-operation.js";
 import { ARCHIVE_FILE, MoneyArchive } from "./money-archive.js";
+import type { ChildHireState } from "./child-hire-store.js";
 import type { JobTerms } from "./client/types.js";
 // The wallet's journal: agents, jobs, approvals and the activity list, in one
 // private JSON file that is rewritten atomically on every change.
@@ -179,6 +180,7 @@ export interface ContestRegistration {
 }
 
 export interface JobRecord {
+  parties?: import("./client/business.js").JobParties;
   contestRegistration?: ContestRegistration;
   contestEntries?: Array<import("./client/types.js").ContestEntry & { commitment?: string; observedEvent?: boolean; eventId?: string }>;
   contestQuote?: import("./client/types.js").ContestQuote;
@@ -417,9 +419,11 @@ export interface ActivityRecord {
   signature: string | null;
 }
 
-export interface WalletState {
+export interface WalletState extends ChildHireState {
   moneyArchiveId?: string;
   contestRegistrations?: Record<string, ContestRegistration>;
+  actionInbox?: import("./action-inbox.js").SavedAction[];
+  businessRecovery?: { restoredAt: number; requiresConsent: boolean; sellers?: string[] };
   setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;
   version: number;
   createdAt: number;
@@ -433,6 +437,9 @@ export interface WalletState {
     receipt?: PendingListingSend;
   }>;
   workRecords?: Record<string, {
+    parties?: import("./client/business.js").JobParties;
+    /** The parties were read after the task or claim closed, or the job ended. Lists stop re-reading them. */
+    partiesFinal?: boolean;
     revisionDeadlines?: Record<string, number>;
     reviewDraft?: import("./client/reviews.js").ReviewDraft;
     result?: JobResult;

@@ -53,6 +53,7 @@ export function workerJob(job: OpenWork | HeldWork, rate: number, defaultFee: bi
     releaseBy: open ? null : job.releaseBy, expiresAt: open ? null : job.expiresAt,
     resultHash: open ? null : job.resultHash, resultBytes: open ? null : job.resultBytes,
     preview: open ? null : job.preview, canSubmit: !open && job.canSubmit, canRelease: !open && job.canRelease,
+    ...(!open && { correctionEndsAt: job.correctionEndsAt }),
   };
 }
 

@@ -1,3 +1,4 @@
+import type {} from "./service-usage.js";
 // Turn the journal's records into what a person reads.
 import { contestPage } from "./contest-page.js";
 import { fractionalQuoteUsd } from "./job-money.js";
@@ -339,6 +340,8 @@ export function jobView(
     task: job.task,
     listing: job.listing || null,
     provider: job.providerAgent || null,
+    ...(job.modelUsage && { modelUsage: job.modelUsage, settledSellerCredit: job.settledSellerLamports == null ? null : money(job.settledSellerLamports, context.usdPerSol) }),
+    ...(job.parties && { parties: { ...job.parties } }),
     // A delivery saved before files could come with one has no list.
     // A verified earlier revision is not evidence of the paid commitment.
     result: job.result === null || (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked)

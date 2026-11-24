@@ -123,4 +123,8 @@ declare module "./types.js" {
   interface JobView {
     parties?: JobParties;
   }
+  interface WorkerJobView {
+    /** Unix seconds a correction must finish by, leaving time to submit or give back the claim. */
+    correctionEndsAt?: number | null;
+  }
 }

@@ -179,3 +179,5 @@ export * from "./chosen-release.js";
 
 export { decodeHostedBrief } from "./hosted-brief.js";
 export { readReviewEnvelope } from "./review-artifact.js";
+
+export { correctChosenWork } from "./chosen-correction.js";
