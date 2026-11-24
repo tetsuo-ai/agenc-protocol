@@ -11,6 +11,7 @@ import { connectWallet, type WalletClient } from "../src/client/socket-client.js
 import type { MethodResult } from "../src/client/protocol.js";
 import { runMarketTool } from "../src/client/tools.js";
 import { PRACTICE_SERVICES } from "../src/sandbox.js";
+import { readTask } from "../src/market.js";
 import { agentToken, serveWallet, type WalletServer } from "../src/server.js";
 import { REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 
@@ -80,6 +81,10 @@ async function open() {
   await sandbox.workOnce();
   const delivered = await wallet.getJob(job.id, true);
   expect(delivered.status).toBe("delivered");
+  // Item 7: parties carry the stock task's claim generation (Task._reserved[3..11]).
+  const account = await readTask(w.sandbox.chain, address(job.task!));
+  expect(delivered.parties?.claimGeneration).toBe(Buffer.from(account!.reserved).readBigUInt64LE(3).toString());
+  expect(delivered.parties?.claimGeneration).not.toBe("0");
   return { w, owner, chat, agent, other, job, delivered };
 }
 
