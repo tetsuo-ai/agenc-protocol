@@ -428,6 +428,11 @@ export class ChildHires {
       proof,
     };
   }
+  /** After a restore, seller work waits for the owner to confirm this device. A supplier purchase is seller work. */
+  #checkRestoredDevice(): void {
+    if (this.p.store.state.businessRecovery?.requiresConsent)
+      refuseChild("Review the restored work and grant this device permission first.");
+  }
   async request(
     grant: ChildRoomGrant,
     request: ChildHireRequest,
@@ -452,6 +457,8 @@ export class ChildHires {
         )
           return this.timeline(grant.parentTask);
       }
+      // A new supplier quote is seller work: a restored device is confirmed first.
+      this.#checkRestoredDevice();
       const resolved = await this.#context(
         grant,
         input,
@@ -681,6 +688,8 @@ export class ChildHires {
           delete r.draft;
         });
       } else {
+        // Funding a supplier that is not yet funded waits for the restored device too. Declining does not.
+        if (record.draft) this.#checkRestoredDevice();
         if (record.draft) {
           const { job, approval } = record.draft;
           await this.p.reserve(job.agentId, async () => {
