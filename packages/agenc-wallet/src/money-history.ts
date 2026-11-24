@@ -4,7 +4,8 @@ import type { StateStore, WalletState } from "./store.js";
 
 import type { AccountChange, HistoryRow } from "./client/money-operations.js";
 export type { AccountChange, HistoryRow } from "./client/money-operations.js";
-interface Cursor { head?: string; before?: string; target?: string; gap?: string; missingCheckpoint?: string }
+interface Backfill { before: string; until?: string; gap?: string }
+interface Cursor { backfill?: Backfill[]; head?: string; before?: string; target?: string; gap?: string; missingCheckpoint?: string }
 declare module "./store.js" {
   interface WalletState { moneyCursors?: Record<string, Cursor>; moneyRows?: Record<string, HistoryRow> }
 }
@@ -66,26 +67,42 @@ export function classifyChange(state: WalletState, change: AccountChange, own: R
 
 export async function indexAccountChanges(chain: Chain, store: StateStore, account: Address, own: ReadonlySet<string>, onDeposit: (draft: WalletState, row: HistoryRow) => void) {
   const cursor = store.state.moneyCursors?.[account] ?? {};
-  let page: ChangePage;
-  try {
-    page = chain.accountChanges ? await chain.accountChanges(account, cursor.before, cursor.head) : { rows: [], end: false, gap: "Transaction history is unavailable." };
-  } catch { page = { rows: [], end: false, gap: "Transaction history could not be read." }; }
-  if (!page.rows.length && !page.gap && !cursor.before && !cursor.gap) return;
+  const read = async (before?: string, until?: string): Promise<ChangePage> => {
+    try {
+      if (chain.accountChanges) return await chain.accountChanges(account, before, until);
+    } catch { /* Retain the checkpoint for the next tick. */ }
+    return { rows: [], end: false, gap: "Transaction history is unavailable." };
+  };
+  // Older cursors kept the newest observed signature in target until backfill finished.
+  const head = cursor.target ?? cursor.head;
+  const ranges: Backfill[] = [...(cursor.backfill ?? [])];
+  if (cursor.before) ranges.push({ before: cursor.before, ...(cursor.head && { until: cursor.head }), ...(cursor.gap && { gap: cursor.gap }) });
+  const range = ranges.shift();
+  const live = await read(undefined, head);
+  const back = range ? await read(range.before, range.until) : null;
+  let missingCheckpoint = cursor.missingCheckpoint;
+  const retain = (page: ChangePage, before?: string, until?: string) => {
+    if (page.end) {
+      if (page.gap) missingCheckpoint = page.gap;
+    } else {
+      const last = page.rows.at(-1)?.signature ?? before;
+      if (last) ranges.push({ before: last, ...(until && { until }), ...(page.gap && { gap: page.gap }) });
+    }
+  };
+  retain(live, undefined, head);
+  if (back && range) retain(back, range.before, range.until);
+  const gap = (!live.end && live.gap) || ranges.find(r => r.gap)?.gap;
+  if (!live.rows.length && !range && !gap && !cursor.gap && !missingCheckpoint) return;
   store.update(s => {
-    const rows = s.moneyRows ??= {};
-    for (const change of page.rows) {
+    for (const change of [...live.rows, ...(back?.rows ?? [])]) {
       const key = change.signature + "/" + account;
-      if (rows[key]) continue;
+      if (s.moneyRows?.[key]) continue;
       const row = classifyChange(s, change, own);
-      rows[key] = row;
+      (s.moneyRows ??= {})[key] = row;
       if (row.kind === "deposit") onDeposit(s, row);
     }
-    const target = cursor.target ?? page.rows[0]?.signature;
-    const before = page.rows.at(-1)?.signature ?? cursor.before;
-    (s.moneyCursors ??= {})[account] = page.end ? {
-      ...(target && { head: target }), ...(cursor.missingCheckpoint && { missingCheckpoint: cursor.missingCheckpoint }),
-      ...(page.gap && { missingCheckpoint: page.gap }),
-    } :
-      { ...cursor, ...(before && { before }), ...(target && { target }), ...(page.gap && { gap: page.gap }) };
+    const newest = live.rows[0]?.signature ?? head;
+    (s.moneyCursors ??= {})[account] = { ...(newest && { head: newest }), ...(ranges.length && { backfill: ranges }),
+      ...(gap && { gap }), ...(missingCheckpoint && { missingCheckpoint }) };
   });
 }

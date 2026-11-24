@@ -124,3 +124,27 @@ it("keeps listing creation evidence through an offer edit and restart", async ()
   await restart();
   expect(w.wallet.sellerOperation(seller.id, q.quoteId)).toEqual(first);
 });
+
+it("advances the live head during a pruned backfill and later fills the gap", async () => {
+  let top = "older", pruned = true;
+  w = await startWorld({ chain: base => ({ ...base, async accountChanges(account, before, until) {
+    const all = top === "older" ? ["older", "missing"] : ["new", "older", "missing"];
+    const rows = [];
+    for (const sig of all.slice(before ? all.indexOf(before) + 1 : 0)) {
+      if (sig === until) break;
+      if (sig === "missing" && pruned) return { rows, end: false, gap: "Receipt is pruned." };
+      rows.push({ signature: sig, account, delta: "10", payerFee: "0", at: 1, externalSender: null, failed: false });
+    }
+    return { rows, end: true };
+  } }) });
+  await w.wallet.tick();
+  top = "new";
+  await restart();
+  await w.wallet.tick();
+  expect(w.wallet.moneyHistory().rows.map(r => r.signature)).toContain("new");
+  expect(w.wallet.moneyHistory().gaps).toHaveLength(1);
+  pruned = false;
+  await w.wallet.tick();
+  expect(w.wallet.moneyHistory().gaps).toHaveLength(0);
+  expect(w.wallet.moneyHistory().rows).toHaveLength(3);
+});
