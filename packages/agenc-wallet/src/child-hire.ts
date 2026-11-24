@@ -785,8 +785,12 @@ export class ChildHires {
       const data =
         (await this.p.evidence?.(job, r.view.request.outputs, grant)) ??
         (await this.#practiceEvidence(job, r.view));
-      if (data.round === 0 && r.delivered && r.delivered.hash === data.deliveryHash)
-        data.round = r.delivered.round;
+      if (data.round === 0) {
+        const current = await this.#submission(job, r.view);
+        if (!current || current.deliveryHash !== data.deliveryHash)
+          refuseChild("The settled supplier submission could not be verified.");
+        data.round = current.round;
+      }
       const receipt = childDigest([
         grant.parentTask,
         grant.claimedAt,
@@ -828,31 +832,39 @@ export class ChildHires {
     });
   }
 
+  async #submission(job: JobRecord, view: ChildHireView) {
+    const task = address(job.task!);
+    const worker = address(view.supplier);
+    const live = await readSubmission(this.p.chain, task, worker);
+    if (live) {
+      if (
+        live.account.worker !== worker ||
+        live.account.claim !== live.claim ||
+        ![SubmissionStatus.Submitted, SubmissionStatus.Accepted].includes(live.account.status)
+      )
+        return null;
+      return {
+        round: live.account.submissionCount,
+        deliveryHash: Buffer.from(live.account.proofHash).toString("hex"),
+        resultData: Uint8Array.from(live.account.resultData),
+      };
+    }
+    const payer = address(view.payer);
+    const paid = await this.p.chain.escrowReceipt?.(task, payer);
+    if (paid?.status !== "paid") return null;
+    const [claim] = await findClaimPda({ task, bidder: worker });
+    const [final, last] = await Promise.all([
+      this.p.chain.findSettledDelivery?.(task, payer),
+      this.p.chain.settledChildRound?.(task, claim, paid.signature),
+    ]);
+    if (final?.worker !== worker || !last || last.deliveryHash !== final.proofHashHex) return null;
+    return { round: last.submissionCount, deliveryHash: last.deliveryHash, resultData: final.resultData };
+  }
+
   async #matchesSubmission(r: ChildHireRecord, result: Pick<ChildResult, "deliveryHash" | "round">) {
     const job = this.p.store.state.jobs[r.view.child.jobId];
-    const task = address(job!.task!);
-    const worker = address(r.view.supplier);
-    const live = await readSubmission(this.p.chain, task, worker);
-    if (
-      live &&
-      live.account.worker === worker &&
-      live.account.claim === live.claim &&
-      live.account.submissionCount === result.round &&
-      [SubmissionStatus.Submitted, SubmissionStatus.Accepted].includes(live.account.status) &&
-      Buffer.from(live.account.proofHash).toString("hex") === result.deliveryHash
-    )
-      return true;
-    if (job?.outcome === "paid" && !live) {
-      const final = await this.p.chain.findSettledDelivery?.(task, address(r.view.payer));
-      if (final?.worker === worker && final.proofHashHex === result.deliveryHash) {
-        const [claim] = await findClaimPda({ task, bidder: worker });
-        const paid = await this.p.chain.escrowReceipt?.(task, address(r.view.payer));
-        if (!paid || paid.status !== "paid") return false;
-        const round = await this.p.chain.settledChildRound?.(task, claim, paid.signature);
-        return round?.deliveryHash === result.deliveryHash && round.submissionCount === result.round;
-      }
-    }
-    return false;
+    const current = job && (await this.#submission(job, r.view));
+    return current?.deliveryHash === result.deliveryHash && current.round === result.round;
   }
 
   async #currentSubmission(r: ChildHireRecord, result: Pick<ChildResult, "deliveryHash" | "round">) {
@@ -879,14 +891,10 @@ export class ChildHires {
   async #practiceEvidence(job: JobRecord, view: ChildHireView) {
     if (this.p.chain.network !== "sandbox" || view.request.privateCommitment)
       refuseChild("The verified delivery reader is required for this job.");
-    const current = () => readSubmission(this.p.chain, address(job.task!), address(view.supplier));
-    const sub = await current();
-    if (!sub) refuseChild("The supplier has no current delivery.");
-    const deliveryHash = Buffer.from(sub.account.proofHash).toString("hex");
-    const result = await this.p.services.fetchResult({
-      proofHashHex: deliveryHash,
-      resultData: Uint8Array.from(sub.account.resultData),
-    });
+    const current = await this.#submission(job, view);
+    if (!current) refuseChild("The supplier has no verified current delivery.");
+    const { deliveryHash, resultData, round } = current;
+    const result = await this.p.services.fetchResult({ proofHashHex: deliveryHash, resultData });
     if (
       !result ||
       result.bytes.length > 262144 ||
@@ -915,14 +923,8 @@ export class ChildHires {
         return { ...file, base64: Buffer.from(bytes).toString("base64") };
       }),
     );
-    const again = await current();
-    if (
-      !again ||
-      sub.account.submissionCount !== again.account.submissionCount ||
-      !Buffer.from(again.account.proofHash).equals(Buffer.from(sub.account.proofHash))
-    )
-      refuseChild("The supplier submitted a new delivery. Read it again.");
-    return { deliveryHash, round: sub.account.submissionCount, text, files };
+    // delivery() rechecks the signed round and hash immediately before staging this snapshot.
+    return { deliveryHash, round, text, files };
   }
   async acknowledgeImport(grant: ChildRoomGrant, receipt: string) {
     return this.p.lock("child:" + address(grant.parentTask), async () => {

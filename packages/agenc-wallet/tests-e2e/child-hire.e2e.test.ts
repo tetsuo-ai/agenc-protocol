@@ -553,3 +553,17 @@ it("keeps another child's review SOL when the owner reclaims a specific amount",
   );
   expect(await world.balance(seller.address)).toBe(before);
 }, 90000);
+
+it("imports a first-seen paid supplier delivery with its settled round after restart", async () => {
+  const { grant, request } = await parent();
+  const ask = await world.wallet.childHires.request(grant, request);
+  await world.wallet.childHires.decide(grant.parentTask, ask.quote.id, true);
+  await world.sandbox.workOnce();
+  expect((await confirmPayout(world.wallet, ask.child.jobId)).status).toBe("paid");
+  await world.wallet.close();
+  world.wallet = await world.reopen();
+  const result = await world.wallet.childHires.delivery(grant);
+  expect(result.round).toBe(1);
+  expect(result.files[0]?.name).toBe("postcard.png");
+  await world.wallet.childHires.acknowledgeImport(grant, result.receipt);
+}, 90000);

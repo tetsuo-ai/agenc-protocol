@@ -16,13 +16,12 @@ export async function escrowEvent(
     if (e.eventName === "RejectFrozenExpired" && e.data.task === task)
       return e.data.workerPayout > 0n ? "paid" : "refunded";
     if (e.eventName === "TaskResultAccepted" && e.data.task === task) return "paid";
-    if (e.eventName === "TaskCancelled" && (await findTaskPda(e.data))[0] === task) return "refunded";
     if (
-      e.eventName === "TaskCompleted" &&
-      creator &&
-      (await findTaskPda({ creator, taskId: e.data.taskId }))[0] === task
+      e.eventName === "TaskCancelled" &&
+      (!creator || e.data.creator === creator) &&
+      (await findTaskPda(e.data))[0] === task
     )
-      return "paid";
+      return "refunded";
   }
   return null;
 }
