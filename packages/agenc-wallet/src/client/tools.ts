@@ -173,7 +173,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
         job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
         entry_id: { type: "string", maxLength: 64, description: "Contest submission ID from market_status." },
         event_id: { type: "string", pattern: "^[0-9a-f]{64}$", description: "For dismiss_reminder, the exact event ID from market_status." },
-        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record", "winner", "reject", "release", "dismiss_reminder"] },
+        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record", "winner", "reject", "release", "dismiss_reminder", "rate"] },
         note: {
           type: "string",
           maxLength: 2000,
@@ -186,7 +186,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
           },
         },
         quote_id: { type: "string", pattern: "^[0-9a-f]{64}$", description: "For approve, use the quote ID from market_status for the delivery you reviewed." },
-        rating_quote_id: {type:"string",pattern:"^[a-f0-9]{64}$"},
+        rating_quote_id: {type:"string",pattern:"^[a-f0-9]{64}$",description:"The rating quote ID market_review returned for these stars. Without it, market_review returns the quote and pays nothing."},
         rating: {
           type: "integer",
           minimum: 1,
@@ -219,6 +219,8 @@ export interface MarketToolOptions {
 
 /** What every tool returns: JSON a model can read and a host can display. */
 export interface MarketToolResult {
+  /** The quote for a rating's exact score; send its ID to leave those stars. */
+  rating_quote?: { rating_quote_id: string; rating: number; maximum_debit: unknown; fee: unknown; rent: unknown; expires_at: number };
   actions?: import("./business.js").JobAction[];
   actions_unavailable?: boolean;
   receipt?: unknown;
@@ -556,7 +558,36 @@ export async function runMarketTool(
       const { job } = await client.call("jobs.quoteContest", { jobId, entryId, action, ...(reason && { reason }) }, callOptions);
       return { ok: true, message: "The contest decision is drafted. The owner reviews the quote in Market Jobs.", job: describeJob(job, now()) };
     }
+    if (action === "rate" || (action === "approve" && args.rating !== undefined)) {
+      // Stars cost a fee: show the quote for this exact score first, and send stars only with its ID.
+      const score = args.rating;
+      if (typeof score !== "number" || !Number.isInteger(score) || score < 1 || score > 5) {
+        throw new ToolInputError("rating must be a whole number from 1 to 5.");
+      }
+      if (action === "approve" && (typeof args.quote_id !== "string" || !/^[a-f0-9]{64}$/.test(args.quote_id))) {
+        throw new ToolInputError("Read the delivery with market_status and use its quote_id to approve payment.");
+      }
+      if (typeof args.rating_quote_id !== "string") {
+        const quote = await client.call("jobs.ratingQuote", { jobId, score }, callOptions);
+        return {
+          ok: false,
+          message: `${score} ${score === 1 ? "star costs" : "stars cost"} at most ${formatMoney(quote.maximumDebit)} (fee ${formatMoney(quote.fee)}, rent ${formatMoney(quote.rent)}). Nothing was paid. ` +
+            (action === "approve"
+              ? "To approve with these stars, call market_review again with this rating and rating_quote_id. To approve without stars, leave rating out."
+              : "To leave these stars, call market_review again with action rate, this rating and rating_quote_id."),
+          rating_quote: { rating_quote_id: quote.id, rating: quote.score, maximum_debit: quote.maximumDebit, fee: quote.fee, rent: quote.rent, expires_at: quote.expiresAt },
+        };
+      }
+      if (!/^[a-f0-9]{64}$/.test(args.rating_quote_id)) throw new ToolInputError("Use the rating_quote_id market_review returned.");
+      if (action === "rate") {
+        const { job } = await client.call("jobs.rate", { jobId, score, ratingQuoteId: args.rating_quote_id }, callOptions);
+        return reviewedStatus(job);
+      }
+    }
     if (action === "approve") {
+      if (typeof args.rating_quote_id === "string" && args.rating === undefined) {
+        throw new ToolInputError("Give the rating that rating_quote_id was quoted for, or leave both out.");
+      }
       if (typeof args.quote_id !== "string" || !/^[a-f0-9]{64}$/.test(args.quote_id)) {
         throw new ToolInputError("Read the delivery with market_status and use its quote_id to approve payment.");
       }

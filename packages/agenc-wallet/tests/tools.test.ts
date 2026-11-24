@@ -407,3 +407,34 @@ describe("market_status inbox and reminders (track F wiring)", () => {
     expect(calls).toContainEqual(["jobs.dismiss", { id: action.id }]);
   });
 });
+
+describe("rating quotes in chat (track A wiring)", () => {
+  const quote = { id: "f".repeat(64), jobId: "job_1", task: "t", listing: "l", payer: "p", score: 4,
+    fee: { lamports: "5000", usdCents: 1 }, rent: { lamports: "1000000", usdCents: 15 }, maximumDebit: { lamports: "1005000", usdCents: 16 }, expiresAt: 9 };
+  const deliveryQuote = "a".repeat(64);
+
+  it("shows the quote for the chosen score and pays nothing until its ID comes back", async () => {
+    const { client, calls } = wallet({ "jobs.ratingQuote": quote });
+    const result = await runMarketTool(client, "agent_1", "market_review", { job_id: "job_1", action: "approve", quote_id: deliveryQuote, rating: 4 });
+    expect(result).toMatchObject({ ok: false, rating_quote: { rating_quote_id: quote.id, rating: 4 } });
+    expect(result.message).toMatch(/Nothing was paid/);
+    expect(calls).toEqual([["jobs.ratingQuote", { jobId: "job_1", score: 4 }]]);
+  });
+
+  it("carries the rating quote ID through approval and a standalone rating", async () => {
+    const done = { job: job({ id: "job_1", status: "completed" } as never) };
+    const { client, calls } = wallet({ "jobs.approve": done, "jobs.rate": done });
+    await runMarketTool(client, "agent_1", "market_review", { job_id: "job_1", action: "approve", quote_id: deliveryQuote, rating: 4, rating_quote_id: quote.id });
+    await runMarketTool(client, "agent_1", "market_review", { job_id: "job_1", action: "rate", rating: 5, rating_quote_id: quote.id });
+    expect(calls).toEqual([
+      ["jobs.approve", { jobId: "job_1", quoteId: deliveryQuote, rating: 4, ratingQuoteId: quote.id }],
+      ["jobs.rate", { jobId: "job_1", score: 5, ratingQuoteId: quote.id }],
+    ]);
+  });
+
+  it("refuses a rating quote ID with no rating", async () => {
+    const { client, calls } = wallet({});
+    expect((await runMarketTool(client, "agent_1", "market_review", { job_id: "job_1", action: "approve", quote_id: deliveryQuote, rating_quote_id: quote.id })).ok).toBe(false);
+    expect(calls).toEqual([]);
+  });
+});
