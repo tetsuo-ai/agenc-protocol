@@ -179,6 +179,13 @@ export interface AgentView {
    * asks the person every time. Set with `agents.setBudget`.
    */
   budgetCents: number;
+  /**
+   * Set after a restore from a backup: until this time (ms) the agent cannot
+   * spend on its own, because what it spent since the backup is not known.
+   */
+  allowanceUnknownUntil?: number;
+  /** One plain sentence for the person while `allowanceUnknownUntil` applies. */
+  allowanceUnknownText?: string;
   /** The agent's own wallet address. Its balance IS the agent's allowance. */
   address: string;
   /** What the agent can still spend. */

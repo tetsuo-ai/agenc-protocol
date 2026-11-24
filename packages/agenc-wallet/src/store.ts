@@ -108,6 +108,8 @@ export interface AgentRecord {
   /** Automatic top-ups in the last day, for the per-day rule. */
   refills: AllowanceCharge[];
   jobSpends?: { id: string; at: number; microcents: string | null }[];
+  /** Set by a restore: until then the ledger may miss spends made after the backup. */
+  allowanceUnknownUntil?: number;
   earn: {
     chooseOpenJobs?: boolean;
     enabled: boolean;
@@ -200,6 +202,11 @@ export interface JobRecord {
   contestCheckpoint?: import("./contest-history.js").ContestCheckpoint;
   terms?: JobTerms;
   inputFingerprint?: string;
+  /**
+   * Set by a restore on a job the backup knew as not yet funded. Its task may
+   * have been funded after the backup, so the chain is asked before anything else.
+   */
+  fundingUnknown?: true;
   /** Null when the buyer left the maximum to the quote. Older journals omit this field. */
   buyerMaxPriceCents?: number | null;
   maxPriceCents?: number;

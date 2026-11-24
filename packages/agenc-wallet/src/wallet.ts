@@ -82,6 +82,7 @@ import { contestPlan } from "./contest-decision.js";
 import { beforeContestExpiry, contestSigner } from "./contest-deadline.js";
 import type { ContestAction, ContestQuote } from "./client/types.js";
 import { ceilingLamports, jobNetworkFees, microcents, remainingJobMicrocents, reserveJobSpend, type JobDeposits } from "./job-money.js";
+import { allowanceUnknown, RESTORED_ALLOWANCE_TEXT } from "./job-money.js";
 import { checkedAcceptance, jobIdentity, resolveJobTerms, type TermsInput } from "./job-terms.js";
 import { legacyRefreshLimit, buildJobQuote, checkPriceLimit, jobCosts, buyerPriceLimit, allowanceRate } from "./job-quote.js";
 import type { JobTerms, ServiceView } from "./client/types.js";
@@ -1156,6 +1157,7 @@ export class AgencWallet {
       name: agent.name,
       scope: agent.scope ?? null,
       budgetCents: agent.policy.refill.perDayCents,
+      ...(allowanceUnknown(agent, this.#now()) && { allowanceUnknownUntil: agent.allowanceUnknownUntil!, allowanceUnknownText: RESTORED_ALLOWANCE_TEXT }),
       address: agent.address,
       balance: money(balance ?? 0n, rate),
       balanceKnown: balance !== null,
@@ -1672,6 +1674,8 @@ export class AgencWallet {
         const dailyRoom = this.#dailyRoom(this.#agentRecord(agent.id), rate);
         if (funding.exact && BigInt(funding.exact.dailyRemaining.lamports) !== dailyRoom)
           throw new WalletError("PRICE_CHANGED", "The remaining daily allowance changed. Review a new quote.");
+        if (!funding.approved && allowanceUnknown(this.#agentRecord(agent.id), this.#now()))
+          throw new WalletError("APPROVAL_REQUIRED", RESTORED_ALLOWANCE_TEXT);
         if (!funding.approved && charge > dailyRoom) {
           throw new WalletError(
             "APPROVAL_REQUIRED",
@@ -2690,6 +2694,14 @@ export class AgencWallet {
       return this.#jobView(this.#jobRecord(approval.jobId), true);
     }
     const jobId = approval.jobId;
+    if (!panel && this.#store.state.jobs[jobId]?.fundingUnknown &&
+        await this.#lock(`job:${jobId}`, () => this.#adoptRestoredFunding(jobId))) {
+      // Already funded before this wallet was restored: there is nothing left to approve or decline.
+      this.#emit({ type: "approval", approvalId });
+      await this.#advance(jobId, true);
+      this.#emit({ type: "job", jobId });
+      return this.#jobView(this.#jobRecord(jobId), true);
+    }
     if (!approve) {
       if (panel) {
         this.#panelQuotes.delete(approvalId);
@@ -3002,9 +3014,71 @@ export class AgencWallet {
     this.#emit({ type: "overview" });
   }
 
+  /**
+   * A restore brings a job back as the backup knew it. When its task was funded
+   * after the backup, the chain already holds it under this job's own task ID:
+   * adopt it, so it is not quoted again, declined, failed as unspent or sent twice.
+   * The caller holds the job's lock. True when the funded task was adopted.
+   */
+  async #adoptRestoredFunding(jobId: string): Promise<boolean> {
+    const job = this.#store.state.jobs[jobId];
+    if (!job?.fundingUnknown) return false;
+    const settle = () => this.#store.update(draft => { delete draft.jobs[jobId]?.fundingUnknown; });
+    if (job.role !== "buying" || job.payer === null || job.hiredAt !== null || childForJob(this.#store.state, job)) {
+      settle();
+      return false;
+    }
+    const payer = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address as Address;
+    const task = await taskAddressFor(payer, values.hexToBytes(job.taskIdHex));
+    const account = await readTask(this.#chain, task);
+    if (account === null || account.creator !== payer) {
+      settle();
+      return false;
+    }
+    // The first run published the request before it funded the task. Publishing is
+    // repeatable and moves no money: it gives back the same request and its address.
+    const published = await this.#services.publishJobSpec({
+      title: job.title, request: job.request, acceptance: job.acceptance, ...(job.terms && { terms: job.terms }),
+      listing: isRequest(job) ? null : (job.listing as Address), signer: await this.#payerSigner(job),
+    }).catch((error: unknown) => {
+      if (error instanceof WalletError && error.code !== "NETWORK") return null;
+      throw error;
+    });
+    const requestDeadline = isRequest(job) ? job.requestDeadline ?? Number(account.deadline) : undefined;
+    this.#patchJob(jobId, (entry, draft) => {
+      delete entry.fundingUnknown;
+      if (published) {
+        entry.jobSpec = published.spec;
+        entry.jobSpecHashHex = published.hashHex;
+        entry.jobSpecUri = published.uri;
+      }
+      entry.task = task;
+      if (requestDeadline !== undefined) entry.requestDeadline = requestDeadline;
+      // The chain decides from here: the next step compares the task with this job and records it as funded.
+      entry.phase = "hiring";
+      entry.hireAttemptAt = this.#now();
+      entry.ownerApproved = true;
+      entry.error = null;
+      const approval = entry.approvalId ? draft.approvals[entry.approvalId] : undefined;
+      if (approval) {
+        approval.status = "approved";
+        // The restored ledger does not hold this purchase. Count it from now, at the quote's rate.
+        const agent = entry.payer === "agent" ? draft.agents[entry.agentId] : undefined;
+        if (agent && approval.quoteRate) reserveJobSpend(agent, entry.id,
+          microcents(BigInt(entry.priceLamports) + BigInt(approval.depositsLamports), approval.quoteRate), 0n, this.#now(), true);
+      }
+    });
+    this.#emit({ type: "overview" });
+    return true;
+  }
+
   /** Move one job as far as it can go right now. Safe to call at any time. */
   #advance(jobId: string, fundContest = false, observed = false): Promise<void> {
     return this.#lock(`job:${jobId}`, async () => {
+      if (this.#store.state.jobs[jobId]?.fundingUnknown) {
+        try { await this.#adoptRestoredFunding(jobId); }
+        catch (error) { this.#log(`job ${jobId} restored funding: ${describeError(error)}`); return; }
+      }
       for (let step = 0; step < 6; step += 1) {
         const before = this.#store.state.jobs[jobId];
         if (before === undefined || before.role !== "buying") return;
@@ -4994,6 +5068,7 @@ export class AgencWallet {
     if (this.#ownedJob(jobId, agentId).terms?.contest) return contestUnavailable("Review the contest payout quote in Jobs.");
     const initial = this.#ownedJob(jobId, agentId);
     if (!isOwner && (!agentId || initial.payer !== "agent")) throw this.#reviewRequired(false);
+    if (!isOwner && allowanceUnknown(this.#agentRecord(initial.agentId), this.#now())) throw new WalletError("NOT_ALLOWED", RESTORED_ALLOWANCE_TEXT);
     if (!quoteId) throw new WalletError(isOwner ? "APPROVAL_REQUIRED" : "NOT_ALLOWED",
       isOwner ? "Review the current delivery and confirm payment in Market." : "Read the current delivery in chat before approving payment.");
     if (rating !== undefined && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
@@ -6092,7 +6167,7 @@ export class AgencWallet {
       transferFee: sellerMoney(fee, rate),
       totalFromMain: sellerMoney(fromMain + fee, rate),
       dailyRemaining: sellerMoney(room, rate),
-      requiresApproval: fromMain + fee > room,
+      requiresApproval: fromMain + fee > room || (fromMain > 0n && allowanceUnknown(agent, this.#now())),
     };
   }
 
@@ -7444,9 +7519,15 @@ export class AgencWallet {
     // A restore waiting for consent pauses only seller work: new claims,
     // Earns and offers. Buying jobs, approvals and notices keep moving.
     const sellerPaused = this.#store.state.businessRecovery?.requiresConsent === true;
+    // Before a restored quote can lapse as unspent, ask the chain whether it was funded after the backup.
+    for (const job of Object.values(this.#store.state.jobs).filter(job => job.fundingUnknown)) {
+      const adopted = await this.#lock(`job:${job.id}`, () => this.#adoptRestoredFunding(job.id))
+        .catch(error => { this.#log(`job ${job.id} restored funding: ${describeError(error)}`); return false; });
+      if (adopted) await this.#advance(job.id, true);
+    }
     const now = this.#now();
     const lapsed = Object.values(this.#store.state.approvals).filter(
-      (approval) => approval.status === "pending" && approval.expiresAt <= now,
+      (approval) => approval.status === "pending" && approval.expiresAt <= now && !this.#store.state.jobs[approval.jobId]?.fundingUnknown,
     );
     if (lapsed.length > 0) {
       this.#store.update((draft) => {
@@ -7541,6 +7622,8 @@ export class AgencWallet {
     for (const agent of Object.values(this.#store.state.agents)) {
       const rule = agent.policy.refill;
       if (!rule.enabled || rule.topUpToCents <= 0 || rule.perDayCents <= 0) continue;
+      // After a restore nothing moves to an agent without the owner for a day.
+      if (allowanceUnknown(agent, this.#now())) continue;
       const balance = await this.#chain.getBalance(agent.address as Address);
       const target = centsToLamports(rule.topUpToCents, rate);
       // Top up only once the wallet has fallen to half its target, so small

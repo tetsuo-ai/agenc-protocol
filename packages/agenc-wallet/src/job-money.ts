@@ -84,7 +84,43 @@ export function remainingJobMicrocents(agent: AgentRecord, now: number, except?:
   return room > 0n ? room : 0n;
 }
 
+/** How long after a restore an agent cannot spend on its own: the length of the allowance day. */
+export const RESTORE_HOLD_MS = 86_400_000;
+export const RESTORED_ALLOWANCE_TEXT = "This wallet was restored from a backup, so what this agent spent since the backup is not known. " +
+  "For 24 hours after the restore it cannot spend on its own. You can approve each payment in Market.";
+
+/**
+ * A backup holds the allowance ledger of the moment it was made. After a restore
+ * the agent may already have used today's allowance, so nothing it decides alone
+ * is inside it until a full day has passed. The owner's own approvals are not affected.
+ */
+export function allowanceUnknown(agent: AgentRecord, now: number): boolean {
+  return agent.allowanceUnknownUntil !== undefined && now < agent.allowanceUnknownUntil;
+}
+
+/** Called while a backup is put back, on the records it restores. */
+export function holdRestoredAllowances(state: { agents?: Record<string, AgentRecord>; activity?: unknown[] }, now: number): void {
+  const agents = Object.values(state.agents ?? {});
+  for (const agent of agents) agent.allowanceUnknownUntil = now + RESTORE_HOLD_MS;
+  if (agents.length && Array.isArray(state.activity)) state.activity.push({ id: "act_restore_" + now, ts: now, kind: "note",
+    text: "Restored from a backup. Spending since the backup is not known, so for 24 hours every agent payment needs your approval.",
+    lamports: null, agentId: null, jobId: null, signature: null });
+}
+
+/**
+ * Called while a backup is put back. A job that was quoted or approved but not
+ * yet funded in the backup may have been funded afterwards: mark it so the
+ * wallet reads the chain before it quotes, declines, fails or sends it again.
+ */
+export function markRestoredJobs(state: { jobs?: Record<string, { role?: string; phase?: string; hiredAt?: number | null; hireAttemptAt?: number | null; fundingUnknown?: true }> }): void {
+  for (const job of Object.values(state.jobs ?? {})) {
+    if (job.role === "buying" && job.hiredAt == null && job.hireAttemptAt == null &&
+        (job.phase === "needs_approval" || job.phase === "cleared" || job.phase === "hiring")) job.fundingUnknown = true;
+  }
+}
+
 export function reserveJobSpend(agent: AgentRecord, id: string, charge: bigint, price: bigint, now: number, ownerApproved: boolean): boolean {
+  if (!ownerApproved && allowanceUnknown(agent, now)) return false;
   if (!ownerApproved && (price > BigInt(agent.policy.askAboveCents) * 1_000_000n ||
       charge > remainingJobMicrocents(agent, now, id))) return false;
   const recent = (agent.jobSpends ?? []).filter(entry => entry.at > now - 86_400_000 && entry.id !== id);

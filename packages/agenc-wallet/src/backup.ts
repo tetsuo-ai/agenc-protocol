@@ -1,3 +1,4 @@
+import { holdRestoredAllowances, markRestoredJobs } from "./job-money.js";
 import { ARCHIVE_FILE } from "./money-archive.js";
 import { BUSINESS_FILE, pauseRestoredBusiness, restoredBusiness, verifyPortableBusiness } from "./business-backup.js";
 import type { PortableBusiness } from "./client/business.js";
@@ -487,6 +488,9 @@ export async function restoreBackup(input: {
           return !!ledger.openClaim || ledger.submissions?.some((entry: {settled: boolean}) => !entry.settled);
         });
         pauseRestoredBusiness(state as unknown as WalletState, content.business, input.now, hasWork);
+        // The ledger of what each agent spent today is as old as the backup.
+        holdRestoredAllowances(state as unknown as WalletState, input.now);
+        markRestoredJobs(state as unknown as WalletState);
         bytes = Buffer.from(JSON.stringify(state), "utf8");
       } catch {
         throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
