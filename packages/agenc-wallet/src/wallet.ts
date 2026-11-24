@@ -13,7 +13,7 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
-import { recordSellerDecision, sellerReceipt } from "./seller-operation.js";
+import { recordListingCreation, recordSellerDecision, sellerReceipt } from "./seller-operation.js";
 import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
 import { checkHireOperator, checkOperator } from "./payable-operator.js";
 import { fillCatalogTerms, reducesListingCapacity, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
@@ -1441,6 +1441,9 @@ export class AgencWallet {
           offer.status = "being_checked";
           offer.error = null;
         }
+        const offerId = operation.offerId ?? offer?.id;
+        const listingId = operation.listingId ?? offer?.listingIdHex;
+        if (offerId && listingId) recordListingCreation(agent, offerId, listingId, operation.listing, signature);
         this.#note(draft, { kind: "note", text: `${agent.name} now offers “${operation.name}”.`, agentId, signature });
       } else {
         for (const offer of agentOffers(agent)) {
@@ -6124,7 +6127,7 @@ export class AgencWallet {
       const latest = this.#agentRecord(agentId);
       const wanted = agentOffers(latest).find((item) => item.id === offerId);
       if (!wanted || !this.#wantsLive(latest, wanted)) return settle("paused");
-      await withListingOperation({ kind: "create", listing, name: offer.name, lamports: deposit.toString() },
+      await withListingOperation({ kind: "create", listing, offerId, listingId: offer.listingIdHex, name: offer.name, lamports: deposit.toString() },
         async () => sendCreateListing(this.#chain, await this.#vault.signer(agent.keyId), {
           providerAgent, listingId, name: offer.name, category: offer.category,
           specHash: values.hexToBytes(offer.specHashHex), specUri,

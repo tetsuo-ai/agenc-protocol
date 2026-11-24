@@ -4,7 +4,7 @@ import { generateKeyPairSigner, SolanaError, SOLANA_ERROR__JSON_RPC__SERVER_ERRO
 import { createRpcTransport, type RpcTransportRpc } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it } from "vitest";
 import { StateStore, type WalletState } from "../src/store.js";
-import { confirmPayout, SOL, startWorld, type World } from "./harness.js";
+import { confirmPayout, eventually, SOL, startWorld, type World } from "./harness.js";
 
 let w: World;
 afterEach(async () => { await w?.wallet.close(); });
@@ -103,3 +103,24 @@ async function finishContest() {
   await wallet.tick();
   return job.id;
 }
+
+it("keeps listing creation evidence through an offer edit and restart", async () => {
+  w = await startWorld({ earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
+    mode: "sandboxed", envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 150 } });
+  const seller = await w.wallet.createAgent("Seller");
+  const input = { name: "Editor", summary: "Line edits", price: { lamports: "3000999" } };
+  const q = await w.wallet.quoteEarn(seller.id, input);
+  await w.wallet.setOffer(seller.id, input, undefined, q.quoteId);
+  const earn = await w.wallet.quoteEarn(seller.id, undefined, undefined, 10);
+  await w.wallet.setEarn(seller.id, true, 10, earn.quoteId);
+  const first = await eventually(async () => {
+    await w.wallet.tick();
+    const receipt = w.wallet.sellerOperation(seller.id, q.quoteId);
+    return receipt?.listingSignature ? receipt : null;
+  });
+  const changed = { ...input, price: { lamports: "4000999" } };
+  const edit = await w.wallet.quoteEarn(seller.id, changed, first.offerId);
+  await w.wallet.setOffer(seller.id, changed, first.offerId, edit.quoteId);
+  await restart();
+  expect(w.wallet.sellerOperation(seller.id, q.quoteId)).toEqual(first);
+});

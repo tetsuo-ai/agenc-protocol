@@ -24,12 +24,25 @@ export function recordSellerDecision(agent: AgentRecord, decision: SellerDecisio
   if (row) (agent.sellerOperations ??= {})[decision.quoteId] = row;
 }
 
+// The listing ID is immutable even when the seller changes price or metadata.
+// A replacement listing receives a fresh ID and cannot supply this evidence.
+export function recordListingCreation(agent: AgentRecord, offerId: string, listingId: string, listing: string, signature: string) {
+  for (const row of Object.values(agent.sellerOperations ?? {})) {
+    if (row.state === "confirmed" && row.seller === agent.address && row.offerId === offerId &&
+        row.listingId === listingId && !row.listingSignature) {
+      row.listing = listing;
+      row.listingSignature = signature;
+    }
+  }
+}
+
 export function sellerReceipt(agent: AgentRecord, quoteId: string) {
   const saved = agent.sellerOperations?.[quoteId];
-  if (saved) {
-    const offer = agentOffers(agent).find(o => o.id === saved.offerId && o.listingIdHex === saved.listingId && o.specHashHex === saved.metadataHash && o.priceLamports === saved.priceLamports);
+  if (saved?.state === "confirmed" && !saved.listingSignature) {
+    const offer = agentOffers(agent).find(o => o.id === saved.offerId && o.listingIdHex === saved.listingId);
     return { ...saved, listing: saved.listing ?? offer?.listing ?? null, listingSignature: saved.listingSignature ?? offer?.signatures.create ?? null };
   }
+  if (saved) return { ...saved };
   for (const { operation, signature } of agent.earn.pendingListingSends ?? []) {
     if (operation?.kind === "funding" && operation.decision?.quoteId === quoteId)
       return describe(agent, operation.decision, "pending", signature, operation.lamports);
