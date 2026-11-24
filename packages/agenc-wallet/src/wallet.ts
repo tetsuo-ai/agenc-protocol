@@ -3805,12 +3805,22 @@ export class AgencWallet {
     }));
   }
 
-  async #sellerParties(agentId: string, task: string, freshClaim = false) {
+  async #sellerParties(agentId: string, task: string, freshClaim = false, ended = false) {
     const id = "earn_" + agentId + "_" + task;
-    const existing = this.#store.state.workRecords?.[id]?.parties;
-    if (existing?.workerRegistration && !freshClaim) return existing;
+    const record = this.#store.state.workRecords?.[id];
+    const existing = record?.parties;
+    if ((existing?.workerRegistration || record?.partiesFinal) && !freshClaim) return existing ?? null;
     const registration = await this.#earn.marketplaceAgent(agentId);
-    const parties = await readJobParties(this.#chain, task as Address, registration).catch(() => null);
+    let failed = false;
+    const parties = await readJobParties(this.#chain, task as Address, registration).catch(() => { failed = true; return null; });
+    // A closed task or claim, or an ended job, will not change: remember that
+    // it was checked so job lists stop reading the chain for it.
+    const final = !failed && (ended || parties === null || !parties.workerRegistration);
+    if (final && !freshClaim && !this.#closed)
+      this.#store.update(draft => { ((draft.workRecords ??= {})[id] ??= {}).partiesFinal = true; });
+    // A worker that claims the same task again gets a live read once more.
+    if (freshClaim && parties?.workerRegistration && record?.partiesFinal && !this.#closed)
+      this.#store.update(draft => { delete draft.workRecords![id]!.partiesFinal; });
     if (existing?.workerRegistration && !parties?.workerRegistration) return existing;
     if (parties?.workerWallet && parties.workerWallet !== this.#agentRecord(agentId).address) return existing;
     if (parties && JSON.stringify(parties) !== JSON.stringify(existing) && !this.#closed) {
@@ -3824,7 +3834,7 @@ export class AgencWallet {
     await this.#lock(`work-evidence:${job.id}`, async () => {
       const cached = this.#store.state.workRecords?.[job.id];
       if (job.task) {
-        const parties = await this.#sellerParties(job.agentId,job.task);
+        const parties = await this.#sellerParties(job.agentId, job.task, false, job.phase === "done" || job.phase === "failed");
         if (parties) job.parties = parties;
       }
       if (!job.request && cached?.request) {

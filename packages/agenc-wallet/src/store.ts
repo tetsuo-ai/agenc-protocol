@@ -434,6 +434,8 @@ export interface WalletState extends ChildHireState {
   }>;
   workRecords?: Record<string, {
     parties?: import("./client/business.js").JobParties;
+    /** The parties were read after the task or claim closed, or the job ended. Lists stop re-reading them. */
+    partiesFinal?: boolean;
     revisionDeadlines?: Record<string, number>;
     reviewDraft?: import("./client/reviews.js").ReviewDraft;
     result?: JobResult;
