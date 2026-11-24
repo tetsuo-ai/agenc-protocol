@@ -1,3 +1,4 @@
+import { checkedChildPolicy, withChildDependency } from "./seller-dependency.js";
 import { checkOperator } from "./payable-operator.js";
 import { address } from "@solana/kit";
 import {
@@ -39,7 +40,7 @@ export function resolveTerms(
   if (
     patch &&
     Object.keys(patch).some(
-      (field) => !Object.hasOwn(DEFAULT_SELLER_TERMS, field) && !["servicePin", "minimumMarginCents", "modelCapCents"].includes(field),
+      (field) => !Object.hasOwn(DEFAULT_SELLER_TERMS, field) && !["servicePin", "minimumMarginCents", "modelCapCents", "childPolicy"].includes(field),
     )
   )
     throw new WalletError(
@@ -50,6 +51,7 @@ export function resolveTerms(
     ...(previous ? storedTerms(previous) : DEFAULT_SELLER_TERMS),
     ...patch,
   };
+  if (terms.childPolicy != null) terms.childPolicy = checkedChildPolicy(terms.childPolicy);
   const problem = sellerTermsProblem(terms);
   if (problem) throw new WalletError("BAD_REQUEST", problem);
   if (terms.operator !== null) {
@@ -69,7 +71,7 @@ export function resolveTerms(
   return terms;
 }
 
-export function sellerListingSpec(input: SellerTerms & { name: string; summary: string }) {
+export function sellerListingSpec(input: SellerTerms & { name: string; summary: string }, seller?: string) {
   const spec = buildListingSpec(input);
   if (input.servicePin || input.minimumMarginCents || input.modelCapCents) {
     const custom = spec.custom as { listingMetadata: Record<string, unknown> };
@@ -79,7 +81,9 @@ export function sellerListingSpec(input: SellerTerms & { name: string; summary: 
       ...(input.modelCapCents && { modelCapCents: input.modelCapCents }),
     };
   }
-  return spec;
+  if (!input.childPolicy) return spec;
+  if (!seller) throw new WalletError("BAD_REQUEST", "The paying seller is required for a supplier policy.");
+  return withChildDependency(spec, seller, input.childPolicy);
 }
 
 export function sameChainTerms(

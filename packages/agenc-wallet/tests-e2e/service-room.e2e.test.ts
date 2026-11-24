@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { readAgent, readListing } from "../src/market.js";
 import { serviceUsage } from "../src/service-usage.js";
-import { confirmPayout, eventually, REVIEW_ALLOWANCE, startWorld } from "./harness.js";
+import { confirmPayout, eventually, setEarnWithApproval, REVIEW_ALLOWANCE, startWorld } from "./harness.js";
 import type { Address } from "@solana/kit";
 
 const program = process.env.AGENC_TEST_SERVICE_ROOM;
@@ -25,7 +25,7 @@ function panel(input: object) {
   return runFixture([electron!, path.resolve(path.dirname(program!), "../scripts/check-service-room.cjs"), "--no-sandbox"], input);
 }
 
-it.skipIf(!program || !assets)("rehearses, publishes and serves a different wallet from immutable local room assets", async () => {
+it.skipIf(!program || !assets).each(["register", "upgrade"])("rehearses and serves a different wallet with verified capabilities (%s)", async (mode) => {
   const scratch = mkdtempSync(path.join(tmpdir(), "service-journey-"));
   const room = path.join(scratch, "{agent}");
   const earn = {
@@ -38,6 +38,11 @@ it.skipIf(!program || !assets)("rehearses, publishes and serves a different wall
   const buyerWallet = await world.reopen({ dataDir: path.join(scratch, "buyer"), earn: { executor: null } });
   try {
     const seller = await world.wallet.createAgent();
+    if (mode === "upgrade") {
+      await setEarnWithApproval(world.wallet, seller.id, true, 10);
+      await eventually(async () => (await world.wallet.effectiveServiceCapabilities(seller.id)) === 1n);
+      await world.wallet.setEarn(seller.id, false);
+    }
     const sellerDir = path.join(world.dataDir, "earn", seller.id);
     const sample = { files: [
       { name: "service.py", base64: Buffer.from("import pathlib,sys\np=pathlib.Path\n(p('/work/outbox')/'result.txt').write_text(p('/inbox/prefix.txt').read_text()+p(sys.argv[1]).read_text())\nprint('Text ready')").toString("base64") },
@@ -49,6 +54,7 @@ it.skipIf(!program || !assets)("rehearses, publishes and serves a different wall
       await runFixture(args, sample);
     const rehearsal = JSON.parse(checked);
     expect(rehearsal).toMatchObject({ costUsd: 0, pin: { capabilities: "5" }, files: [{ name: "result.txt" }] });
+    await expect(world.wallet.quoteEarn(seller.id, { name: "Unproved", summary: "Test", price: { usdCents: 50 }, terms: { servicePin: { ...rehearsal.pin, capabilities: "9" } } })).rejects.toThrow(/Rehearse/i);
     const offer = { name: "Prefix a document", summary: "Deliver a signed-off text file.", price: { usdCents: 80 }, enableEarns: true as const,
       setupId: "immutable-workflow", terms: { servicePin: rehearsal.pin, minimumMarginCents: 5, modelCapCents: 10 } };
     const file = path.join(sellerDir, "service-bundles", rehearsal.pin.digest, "manifest.json");

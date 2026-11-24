@@ -53,6 +53,7 @@ import {
 import { claimBudget, budgetForRevision, enrollClaimBudget, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
+import { needsPrivateRoom, type RoomWork } from "./room-work.js";
 import { assertActiveWorkerConfig, effectiveCapabilities, type WorkerConfig } from "./config.js";
 import {
   assertExecutorPromptFits,
@@ -195,6 +196,7 @@ export type WorkerContext = {
   withChosenRoom?: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   simulateWork?: (instruction: import("@solana/kit").Instruction) => Promise<WorkSimulation | null>;
   chosenOutcome?: (receipt: { signature: string; lastValidBlockHeight: string }) => Promise<"pending" | "landed" | "failed" | "expired">;
+  roomWork?: RoomWork;
   chooseOpenJobs?: () => boolean;
   checkChosenRoom?: (signal?: AbortSignal) => Promise<void>;
   /** Signing + sending (the hot wallet is this client's signer/fee payer). */
@@ -1894,6 +1896,9 @@ async function executeAndSubmit(
     evidenceState.openClaim.jobEvidence = { ...brief, ...(decodedTask.deadline > 0n && { marketplaceDeadline: Number(decodedTask.deadline) }) };
     saveState(ctx.stateDir, evidenceState);
   }
+  const privateInputs = needsPrivateRoom(payload);
+  const binding = { task, seller: agent.agentPda, deadline: decodedTask.deadline, spec: payload, privateInputs,
+    listing: (evidenceState.openClaim?.listing as Address | undefined) ?? null };
   let stdout: Buffer;
   try {
     // A queued recovery tick can drain after shutdown. Cancellation must not
@@ -1903,35 +1908,51 @@ async function executeAndSubmit(
         exitCode: null, signal: null, reason: "aborted",
       });
     }
-    let reservedCents: number | undefined;
-    if (ctx.modelBudgetForTask !== undefined) {
-      const state = loadState(ctx.stateDir);
-      const marker = state.openClaim;
-      if (marker?.task !== task) throw new Error("Cannot authorize untracked work.");
-      // Legacy/incomplete attempts have unknown spend. Never replenish them.
-      reservedCents = marker.modelBudget?.remainingCents ?? 0;
-      if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
-      if (ctx.modelSpendDir) {
-        const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
-        spendClaimRound(ctx.modelSpendDir, ctx.signer.address, claim, marker.revisionSubmissionCount ?? 0);
+    const turn = await ctx.roomWork?.open(binding);
+    if (turn?.state === "waiting" || (privateInputs && (!turn || turn.state === "ordinary")))
+      return { status: "held", task };
+    if (turn?.state === "resume") {
+      // No new executor or model authorization. The host joins the original run.
+      if (!evidenceState.openClaim?.modelBudget || evidenceState.openClaim.modelBudget.remainingCents !== 0)
+        throw new Error("There is no previously reserved room run to resume.");
+      const result = await turn.resume();
+      if (result.state === "parked") return { status: "held", task };
+      stdout = result.stdout;
+    } else {
+      let reservedCents: number | undefined;
+      if (ctx.modelBudgetForTask !== undefined) {
+        const state = loadState(ctx.stateDir);
+        const marker = state.openClaim;
+        if (marker?.task !== task) throw new Error("Cannot authorize untracked work.");
+        // Legacy/incomplete attempts have unknown spend. Never replenish them.
+        reservedCents = marker.modelBudget?.remainingCents ?? 0;
+        if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
+        if (ctx.modelSpendDir) {
+          const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
+          spendClaimRound(ctx.modelSpendDir, ctx.signer.address, claim, marker.revisionSubmissionCount ?? 0);
+        }
+        marker.modelBudget = { ...marker.modelBudget!, remainingCents: 0 };
+        // Reserve before starting the host. Without an authenticated usage receipt,
+        // success, failure, timeout and interruption all consume the reservation.
+        saveState(ctx.stateDir, state);
       }
-      marker.modelBudget = { ...marker.modelBudget!, remainingCents: 0 };
-      // Reserve before starting the host. Without an authenticated usage receipt,
-      // success, failure, timeout and interruption all consume the reservation.
-      saveState(ctx.stateDir, state);
+      const execute = reviewInputs === undefined ? runExecutor : ctx.reviewRoom?.execute;
+      if (!execute) throw new Error("This revision needs an isolated job room.");
+      const executeTurn = turn?.state === "ready" ? turn.execute : execute;
+      const result = await executeTurn({
+        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request),
+        prompt,
+        ...(reviewInputs?.length ? { reviewInputs } : {}),
+        timeoutMs: ctx.config.executorTimeoutMs,
+        envAllowlist: ctx.config.executorEnvAllowlist,
+        unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
+      if ("state" in result && result.state === "parked") return { status: "held", task };
+      stdout = result.stdout;
     }
-    const execute = reviewInputs === undefined ? runExecutor : ctx.reviewRoom?.execute;
-    if (!execute) throw new Error("This revision needs an isolated job room.");
-    const result = await execute({
-      argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request),
-      prompt,
-      ...(reviewInputs?.length ? { reviewInputs } : {}),
-      timeoutMs: ctx.config.executorTimeoutMs,
-      envAllowlist: ctx.config.executorEnvAllowlist,
-      unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
-      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-    });
-    stdout = result.stdout;
+    if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v1:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
+      throw new Error("The room has not produced a protected delivery.");
   } catch (error) {
     const reason = formatDiagnosticError(error);
     if (error instanceof ExecutorError && error.detail.reason === "aborted") {
@@ -2135,6 +2156,15 @@ export async function processCandidate(
     return { status: "skipped", task, reason };
   }
 
+  const verifiedSpec = JSON.parse(new TextDecoder().decode(verified.content));
+  const privateInputs = needsPrivateRoom(verifiedSpec);
+  if (privateInputs && !ctx.roomWork) return { status: "skipped", task, reason: "A verified private room is required." };
+  try {
+    await ctx.roomWork?.admit({ task, seller: agent.agentPda, deadline: decodedTask.deadline,
+      listing: hireBinding.listing, spec: verifiedSpec, privateInputs });
+  } catch {
+    return { status: "skipped", task, reason: "The room cannot fulfil the verified job terms.", retryable: true };
+  }
   const facts = { task: decodedTask, spec: verified, isHire: hireBinding.isHire };
   options.inspect?.(facts);
   if (!ctx.dryRun && !hireBinding.isHire && !options.authorizeChosen && ctx.chooseOpenJobs?.()) {

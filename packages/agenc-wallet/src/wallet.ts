@@ -3715,7 +3715,7 @@ export class AgencWallet {
     );
     return this.#earn.jobs(agentId).map((entry) => ({
       id: `earn_${agentId}_${entry.task}`,
-      ...(entry.modelUsage && { modelUsage: entry.modelUsage }),
+      ...(entry.modelUsage && { modelUsage: entry.modelUsage, settledSellerLamports: entry.earnedLamports?.toString() ?? null }),
       role: "working" as const,
       agentId,
       createdAt: entry.createdAt,
@@ -4898,7 +4898,7 @@ export class AgencWallet {
       this.#checkOfferPrice(price);
       const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, previous);
       quotedTerms = terms;
-      const spec = sellerListingSpec({ name, summary, ...terms });
+      const spec = sellerListingSpec({ name, summary, ...terms }, agent.address);
       action = this.#quotedOfferKey(offerId, name, summary, price, terms, input.enableEarns, input.setupId);
       const completed = input.setupId && Object.hasOwn(agent.serviceSetups ?? {}, input.setupId) ? agent.serviceSetups![input.setupId] : undefined;
       if (completed) throw new WalletError(completed.action !== action ? "PRICE_CHANGED" : "BAD_REQUEST",
@@ -4982,6 +4982,12 @@ export class AgencWallet {
       readServiceRehearsal(this.#earn.stateDir(agent.id), offer.terms.servicePin);
       return mask | BigInt(offer.terms.servicePin.capabilities);
     }, 1n);
+  }
+
+  /** A picker cannot promise an unregistered or locally unavailable feature. */
+  async effectiveServiceCapabilities(agentId: string): Promise<bigint> {
+    const registration = await this.#earn.registration(agentId);
+    return registration ? this.#enabledServiceMask(this.#agentRecord(agentId)) & registration.account.capabilities : 0n;
   }
 
   async #serviceAdmission(agentId: string, priceLamports: bigint, terms: ReturnType<typeof storedTerms>) {
@@ -5636,12 +5642,12 @@ export class AgencWallet {
     this.#checkOfferPrice(priceLamports);
     const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, current);
     if (!fundingQuoteId) {
-      if (terms.servicePin || terms.modelCapCents || terms.minimumMarginCents)
+      if (terms.servicePin || terms.modelCapCents || terms.minimumMarginCents || terms.childPolicy)
         throw new WalletError("APPROVAL_REQUIRED", "Review the rehearsed service and spending limits in Market.");
       await this.#serviceAdmission(agentId, priceLamports, terms);
     }
     const category = terms.category;
-    const spec = sellerListingSpec({ name, summary, ...terms });
+    const spec = sellerListingSpec({ name, summary, ...terms }, agent.address);
     const hash = await jobSpecHash(spec);
     const price = priceLamports.toString();
     const id = current?.id ?? values.bytesToHex(values.randomId32());
@@ -5994,6 +6000,7 @@ export class AgencWallet {
           capabilities: registration.capabilities | required })], { maxRetries: 0 });
         const landed = await readAgent(this.#chain, providerAgent);
         if (!landed || (landed.capabilities & required) !== required) throw new Error("The capability update has not been verified.");
+        this.#earn.capabilitiesChanged(agentId);
       }
     }
     const listingId = values.hexToBytes(offer.listingIdHex);

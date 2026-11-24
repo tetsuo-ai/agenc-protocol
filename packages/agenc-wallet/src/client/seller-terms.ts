@@ -61,7 +61,16 @@ export function validServicePin(pin: unknown): pin is ServicePin {
   ) && (p.capabilities === "1" || p.capabilities === "5");
 }
 
+export interface SellerDependency {
+  allowedListings: string[];
+  maxDebitLamports: string;
+  /** Seconds to keep for the parent after the child's delivery and review. */
+  returnBeforeSecs: number;
+  reviewWindowSecs: number;
+  sharing: "public-brief" | "buyer-approved-input";
+}
 export interface SellerTerms {
+  childPolicy?: SellerDependency | null;
   servicePin?: ServicePin;
   minimumMarginCents?: number;
   modelCapCents?: number;

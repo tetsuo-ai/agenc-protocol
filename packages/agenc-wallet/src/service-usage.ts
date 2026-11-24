@@ -2,6 +2,15 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
+import type { Money } from "./client/types.js";
+
+declare module "./store.js" {
+  interface JobRecord { modelUsage?: ServiceUsage; settledSellerLamports?: string | null }
+}
+declare module "./client/types.js" {
+  interface JobView { modelUsage?: ServiceUsage; settledSellerCredit?: Money | null }
+}
+
 export interface ServiceUsage {
   reservedCents: number;
   costUsd: number | null;

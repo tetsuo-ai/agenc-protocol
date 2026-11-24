@@ -90,6 +90,8 @@ export interface EarnExecutor {
 }
 
 export interface EarnOptions {
+  /** Host-owned exchange and supplier grant resolved independently for each seller. */
+  roomWork?: (agentId: string) => WorkerContext["roomWork"];
   /** The host selected its isolated open-job room under the operator switch. */
   chosenRoomEnabled?: () => boolean;
   watchChosenRoom?: (revoke: () => void) => () => void;
@@ -207,6 +209,7 @@ export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
+  capabilityRevision?: number;
   dispatch?: WorkerDispatch | null;
   read?: WorkerDispatch | undefined;
   recoveryOnly: boolean;
@@ -285,6 +288,11 @@ export class EarnHost {
     if (state.agentIdHex !== null) return state.agentIdHex;
     if (reserve) saveState(dir, { ...state, agentIdHex: proposedId });
     return proposedId;
+  }
+
+  capabilitiesChanged(agentId: string): void {
+    const running = this.#running.get(agentId);
+    if (running) running.capabilityRevision = (running.capabilityRevision ?? 0) + 1;
   }
 
   state(agentId: string): { state: EarnState; lastError: string | null } {
@@ -820,8 +828,10 @@ export class EarnHost {
         throw new Error("The hired service has invalid fulfilment terms.");
       return terms;
     };
+    const roomWork = executor.isolatedJobRoom && executor.mode === "sandboxed" ? this.#options.roomWork?.(agent.agentId) : undefined;
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      ...(roomWork && { roomWork }),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
       ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
       onWorkerReady: (dispatch, read) => { entry.dispatch = dispatch; entry.read = read; },
@@ -892,7 +902,7 @@ export class EarnHost {
         return executor.argv.flatMap(part => {
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
-            return !paired && room && (receipt || bundleDir) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, task: address, ...(pin && { request }) })] : [source];
+            return !paired && room && (receipt || bundleDir) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }) })] : [source];
           }
           if (part === "{task}") return [address];
           if (part === "{servicePin}") {
@@ -942,12 +952,13 @@ export class EarnHost {
       const endRun = (): void => run.abort();
       signal.addEventListener("abort", endRun, { once: true });
       const startedAt = Date.now();
+      const revision = entry.capabilityRevision;
       const choosing = agent.chooseOpenJobs?.();
       if (agent.currentCapabilities) ctx.config.capabilities = await agent.currentCapabilities();
       const refresh = setInterval(
         () => {
           // An own-jobs loop also starts afresh, to learn of agents added since.
-          if (choosing !== agent.chooseOpenJobs?.()) run.abort();
+          if (choosing !== agent.chooseOpenJobs?.() || (revision !== entry.capabilityRevision && !this.hasUnfinishedJob(agent.agentId))) run.abort();
           const due = this.#serves(agent.agentId) || this.ownJobsOnly;
           if (due && Date.now() - startedAt >= refreshMs) run.abort();
         },
