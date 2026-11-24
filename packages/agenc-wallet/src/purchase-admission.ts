@@ -57,7 +57,8 @@ export function reservedPurchaseText(value: unknown) {
 export function refuseReservedPurchase(input: Record<string, unknown>) {
   for (const key of ["shareGrant", "share_grant", "childShare", "child_share", "childShareGrant", "child_share_grant"])
     if (Object.hasOwn(input, key)) throw new WalletError("BAD_REQUEST", "Approve shared files for a supplier in Market. They cannot be part of an order.");
-  if (reservedPurchaseText(input.request) || reservedPurchaseText(input.brief))
+  const acceptance = Array.isArray(input.acceptance) ? input.acceptance : [];
+  if (reservedPurchaseText(input.request) || reservedPurchaseText(input.brief) || acceptance.some(reservedPurchaseText))
     throw new WalletError("BAD_REQUEST", "Use the approved private input or supplier selection for these criteria.");
 }
 

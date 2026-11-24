@@ -2029,6 +2029,7 @@ export class AgencWallet {
     acceptance?: string[];
     idempotencyKey?: string;
   }, quoteOnly = false): Promise<{ job: JobView; approval: ApprovalView | null }> {
+    refuseReservedPurchase(params as unknown as Record<string, unknown>);
     if (childOwnsKey(this.#store.state, params.idempotencyKey))
       refuseChild("Use the existing supplier purchase in Market.");
     const fingerprint = jobIdentity(params, quoteOnly);

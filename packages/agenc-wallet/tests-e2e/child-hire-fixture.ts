@@ -41,9 +41,21 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
       },
       pollIntervalMs: 150,
       serviceRefreshMs: 300,
+      ...options.world?.earn,
     },
     config: { reviewWindowSecs: 60n },
     ...options.world,
+    earn: {
+      executor: {
+        argv: [process.execPath, "-e", wait, finish, "{prompt}"],
+        mode: "sandboxed",
+        envAllowlist: [],
+        timeoutMs: 60_000,
+      },
+      pollIntervalMs: 150,
+      serviceRefreshMs: 300,
+      ...options.world?.earn,
+    },
     services(services, sandbox) {
       const base = options.world?.services?.(services, sandbox) ?? services;
       return {
