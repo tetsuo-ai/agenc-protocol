@@ -1,5 +1,6 @@
 import { WalletError } from "./errors.js";
 import { OUTPUT_AGREEMENT_CRITERION, type OutputAgreement } from "./client/job-exchange.js";
+import { CHILD_SHARE_PREFIX } from "./client/child-hire.js";
 
 export const PRIVATE_CRITERION = "Private input handoff v1: ";
 export const CHILD_CRITERION = "Allow one seller-funded supplier under policy ";
@@ -47,8 +48,26 @@ export async function purchaseAdmission(input: PurchaseAttachments, source: Appr
   return admission;
 }
 
+/** Text only the wallet writes: private input, supplier policy and the buyer's share grant. */
+export const CHILD_SHARE_MESSAGE = "agenc.child-share.v1";
+const RESERVED = [PRIVATE_CRITERION, CHILD_CRITERION, CHILD_SHARE_PREFIX, CHILD_SHARE_MESSAGE].map(m => m.trim().toLowerCase());
+export function reservedPurchaseText(value: unknown) {
+  return typeof value === "string" && RESERVED.some(marker => value.replace(/\s+/g, " ").toLowerCase().includes(marker));
+}
+
+/** A share grant is the buyer's separate signed approval, delivered through the order exchange. Caller-written
+ * criteria, request text or checkout fields cannot carry one. */
+export function refuseReservedPurchase(input: Record<string, unknown>) {
+  for (const key of ["shareGrant", "share_grant", "childShare", "child_share", "childShareGrant", "child_share_grant"])
+    if (Object.hasOwn(input, key)) throw new WalletError("BAD_REQUEST", "Approve shared files for a supplier in Market. They cannot be part of an order.");
+  const acceptance = Array.isArray(input.acceptance) ? input.acceptance : [];
+  if (reservedPurchaseText(input.request) || reservedPurchaseText(input.brief) || acceptance.some(reservedPurchaseText))
+    throw new WalletError("BAD_REQUEST", "Use the approved private input or supplier selection for these criteria.");
+}
+
 export function purchaseCriteria(criteria: string[], admission: PurchaseAdmission) {
-  if (criteria.some(line => line.startsWith(PRIVATE_CRITERION) || line.startsWith(CHILD_CRITERION) || line.startsWith(OUTPUT_AGREEMENT_CRITERION)))
+  if (criteria.some(line => line.startsWith(PRIVATE_CRITERION) || line.startsWith(CHILD_CRITERION) || reservedPurchaseText(line) ||
+      line.startsWith(OUTPUT_AGREEMENT_CRITERION)))
     throw new WalletError("BAD_REQUEST", "Use the approved private input or supplier selection for these criteria.");
   const lines = [...criteria];
   if (admission.privateInputs) lines.push(PRIVATE_CRITERION + admission.privateInputs.commitment);

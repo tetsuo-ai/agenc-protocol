@@ -238,6 +238,12 @@ export async function openLegacyBuyerOutput(journal: ExchangeJournal, parties: P
   return bundle;
 }
 
+export function approvedRecipient(journal: ExchangeJournal, commitment: string): string | null {
+  const staged = journal.read<Staged>("stage/" + commitment);
+  if (!staged || bundleManifest(staged.bundle) !== commitment) return fail();
+  return staged.recipient;
+}
+
 export function approvedRequirement(journal: ExchangeJournal, commitment: string): PrivateRequirement {
   const staged = journal.read<Staged>("stage/" + commitment);
   if (!staged || bundleManifest(staged.bundle) !== commitment) return fail();
@@ -266,13 +272,6 @@ export function privateRequirementFromSpec(spec: Record<string, unknown>): Priva
   return explicit ?? selected;
 }
 
-
-/** The provider authority the staged files were approved for, or null for any provider. */
-export function approvedRecipient(journal: ExchangeJournal, commitment: string): string | null {
-  const staged = journal.read<Staged>("stage/" + commitment);
-  if (!staged || bundleManifest(staged.bundle) !== commitment) return fail();
-  return staged.recipient;
-}
 
 export function approvedOutputs(journal: ExchangeJournal, requirement: PrivateRequirement) {
   const staged = journal.read<Staged>("stage/" + requirement.commitment);

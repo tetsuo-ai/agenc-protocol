@@ -118,3 +118,28 @@ export function requireInspection(journal: ExchangeJournal, scope: string, e: Ev
     throw new WalletError("NOT_ALLOWED", "Read the complete current delivery and every listed file before approving payment.");
   }
 }
+
+/** The reviewer that read the bytes: the paying agent itself, or one outside connection acting for it.
+ * A different connection, another agent or a room import never shares this receipt. */
+export function reviewerScope(agentId: string, connectionId?: string | null) {
+  if (!agentId) throw new WalletError("NOT_ALLOWED", "A paying agent is required.");
+  return connectionId ? JSON.stringify(["connection", agentId, connectionId]) : agentId;
+}
+
+const roomImportKey = (grant: RoomImportScope, manifest: string) =>
+  JSON.stringify(["room-import-v1", grant.parentTask, grant.sellerAgentId, grant.claimedAt, grant.roomId, manifest]);
+export interface RoomImportScope { kind: "room-import"; parentTask: string; sellerAgentId: string; claimedAt: string; roomId: string }
+
+/** One verified snapshot for a seller's room. Its receipt lives in its own
+ * namespace and never counts as a payment inspection. */
+export function roomImportEvidence(journal: ExchangeJournal, scope: RoomImportScope, e: Evidence, outputs: string[]) {
+  if (scope.kind !== "room-import" || !Array.isArray(outputs) ||
+      outputs.some(name => name === "text" ? !e.text.trim() : !e.files.some(file => file.name === name))) return unavailable();
+  journal.write(roomImportKey(scope, e.manifest), { round: e.binding.round, hash: e.binding.deliveryHash });
+  return {
+    round: e.binding.round,
+    deliveryHash: e.binding.deliveryHash,
+    text: e.text,
+    files: e.files.map(f => ({ name: f.name, bytes: f.bytes, sha256: f.sha256, base64: e.parts.get(f.name)!.toString("base64") })),
+  };
+}

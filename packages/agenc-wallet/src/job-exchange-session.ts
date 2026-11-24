@@ -3,13 +3,18 @@ import { taskThread } from "@tetsuo-ai/marketplace-sdk";
 import { type ExchangeReceipt, type JobMessage, type RecipientGrantPreview, type PrivateRequirement } from "./client/job-exchange.js";
 import { acceptImportReceipt, ExchangeRelay, handoffView, importAndAcknowledge } from "./exchange-relay.js";
 import { deliveryFileProblem } from "./client/delivery-files.js";
-import { conversationPage, JobConversation } from "./job-conversation.js";
+import { conversationPage, isShareMessage, JobConversation } from "./job-conversation.js";
+import { CHILD_SHARE_MESSAGE } from "./purchase-admission.js";
+import { verifyChildShare } from "./child-share.js";
+import type { ChildShareBinding } from "./client/child-hire.js";
 import { digest, JobExchange, protectOutput, type Packet, type PrivateBundle } from "./private-inputs.js";
 
 interface Mailbox {
   peerKey?: Packet;
   inputs?: Packet;
   receipt?: ExchangeReceipt;
+  /** Supplier share approvals signed by this order's buyer, verified on arrival. */
+  shares?: { binding: ChildShareBinding; proof: string }[];
 }
 
 /** Scoped host controller used by the wallet broker and worker. The caller
@@ -49,6 +54,15 @@ export class JobExchangeSession {
         if (packet.header.purpose === "inputs" && this.required) {
           await this.exchange.receiveBundle(packet, "inputs", this.required.commitment);
           this.exchange.journal.write(id, { ...read(), inputs: packet });
+        }
+        if (packet.header.purpose === "message" && packet.header.sender === p.buyer && this.exchange.signer.address === p.authority) {
+          const message = await this.exchange.receive<JobMessage>(packet, "message").catch(() => null);
+          if (message && isShareMessage(message)) {
+            const share = await this.verifiedShare(p, message.body.slice(CHILD_SHARE_MESSAGE.length + 1));
+            const saved = read().shares ?? [];
+            if (share && !saved.some(other => other.proof === share.proof) && saved.length < 8)
+              this.exchange.journal.write(id, { ...read(), shares: [...saved, share] });
+          }
         }
         if (packet.header.purpose === "receipt" && this.required) {
           const receipt = await acceptImportReceipt(this.exchange, this.required, packet);
@@ -116,6 +130,27 @@ export class JobExchangeSession {
     if (this.now() >= status.deadline) return "expired";
     if (status.waiting || (this.required && !status.receipt)) return "parked";
     return "ready";
+  }
+
+  private async verifiedShare(p: taskThread.ExchangeParties, raw: string) {
+    try {
+      const { binding, proof } = JSON.parse(raw) as { binding: ChildShareBinding; proof: string };
+      if (binding?.parentTask !== p.task || typeof proof !== "string") return null;
+      await verifyChildShare(p.buyer, binding, proof);
+      return { binding, proof };
+    } catch { return null; }
+  }
+
+  /** Buyer wallet only. Send the owner-signed supplier share to this order's verified provider. */
+  async sendChildShare(binding: ChildShareBinding, proof: string) {
+    const p = await this.exchange.live();
+    if (this.exchange.signer.address !== p.buyer || binding.parentTask !== p.task) throw new Error("Only this order's buyer can approve a supplier share.");
+    await verifyChildShare(p.buyer, binding, proof);
+    const peer = (await this.mailbox(p)).read().peerKey;
+    if (!peer) throw new Error("Waiting for a job-specific recipient key.");
+    const body = CHILD_SHARE_MESSAGE + ":" + JSON.stringify({ binding, proof });
+    const message: JobMessage = { id: digest(body).slice(0, 32), kind: "progress", parent: null, body };
+    await this.relay.put(this.exchange, await this.conversation.send(message, peer, true));
   }
 
   async send(message: JobMessage) {

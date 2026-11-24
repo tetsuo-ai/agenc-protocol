@@ -240,6 +240,7 @@ export class EarnHost {
   readonly #notify: (agentId: string, notice: EarnNotice) => void;
   readonly #serves: (agentId: string) => boolean;
   readonly #ownAddresses: () => Address[];
+  readonly #privateProcessing: (agentId: string, task: Address) => Promise<string | null>;
   readonly #running = new Map<string, Running>();
   /**
    * Aborted when the wallet closes. A job program in progress is then killed
@@ -261,6 +262,8 @@ export class EarnHost {
     serves?: (agentId: string) => boolean;
     /** Every address of this wallet, for {@link EarnOptions.ownJobsOnly}. */
     ownAddresses?: () => Address[];
+    /** The processing the buyer approved in this job's verified private inputs, or null. */
+    privateProcessing?: (agentId: string, task: Address) => Promise<string | null>;
   }) {
     this.#chain = deps.chain;
     this.#services = deps.services;
@@ -270,6 +273,7 @@ export class EarnHost {
     this.#notify = deps.notify;
     this.#serves = deps.serves ?? (() => false);
     this.#ownAddresses = deps.ownAddresses ?? (() => []);
+    this.#privateProcessing = deps.privateProcessing ?? (async () => null);
   }
 
   /** Whether this host can run jobs at all. */
@@ -917,10 +921,13 @@ export class EarnHost {
         }
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
         const receipt = reservedCents ? reserveServiceRun(stateDir, address, reservedCents) : null;
+        // D's paired peer gets the verified request, usage reservation and the buyer-approved processing (or null).
+        const privateProcessing = paired ? await this.#privateProcessing(agent.agentId, address).catch(() => null) : undefined;
         return executor.argv.flatMap(part => {
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
-            return !paired && room && (receipt || bundleDir) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }) })] : [source];
+            return room && (receipt || bundleDir || (paired && pin)) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
+              ...(paired && { privateProcessing: privateProcessing ?? null }) })] : [source];
           }
           if (part === "{task}") return [address];
           if (part === "{servicePin}") {

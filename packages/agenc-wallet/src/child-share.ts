@@ -142,3 +142,41 @@ export async function stageChildShare(
     throw unavailable();
   return stage.commitment;
 }
+
+/** The buyer's signed share approval that reached this seller through the authenticated order
+ * exchange for this live room and claim. The room supplies only the public listing, brief and outputs. */
+export async function deliveredChildShare(
+  wallet: ShareWallet,
+  grant: ChildRoomGrant,
+  supplier: string,
+  request: ChildHireRequest,
+): Promise<{ request: ChildHireRequest; proof: string } | undefined> {
+  const context = (taskThread as { exchangeContext?: (parties: Parties) => string }).exchangeContext;
+  if (!context || !wallet.jobExchange) return undefined;
+  const exchange = await wallet.jobExchange(
+    "earn_" + grant.sellerAgentId + "_" + grant.parentTask,
+    grant.roomId,
+    grant.sellerAgentId,
+  );
+  const parties = await exchange.live();
+  if (parties.task !== grant.parentTask || parties.claimedAt !== grant.claimedAt || parties.room !== grant.roomId)
+    return undefined;
+  const box = exchange.journal.read<{ shares?: { binding: ChildShareBinding; proof: string }[] }>(
+    "inbox/" + context(parties),
+  );
+  for (const share of [...(box?.shares ?? [])].reverse()) {
+    const offered = share.binding.request;
+    if (
+      share.binding.parentTask !== parties.task ||
+      share.binding.supplier !== supplier ||
+      offered.listing !== request.listing ||
+      offered.brief.trim() !== request.brief.trim() ||
+      JSON.stringify(offered.outputs) !== JSON.stringify(request.outputs) ||
+      (request.privateCommitment !== undefined && offered.privateCommitment !== request.privateCommitment)
+    )
+      continue;
+    await verifyChildShare(parties.buyer, share.binding, share.proof);
+    return { request: offered, proof: share.proof };
+  }
+  return undefined;
+}

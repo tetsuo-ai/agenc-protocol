@@ -8,12 +8,13 @@ import type { MarketServices } from "../src/services.js";
 import { EarnHost, type EarnExecutor } from "../src/earn.js";
 import { withAgentExecutors } from "../src/agent-executors.js";
 
-const seen = vi.hoisted(() => ({ runs: [] as { agent: string; argv: string[] }[] }));
+const seen = vi.hoisted(() => ({ runs: [] as { agent: string; argv: string[] }[], contexts: [] as unknown[] }));
 vi.mock("@tetsuo-ai/agenc-worker", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tetsuo-ai/agenc-worker")>(),
   checkSettlements: vi.fn(async () => []),
   runUpkeep: vi.fn(async () => undefined),
   runUp: vi.fn(async (ctx: { config: { executor: string[] }; agentId?: string }) => {
+    seen.contexts.push(ctx);
     seen.runs.push({ agent: ctx.config.executor.find((p) => p.startsWith("room:"))!.slice(5), argv: ctx.config.executor });
     throw new Error("stop after one look");
   }),
@@ -23,6 +24,7 @@ const folders: string[] = [];
 afterEach(() => {
   for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
   seen.runs.length = 0;
+  seen.contexts.length = 0;
 });
 
 const local: EarnExecutor = { argv: ["/local/room", "job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
@@ -74,4 +76,31 @@ it("checks each named executor like the shared one and refuses bad names", () =>
   expect(() => withAgentExecutors({ executor: local }, [peer], check)).toThrow(/not valid/);
   expect(() => withAgentExecutors({ executor: local }, { paired: null }, check)).toThrow(/not valid/);
   expect(() => withAgentExecutors({ executor: local }, { paired: { argv: [] } }, () => { throw new Error("needs {prompt}"); })).toThrow(/prompt/);
+});
+
+it("gives a paired seller's peer the verified request, its usage reservation and the approved processing", async () => {
+  const pin = { digest: "a".repeat(64), runtimeDigest: "b".repeat(64), permissionDigest: "c".repeat(64), capabilities: "1" as const };
+  const paired: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "/profile.json", "{task}", "{servicePin}", "{jobExpires}", "{pay}", "{requestSource}", "{prompt}"],
+    mode: "sandboxed", isolatedJobRoom: true, envAllowlist: [], timeoutMs: 60_000,
+    readiness: { argv: ["/node", "/job-room.mjs", "peer-ready", "/profile.json"], timeoutMs: 1000 } } as EarnExecutor;
+  const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
+  folders.push(dataDir);
+  const processing = vi.fn(async () => "Runs in the verified job room.");
+  const earn = new EarnHost({ dataDir, chain: { clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
+    services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices,
+    options: { executor: local, agentExecutors: { paired }, pollIntervalMs: 10, maxIdlePollIntervalMs: 10 }, log: vi.fn(), notify: vi.fn(),
+    privateProcessing: processing });
+  void earn.start({ agentId: "paired", signer: { address: "x" } as unknown as KeyPairSigner, minRewardLamports: 0n,
+    specialistTerms: () => ({ servicePin: pin }) });
+  await vi.waitFor(() => expect(seen.contexts.length).toBeGreaterThan(0));
+  earn.stopAll?.();
+  const ctx = seen.contexts[0] as { executorForTask: (...args: unknown[]) => Promise<string[]> };
+  const task = { creator: "Buyer1111111111111111111111111111111111111", deadline: 99n, rewardAmount: 1n, requiredCapabilities: 1n };
+  const address = "Task11111111111111111111111111111111111111";
+  const argv = await ctx.executorForTask(task, address, 40, null, null, "Draw the verified postcard.");
+  expect(argv[2]).toBe("peer-job");
+  const context = JSON.parse(argv[argv.indexOf("external") + 1]!);
+  expect(context).toMatchObject({ task: address, pin, request: "Draw the verified postcard.", privateProcessing: "Runs in the verified job room.", bundleDir: null });
+  expect(context.receipt).toMatch(/service-usage/);
+  expect(processing).toHaveBeenCalledWith("paired", address);
 });
