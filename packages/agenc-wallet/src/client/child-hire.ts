@@ -22,6 +22,24 @@ export interface ChildHireRequest {
   outputs: string[];
   privateCommitment?: string;
 }
+export interface ChildShareBinding {
+  parentTask: string;
+  supplier: string;
+  request: ChildHireRequest;
+}
+/** Legacy criterion prefix for admission filters. It conveys no authority. */
+export function childSharePayload(supplier: string, request: ChildHireRequest) {
+  return JSON.stringify([
+    supplier,
+    {
+      listing: request.listing,
+      brief: request.brief.trim(),
+      outputs: request.outputs,
+      ...(request.privateCommitment && { privateCommitment: request.privateCommitment }),
+    },
+  ]);
+}
+export const CHILD_SHARE_PREFIX = "Share the approved input with supplier under grant ";
 export interface ChildPayout {
   listingVersion: string;
   price: Money;
@@ -41,11 +59,20 @@ export interface ChildEscrow {
   reviewEndsAt: number | null;
   action: string | null;
   signature: string | null;
+  fundingSignature?: string | null;
 }
 export interface ChildHireView {
   parent: ChildEscrow;
   child: ChildEscrow;
-  phase: "approval" | "declined" | "dispatching" | "funded" | "imported" | "expired" | "failed";
+  phase:
+    | "approval"
+    | "declined"
+    | "dispatching"
+    | "awaiting-publication"
+    | "funded"
+    | "imported"
+    | "expired"
+    | "failed";
   purchaseKey: string;
   payer: string;
   sellerAgentId: string;
@@ -63,6 +90,8 @@ export interface ChildHireView {
   cap: Money;
   cutoff: number;
   importReceipt: string | null;
+  settlementRecipient?: { treasury: string; quoteId: string };
+  returnTimedOut?: boolean;
 }
 export interface ChildResult {
   parentTask: string;
@@ -84,11 +113,25 @@ export interface ChildResultManifest extends Omit<ChildResult, "text" | "files">
 
 /** Register on the trusted Market host socket only. A room gets request_supplier, never an owner RPC. */
 export interface ChildHireMethods {
-  "child.policy": { params: { sellerAgentId: string; listing: string; policy: ChildHirePolicy | null }; result: ChildHirePolicy | null };
-  "child.request": { params: { grant: ChildRoomGrant; request: ChildHireRequest }; result: ChildHireView };
+  "child.policy": {
+    params: { sellerAgentId: string; listing: string; policy: ChildHirePolicy | null };
+    result: ChildHirePolicy | null;
+  };
+  "child.authorizeShare": { params: { jobId: string; binding: ChildShareBinding }; result: string };
+  "child.refresh": { params: { parentTask: string; quoteId: string }; result: ChildHireView };
+  "child.request": {
+    params: { grant: ChildRoomGrant; request: ChildHireRequest; shareGrant?: string };
+    result: ChildHireView;
+  };
   "child.timeline": { params: { parentTask: string }; result: ChildHireView };
-  "child.decide": { params: { parentTask: string; quoteId: string; approve: boolean }; result: ChildHireView };
+  "child.decide": {
+    params: { parentTask: string; quoteId: string; approve: boolean };
+    result: ChildHireView;
+  };
   "child.delivery": { params: { grant: ChildRoomGrant }; result: ChildResultManifest };
-  "child.part": { params: { grant: ChildRoomGrant; receipt: string; part: string; offset: number }; result: { base64: string; total: number } };
+  "child.part": {
+    params: { grant: ChildRoomGrant; receipt: string; part: string; offset: number };
+    result: { base64: string; total: number };
+  };
   "child.imported": { params: { grant: ChildRoomGrant; receipt: string }; result: { imported: true } };
 }

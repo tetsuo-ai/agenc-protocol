@@ -6,6 +6,9 @@ import type { BusinessMethods } from "./client/business.js";
 import type { ChildHireMethods, ChildResult } from "./client/child-hire.js";
 import type { ExchangeMethods } from "./client/exchange-methods.js";
 import type { AgencWallet } from "./wallet.js";
+import { moneyHandlers } from "./money-handlers.js";
+import { listingHandlers } from "./listing-handlers.js";
+import { withPendingFeatures } from "./pending-feature-wallet.js";
 
 type Features = MoneyMethods &
   ListingMethods &
@@ -53,29 +56,9 @@ export function featureRoutes(
   };
   // Owner routes are excluded from AGENT_METHODS and from the paired broker's allowlist.
   return {
-    "wallet.transferQuote": (p) => featureCall(wallet, "quoteTransfer", p),
-    "wallet.confirmTransfer": (p) =>
-      featureCall(wallet, "confirmTransfer", p.id),
-    "wallet.operationOutcome": (p) =>
-      featureCall(wallet, "operationOutcome", p.id),
-    "wallet.moneyHistory": (p) => featureCall(wallet, "moneyHistory", p.jobId),
-    "jobs.ratingQuote": (p, s) =>
-      featureCall(
-        wallet,
-        "quoteRating",
-        p.jobId,
-        p.score,
-        s.role === "owner",
-        s.agentId ?? undefined,
-      ),
-    "jobs.publishReview": (p) =>
-      featureCall(wallet, "publishOrdinaryReview", p.jobId, p.stars, p.text),
-    "jobs.contestStake": (p) =>
-      featureCall(wallet, "quoteContestRetirement", p.jobId),
-    "jobs.retireRegistration": (p) =>
-      featureCall(wallet, "retireContestRegistration", p.id),
-    "earn.operation": (p, s) =>
-      featureCall(wallet, "sellerOperation", agent(s, p.agentId), p.quoteId),
+    // The feature owners' handlers, unchanged: A's money routes and E's listing routes with their owner checks.
+    ...moneyHandlers(withPendingFeatures(wallet)),
+    ...listingHandlers(withPendingFeatures(wallet)),
     "jobs.inbox": (_, s) =>
       featureCall(wallet, "jobInbox", s.agentId ?? undefined),
     "jobs.dismiss": (p, s) =>
@@ -99,26 +82,6 @@ export function featureRoutes(
     "business.status": () => featureCall(wallet, "businessStatus"),
     "business.resume": (p) =>
       featureCall(wallet, "confirmRestoredDevice", p.restoredAt),
-    "listings.inquiries": (p) =>
-      featureCall(wallet, "listingExchange", p.listing),
-    "listings.message": async (p, s) => {
-      if (!["question", "reply"].includes(p.message?.kind))
-        throw new WalletError("BAD_REQUEST", "Choose a question or reply.");
-      return featureCall(
-        wallet,
-        "postListingMessage",
-        agent(s, p.agentId),
-        p.message,
-      );
-    },
-    "listings.heartbeat": async (p) => {
-      if (p.message?.kind !== "availability")
-        throw new WalletError(
-          "BAD_REQUEST",
-          "Expected a host availability report.",
-        );
-      return featureCall(wallet, "postListingMessage", p.agentId, p.message);
-    },
     "jobs.exchange": (p, s) =>
       assignment().dispatch(wallet, s, p.jobId, p.request),
     "jobs.bindRoom": async (p, s) => {
@@ -151,7 +114,16 @@ export function featureRoutes(
       ),
     "child.policy": (p) =>
       child("setPolicy", p.sellerAgentId, p.listing, p.policy),
-    "child.request": (p) => child("request", p.grant, p.request),
+    "child.request": (p) => child("request", p.grant, p.request, p.shareGrant),
+    // Consent and refresh stay on the owner channel (never in AGENT_METHODS or the paired allowlist).
+    "child.authorizeShare": (p, s) => {
+      if (s.role !== "owner") throw new WalletError("NOT_ALLOWED", "Only the owner can do this in Market.");
+      return child("authorizeShare", p.jobId, p.binding);
+    },
+    "child.refresh": (p, s) => {
+      if (s.role !== "owner") throw new WalletError("NOT_ALLOWED", "Only the owner can do this in Market.");
+      return child("refresh", p.parentTask, p.quoteId);
+    },
     "child.timeline": (p) => child("timeline", p.parentTask),
     "child.decide": (p) => child("decide", p.parentTask, p.quoteId, p.approve),
     "child.delivery": async (p) => {
@@ -165,31 +137,8 @@ export function featureRoutes(
         files: files.map(({ base64, ...metadata }) => metadata),
       };
     },
-    "child.part": async (p) => {
-      const result = await child<ChildResult>("delivery", p.grant);
-      const file = result.files.find((f) => f.name === p.part);
-      const bytes =
-        p.part === "text"
-          ? Buffer.from(result.text)
-          : file && Buffer.from(file.base64, "base64");
-      if (
-        result.receipt !== p.receipt ||
-        !bytes ||
-        !Number.isSafeInteger(p.offset) ||
-        p.offset < 0 ||
-        p.offset > bytes.length
-      )
-        throw new WalletError(
-          "BAD_REQUEST",
-          "The selected supplier part changed.",
-        );
-      return {
-        base64: bytes
-          .subarray(p.offset, p.offset + 24 * 1024)
-          .toString("base64"),
-        total: bytes.length,
-      };
-    },
+    // G's wallet serves bounded parts from its verified staging (childHires.part).
+    "child.part": (p) => child("part", p.grant, p.receipt, p.part, p.offset),
     "child.imported": async (p) => {
       await child("acknowledgeImport", p.grant, p.receipt);
       return { imported: true };
