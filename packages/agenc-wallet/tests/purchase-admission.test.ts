@@ -32,3 +32,28 @@ it("requires approved local staging for a commitment and rejects a fabricated pu
   await expect(purchaseAdmission({ privateCommitment: commitment }, stage, false, undefined)).rejects.toThrow();
   await expect(purchaseAdmission({ privateCommitment: "b".repeat(64) }, stage, true, undefined)).rejects.toThrow();
 });
+
+it("refuses staged files approved for a different provider before funding", async () => {
+  const commitment = "c".repeat(64);
+  const requirement = { required: true, version: 1, commitment } as const;
+  const provider = (await generateKeyPairSigner()).address;
+  const other = (await generateKeyPairSigner()).address;
+  const stage = (recipient: string | null) => ({
+    approvedJobInputs: vi.fn(async () => requirement),
+    approvedJobInputRecipient: vi.fn(async () => recipient),
+  });
+  const forProvider = stage(provider);
+  expect(await purchaseAdmission({ privateCommitment: commitment }, forProvider, true, undefined, provider))
+    .toEqual({ privateInputs: requirement });
+  expect(forProvider.approvedJobInputRecipient).toHaveBeenCalledWith(commitment);
+  // Staged for any provider: the handoff binds the live authority later.
+  expect(await purchaseAdmission({ privateCommitment: commitment }, stage(null), true, undefined, provider))
+    .toEqual({ privateInputs: requirement });
+  await expect(purchaseAdmission({ privateCommitment: commitment }, stage(other), true, undefined, provider))
+    .rejects.toMatchObject({ code: "NOT_ALLOWED" });
+  // No live authority, or a stage that cannot say who receives the files: refuse.
+  await expect(purchaseAdmission({ privateCommitment: commitment }, stage(provider), true, undefined, null))
+    .rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+  await expect(purchaseAdmission({ privateCommitment: commitment }, { approvedJobInputs: async () => requirement }, true, undefined, provider))
+    .rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+});
