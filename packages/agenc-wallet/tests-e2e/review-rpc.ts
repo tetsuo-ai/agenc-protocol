@@ -1,7 +1,7 @@
 // Return actual SVM instructions, logs and before/after balances in the
 // production JSON-RPC shape. The production reader must interpret them.
 import { getBase58Decoder, getCompiledTransactionMessageDecoder, type Address } from "@solana/kit";
-import { TASK_RESULT_ACCEPTED_EVENT_DISCRIMINATOR, type Transport } from "@tetsuo-ai/marketplace-sdk";
+import { lighthouse, TASK_RESULT_ACCEPTED_EVENT_DISCRIMINATOR, type Transport } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "../src/chain.js";
 import { readReviewHistory, type ReviewAnchor } from "../src/review-history.js";
 import type { SettlementHistoryRpc } from "../src/settlement.js";
@@ -11,6 +11,7 @@ export function reviewRpc(withCache = false) {
   let hideAcceptance = false;
   let legacy = false;
   let hideDeliveries = false;
+  let guardView: "original" | "legacy" | "wrongTarget" = "original";
   let local: Chain | undefined;
   const rows = new Map<string, { accounts: readonly Address[]; tx: unknown }>();
   const rpc: SettlementHistoryRpc = {
@@ -20,7 +21,17 @@ export function reviewRpc(withCache = false) {
       return keys.slice(start, start + limit).map(signature => ({ signature, err: null }));
     } }),
     getTransaction: signature => ({ send: async () => {
-      const tx = rows.get(signature)?.tx as { meta: { logMessages: string[] } } | undefined;
+      let tx = rows.get(signature)?.tx as {
+        meta: { logMessages: string[] };
+        transaction: { message: { instructions: { programId: string; accounts?: string[] }[] } };
+      } | undefined;
+      if (tx && guardView !== "original") {
+        const { transaction } = tx;
+        const { message } = transaction;
+        const instructions = guardView === "legacy" ? message.instructions.filter(ix => ix.programId !== lighthouse.LIGHTHOUSE)
+          : message.instructions.map(ix => ix.programId === lighthouse.LIGHTHOUSE ? { ...ix, accounts: [lighthouse.RENT] } : ix);
+        tx = { ...tx, transaction: { ...transaction, message: { ...message, instructions } } };
+      }
       if (hideAcceptance && tx) {
         return { ...tx, meta: { ...tx.meta, logMessages: tx.meta.logMessages.filter(line =>
           !line.startsWith("Program data: ") || !Buffer.from(line.slice("Program data: ".length), "base64").subarray(0, 8).equals(Buffer.from(TASK_RESULT_ACCEPTED_EVENT_DISCRIMINATOR))) } };
@@ -34,6 +45,7 @@ export function reviewRpc(withCache = false) {
     hideAcceptance(hidden: boolean) { hideAcceptance = hidden; },
     pruneSubmissions(pruned = true) { hideDeliveries = pruned; },
     useLegacyReceipts() { legacy = true; },
+    showGuards(view: typeof guardView) { guardView = view; },
     chain(base: Chain): Chain {
       local = base;
       return { ...base, reviewHistory: (task, claim, before) => readReviewHistory(rpc, task, claim, cache, before) };

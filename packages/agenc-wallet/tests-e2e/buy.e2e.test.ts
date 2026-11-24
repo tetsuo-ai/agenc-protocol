@@ -1,6 +1,9 @@
 // The buying side, end to end against the real program: an agent hires a
 // service from its own allowance, a house provider delivers, the delivery is
 // approved, rated and tidied. Money is checked at every step.
+import { address } from "@solana/kit";
+import { findClaimPda, findTaskSubmissionPda } from "@tetsuo-ai/marketplace-sdk";
+import { readAgent, readListing, readProtocolConfig } from "../src/market.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { confirmPayout, REVIEW_ALLOWANCE, CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
@@ -47,7 +50,18 @@ describe("buying from an allowance", () => {
     expect(delivered.result?.text).toContain("A haiku about a lighthouse.");
     expect(delivered.canApprove).toBe(true);
 
+    const { providerAgent } = (await readListing(sandbox.chain, listing))!;
+    const { authority } = (await readAgent(sandbox.chain, providerAgent))!;
+    const { treasury } = await readProtocolConfig(sandbox.chain);
+    const [claim] = await findClaimPda({ task: address(job.task!), bidder: providerAgent });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    const sellerBefore = await world.balance(authority);
+    const deposits = await world.balance(claim) + await world.balance(submission);
+    const treasuryBefore = await world.balance(treasury);
+    const split = job.terms!.hire!;
     const paid = await confirmPayout(wallet, job.id, 5);
+    expect(await world.balance(authority) - sellerBefore - deposits).toBe(BigInt(split.minimumSellerNet.lamports));
+    expect(await world.balance(treasury) - treasuryBefore).toBe(BigInt(split.maximumMarketplaceFee.lamports));
     expect(paid.status).toBe("paid");
     expect(paid.rating).toBe(5);
 

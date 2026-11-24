@@ -198,16 +198,18 @@ it("filters contest, multi-worker and token actions using the submitted job's ch
   expect((await world.wallet.reviewRecord(job.id)).resubmitBy).toBe(Number(held.expiresAt) * 1000);
 });
 
-it.each(["approve", "reject", "change"] as const)("refuses a changed delivery at the %s signing boundary", async action => {
+it.each((["before signing", "after signing"] as const).flatMap(stage =>
+  (["approve", "reject", "change"] as const).map(action => ({ action, stage }))
+))("refuses a changed delivery $stage for $action", async ({ action, stage }) => {
   let replace: (() => void) | undefined;
   let sends = 0;
   world = await startWorld({ transport: base => ({ ...base,
     async getLatestBlockhash() {
       const latest = await base.getLatestBlockhash();
-      replace?.();
+      if (stage === "before signing") replace?.();
       return latest;
     },
-    async sendAndConfirm(tx) { sends++; return base.sendAndConfirm(tx); },
+    async sendAndConfirm(tx) { sends++; if (stage === "after signing") replace?.(); return base.sendAndConfirm(tx); },
   }) });
   const agent = await buyer();
   const job = await hire(agent.id);
@@ -228,7 +230,8 @@ it.each(["approve", "reject", "change"] as const)("refuses a changed delivery at
   };
   const before = sends;
   await expect(draft ? world.wallet.confirmReview(job.id, draft, true) : world.wallet.approveJob(job.id, undefined, true, undefined, quote.id))
-    .rejects.toThrow(/delivery changed before signing/i);
-  expect(sends).toBe(before);
-  expect(state().reviewIntents?.[job.id]?.receipt).toBeUndefined();
+    .rejects.toThrow(/delivery changed/i);
+  expect(sends - before).toBe(stage === "before signing" ? 0 : 1);
+  if (stage === "before signing") expect(state().reviewIntents?.[job.id]?.receipt).toBeUndefined();
+  expect((await world.wallet.getJob(job.id, true)).status).toBe("delivered");
 });

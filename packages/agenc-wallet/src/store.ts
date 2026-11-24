@@ -202,7 +202,7 @@ export interface JobRecord {
   /** Costs and expiry of the exact quote authorized for this job. */
   ownerApproved?: boolean;
   approvalId?: string;
-  approvedCosts?: { networkFees?: string; cancellationRent?: string; total: string; kept: string; protocolFeeBps: number; expiresAt: number };
+  approvedCosts?: { rentTerms?: string; networkFees?: string; cancellationRent?: string; total: string; kept: string; protocolFeeBps: number; expiresAt: number };
   revisionDeadlines?: Record<string, number>;
   reviewDraft?: import("./client/reviews.js").ReviewDraft;
   id: string;

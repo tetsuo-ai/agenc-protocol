@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { type Address } from "@solana/kit";
-import { getServiceListingDecoder, getServiceListingEncoder } from "@tetsuo-ai/marketplace-sdk";
+import { findProtocolConfigPda, getProtocolConfigDecoder, getProtocolConfigEncoder, getServiceListingDecoder, getServiceListingEncoder } from "@tetsuo-ai/marketplace-sdk";
 import { startWorld, type World } from "./harness.js";
 
 let world: World;
@@ -63,4 +63,48 @@ it("revision 9 rejects a signed hire when the seller updates the listing before 
   if (!raw.exists) throw new Error("Missing fixture listing");
   expect(getServiceListingDecoder().decode(raw.data).openJobs).toBe(0);
   expect(await world.balance(operator.address)).toBe(before);
+});
+
+it.each(["protocol fee", "rent", "unrelated counter"])("binds the quote across a signed hire and a change to %s", async field => {
+  let change: (() => void) | undefined;
+  world = await startWorld({ transport: base => ({ ...base, async sendAndConfirm(signed) {
+    if (change) { change(); change = undefined; }
+    return base.sendAndConfirm(signed);
+  } }) });
+  const { wallet, listing, sandbox } = world;
+  const buyer = await wallet.createAgent("Buyer");
+  const operator = await wallet.createAgent("Operator");
+  setListingOperator(operator.address as Address, 125);
+  const quote = (await wallet.hire({ agentId: buyer.id, listing, request: "Edit a line." }, true)).approval!;
+  const [config] = await findProtocolConfigPda();
+  const svm = sandbox.market.svm;
+  const configAccount = svm.getAccount(config);
+  if (!configAccount.exists) throw new Error("Missing fixture config");
+  const configData = getProtocolConfigDecoder().decode(configAccount.data);
+  change = () => {
+    if (field === "rent") {
+      const rent = svm.getRent();
+      rent.lamportsPerByteYear += 1n;
+      svm.setRent(rent);
+    } else {
+      const updated = field === "protocol fee" ? { protocolFeeBps: configData.protocolFeeBps + 1 } : { totalTasks: configData.totalTasks + 1n };
+      svm.setAccount({ ...configAccount, data: Uint8Array.from(getProtocolConfigEncoder().encode({ ...configData, ...updated })) });
+    }
+  };
+  const before = await world.balance(wallet.mainAddress);
+  const outcome = await wallet.decideApproval(quote.id, true);
+  expect(change).toBeUndefined();
+  if (field === "unrelated counter") {
+    expect(outcome.status).toBe("waiting");
+    expect(outcome.terms?.hire).toEqual(quote.terms?.hire);
+    return;
+  }
+  expect(outcome.status).toBe("failed");
+  expect(outcome.error).toMatch(/fresh quote.*network fee/i);
+  expect(await world.balance(wallet.mainAddress)).toBe(before - 5000n);
+  expect(await sandbox.chain.readAccount(outcome.task as Address)).toBeNull();
+  const raw = svm.getAccount(listing);
+  if (!raw.exists) throw new Error("Missing fixture listing");
+  expect(getServiceListingDecoder().decode(raw.data).openJobs).toBe(0);
+  expect(await world.balance(operator.address)).toBe(0n);
 });

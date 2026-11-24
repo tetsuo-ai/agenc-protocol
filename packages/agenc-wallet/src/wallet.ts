@@ -27,6 +27,7 @@ import {
 import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms, releaseQuoteLifetime } from "./worker-jobs.js";
 import type { WorkerQuote, WorkAction } from "./client/types.js";
 import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, type WorkerDispatch, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, readReviewEnvelope, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
+import { assertionFailed, readHireRent } from "./money-assertions.js";
 import { deliveryNotice } from "./review-history.js";
 import { publishReviewFiles, reviewChargeCents, quoteReview, reviewRead, reviewAttachments, reviewNote } from "./review.js";
 import type { ReviewAction, ReviewAttachment, ReviewConfirmation, ReviewDraft, ReviewQuote, ReviewRecord } from "./client/reviews.js";
@@ -403,6 +404,9 @@ function hireFailureText(
   }
   const name = error instanceof AgencError ? (error.errorName ?? "") : "";
   const text = error instanceof Error ? error.message : String(error);
+  if (what === "order" && assertionFailed(error)) {
+    return { code: "PRICE_CHANGED", message: "The quoted fee or deposit changed. The hire price stayed in your balance. Request a fresh quote. A network fee may apply." };
+  }
   if (/Price|Version|ListingChanged|Mismatch/i.test(name)) {
     return {
       code: "PRICE_CHANGED",
@@ -1814,8 +1818,9 @@ export class AgencWallet {
 
   async #queueJob(record: JobRecord, payer: "main" | "agent", service: ServiceView | null, rate: number | null, panel: boolean, replaces?: string) {
     const address = payer === "main" ? this.mainAddress : this.#agentRecord(record.agentId).address as Address;
+    const rent = service ? await readHireRent(this.#chain) : undefined;
     const [deposits, { protocolFeeBps }, chainNow] = await Promise.all([
-      this.#jobDeposits(record, address),
+      rent ? purchaseDeposits(this.#chain, address, rent.minimumBalance) : this.#jobDeposits(record, address),
       readProtocolConfig(this.#chain),
       this.#chain.clusterTime(),
     ]);
@@ -1828,7 +1833,7 @@ export class AgencWallet {
     const approvalId = newId("ok");
     const name = record.agentId === "" ? "You" : this.#agentRecord(record.agentId).name;
     const { job, approval } = buildJobQuote(record, {
-      approvalId, payer, service, deposits, protocolFeeBps, rate, now, expiresAt,
+      approvalId, payer, service, deposits, protocolFeeBps, rate, now, expiresAt, ...(rent && { rentTerms: rent.hex }),
     });
     if (record.terms.contest) {
       Object.assign(approval, await entrantCosts(this.#chain));
@@ -2350,7 +2355,7 @@ export class AgencWallet {
     if (job.terms && await this.#chain.clusterTime() >= job.terms.deadline) {
       throw new WalletError("NOT_AVAILABLE", "The delivery deadline has passed.");
     }
-    if (!quote?.networkFees || job.maxPriceCents === undefined || (!isRequest(job) && !job.terms?.hire)) {
+    if (!quote?.networkFees || job.maxPriceCents === undefined || (!isRequest(job) && (!job.terms?.hire || !quote.rentTerms))) {
       throw new WalletError("NOT_AVAILABLE", "Refresh the quote to get the current costs.");
     }
     if (quote.expiresAt <= this.#now()) throw new WalletError("NOT_AVAILABLE", "This quote has expired.");
@@ -2792,7 +2797,7 @@ export class AgencWallet {
         this.#failJob(job.id, error.message);
         return;
       }
-      await this.#sendCreation(job, "order", landed, () => sendHire(this.#chain, payer, intent, gate));
+      await this.#sendCreation(job, "order", landed, () => sendHire(this.#chain, payer, intent, gate, job.approvedCosts!.protocolFeeBps, job.approvedCosts!.rentTerms!));
     });
   }
 
@@ -4258,6 +4263,9 @@ export class AgencWallet {
     if (!intent || intent.quoteId !== quoteId || intent.action !== action) return cause;
     const evidence = intent.published?.length ? "The verified evidence is public. Its fingerprints are in the job record."
       : intent.hashes.length ? "Evidence may already be public. Its fingerprints are in the job record." : "";
+    if (action !== "dispute" && assertionFailed(cause)) {
+      return new WalletError("NOT_ALLOWED", ["The delivery changed. Review the current delivery before deciding again. A network fee may apply.", evidence].filter(Boolean).join(" "), { cause });
+    }
     if (intent.confirmed || intent.receipt) {
       const status = intent.confirmed
         ? (intent.reconciled ? "The review was confirmed." : "The review was confirmed. Its final cost is awaiting reconciliation in the job record.")

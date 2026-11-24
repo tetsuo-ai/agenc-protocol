@@ -2,7 +2,7 @@ import { approvedPost } from "./harness.js";
 import { address } from "@solana/kit";
 import { setImmediate } from "node:timers/promises";
 import path from "node:path";
-import { getCreateTaskHumanlessDiscriminatorBytes } from "@tetsuo-ai/marketplace-sdk";
+import { getCreateTaskHumanlessDiscriminatorBytes, getHireFromListingHumanlessDiscriminatorBytes } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chain } from "../src/chain.js";
 import { connectWallet, type WalletClient } from "../src/client/socket-client.js";
@@ -55,14 +55,10 @@ function creationChain(state: { sends: number; loseAnswer?: boolean; blindReads?
         return result;
       };
       return Object.create(client, {
-        hireFromListingHumanless: {
-          value: (...args: Parameters<typeof client.hireFromListingHumanless>) =>
-            creation(() => client.hireFromListingHumanless(...args)),
-        },
         send: {
           value: (...args: Parameters<typeof client.send>) => {
-            const mark = Array.from(getCreateTaskHumanlessDiscriminatorBytes());
-            const creates = args[0].some((ix) => mark.every((byte, index) => ix.data?.[index] === byte));
+            const marks = [getCreateTaskHumanlessDiscriminatorBytes(), getHireFromListingHumanlessDiscriminatorBytes()];
+            const creates = args[0].some((ix) => marks.some(mark => mark.every((byte, index) => ix.data?.[index] === byte)));
             return creates ? creation(() => client.send(...args)) : client.send(...args);
           },
         },

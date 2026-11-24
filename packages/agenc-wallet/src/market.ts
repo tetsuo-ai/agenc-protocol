@@ -8,6 +8,7 @@ import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
+import { hireCostAssertions, submissionAssertions } from "./money-assertions.js";
 import { reviewMemo } from "./review-memo.js";
 import type { ReviewedDelivery } from "./client/reviews.js";
 import { withListingOperation } from "./transport-scope.js";
@@ -427,8 +428,9 @@ export async function findTaskGate(
 export function purchaseDeposits(
   chain: Chain,
   buyer: Address,
+  rent?: (space: number) => bigint,
 ): Promise<JobDeposits> {
-  return jobDeposits(chain, buyer, true);
+  return jobDeposits(chain, buyer, true, rent);
 }
 
 /**
@@ -446,8 +448,8 @@ async function jobDeposits(
   chain: Chain,
   payer: Address,
   hired: boolean,
+  rent: (space: number) => bigint | Promise<bigint> = space => chain.getMinimumBalanceForRentExemption(space),
 ): Promise<JobDeposits> {
-  const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
   const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent, markerRent] =
     await Promise.all([
       rent(TASK_ACCOUNT_SPACE),
@@ -478,7 +480,7 @@ async function jobDeposits(
     total += once;
     kept += once;
   }
-  const cancellationRent = await creatorRecordCost(chain, payer);
+  const cancellationRent = await creatorRecordCost(chain, payer, rent);
   const networkFees = jobNetworkFees(chain.transferFeeLamports);
   return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent };
 }
@@ -501,7 +503,9 @@ export async function cancelShortfall(chain: Chain, payer: Address): Promise<big
  * Its first turn-down or cancel pays it, before any refund, and it never
  * comes back.
  */
-export async function creatorRecordCost(chain: Chain, creator: Address): Promise<bigint> {
+export async function creatorRecordCost(chain: Chain, creator: Address,
+  rent: (space: number) => bigint | Promise<bigint> = space => chain.getMinimumBalanceForRentExemption(space),
+): Promise<bigint> {
   const [record] = await findCreatorStatsPda({ authority: creator });
   const info = await chain.readAccountInfo(record);
   if (
@@ -511,7 +515,7 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
   ) {
     return 0n;
   }
-  return chain.getMinimumBalanceForRentExemption(getCreatorStatsSize());
+  return rent(getCreatorStatsSize());
 }
 
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
@@ -592,9 +596,11 @@ export async function sendHire(
   buyer: KeyPairSigner,
   intent: HireIntent,
   gate: GateAccounts,
+  protocolFeeBps: number,
+  rentTerms: string,
 ): Promise<string> {
-  const client = chain.clientFor(buyer);
-  const result = await client.hireFromListingHumanless({
+  const guards = await hireCostAssertions(protocolFeeBps, rentTerms);
+  const ix = await facade.hireFromListingHumanless({
     creator: buyer,
     listing: intent.listing,
     providerAgent: intent.providerAgent,
@@ -607,7 +613,7 @@ export async function sendHire(
     ...gateArgs(gate),
     ...(gate.record !== undefined ? { listingModeration: gate.record } : {}),
   });
-  return result.signature;
+  return (await chain.clientFor(buyer).send([...guards, ix])).signature;
 }
 
 /**
@@ -1001,6 +1007,8 @@ async function sendBuyerDecision(
   action: "approve" | "change" | "reject", ix: Instruction, expected: ReviewedDelivery,
 ) {
   const [claim] = await findClaimPda({ task, bidder: provider });
+  const [submission] = await findTaskSubmissionPda({ claim });
+  const guards = submissionAssertions(submission, expected);
   let refusal: WalletError | undefined;
   // The SDK obtains a fresh lifetime and assembles the message before calling
   // this signer. Keep the claim read here, after uploads, quotes and RPC setup.
@@ -1017,7 +1025,7 @@ async function sendBuyerDecision(
     },
   };
   try {
-    return await chain.clientFor(signer, { review: true }).send([reviewMemo(action, claim, expected), ix], { maxRetries: 0 });
+    return await chain.clientFor(signer, { review: true }).send([...guards, reviewMemo(action, claim, expected), ix], { maxRetries: 0 });
   } catch (error) {
     // The SDK wraps errors raised by a signer.
     throw refusal ?? error;

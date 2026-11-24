@@ -3,7 +3,7 @@
 // that landed is carried on, one that never landed costs nothing, and nothing
 // is ever paid twice.
 import { SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, SolanaError } from "@solana/kit";
-import { AgencError } from "@tetsuo-ai/marketplace-sdk";
+import { AgencError, getHireFromListingHumanlessDiscriminatorBytes } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Chain } from "../src/chain.js";
 import { confirmPayout, REVIEW_ALLOWANCE, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
@@ -27,10 +27,11 @@ function flakyChain(mode: { hire: "ok" | "land-then-lose" | "drop"; blindReads: 
     clientFor(signer) {
       const client = base.clientFor(signer);
       return Object.create(client, {
-        hireFromListingHumanless: {
-          value: async (input: Parameters<typeof client.hireFromListingHumanless>[0]) => {
+        send: {
+          value: async (...args: Parameters<typeof client.send>) => {
+            if (!args[0].some(ix => getHireFromListingHumanlessDiscriminatorBytes().every((b, i) => ix.data?.[i] === b))) return client.send(...args);
             if (mode.hire === "drop") throw new Error("socket hang up");
-            const result = await client.hireFromListingHumanless(input);
+            const result = await client.send(...args);
             if (mode.hire === "land-then-lose") {
               mode.blindReads = 1;
               throw new Error("socket hang up");
@@ -72,11 +73,12 @@ function busyChain(mode: { busy: number; tried: number }) {
     clientFor(signer) {
       const client = base.clientFor(signer);
       return Object.create(client, {
-        hireFromListingHumanless: {
-          value: async (input: Parameters<typeof client.hireFromListingHumanless>[0]) => {
+        send: {
+          value: async (...args: Parameters<typeof client.send>) => {
+            if (!args[0].some(ix => getHireFromListingHumanlessDiscriminatorBytes().every((b, i) => ix.data?.[i] === b))) return client.send(...args);
             mode.tried += 1;
             if (mode.tried <= mode.busy) throw tooBusy();
-            return client.hireFromListingHumanless(input);
+            return client.send(...args);
           },
         },
       }) as typeof client;

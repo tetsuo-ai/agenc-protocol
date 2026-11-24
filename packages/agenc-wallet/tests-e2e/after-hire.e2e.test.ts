@@ -15,7 +15,7 @@ import { reviewRpc } from "./review-rpc.js";
 let world: World | undefined;
 afterEach(async () => { vi.useRealTimers(); await world?.wallet.close(); });
 
-it.each(["reject", "approve", "change"] as const)("shares a confirmed %s that races a hosted revision with both parties", async action => {
+it.each(["reject", "approve", "change"] as const)("refuses a signed %s for a superseded delivery and confirms the fresh round for both parties", async action => {
   const objects = new Map<string, Uint8Array>();
   let serve = true;
   const hosted = createHostedServices({
@@ -138,39 +138,44 @@ it.each(["reject", "approve", "change"] as const)("shares a confirmed %s that ra
   const second = await wallet.getJob(job.id, true);
   await expect(wallet.confirmReview(job.id, request, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
   expect((await wallet.reviewRecord(job.id)).quote?.fee.lamports).toBe("5000");
+  const originalBalance = await world.balance(seller.address);
   release();
-  expect(await delayed).toBeNull();
+  expect(await delayed).toMatchObject({ code: "NOT_ALLOWED", message: expect.stringContaining("delivery changed") });
   await peer.close();
-  await wallet.tick();
+  expect(await world.balance(seller.address)).toBe(originalBalance);
+  expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
+  const freshQuote = (await wallet.reviewRecord(job.id)).quote!;
+  expect(freshQuote.submissionCount).toBe(2);
+  expect(freshQuote.deliveryHash).toBe(second.result!.hash);
+  const reading = { call: async (method: string) => method === "jobs.get" ? { job: second } : { quote: freshQuote } } as unknown as WalletClient;
+  expect((await runMarketTool(reading, buyer.id, "market_status", { job_id: job.id })).message).toContain("This decision applies only to delivery 2.");
+  const priorEntries = (await wallet.reviewRecord(job.id)).entries;
+  expect(priorEntries.map(entry => entry.action)).toEqual(["change"]);
+  const freshNote = "Second delivery has no heading.";
+  if (action === "approve") {
+    await wallet.approveJob(job.id, undefined, true, undefined, freshQuote.id);
+  } else {
+    const draft = await wallet.draftReview(job.id, action, freshNote);
+    await wallet.confirmReview(job.id, draft, true);
+  }
+  const reviewed = { submissionCount: 2, deliveryHash: second.result!.hash };
+  history.pruneSubmissions();
   for (const [id, agentId] of [[job.id, buyer.id], [sellerJob.id, seller.id]] as const) {
     const record = await wallet.reviewRecord(id, agentId);
-    expect(record.entries.at(-1)).toMatchObject({ action, intendedDelivery: { submissionCount: 1, deliveryHash: delivery.result!.hash },
-      appliedDelivery: { submissionCount: 2, deliveryHash: second.result!.hash },
-      deliveryNotice: expect.stringContaining("applied to a different delivery (round 2)") });
+    expect(record.entries.at(-1)).toMatchObject({ action, intendedDelivery: reviewed, appliedDelivery: reviewed });
+    expect(record.entries.at(-1)?.deliveryNotice).toBeUndefined();
     const scoped = { call: async (method: string) => method === "jobs.get" ? { job: await wallet.getJob(id, false, agentId) } : record } as unknown as WalletClient;
-    expect((await runMarketTool(scoped, agentId, "market_status", { job_id: id })).message).toContain("applied to a different delivery");
-    expect((await runMarketTool(scoped, agentId, "market_review", { action: "record", job_id: id })).message).toContain("applied to a different delivery");
+    const receipt = await runMarketTool(scoped, agentId, "market_review", { action: "record", job_id: id });
+    expect(receipt.review_record?.entries.at(-1)?.appliedDelivery).toEqual(reviewed);
+    expect(receipt.message).not.toContain("could not be verified");
   }
-  if (action !== "reject") {
-    history.pruneSubmissions();
-    const pruned = await wallet.reviewRecord(job.id);
-    expect(pruned.historyAvailable).toBe(false);
-    expect(pruned.entries.at(-1)?.appliedDelivery).toBeUndefined();
-    expect(pruned.entries.at(-1)?.deliveryNotice).toContain("applied to a different delivery");
-    return;
-  }
-  const held = await wallet.reviewRecord(sellerJob.id);
-  expect(held.entries.at(-1)).toMatchObject({ fee: { lamports: "5000" }, rent: expect.objectContaining({ lamports: expect.any(String) }), action: "reject", note: noteForFirst,
-    intendedDelivery: { submissionCount: 1, deliveryHash: delivery.result!.hash }, appliedDelivery: { submissionCount: 2, deliveryHash: second.result!.hash },
-    deliveryNotice: expect.stringContaining("applied to a different delivery (round 2)"), deadline: expect.any(Number) });
-  history.pruneSubmissions();
-  const frozen = await wallet.reviewRecord(sellerJob.id);
-  expect(frozen.historyAvailable).toBe(false);
-  expect(frozen.entries.at(-1)?.appliedDelivery).toEqual({ submissionCount: 2, deliveryHash: second.result!.hash });
   history.pruneSubmissions(false);
+  if (action !== "reject") return;
+  const held = await wallet.reviewRecord(sellerJob.id);
+  expect(held.entries.at(-1)).toMatchObject({ fee: freshQuote.fee, rent: freshQuote.rejectionRent, action, note: freshNote,
+    intendedDelivery: reviewed, appliedDelivery: reviewed, deadline: expect.any(Number) });
   const scoped = { call: async (method: string) => method === "jobs.get" ? { job: await wallet.getJob(sellerJob.id, false, seller.id) } : held } as unknown as WalletClient;
   const status = await runMarketTool(scoped, seller.id, "market_status", { job_id: sellerJob.id });
-  expect(status.message).toContain("applied to a different delivery (round 2)");
   expect(status.job?.can).toEqual(["draft_dispute", "record"]);
   expect(held.quote).toMatchObject({ actions: ["dispute"], bond: { lamports: "10000000" } });
   expect(BigInt(held.quote!.disputeRent.lamports)).toBeGreaterThan(0n);
@@ -188,10 +193,7 @@ it.each(["reject", "approve", "change"] as const)("shares a confirmed %s that ra
   const state = JSON.parse(readFileSync(join(world.dataDir, "state.json"), "utf8")) as WalletState;
   const charges = (id: string) => state.agents[id]!.refills.filter(row => row.id?.startsWith("review:")).map(row => row.lamports);
   expect(charges(seller.id)).toEqual([disputeTotal.lamports]);
-  expect(charges(buyer.id)).toEqual(["5000"]);
-  const peerState = JSON.parse(readFileSync(join(peerDir, "state.json"), "utf8")) as WalletState;
-  expect(peerState.agents[buyer.id]!.refills.filter(row => row.id?.startsWith("review:")).map(row => row.lamports))
-    .toEqual([String(BigInt(held.entries.at(-1)!.rent!.lamports) + 5000n)]);
+  expect(charges(buyer.id)).toEqual([firstQuote.fee.lamports, freshQuote.rejectionTotal.lamports]);
   const due = revision.resubmitBy!;
   await world.sandbox.ruleOnTurnedDown({ task: address(job.task!), payProvider: true });
   await wallet.tick();
@@ -204,13 +206,21 @@ it.each(["reject", "approve", "change"] as const)("shares a confirmed %s that ra
       expect(late.entries.map(e => [e.action, e.deadline])).toEqual([
         ["change", due], ["reject", expect.any(Number)], ["dispute", expect.any(Number)],
       ]);
-      expect(late.entries.find(entry => entry.action === "reject")?.deliveryNotice).toContain("different delivery (round 2)");
+      expect(late.entries.find(entry => entry.action === "reject")?.appliedDelivery).toEqual(reviewed);
       expect(late.entries.at(-1)).toMatchObject({ evidenceUri: expect.stringMatching(/^agenc:/), note: dispute.note });
     }
     history.pruneSubmissions();
     const unavailable = await lateReader.reviewRecord(sellerJob.id);
     const closedRejection = unavailable.entries.find(entry => entry.action === "reject");
-    expect(closedRejection?.deliveryNotice).toContain("affected delivery could not be verified");
-    expect(closedRejection?.appliedDelivery).toBeUndefined();
+    expect(closedRejection?.deliveryNotice).toBeUndefined();
+    expect(closedRejection?.appliedDelivery).toEqual(reviewed);
+    history.showGuards("legacy");
+    const legacy = (await lateReader.reviewRecord(sellerJob.id)).entries.find(entry => entry.action === "reject");
+    expect(legacy?.deliveryNotice).toContain("affected delivery could not be verified");
+    expect(legacy?.appliedDelivery).toBeUndefined();
+    history.showGuards("wrongTarget");
+    const unbound = (await lateReader.reviewRecord(sellerJob.id)).entries.find(entry => entry.action === "reject");
+    expect(unbound?.action).toBe("reject");
+    expect(unbound?.appliedDelivery).toBeUndefined();
   } finally { await lateReader.close(); }
 }, 60000);

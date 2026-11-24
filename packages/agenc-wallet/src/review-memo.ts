@@ -20,6 +20,6 @@ export function intendedDelivery(raw: unknown, claim: Address, action: string): 
   if (!text) return;
   const fields = text.split(" ");
   if (fields.length !== 5 || fields[0] !== "agenc.review.v1" || fields[1] !== action || fields[2] !== claim ||
-      !/^[1-9][0-9]{0,4}$/.test(fields[3]!) || !/^[0-9a-f]{64}$/.test(fields[4]!)) return;
+      !/^[1-9][0-9]{0,4}$/.test(fields[3]!) || Number(fields[3]) > 65535 || !/^[0-9a-f]{64}$/.test(fields[4]!)) return;
   return { submissionCount: Number(fields[3]), deliveryHash: fields[4]! };
 }

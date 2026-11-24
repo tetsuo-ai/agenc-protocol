@@ -49,7 +49,7 @@ describe("the wallet service process", () => {
 
     const owner = await connectWallet({ socketPath, token: ownerToken });
     const overview = await owner.call("overview", {});
-    expect(overview.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes", "contests", "service-discovery-v1", "chosen-work", "delivery-review-v3"]);
+    expect(overview.capabilities).toEqual(["earn-finishing", "job-terms", "job-spend-quotes", "contests", "service-discovery-v1", "chosen-work", "delivery-review-v4"]);
     expect(overview.network).toBe("sandbox");
     expect(overview.main.balance.usdCents).toBe(5_000);
     const { services } = await owner.call("market.find", {});

@@ -184,7 +184,7 @@ it.each([3600, 3601])("discloses both recipients and reconciles a release landin
         const indices = guards[0]!.accountIndices!;
         expect(indices).toHaveLength(1);
         expect(message.staticAccounts[indices[0]!]).toBe("SysvarC1ock11111111111111111111111111111111");
-        expect(indices[0]!).toBeGreaterThanOrEqual(message.staticAccounts.length - message.header.numReadonlyNonSignerAccounts);
+        expect(indices[0]!).toBeGreaterThanOrEqual(message.header.numSignerAccounts);
         verifiedClock = true;
         world!.sandbox.advanceClock(delay);
       }

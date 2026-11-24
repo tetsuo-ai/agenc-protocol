@@ -4,7 +4,9 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Address } from "@solana/kit";
+import { getCompiledTransactionMessageDecoder, isOffCurveAddress, type Address } from "@solana/kit";
+import { lighthouse } from "@tetsuo-ai/marketplace-sdk";
+import { expect } from "vitest";
 import { APPROVAL_FEE_LAMPORTS, approvalCost } from "../src/approval.js";
 import type { Chain } from "../src/chain.js";
 import type { EarnOptions } from "../src/earn.js";
@@ -67,7 +69,28 @@ export async function startWorld(options: {
   services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
   config?: Partial<WalletConfig>;
 } = {}): Promise<World> {
-  const sandbox = await startSandbox({ followWallClock: false, ...(options.transport === undefined ? {} : { transport: options.transport }) });
+  const sandbox: Sandbox = await startSandbox({ followWallClock: false, transport: base => {
+    const decorated = options.transport?.(base) ?? base;
+    return { ...decorated, async sendAndConfirm(tx) {
+      const msg = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+      if (msg.version === 0) for (const ix of msg.instructions) {
+        if (msg.staticAccounts[ix.programAddressIndex] !== lighthouse.LIGHTHOUSE) continue;
+        expect.soft(ix.accountIndices).toHaveLength(1);
+        for (const index of ix.accountIndices ?? []) {
+          const key = msg.staticAccounts[index]!;
+          expect.soft(index).toBeGreaterThanOrEqual(msg.header.numSignerAccounts);
+          expect.soft(key).not.toBe(msg.staticAccounts[0]);
+          // Absent PDAs are loaded by the runtime as empty system accounts.
+          const account = sandbox.market.svm.getAccount(key);
+          const sysvar = account.exists && account.programAddress === "Sysvar1111111111111111111111111111111111111";
+          const program = account.exists && account.executable;
+          expect.soft(sysvar || program || isOffCurveAddress(key), `Wallet address passed to Lighthouse: ${key}`).toBe(true);
+          expect.soft(account.exists ? account.programAddress : "11111111111111111111111111111111").not.toBe(lighthouse.LIGHTHOUSE);
+        }
+      }
+      return decorated.sendAndConfirm(tx);
+    } };
+  } });
   const listing = await sandbox.addService(HAIKU);
   const dataDir = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-"));
   const secret = randomBytes(32);

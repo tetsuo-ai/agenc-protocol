@@ -1,11 +1,11 @@
 import path from "node:path";
 import { getBase64EncodedWireTransaction, getSignatureFromTransaction, type Address } from "@solana/kit";
 import { StateStore } from "../src/store.js";
-import { findEscrowPda, findTaskPda, values } from "@tetsuo-ai/marketplace-sdk";
+import { findClaimPda, findEscrowPda, findTaskPda, findTaskSubmissionPda, values } from "@tetsuo-ai/marketplace-sdk";
 import { afterEach, expect, it } from "vitest";
 import { fixedPrice } from "../src/pricing.js";
 import { checkHireOperator } from "../src/payable-operator.js";
-import { readListing, readTask } from "../src/market.js";
+import { readListing, readProtocolConfig, readTask } from "../src/market.js";
 import {
   DEFAULT_SELLER_TERMS,
   SELLER_CATEGORIES,
@@ -371,15 +371,26 @@ it("funds concurrent deliveries and reports both possible operator credits from 
   await expect(wallet.hire({ agentId: buyer.id, listing, request: "Seventh hire" })).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
   const lower = await wallet.quoteEarn(seller.id, { ...service, terms: { maxOpenJobs: 2 } }, offer.id);
   expect(lower.capacity).toEqual({ open: 6, proposed: 2, pausing: true });
+  const chain = world.sandbox.chain;
+  const { treasury } = await readProtocolConfig(chain);
+  const listingAccount = (await readListing(chain, listing as Address))!;
   for (const [index, id] of jobs.slice(0, 2).entries()) {
     if (index) await wallet.fundAgent(operator.id, { usdCents: 100 });
-    const initial = await world.balance(operator.address);
+    const job = await wallet.getJob(id, true);
+    const split = job.terms!.hire!;
+    const [claim] = await findClaimPda({ task: job.task as Address, bidder: listingAccount.providerAgent });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    const [operatorBefore, treasuryBefore, sellerBefore, claimReturn, submissionReturn] =
+      await Promise.all([operator.address, treasury, seller.address, claim, submission].map(key => world.balance(key))) as [bigint, bigint, bigint, bigint, bigint];
     const paid = await confirmPayout(wallet, id);
-    const credited = index ? 36912n : 0n;
-    expect(await world.balance(operator.address) - initial).toBe(credited);
+    const credited = index ? BigInt(split.operatorFee.lamports) : 0n;
+    const sellerNet = index ? split.minimumSellerNet.lamports : split.minimumSellerNetIfOperatorCannotReceive.lamports;
+    expect(await world.balance(operator.address) - operatorBefore).toBe(credited);
+    expect(await world.balance(treasury) - treasuryBefore).toBe(BigInt(split.maximumMarketplaceFee.lamports));
+    expect(await world.balance(seller.address) - sellerBefore - claimReturn - submissionReturn).toBe(BigInt(sellerNet));
     expect(paid.operatorPayment).toMatchObject({ address: operator.address,
-      paid: { lamports: credited.toString() }, forfeited: { lamports: (36912n - credited).toString() },
-      sellerNet: { lamports: (3000999n - 150049n - credited).toString() } });
+      paid: { lamports: String(credited) }, forfeited: { lamports: String(BigInt(split.operatorFee.lamports) - credited) },
+      sellerNet: { lamports: sellerNet } });
   }
 }, 60_000);
 

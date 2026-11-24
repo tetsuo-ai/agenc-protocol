@@ -23,6 +23,8 @@ export interface ReviewQuote {
   payer?: string;
   dailyLimitCents?: number | null;
   canPay: boolean;
+  /** The buyer decision checks this round and hash during execution. */
+  submissionBound?: true;
   submissionCount: number;
   deliveryHash: string;
   reviewEndsAt: number;

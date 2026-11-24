@@ -1,11 +1,12 @@
 import { AccountRole, signature as toSignature, type Address, type Signature } from "@solana/kit";
 import {
-  AgencCoordinationInstruction as Ix, AGENC_COORDINATION_PROGRAM_ADDRESS,
+  AgencCoordinationInstruction as Ix, AGENC_COORDINATION_PROGRAM_ADDRESS, findTaskSubmissionPda,
   parseAgencCoordinationEvents, parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
 import { closedRevisionDeadline } from "./review-deadline.js";
 import { settledDeliveryFromLogs } from "./delivery-history.js";
 import { reviewRead } from "./review.js";
+import { submissionAssertions } from "./money-assertions.js";
 import { intendedDelivery } from "./review-memo.js";
 import type { ReviewEntry, ReviewedDelivery } from "./client/reviews.js";
 import { sentInstruction, type SentInstruction, type SettlementHistoryRpc } from "./settlement.js";
@@ -131,7 +132,7 @@ async function deliveryBeforeDecision(rpc: SettlementHistoryRpc, task: Address, 
   }
 }
 
-async function identifyAppliedDelivery(rpc: SettlementHistoryRpc, task: Address, claim: Address, logs: readonly string[], anchor: ReviewAnchor) {
+async function identifyAppliedDelivery(rpc: SettlementHistoryRpc, task: Address, claim: Address, logs: readonly string[], anchor: ReviewAnchor, guarded: boolean) {
   if (anchor.action === "approve") {
     const acceptance = parseAgencCoordinationEvents(logs).find(event =>
       event.eventName === "TaskResultAccepted" && event.data.task === task && event.data.claim === claim);
@@ -140,8 +141,25 @@ async function identifyAppliedDelivery(rpc: SettlementHistoryRpc, task: Address,
       if (paid) anchor.paidDeliveryHash = paid.proofHashHex;
     }
   }
-  anchor.appliedDelivery = await deliveryBeforeDecision(rpc, task, claim, anchor).catch(() => undefined);
+  anchor.appliedDelivery = guarded ? anchor.intendedDelivery : await deliveryBeforeDecision(rpc, task, claim, anchor).catch(() => undefined);
   if (anchor.paidDeliveryHash && anchor.appliedDelivery?.deliveryHash !== anchor.paidDeliveryHash) delete anchor.appliedDelivery;
+}
+
+// A legacy wallet put the memo immediately after its compute budget. A bound
+// decision adds exactly two checks on this claim's submission before the memo.
+// Other batches cannot establish the affected delivery from the memo alone.
+async function decisionBinding(prefix: unknown[], claim: Address, intended: ReviewedDelivery) {
+  const first = prefix.findIndex(raw =>
+    (raw as { programId?: string } | null)?.programId !== "ComputeBudget111111111111111111111111111111");
+  if (first < 0) return "legacy";
+  if (prefix.length - first !== 2) return "unrecognized";
+  const [submission] = await findTaskSubmissionPda({ claim });
+  const matches = submissionAssertions(submission, intended).every((expected, i) => {
+    const actual = sentInstruction(prefix[first + i]);
+    return actual?.programAddress === expected.programAddress && actual.accounts.length === 1 &&
+      actual.accounts[0] === submission && Buffer.from(actual.data).equals(Buffer.from(expected.data!));
+  });
+  return matches ? "guarded" : "unrecognized";
 }
 
 export function deliveryNotice(entry: ReviewAnchor): string | undefined {
@@ -213,17 +231,17 @@ export async function readReviewHistory(rpc: SettlementHistoryRpc, task: Address
       for (const [index, raw] of instructions.entries()) {
         const ix = sentInstruction(raw);
         if (!ix || ix.accounts[0] !== task || ix.accounts[1] !== claim) continue;
-        // This wallet signs only budget instructions, the memo and one decision.
-        // A third-party batch could resubmit inside the decision transaction.
-        const memo = index > 0 && index === outer.length - 1 && outer.slice(0, index - 1).every(raw =>
-          (raw as { programId?: string } | null)?.programId === "ComputeBudget111111111111111111111111111111")
-          ? outer[index - 1] : undefined;
-        const anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs, memo);
-        if (anchor) {
-          if (anchor.intendedDelivery) {
-            await identifyAppliedDelivery(rpc, task, claim, meta.logMessages!, anchor);
+        const memo = index > 0 && index === outer.length - 1 ? outer[index - 1] : undefined;
+        let anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs, memo);
+        if (anchor?.intendedDelivery) {
+          const binding = await decisionBinding(outer.slice(0, index - 1), claim, anchor.intendedDelivery);
+          if (binding === "unrecognized") anchor = reviewAnchor(ix, meta.logMessages ?? [], row.signature, costs);
+          else {
+            await identifyAppliedDelivery(rpc, task, claim, meta.logMessages!, anchor, binding === "guarded");
             if (!anchor.appliedDelivery) verified = false;
           }
+        }
+        if (anchor) {
           transactionEntries.push(anchor);
         } else if (ix.programAddress === AGENC_COORDINATION_PROGRAM_ADDRESS) {
           try {

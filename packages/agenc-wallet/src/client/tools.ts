@@ -389,7 +389,7 @@ export async function runMarketTool(
       if (job.status === "failed") {
         return {
           ok: false,
-          message: `The hire did not go through and nothing was spent. ${job.error ?? ""}`.trim(),
+          message: `The hire did not go through. ${job.error ?? ""}`.trim(),
           job: describeJob(job, now()),
         };
       }
@@ -466,7 +466,10 @@ export async function runMarketTool(
     async function reviewedStatus(job: JobView) {
       const record = job.task ? await client.call("jobs.reviewRecord", { jobId: job.id }, callOptions).catch(() => null) : null;
       const described = describeJob(job, now(), record);
-      return { ok: true, message: [job.statusText, ...(described.delivery_notices ?? [])].join(" "), job: described };
+      const quote = job.role === "buying" ? record?.quote : null;
+      const binding = quote?.submissionBound
+        ? `This decision applies only to delivery ${quote.submissionCount}.` : null;
+      return { ok: true, message: [job.statusText, binding, ...(described.delivery_notices ?? [])].filter(Boolean).join(" "), job: described };
     }
 
     if (name === "market_status") {

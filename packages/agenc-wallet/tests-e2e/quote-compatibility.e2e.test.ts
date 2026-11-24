@@ -113,3 +113,22 @@ it.each([
   await expect(world.wallet.decideApproval(first.id, true)).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
   expect((await world.wallet.decideApproval(approval.id, true)).status).toBe("waiting");
 });
+
+it("refreshes an older pending hire without a rent snapshot before funding", async () => {
+  world = await startWorld();
+  const { wallet, listing } = world;
+  const agent = await wallet.createAgent("Buyer");
+  const { approval } = await wallet.hire({ agentId: agent.id, listing, request: "Write a poem." });
+  await wallet.close();
+  const file = join(world.dataDir, "state.json");
+  const state: WalletState = JSON.parse(readFileSync(file, "utf8"));
+  delete state.jobs[approval!.jobId]!.approvedCosts!.rentTerms;
+  writeFileSync(file, JSON.stringify(state));
+  world.wallet = await world.reopen();
+  const before = await world.balance(wallet.mainAddress);
+  await expect(world.wallet.decideApproval(approval!.id, true)).rejects.toThrow(/refresh the quote/i);
+  expect(await world.balance(wallet.mainAddress)).toBe(before);
+  const fresh = await world.wallet.refreshApproval(approval!.id);
+  expect(fresh.approval.id).not.toBe(approval!.id);
+  expect((await world.wallet.decideApproval(fresh.approval.id, true)).status).toBe("waiting");
+});

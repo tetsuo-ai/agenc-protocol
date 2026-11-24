@@ -202,7 +202,7 @@ export interface AgentView {
 }
 
 /** Capabilities advertised by this service on every overview. */
-export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY, "chosen-work", "delivery-review-v3"] as const);
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY, "chosen-work", "delivery-review-v4"] as const);
 
 export interface WalletOverview {
   /**

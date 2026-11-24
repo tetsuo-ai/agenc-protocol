@@ -40,6 +40,7 @@ export function buildJobQuote(record: JobRecord, input: {
   service: ServiceView | null;
   deposits: JobDeposits;
   protocolFeeBps: number;
+  rentTerms?: string;
   rate: number | null;
   now: number;
   expiresAt: number;
@@ -66,7 +67,7 @@ export function buildJobQuote(record: JobRecord, input: {
     ...record, payer, approvalId,
     ...(hire && record.terms && { terms: { ...record.terms, hire } }),
     ...(rate !== null && { maxPriceCents: record.maxPriceCents ?? Number(microcents(BigInt(record.priceLamports), rate)) / 1_000_000 }),
-    approvedCosts: { networkFees: deposits.networkFees.toString(), cancellationRent: deposits.cancellationRent.toString(), total: deposits.total.toString(), kept: deposits.kept.toString(), protocolFeeBps, expiresAt },
+    approvedCosts: { ...(input.rentTerms && { rentTerms: input.rentTerms }), networkFees: deposits.networkFees.toString(), cancellationRent: deposits.cancellationRent.toString(), total: deposits.total.toString(), kept: deposits.kept.toString(), protocolFeeBps, expiresAt },
   };
   const approval: ApprovalRecord = {
     id: approvalId,
