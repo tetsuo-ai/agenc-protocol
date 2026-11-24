@@ -4,7 +4,7 @@ import { createExchangeKey, newExchangeId, openPacket, sealPacket, signPacket, v
 
 async function fixture() {
   const [buyer, worker, task, claim] = await Promise.all(Array.from({ length: 4 }, () => generateKeyPairSigner()));
-  const parties = { task: task.address, claim: claim.address, claimedAt: "123", worker: worker.address,
+  const parties = { task: task.address, claim: claim.address, generation: "1", claimedAt: "123", worker: worker.address,
     buyer: buyer.address, authority: worker.address, room: "f".repeat(64) };
   const key = await createExchangeKey();
   const announcement = await signPacket({ ...parties, sender: worker.address, id: newExchangeId(), purpose: "key" }, key.publicKey, worker);
@@ -27,7 +27,7 @@ describe("private task thread", () => {
   });
   it("rejects replay into another claim, room, sender or message type", async () => {
     const { buyer, worker, parties, packet } = await fixture();
-    for (const override of [{ claimedAt: "124" }, { claim: buyer.address }, { room: "e".repeat(64) }]) {
+    for (const override of [{ generation: "2" }, { claimedAt: "124" }, { claim: buyer.address }, { room: "e".repeat(64) }]) {
       await expect(verifyPacket(packet, { ...parties, ...override }, buyer.address, "inputs")).rejects.toThrow();
     }
     await expect(verifyPacket(packet, parties, worker.address, "inputs")).rejects.toThrow();
