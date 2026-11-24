@@ -1,5 +1,10 @@
 // Lighthouse's public Borsh ABI. Each builder declares one read-only target.
-// Solana resolves effective top-level privileges across all sibling instructions.
+// Solana merges top-level privileges across the transaction. A sibling may
+// write a coordination PDA inspected here. Lighthouse is immutable on mainnet
+// (no upgrade authority), and only an account's owner can change its data or
+// debit its lamports. Every target must therefore belong to another program.
+// Never pass a signer, fee payer or wallet key. In particular, transferring
+// from a system wallet requires its signature, which Lighthouse never gets.
 // https://github.com/Jac0xb/lighthouse/tree/4c579479c98635e419b1b167f08be02a71604a71/programs/lighthouse
 import { AccountRole, type Address, type Instruction } from "@solana/kit";
 

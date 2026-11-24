@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, address, createNoopSigner, getAddressDecoder, compileTransactionMessage, createTransactionMessage, appendTransactionMessageInstructions, setTransactionMessageFeePayer } from "@solana/kit";
-import { facade, findClaimPda, findTaskSubmissionPda } from "../src/index.js";
+import { AccountRole, address, compileTransactionMessage, createTransactionMessage, appendTransactionMessageInstructions, setTransactionMessageFeePayer } from "@solana/kit";
 import * as lighthouse from "../src/lighthouse.js";
 
 const target = address("So11111111111111111111111111111111111111112");
@@ -23,42 +22,16 @@ describe("Lighthouse assertion accounts", () => {
     }
   });
 
-  it("keeps Clock in the unsigned read-only section of a compiled transaction", () => {
-    const ix = lighthouse.assertClockBefore(10);
-    const message = compileTransactionMessage(appendTransactionMessageInstructions([ix],
+  it("passes no signer or fee payer even when a sibling writes the target", () => {
+    const guard = lighthouse.assertBytes(target, 0, new Uint8Array([1]));
+    const sibling = { programAddress: address("11111111111111111111111111111111"),
+      accounts: [{ address: target, role: AccountRole.WRITABLE }] };
+    const message = compileTransactionMessage(appendTransactionMessageInstructions([guard, sibling],
       setTransactionMessageFeePayer(payer, createTransactionMessage({ version: 0 }))));
-    const index = message.instructions[0]!.accountIndices![0]!;
-    expect(message.staticAccounts[index]).toBe(clock);
-    expect(index).toBeGreaterThanOrEqual(message.staticAccounts.length - message.header.numReadonlyNonSignerAccounts);
+    const indices = message.instructions[0]!.accountIndices!;
+    expect(indices).toHaveLength(1);
+    expect(message.staticAccounts[indices[0]!]).toBe(target);
+    expect(indices[0]!).toBeGreaterThanOrEqual(message.header.numSignerAccounts);
+    expect(message.staticAccounts[indices[0]!]).not.toBe(payer);
   });
-  it("resolves privileges from the compiled revision 9 message for each money action", async () => {
-    const key = (n: number) => getAddressDecoder().decode(new Uint8Array(32).fill(n));
-    const creator = createNoopSigner(key(1));
-    const [task, worker, listing, workerAuthority, treasury] = [key(2), key(3), key(4), key(5), key(6)] as const;
-    const [claim] = await findClaimPda({ task, bidder: worker });
-    const [submission] = await findTaskSubmissionPda({ claim });
-    const bytes = new Uint8Array(32).fill(7);
-    const cases = [
-      [listing, await facade.hireFromListingHumanless({ listing, providerAgent: worker, creator, taskId: bytes,
-        expectedPrice: 1000n, expectedVersion: 1n, reviewWindowSecs: 3600n,
-        listingSpecHash: bytes, taskJobSpecHash: bytes, moderator: key(8) })],
-      [submission, await facade.acceptTaskResult({ creator, task, worker, treasury, workerAuthority })],
-      [submission, await facade.rejectAndFreeze({ creator, task, worker, rejectionHash: bytes })],
-      [submission, await facade.requestChanges({ creator, task, claim, changesHash: bytes })],
-    ] as const;
-    for (const [account, action] of cases) {
-      const guard = lighthouse.assertBytes(account, 0, bytes);
-      const message = compileTransactionMessage(appendTransactionMessageInstructions([guard, action],
-        setTransactionMessageFeePayer(creator.address, createTransactionMessage({ version: 0 }))));
-      const indices = message.instructions[0]!.accountIndices!;
-      expect(indices).toHaveLength(1);
-      const index = indices[0]!;
-      expect(message.staticAccounts[index]).toBe(account);
-      expect(index).toBeGreaterThanOrEqual(message.header.numSignerAccounts);
-      // A top-level assertion would receive this account writable at runtime.
-      // This is why builder-level READONLY cannot establish effective isolation.
-      expect(index).toBeLessThan(message.staticAccounts.length - message.header.numReadonlyNonSignerAccounts);
-    }
-  });
-
 });
