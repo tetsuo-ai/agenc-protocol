@@ -2,16 +2,17 @@ import { applySellerDecision as apply, type SellerDecision } from "./seller-deci
 import { agentOffers, type AgentRecord } from "./store.js";
 
 export interface SellerOperation {
-  quoteId: string; seller: string; offerId: string; listingId: string; listing: string | null;
+  network: string; quoteId: string; seller: string; offerId: string; listingId: string; listing: string | null;
   terms: string; metadataHash: string; priceLamports: string; fundedLamports: string;
   state: "pending" | "confirmed" | "failed"; fundingSignature: string | null; listingSignature: string | null;
 }
+declare module "./seller-decision.js" { interface SellerDecision { network?: string } }
 declare module "./store.js" { interface AgentRecord { sellerOperations?: Record<string, SellerOperation> } }
 
 function describe(agent: AgentRecord, decision: SellerDecision, state: SellerOperation["state"], signature: string | null, amount: string): SellerOperation | null {
-  if (!("offer" in decision.effect)) return null;
+  if (!decision.network || !("offer" in decision.effect)) return null;
   const offer = decision.effect.offer;
-  return { quoteId: decision.quoteId, seller: agent.address, offerId: offer.id, listingId: offer.listingIdHex,
+  return { network: decision.network, quoteId: decision.quoteId, seller: agent.address, offerId: offer.id, listingId: offer.listingIdHex,
     listing: offer.listing, terms: decision.action, metadataHash: offer.specHashHex, priceLamports: offer.priceLamports,
     fundedLamports: amount, state, fundingSignature: signature, listingSignature: offer.signatures.create ?? null };
 }

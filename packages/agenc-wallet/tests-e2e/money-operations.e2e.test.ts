@@ -197,6 +197,9 @@ it("identifies the funded listing, terms and signature after restarting the sell
   expect(w.wallet.sellerOperation(seller.id, q.quoteId)).toMatchObject({ quoteId: q.quoteId, terms: first.terms, listingId: first.listingId,
     fundingSignature: first.fundingSignature });
   expect(w.wallet.sellerOperation(seller.id, "different")).toBeNull();
+  await w.wallet.close();
+  w.wallet = await w.reopen({ chain: { ...w.sandbox.chain, network: "localnet" } });
+  expect(() => w.wallet.sellerOperation(seller.id, q.quoteId)).toThrow(/different network/);
 });
 
 it("refuses a paid hire whose on-chain protocol fee does not qualify", async () => {

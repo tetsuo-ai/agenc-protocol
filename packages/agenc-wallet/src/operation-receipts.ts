@@ -11,14 +11,14 @@ import { microcents } from "./job-money.js";
 import { WalletError } from "./errors.js";
 
 export interface MoneyOperation {
-  id: string; fingerprint: string; payer: string; recipient: string; kind: string;
+  id: string; network?: string; fingerprint: string; payer: string; recipient: string; kind: string;
   state: "pending" | "confirmed" | "failed";
   allowance?: { agentId: string; usdPerSol: number };
   receipt: PendingListingSend; amount: string; fee: string; recorded?: boolean; jobId?: string;
 }
 export interface TransferReservation { quote: TransferQuote; request: TransferRequest }
 export interface OperationState {
-  purchaseBindings?: Record<string, string>;
+  purchaseBindings?: Record<string, string | { network: string; fingerprint: string }>;
   moneyOperations?: Record<string, MoneyOperation>;
   transferQuotes?: Record<string, TransferReservation>;
   legacyTransfers?: Record<string, string>;
@@ -33,6 +33,8 @@ export const operationId = () => randomUUID();
 export async function reconcileOperation(chain: Chain, store: StateStore, id: string) {
   const saved = store.state.moneyOperations?.[id];
   if (!saved) return saved;
+  if (saved.network && saved.network !== chain.network)
+    throw new WalletError("NOT_ALLOWED", "This receipt belongs to a different network.");
   const outcome = saved.state === "pending" ? await chain.reviewSendOutcome?.(saved.receipt) : null;
   // A missing or pruned signature, even after expiry, is not proof of failure.
   if (outcome === "landed" || outcome === "failed")
@@ -90,7 +92,7 @@ export async function sendOperation(options: {
           signedTransaction: getBase64EncodedWireTransaction(tx) };
         options.reserve?.(draft, receipt);
         (draft.moneyOperations ??= {})[id] = {
-          id, fingerprint, kind: options.kind, payer: signer.address, recipient: options.recipient,
+          id, network: chain.network, fingerprint, kind: options.kind, payer: signer.address, recipient: options.recipient,
           state: "pending", amount: String(options.amount), fee: String(chain.transferFeeLamports),
           ...(options.jobId && { jobId: options.jobId }),
           ...(options.allowance && { allowance: options.allowance }), receipt,

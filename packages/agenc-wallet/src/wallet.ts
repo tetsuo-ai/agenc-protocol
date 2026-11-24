@@ -710,15 +710,18 @@ export class AgencWallet {
     const scope = JSON.stringify([agentId, kind, requestKey]);
     if (Buffer.byteLength(requestKey) > 512) throw new WalletError("BAD_REQUEST", "The purchase identity is too long.");
     const binding = this.#store.state.purchaseBindings?.[scope];
-    if (binding !== undefined) this.#checkFingerprint(binding, fingerprint);
-    else {
+    if (binding !== undefined) {
+      if (typeof binding !== "string" && binding.network !== this.#chain.network)
+        throw new WalletError("NOT_ALLOWED", "This purchase belongs to a different network.");
+      this.#checkFingerprint(typeof binding === "string" ? binding : binding.fingerprint, fingerprint);
+    } else {
       const jobKind = kind === "hire" ? "hire" : "request";
       const state = this.#store.state;
       // Older installations already have a binding in the original job or
       // archived receipt. Let #sameCall verify its original encoding.
       const existing = state.callReceipts?.[JSON.stringify([agentId, jobKind, requestKey])] ??
         Object.values(state.jobs).find(job => job.agentId === agentId && job.idempotencyKey === requestKey && (job.kind ?? "hire") === jobKind);
-      if (!existing) this.#store.update(s => { (s.purchaseBindings ??= {})[scope] = fingerprint; });
+      if (!existing) this.#store.update(s => { (s.purchaseBindings ??= {})[scope] = { fingerprint, network: this.#chain.network }; });
     }
     const pending = this.#jobCalls.get(scope);
     if (pending !== undefined) {
@@ -1666,6 +1669,8 @@ export class AgencWallet {
       for (const receipt of agent.earn.pendingListingSends ?? []) {
         const operation = receipt.operation;
         if (operation?.kind !== "funding") continue;
+        if (operation.decision?.network && operation.decision.network !== this.#chain.network)
+          throw new WalletError("NOT_ALLOWED", "The funding signature belongs to a different network.");
         const outcome = operation.decision ? await this.#chain.listingSendOutcome?.(receipt) :
           await this.#chain.reviewSendOutcome?.(receipt);
         if (outcome !== "landed" && outcome !== "failed")
@@ -2069,14 +2074,20 @@ export class AgencWallet {
 
   sellerOperation(agentId: string, quoteId: string) {
     const receipt = sellerReceipt(this.#agentRecord(agentId), quoteId);
-    return receipt && { ...receipt, network: this.#chain.network };
+    if (receipt && receipt.network !== this.#chain.network)
+      throw new WalletError("NOT_ALLOWED", "This seller receipt belongs to a different network.");
+    return receipt;
   }
 
   async callOutcome(agentId: string, kind: "hire" | "request", key: string) {
+    const method = kind === "hire" ? "hire" : agentId === "" ? "postFromBalance" : "post";
+    const saved = this.#store.state.purchaseBindings?.[JSON.stringify([agentId, method, key.trim()])];
+    const network = typeof saved === "object" ? saved.network : null;
+    if (network && network !== this.#chain.network) throw new WalletError("NOT_ALLOWED", "This purchase belongs to a different network.");
     const result = await this.#sameCall(agentId, key.trim(), kind);
     if (!result) throw new WalletError("NOT_FOUND", "There is no saved outcome for this call.");
     const job = this.#store.state.jobs[result.job.id] ?? this.#store.state.callReceipts?.[JSON.stringify([agentId, kind, key.trim()])];
-    return { ...result, receipt: job ? { operationId: key.trim(), network: this.#chain.network, agentId, kind,
+    return { ...result, receipt: job ? { operationId: key.trim(), network, agentId, kind,
       payer: job.payer === "main" ? this.mainAddress : job.payer === "agent" ? this.#agentRecord(agentId).address : null,
       listing: job.listing, task: job.task, jobId: job.id, priceLamports: job.priceLamports, terms: job.terms,
       request: job.request, fingerprint: job.inputFingerprint, signatures: { ...job.signatures }, status: result.job.status } : null };
@@ -5229,7 +5240,7 @@ export class AgencWallet {
       if (amount > 0n && amount + this.#chain.transferFeeLamports > BigInt(entry.quote.totalFromMain.lamports)) {
         throw new WalletError("PRICE_CHANGED", "The funding fee changed. Review a new quote.");
       }
-      const decision = confirm && { quoteId, action: confirm.action, effect: confirm.effect, expiresAt: entry.quote.expiresAt };
+      const decision = confirm && { network: this.#chain.network, quoteId, action: confirm.action, effect: confirm.effect, expiresAt: entry.quote.expiresAt };
       if (amount > 0n) {
         await this.#withListingTransport(agent.id, this.#listingAbort.signal, () =>
           this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`,
@@ -5840,6 +5851,8 @@ export class AgencWallet {
     // jobs or send a conflicting listing change while it can still land.
     for (const receipt of this.#store.state.agents[agentId]!.earn.pendingListingSends ?? []) {
       const offerId = fundedOfferId(receipt.operation);
+      if (receipt.operation?.kind === "funding" && receipt.operation.decision?.network && receipt.operation.decision.network !== this.#chain.network)
+        return null;
       let outcome = await this.#chain.listingSendOutcome?.(receipt).catch((error) => {
         if (offerId === undefined) throw error;
         this.#log(`funding ${offerId}: ${describeError(error)}`);
