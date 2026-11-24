@@ -1953,7 +1953,8 @@ async function executeAndSubmit(
       if ("state" in result && result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     }
-    if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v1:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
+    // B binds the v2 pointer to the claim generation; v1 remains for earlier rooms.
+    if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v[12]:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
       throw new Error("The room has not produced a protected delivery.");
   } catch (error) {
     const reason = formatDiagnosticError(error);
