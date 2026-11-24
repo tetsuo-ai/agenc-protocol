@@ -186,7 +186,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
           },
         },
         quote_id: { type: "string", pattern: "^[0-9a-f]{64}$", description: "For approve, use the quote ID from market_status for the delivery you reviewed." },
-        rating_quote_id: {type:"string",pattern:"^[a-f0-9]{64}$",description:"The rating quote ID market_review returned for these stars. Without it, market_review returns the quote and pays nothing."},
+        rating_quote_id: {type:"string",pattern:"^(?:[a-f0-9]{64}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$",description:"The rating quote ID market_review returned for these stars. Without it, market_review returns the quote and pays nothing."},
         rating: {
           type: "integer",
           minimum: 1,
@@ -586,7 +586,8 @@ export async function runMarketTool(
           rating_quote: { rating_quote_id: quote.id, rating: quote.score, maximum_debit: quote.maximumDebit, fee: quote.fee, rent: quote.rent, expires_at: quote.expiresAt },
         };
       }
-      if (!/^[a-f0-9]{64}$/.test(args.rating_quote_id)) throw new ToolInputError("Use the rating_quote_id market_review returned.");
+      // The wallet issues rating quote IDs as UUIDs.
+      if (!/^(?:[a-f0-9]{64}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(args.rating_quote_id)) throw new ToolInputError("Use the rating_quote_id market_review returned.");
       if (action === "rate") {
         const { job } = await client.call("jobs.rate", { jobId, score, ratingQuoteId: args.rating_quote_id }, callOptions);
         return reviewedStatus(job);
