@@ -10,6 +10,7 @@ import { localExchangeHistory, rememberExchange } from "./exchange-history.js";
 import { JobExchangeSession } from "./job-exchange-session.js";
 import { ExchangeRelay } from "./exchange-relay.js";
 import { approvedRecipient } from "./private-inputs.js";
+import { walletRoomWork } from "./room-work.js";
 import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, openBuyerOutput, openLegacyBuyerOutput, digest, type Parties, type PrivateBundle } from "./private-inputs.js";
 import type { DeliveryBinding, DeliveryChunkAck, OutputAgreement, PrivateInputPart } from "./client/job-exchange.js";
 import { startProviderHeartbeat, type ServingListing } from "./client/provider-heartbeat.js";
@@ -643,7 +644,12 @@ export class AgencWallet {
     this.#earn = new EarnHost({
       chain: this.#chain,
       services: config.services,
-      options: config.earn ?? { executor: null },
+      // The wallet's own RoomWork gives a private job's room B's scoped session and the durable resume.
+      options: { ...(config.earn ?? { executor: null }),
+        roomWork: config.earn?.roomWork ?? (agentId => walletRoomWork({
+          session: task => this.#roomSession(agentId, task),
+          stateDir: path.join(config.dataDir, "earn", "room-work", agentId),
+        })) },
       dataDir: path.join(config.dataDir, "earn"),
       log: this.#log,
       notify: (agentId, notice) => this.#onEarnNotice(agentId, notice),
@@ -944,6 +950,25 @@ export class AgencWallet {
       privateStage: (grant, request, supplier, proof, saved) => stageChildShare(this as object, grant, request, supplier, proof, saved),
       evidence: (job, names, grant) => readChildEvidence(this as object, job, names, grant),
     });
+  }
+
+  #assignedRooms?: { roomForJob(job: JobView): string | null };
+  /** Server-only: the owner's verified room assignments (jobs.bindRoom). */
+  useAssignedRooms(rooms: { roomForJob(job: JobView): string | null }) { this.#assignedRooms = rooms; }
+
+  /** B's session for this seller's current claim: the owner-assigned room, else the room it already joined for this claim. */
+  async #roomSession(agentId: string, task: string) {
+    const relay = this.#services.exchangeRelay;
+    if (!relay) return null;
+    const jobId = "earn_" + agentId + "_" + task;
+    let room: string | null = null;
+    try { room = this.#assignedRooms?.roomForJob(await this.getJob(jobId, true, agentId)) ?? null; } catch { room = null; }
+    if (!room) {
+      const journal = await ExchangeJournal.open(this.#config.dataDir, await this.#vault.signer(this.#agentRecord(agentId).keyId));
+      room = (journal.read<Parties[]>("job-contexts/" + jobId) ?? []).filter(p => p.generation && p.task === task).at(-1)?.room ?? null;
+    }
+    if (!room) return null;
+    return this.jobExchangeSession(jobId, room, relay, agentId).catch(() => null);
   }
 
   /** The processing in the buyer's verified private inputs for this seller's current claim and room, or null. */

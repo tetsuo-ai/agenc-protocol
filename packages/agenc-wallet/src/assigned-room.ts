@@ -49,6 +49,13 @@ export class AssignedRooms {
       )
       .digest("hex");
   }
+  /** The room assigned to this job's current claim, or null. */
+  roomForJob(job: JobView): string | null {
+    try {
+      const room = readFileSync(join(this.directory, this.claim(job)), "utf8");
+      return /^[a-f0-9]{64}$/.test(room) ? room : null;
+    } catch { return null; }
+  }
   /** Trusted owner/room host only. A change of claim needs a fresh assignment. */
   bind(job: JobView, room: string) {
     if (!/^[a-f0-9]{64}$/.test(room))

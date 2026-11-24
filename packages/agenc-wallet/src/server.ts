@@ -140,9 +140,12 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     if ((p.privateCommitment!==undefined || p.childPolicyDigest!==undefined || p.listingAgreement!==undefined) &&
         typeof Reflect.get(wallet,"postListingMessage")!=="function") throw new WalletError("NOT_AVAILABLE","Update Market to verify these purchase terms.");
   };
+  const rooms = options.grantFile ? new AssignedRooms(path.join(path.dirname(options.grantFile),"assigned-rooms"),
+    options.network==="mainnet" ? "https://agenc.ag" : options.exchangeOrigin) : undefined;
+  // The seller's room run reads the same owner assignment as jobs.exchange.
+  if (rooms) wallet.useAssignedRooms?.(rooms);
   const table: Handlers = {
-    ...featureRoutes(wallet, options.grantFile ? new AssignedRooms(path.join(path.dirname(options.grantFile),"assigned-rooms"),
-      options.network==="mainnet" ? "https://agenc.ag" : options.exchangeOrigin) : undefined),
+    ...featureRoutes(wallet, rooms),
     "connections.invite": async p => {
       if (!wallet.hasAgent(p.agentId)) throw new WalletError("NOT_FOUND", "Choose an existing wallet agent.");
       return book().invite(p);
