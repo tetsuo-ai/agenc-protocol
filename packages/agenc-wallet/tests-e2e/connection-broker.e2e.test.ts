@@ -144,6 +144,8 @@ it("keeps project budgets, operations, subscriptions and handoffs scoped across 
     });
     expect(await read("handoff.status", { jobId: job.id })).toMatchObject({
       payer: a.id,
+      // Only this job's reminders; this wallet build has no inbox journal yet.
+      actions_unavailable: true,
     });
     await expect(
       read("handoff.file", { jobId: job.id, sha256: "0".repeat(64) }),

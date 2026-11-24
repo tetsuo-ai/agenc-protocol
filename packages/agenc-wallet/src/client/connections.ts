@@ -94,6 +94,9 @@ export interface ConnectionMethods {
       status: string;
       task: string | null;
       updatedAt: number;
+      parties?: import("./business.js").JobParties;
+      actions?: import("./business.js").JobAction[];
+      actions_unavailable?: boolean;
     };
   };
   "handoff.delivery": {

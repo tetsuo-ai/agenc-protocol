@@ -172,7 +172,8 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       properties: {
         job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
         entry_id: { type: "string", maxLength: 64, description: "Contest submission ID from market_status." },
-        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record", "winner", "reject", "release"] },
+        event_id: { type: "string", pattern: "^[0-9a-f]{64}$", description: "For dismiss_reminder, the exact event ID from market_status." },
+        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record", "winner", "reject", "release", "dismiss_reminder"] },
         note: {
           type: "string",
           maxLength: 2000,
@@ -218,6 +219,8 @@ export interface MarketToolOptions {
 
 /** What every tool returns: JSON a model can read and a host can display. */
 export interface MarketToolResult {
+  actions?: import("./business.js").JobAction[];
+  actions_unavailable?: boolean;
   receipt?: unknown;
   /** False when nothing happened and the message says why. */
   ok: boolean;
@@ -244,6 +247,7 @@ function describeJob(job: JobView, now: number, terms?: ReviewRecord | null) {
     ? { quote_id: quote.id, round: quote.submissionCount, delivery_hash: quote.deliveryHash } : null;
   return {
     job_id: job.id,
+    ...(job.parties && {parties:job.parties}),
     ...(review && { review }),
     // A request has no service: it is the agent's own, open to anyone.
     ...(job.kind === "request" ? { posted_request: job.title } : { service: job.title }),
@@ -498,10 +502,14 @@ export async function runMarketTool(
       };
       if (jobId === undefined) {
         const { jobs } = await client.call("jobs.list", { agentId, limit: 10 }, callOptions);
+        // The authenticated socket determines whose events are visible. This
+        // reads the durable journal even when the job is outside the first page.
+        const inbox = await client.call("jobs.inbox", {}, callOptions).catch(() => null);
         return {
           ok: true,
           message: jobs.length === 0 ? "You have no jobs yet." : `Your ${jobs.length} most recent jobs.`,
           jobs: await Promise.all(jobs.map(describe)),
+          ...(inbox ? {actions:inbox.actions} : {actions_unavailable:true}),
         };
       }
       if (args.entry_id !== undefined) {
@@ -533,6 +541,15 @@ export async function runMarketTool(
 
     const jobId = text(args.job_id, "job_id", MAX_MARKET_ID_LENGTH, true)!;
     const action = args.action;
+    if (action === "dismiss_reminder") {
+      const id = text(args.event_id, "event_id", 64, true)!;
+      const { actions } = await client.call("jobs.inbox", {}, callOptions);
+      if (!actions.some(action => action.jobId === jobId && action.id === id)) {
+        return { ok: false, message: "This job has no matching unread reminder." };
+      }
+      const { dismissed } = await client.call("jobs.dismiss", { id }, callOptions);
+      return { ok: dismissed, message: dismissed ? "Reminder dismissed." : "The reminder changed. Check the job again." };
+    }
     if (action === "winner" || action === "reject" || action === "release") {
       const entryId = text(args.entry_id, "entry_id", 64, true)!;
       const reason = action === "reject" ? text(args.note, "note", 2000, true)! : undefined;

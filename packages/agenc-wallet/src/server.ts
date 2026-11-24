@@ -215,8 +215,16 @@ function handlers(wallet: AgencWallet, grants: ConnectionGrants | null, options:
     "handoff.status": async (p,s) => {
       const grant = book().permission(installation(s).id, p.jobId, "status");
       const job = await wallet.getJob(grant.jobId, false, grant.payer);
+      const inbox = await featureCall<{ actions: import("./client/business.js").JobAction[] }>(
+        wallet, "jobInbox", grant.payer,
+      ).catch(() => null);
       book().permission(installation(s).id, p.jobId, "status");
-      return { jobId: job.id, payer: grant.payer, title: job.title, status: job.status, task: job.task, updatedAt: job.updatedAt };
+      return {
+        jobId: job.id, payer: grant.payer, title: job.title, status: job.status,
+        task: job.task, updatedAt: job.updatedAt,
+        ...(job.parties && { parties: job.parties }),
+        ...(inbox ? { actions: inbox.actions.filter(action => action.jobId === grant.jobId) } : { actions_unavailable: true }),
+      };
     },
     "handoff.delivery": async (p,s) => {
       const g = book().permission(installation(s).id,p.jobId,"artifacts");

@@ -378,3 +378,32 @@ it("tells a buyer why chat cannot hire a listing without a delivery period", asy
     delivery: "The seller must set a delivery period before you can hire this service.",
   });
 });
+
+describe("market_status inbox and reminders (track F wiring)", () => {
+  const action = { id: "e".repeat(64), jobId: "job_1", role: "buying", agentId: "agent_1", event: "review", title: "Review the poem", dueAt: 1, stage: "due" };
+  it("lists the authenticated agent's inbox with no job ID, and says when it is unavailable", async () => {
+    const { client, calls } = wallet({ "jobs.list": { jobs: [] }, "jobs.inbox": { actions: [action] } });
+    const result = await runMarketTool(client, "agent_1", "market_status", {});
+    expect(result).toMatchObject({ ok: true, actions: [action] });
+    expect(calls).toContainEqual(["jobs.inbox", {}]);
+    const old = wallet({ "jobs.list": { jobs: [] } });
+    expect(await runMarketTool(old.client, "agent_1", "market_status", {})).toMatchObject({ ok: true, actions_unavailable: true });
+  });
+
+  it("shows the verified parties of a job", async () => {
+    const parties = { creatorWallet: "B".repeat(32), workerRegistration: null, workerWallet: null, claimedAt: null, workerProfile: null };
+    const { client } = wallet({ "jobs.list": { jobs: [job({ id: "job_1", parties } as never)] }, "jobs.inbox": { actions: [] } });
+    const result = await runMarketTool(client, "agent_1", "market_status", {}) as { jobs: { parties?: unknown }[] };
+    expect(result.jobs[0]!.parties).toEqual(parties);
+  });
+
+  it("dismisses only an exact reminder the agent's own inbox lists", async () => {
+    const { client, calls } = wallet({ "jobs.inbox": { actions: [action] }, "jobs.dismiss": { dismissed: true } });
+    expect(await runMarketTool(client, "agent_1", "market_review", { job_id: "job_2", action: "dismiss_reminder", event_id: action.id }))
+      .toMatchObject({ ok: false, message: "This job has no matching unread reminder." });
+    expect(calls.some(([method]) => method === "jobs.dismiss")).toBe(false);
+    expect(await runMarketTool(client, "agent_1", "market_review", { job_id: "job_1", action: "dismiss_reminder", event_id: action.id }))
+      .toMatchObject({ ok: true, message: "Reminder dismissed." });
+    expect(calls).toContainEqual(["jobs.dismiss", { id: action.id }]);
+  });
+});
