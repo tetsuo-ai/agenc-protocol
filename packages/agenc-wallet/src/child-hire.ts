@@ -966,7 +966,7 @@ interface DeliveryReader {
     jobId: string,
     scope: ChildRoomGrant & { kind: "room-import" },
     outputs: string[],
-  ): Promise<Pick<ChildResult, "round" | "deliveryHash" | "text" | "files">>;
+  ): Promise<Pick<ChildResult, "round" | "deliveryHash" | "text" | "files"> | null>;
 }
 export async function readChildEvidence(
   wallet: DeliveryReader,

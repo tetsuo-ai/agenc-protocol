@@ -4719,6 +4719,8 @@ export class AgencWallet {
     // Only the supplier job this live room's parent hired, for the same room grant.
     if (scope.kind !== "room-import" || job.payer !== "agent" || !record || record.view.child.jobId !== jobId || !sameGrant(record.grant, scope))
       throw new WalletError("NOT_ALLOWED", "This supplier delivery belongs to another room or claim.");
+    // A settled child has no live submission; G's caller then verifies the settled round itself.
+    if (job.outcome === "paid") return null;
     const { journal, evidence } = await this.#deliveryEvidence(jobId, scope.sellerAgentId);
     return roomImportEvidence(journal, scope, evidence, outputs);
   }

@@ -9,7 +9,7 @@ import {
   withChildDependency,
 } from "../src/child-hire.js";
 import { openParentFixture, type ChildFixtureOptions } from "./child-hire-fixture.js";
-import { CENT, confirmPayout, REVIEW_ALLOWANCE, type World } from "./harness.js";
+import { CENT, confirmPayout, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 let world: World;
 let room: string;
 afterEach(async () => {
@@ -533,17 +533,20 @@ it("rejects a matching public criterion before calling private staging", async (
   const { address } = await import("@solana/kit");
   const { readAgent, readHireableListing } = await import("../src/market.js");
   const commitment = "ab".repeat(32);
-  const { grant, request } = await parent({
-    privateInputs: true,
-    prepareCriteria: async (w, input) => {
-      const listing = await readHireableListing(w.sandbox.chain, address(input.listing));
-      const supplier = (await readAgent(w.sandbox.chain, listing.providerAgent))!.authority;
-      return [childShareCriterion(supplier, { ...input, privateCommitment: commitment })];
-    },
-  });
+  // E: the buyer's checkout refuses a caller-written share criterion before any order exists.
   await expect(
-    world.wallet.childHires.request(grant, { ...request, privateCommitment: commitment }),
-  ).rejects.toThrow(/original buyer/);
+    openParentFixture(
+      {
+        privateInputs: true,
+        prepareCriteria: async (w, input) => {
+          const listing = await readHireableListing(w.sandbox.chain, address(input.listing));
+          const supplier = (await readAgent(w.sandbox.chain, listing.providerAgent))!.authority;
+          return [childShareCriterion(supplier, { ...input, privateCommitment: commitment })];
+        },
+      },
+      async (o) => (world = await startWorld(o)),
+    ),
+  ).rejects.toThrow(/approved private input/);
 }, 90000);
 
 it("keeps another child's review SOL when the owner reclaims a specific amount", async () => {
