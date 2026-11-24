@@ -119,6 +119,9 @@ function carriedFiles(dataDir: string): Record<string, string> {
   const files: Record<string, string> = {};
   let count = 0;
   const take = (relative: string): void => {
+    // Device-local service directories contain passing rehearsal receipts.
+    // PortableBusiness carries the immutable source files separately.
+    if (relative.split("/")[2] === "service-bundles") return;
     const absolute = path.join(dataDir, relative);
     let info;
     try {
@@ -445,6 +448,8 @@ export async function restoreBackup(input: {
     if (safe === null || typeof body !== "string") {
       throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
     }
+    // Old archives could include the rehearsal cache in the worker tree.
+    if (relative.split("/")[2] === "service-bundles") continue;
     let bytes = Buffer.from(body, "base64");
     if (safe === "state.json") {
       // The records were sealed a moment before the backup was noted in them.
@@ -474,7 +479,7 @@ export async function restoreBackup(input: {
   try {
     // Move the wallet that is here out of the way. Nothing is deleted.
     let replaced: string | null = null;
-    const present = ["vault.json", "state.json", "earn", BUSINESS_FILE, "connection-grants.json", "business-rehearsals.json"].filter((name) =>
+    const present = ["vault.json", "state.json", "earn", BUSINESS_FILE, "connection-grants.json", "business-rehearsals.json", "peers"].filter((name) =>
       existsSync(path.join(input.dataDir, name)),
     );
     if (present.length > 0) {
@@ -483,7 +488,17 @@ export async function restoreBackup(input: {
         `replaced-${new Date(input.now).toISOString().replace(/[:.]/g, "-")}`,
       );
       mkdirSync(replaced, { recursive: false, mode: 0o700 });
-      for (const name of present) renameSync(path.join(input.dataDir, name), path.join(replaced, name));
+      const moved: string[] = [];
+      try {
+        for (const name of present) {
+          renameSync(path.join(input.dataDir, name), path.join(replaced, name));
+          moved.push(name);
+        }
+      } catch (error) {
+        for (const name of moved.reverse()) renameSync(path.join(replaced, name), path.join(input.dataDir, name));
+        rmSync(replaced, { recursive: true, force: true });
+        throw error;
+      }
     }
 
     try {
@@ -507,7 +522,7 @@ export async function restoreBackup(input: {
     } catch (error) {
       // Half a restore is worse than none: take out what was just written
       // and put the wallet that was here back exactly as it was.
-      for (const name of ["vault.json", "state.json", "earn", BUSINESS_FILE, "connection-grants.json", "business-rehearsals.json"]) {
+      for (const name of ["vault.json", "state.json", "earn", BUSINESS_FILE, "connection-grants.json", "business-rehearsals.json", "peers"]) {
         rmSync(path.join(input.dataDir, name), { recursive: true, force: true });
       }
       if (replaced !== null) {

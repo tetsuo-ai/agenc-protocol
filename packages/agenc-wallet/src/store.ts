@@ -1,3 +1,4 @@
+import type { ChildHireState } from "./child-hire-store.js";
 import type { JobTerms } from "./client/types.js";
 // The wallet's journal: agents, jobs, approvals and the activity list, in one
 // private JSON file that is rewritten atomically on every change.
@@ -416,7 +417,7 @@ export interface ActivityRecord {
   signature: string | null;
 }
 
-export interface WalletState {
+export interface WalletState extends ChildHireState {
   actionInbox?: import("./action-inbox.js").SavedAction[];
   businessRecovery?: { restoredAt: number; requiresConsent: boolean };
   setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;

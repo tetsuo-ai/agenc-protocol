@@ -1,4 +1,4 @@
-import { restoredBusiness, stagedBusiness, requireFreshRehearsals } from "./business-backup.js";
+import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals } from "./business-backup.js";
 import { checkBusinessRoom } from "./business-room.js";
 import { correctChosenWork } from "@tetsuo-ai/agenc-worker";
 import { checkWorkFiles, correctionInputs, inspectWorkChunk, workFileSource } from "./work-inspection.js";
@@ -31,6 +31,7 @@ import {
   taskThread,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { childHireActions } from "./child-hire-store.js";
 import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms, releaseQuoteLifetime } from "./worker-jobs.js";
 import type { WorkerQuote, WorkAction } from "./client/types.js";
 import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, type WorkerDispatch, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, readReviewEnvelope, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
@@ -1189,7 +1190,11 @@ export class AgencWallet {
     const [costs] = await Promise.all([this.#serviceCosts(), ordered.some((agent) => agentOffers(agent).length) && this.#marketFeeBps()]);
     return {
       businessVersion: 1,
-      capabilities: [...WALLET_CAPABILITIES],
+      capabilities: [...WALLET_CAPABILITIES,
+        ...(typeof Reflect.get(this,"quoteTransfer") === "function" ? ["money-operations"] : []),
+        ...(typeof Reflect.get(this,"stageJobInputs") === "function" ? ["private-job-inputs"] : []),
+        ...(Reflect.has(this,"childHires") ? ["child-hires"] : []),
+      ],
       network: this.#chain.network,
       main: {
         address: this.mainAddress,
@@ -1233,10 +1238,18 @@ export class AgencWallet {
     file: string,
     business?: PortableBusiness | string,
   ): Promise<{ createdAt: number; agents: number; main: string }> {
+    const portable = typeof business === "string" ? stagedBusiness(this.#config.dataDir, business) : business ?? restoredBusiness(this.#config.dataDir);
+    for (const agent of Object.values(this.#store.state.agents)) {
+      for (const offer of agentOffers(agent)) {
+        const terms = offer.terms as {servicePin?: {digest:string}} | undefined;
+        if (terms?.servicePin && !portable?.services.some(source => source.agentId === agent.id && source.manifest === terms.servicePin!.digest))
+          throw new WalletError("NOT_AVAILABLE", "Include the pinned sources for every service before saving this backup.");
+      }
+    }
     const { text, header } = await createBackup({
       dataDir: this.#config.dataDir,
       vault: this.#vault,
-      ...(business && {business: typeof business === "string" ? stagedBusiness(this.#config.dataDir, business) : business}),
+      ...(portable && {business: portable}),
       password,
       network: this.#chain.network,
       agents: Object.keys(this.#store.state.agents).length,
@@ -3795,6 +3808,7 @@ export class AgencWallet {
     if (existing?.workerRegistration) return existing;
     const registration = await this.#earn.marketplaceAgent(agentId);
     const parties = await readJobParties(this.#chain, task as Address, registration).catch(() => null);
+    if (parties?.workerWallet && parties.workerWallet !== this.#agentRecord(agentId).address) return existing;
     if (parties && JSON.stringify(parties) !== JSON.stringify(existing) && !this.#closed) {
       this.#store.update(draft => { ((draft.workRecords ??= {})[id] ??= {}).parties = parties; });
     }
@@ -4585,7 +4599,7 @@ export class AgencWallet {
   jobInbox(agentId?: string) {
     const state = this.#store.state;
     const jobs = [...Object.values(state.jobs), ...Object.keys(state.agents).flatMap(id => this.#earnJobs(id))];
-    const actions = projectInbox(jobs, state.actionInbox ?? [], this.#now());
+    const actions = projectInbox(jobs, state.actionInbox ?? [], this.#now(), childHireActions(state, this.#now()));
     if (JSON.stringify(actions) !== JSON.stringify(state.actionInbox ?? []))
       this.#store.update(draft => { draft.actionInbox = actions; });
     return { actions: actions.filter(row => !row.dismissed && (agentId === undefined || row.agentId === agentId)) };
@@ -4634,7 +4648,12 @@ export class AgencWallet {
     const rows = [...Object.values(state.jobs), ...Object.keys(state.agents).flatMap(id => this.#earnJobs(id))];
     const obligations: RecoveryView["obligations"] = rows.filter(j => ["hiring","hired","active","cleared"].includes(j.phase))
       .map(({id: jobId, role, task, title, agentId}) => ({jobId, role, task, title, agentId}));
-    const pending = new Set<string>();
+    const pending = new Set(pendingBusinessPayments(state).map(payment => payment.receipt.signature));
+    for (const child of Object.values(state.childHires ?? {})) {
+      if (child.view.phase !== "dispatching" || !child.send) continue;
+      const outcome = await this.#chain.reviewSendOutcome?.(child.send);
+      if (outcome !== "landed" && outcome !== "failed") pending.add(child.send.signature);
+    }
     for (const prior of Object.values(state.reviewIntents ?? {}))
       if (prior.receipt && !prior.reconciled) pending.add(prior.receipt.signature);
     for (const agent of Object.values(state.agents)) {
@@ -4657,6 +4676,8 @@ export class AgencWallet {
     return this.#lock("business-recovery", async () => {
       const initial = await this.businessStatus();
       if (!initial?.requiresConsent || initial.restoredAt !== restoredAt) throw new WalletError("NOT_ALLOWED", "Review this restore again.");
+      const money = this as AgencWallet & { operationOutcome?(id:string): Promise<unknown> };
+      for (const payment of pendingBusinessPayments(this.#store.state)) await money.operationOutcome?.(payment.id);
       for (const jobId of Object.keys(this.#store.state.reviewIntents ?? {}))
         await this.#reconcileReview(jobId);
       for (const id of Object.keys(this.#store.state.agents)) {

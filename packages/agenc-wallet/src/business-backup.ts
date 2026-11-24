@@ -86,6 +86,7 @@ export function verifyPortableBusiness(
         "deliverySecs",
         "operator",
         "operatorFeeBps",
+        "childPolicy",
         "servicePin",
         "minimumMarginCents",
         "modelCapCents",
@@ -267,6 +268,17 @@ export function pauseRestoredBusiness(
   if (
     !(
       hasWork ||
+      state.businessRecovery?.requiresConsent ||
+      pendingBusinessPayments(state).length ||
+      Object.values(state.reviewIntents ?? {}).some(
+        (v) => v.receipt && !v.reconciled,
+      ) ||
+      Object.values(state.jobs ?? {}).some((j) =>
+        ["hiring", "hired", "active", "cleared"].includes(j.phase),
+      ) ||
+      Object.values(state.childHires ?? {}).some(
+        (child) => child.view.phase === "dispatching",
+      ) ||
       business?.drafts.length ||
       business?.services.length ||
       agents.some(
@@ -281,4 +293,21 @@ export function pauseRestoredBusiness(
     return;
   for (const agent of agents) if (agent.earn) agent.earn.enabled = false;
   state.businessRecovery = { restoredAt: now, requiresConsent: true };
+}
+
+// A adds the money journal when its contract is installed. Older backups omit it.
+export function pendingBusinessPayments(state: WalletState) {
+  const book = state as WalletState & {
+    moneyOperations?: Record<
+      string,
+      {
+        id: string;
+        state: string;
+        receipt: { signature: string };
+      }
+    >;
+  };
+  return Object.values(book.moneyOperations ?? {}).filter(
+    (row) => row.state === "pending",
+  );
 }

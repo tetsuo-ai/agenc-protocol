@@ -339,6 +339,7 @@ export function jobView(
     task: job.task,
     listing: job.listing || null,
     provider: job.providerAgent || null,
+    ...(job.modelUsage && { modelUsage: job.modelUsage, settledSellerCredit: job.settledSellerLamports == null ? null : money(job.settledSellerLamports, context.usdPerSol) }),
     ...(job.parties && { parties: { ...job.parties } }),
     // A delivery saved before files could come with one has no list.
     // A verified earlier revision is not evidence of the paid commitment.

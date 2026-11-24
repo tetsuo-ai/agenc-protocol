@@ -82,23 +82,28 @@ export function projectInbox(
   jobs: JobRecord[],
   saved: SavedAction[],
   now: number,
+  additional: JobAction[] = [],
 ): SavedAction[] {
   const dismissed = new Set(saved.filter((a) => a.dismissed).map((a) => a.id));
-  return jobs
-    .flatMap((job) => {
-      const row = pendingJobAction(job, now);
-      return row
-        ? [
-            {
-              ...row,
-              ...(dismissed.has(row.id) && { dismissed: true as const }),
-            },
-          ]
-        : [];
-    })
-    .sort(
-      (a, b) =>
-        (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity) ||
-        a.id.localeCompare(b.id),
-    );
+  const knownJobs = new Set(jobs.map((job) => job.id));
+  const live = jobs
+    .flatMap((job) => pendingJobAction(job, now) ?? [])
+    .concat(additional);
+  const actions: SavedAction[] = live.map((row) => ({
+    ...row,
+    ...(dismissed.has(row.id) && { dismissed: true as const }),
+  }));
+  // A worker ledger can be temporarily unavailable during room restart.
+  // Preserve its dismissal until we actually observe the next job state.
+  const visible = new Set(live.map((row) => row.id));
+  actions.push(
+    ...saved.filter(
+      (row) =>
+        row.dismissed && !visible.has(row.id) && !knownJobs.has(row.jobId),
+    ),
+  );
+  return actions.sort(
+    (a, b) =>
+      (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity) || a.id.localeCompare(b.id),
+  );
 }

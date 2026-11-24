@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -272,6 +273,12 @@ it("restores a verified draft and assets, reconciles a pending signature and wai
       },
     ],
   };
+  const cache = path.join("earn", buyer.id, "service-bundles", digest(bytes));
+  mkdirSync(path.join(world.dataDir, cache), { recursive: true });
+  writeFileSync(
+    path.join(world.dataDir, cache, "passed.json"),
+    '{"passed":true}',
+  );
   const file = path.join(world.dataDir, "saved");
   await world.wallet.exportBackup("synthetic backup", file, portable);
   const text = readFileSync(file, "utf8");
@@ -292,6 +299,9 @@ it("restores a verified draft and assets, reconciles a pending signature and wai
     now: world.clock.now,
   });
   expect(() => readFileSync(path.join(dir, "connection-grants.json"))).toThrow(
+    /ENOENT/,
+  );
+  expect(() => readFileSync(path.join(dir, cache, "passed.json"))).toThrow(
     /ENOENT/,
   );
   world.wallet = await world.reopen({ dataDir: dir, unlockSecret: secret });
