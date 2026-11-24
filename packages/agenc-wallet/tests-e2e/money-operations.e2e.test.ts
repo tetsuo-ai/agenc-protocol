@@ -118,6 +118,41 @@ it("binds the original payer, stars and cost, enforces allowance, and reads the 
   expect(await w.balance(a.address)).toBe(balance);
 });
 
+it("lets the owner confirm stars on an agent-paid hire when the agent asks every time, within its daily cap", async () => {
+  w = await startWorld();
+  const { wallet, sandbox } = w;
+  const a = await wallet.createAgent("Asker");
+  await wallet.setPolicy(a.id, { askAboveCents: 1000, refill: REVIEW_ALLOWANCE });
+  await wallet.fundAgent(a.id, { lamports: String(SOL) });
+  const own = await wallet.hire({ agentId: a.id, listing: w.listing, request: "An agent-funded poem." });
+  await sandbox.workOnce();
+  await confirmPayout(wallet, own.job.id);
+  // "Asks you every time": the agent may not spend on its own, but the owner's yes to the exact quote may.
+  await wallet.setPolicy(a.id, { askAboveCents: 0, refill: REVIEW_ALLOWANCE });
+  const agentQ = await wallet.quoteRating(own.job.id, 4, false, a.id);
+  await expect(wallet.rateJob(own.job.id, 4, false, a.id, agentQ.id)).rejects.toThrow(/allowance/);
+  const ownerQ = await wallet.quoteRating(own.job.id, 4, true);
+  const before = await w.balance(a.address);
+  expect((await wallet.rateJob(own.job.id, 4, true, undefined, ownerQ.id)).rating).toBe(4);
+  expect(before - await w.balance(a.address)).toBe(BigInt(ownerQ.maximumDebit.lamports));
+});
+
+it("still holds an owner-confirmed agent-paid rating to the agent's daily cap", async () => {
+  w = await startWorld();
+  const { wallet, sandbox } = w;
+  const a = await wallet.createAgent("Capped");
+  await wallet.setPolicy(a.id, { askAboveCents: 1000, refill: REVIEW_ALLOWANCE });
+  await wallet.fundAgent(a.id, { lamports: String(SOL) });
+  const own = await wallet.hire({ agentId: a.id, listing: w.listing, request: "An agent-funded poem." });
+  await sandbox.workOnce();
+  await confirmPayout(wallet, own.job.id);
+  const ownerQ = await wallet.quoteRating(own.job.id, 4, true);
+  await wallet.setBudget(a.id, 0);
+  const before = await w.balance(a.address);
+  await expect(wallet.rateJob(own.job.id, 4, true, undefined, ownerQ.id)).rejects.toThrow(/allowance/);
+  expect(await w.balance(a.address)).toBe(before);
+});
+
 it("refuses retirement until the main-funded contest ends, then verifies the landed credit", async () => {
   w = await startWorld();
   const { wallet, sandbox } = w;

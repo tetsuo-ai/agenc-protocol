@@ -5584,7 +5584,7 @@ export class AgencWallet {
           ...(job.payer === "agent" && rate !== null && { allowance: { agentId: job.agentId, usdPerSol: rate } }),
           reserve: draft => {
             if (job.payer === "agent" && (rate === null || cost > this.#dailyRoom(draft.agents[job.agentId]!, rate) ||
-              !reserveJobSpend(draft.agents[job.agentId]!, quote.id, microcents(cost, rate), microcents(cost, rate), this.#now(), false)))
+              !reserveJobSpend(draft.agents[job.agentId]!, quote.id, microcents(cost, rate), microcents(cost, rate), this.#now(), isOwner)))
               throw new WalletError("NOT_ALLOWED", "The rating exceeds the agent's allowance.");
           } });
         if (op.state !== "confirmed") throw new WalletError("NETWORK", `Rating ${quote.id} is ${op.state}. Check its signature.`);
