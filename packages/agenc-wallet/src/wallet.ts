@@ -3096,9 +3096,12 @@ export class AgencWallet {
 
     // Keep the verified claim facts while the accounts still exist. A released
     // ordinary post may later have a different claimant.
-    if (!job.parties || job.parties.workerRegistration !== provider) {
+    // A worker may release and reclaim between two reads of an open request.
+    const liveRequestClaim = request && seen.status === "in_progress" && seen.workers > 0;
+    if (!job.parties || job.parties.workerRegistration !== provider || liveRequestClaim) {
       const parties = await readJobParties(this.#chain, task, provider).catch(() => null);
-      if (parties && JSON.stringify(job.parties) !== JSON.stringify(parties)) {
+      if (parties && (parties.workerRegistration || !provider || !job.parties?.workerRegistration)
+          && JSON.stringify(job.parties) !== JSON.stringify(parties)) {
         this.#patchJob(job.id, entry => { entry.parties = parties; });
       }
     }
@@ -3802,12 +3805,13 @@ export class AgencWallet {
     }));
   }
 
-  async #sellerParties(agentId: string, task: string) {
+  async #sellerParties(agentId: string, task: string, freshClaim = false) {
     const id = "earn_" + agentId + "_" + task;
     const existing = this.#store.state.workRecords?.[id]?.parties;
-    if (existing?.workerRegistration) return existing;
+    if (existing?.workerRegistration && !freshClaim) return existing;
     const registration = await this.#earn.marketplaceAgent(agentId);
     const parties = await readJobParties(this.#chain, task as Address, registration).catch(() => null);
+    if (existing?.workerRegistration && !parties?.workerRegistration) return existing;
     if (parties?.workerWallet && parties.workerWallet !== this.#agentRecord(agentId).address) return existing;
     if (parties && JSON.stringify(parties) !== JSON.stringify(existing) && !this.#closed) {
       this.#store.update(draft => { ((draft.workRecords ??= {})[id] ??= {}).parties = parties; });
@@ -4832,7 +4836,7 @@ export class AgencWallet {
         await inTransportScope({ signal, sending, ...(action === "release" && { beforeSend: checkReleaseTime }), confirmed: () => {} }, async () => {
           if (action === "claim") {
             await takeOpenWork(ctx, agent, signal, task, authorize);
-            await this.#sellerParties(agentId, task);
+            await this.#sellerParties(agentId, task, true);
           }
           else await finishChosenWork(ctx, agent, signal, task, action, authorize, intent => { delivery = intent; });
         });
@@ -5272,7 +5276,7 @@ export class AgencWallet {
   #onEarnNotice(agentId: string, notice: EarnNotice): void {
     if (notice.type === "state" && this.#earn.state(agentId).state === "working") {
       const marker = loadWorkerState(this.#earn.stateDir(agentId)).openClaim;
-      if (marker) this.#backgroundWork(this.#sellerParties(agentId, marker.task).then(() => {}));
+      if (marker) this.#backgroundWork(this.#sellerParties(agentId, marker.task, true).then(() => {}));
     }
     if (notice.type === "paid" || notice.type === "failed") {
       const jobId = `earn_${agentId}_${notice.task}`;

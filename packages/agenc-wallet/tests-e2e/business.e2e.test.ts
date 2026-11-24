@@ -1,10 +1,18 @@
+import type { Address } from "@solana/kit";
+import { findClaimPda, getTaskClaimDecoder } from "@tetsuo-ai/marketplace-sdk";
 import { mkdirSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { CENT, eventually, startWorld, type World } from "./harness.js";
+import {
+  approvedPost,
+  CENT,
+  eventually,
+  startWorld,
+  type World,
+} from "./harness.js";
 import { businessHandlers } from "../src/business-handlers.js";
 import { withFiles } from "../src/client/delivery-files.js";
 import { restoreBackup } from "../src/backup.js";
@@ -80,7 +88,11 @@ it("reopens a manual funding quote, takes only the chosen task, inspects files, 
       rewardLamports: 50n * CENT,
       deadlineSeconds: 7200,
     });
-  const { task } = await post();
+  const posted = await approvedPost(world.wallet, {
+    request: "Check the report",
+    reward: { usdCents: 50 },
+  });
+  const task = posted.task!;
   await post();
   const quote = await world.wallet.quoteManualWork(id);
   await world.wallet.close();
@@ -106,6 +118,16 @@ it("reopens a manual funding quote, takes only the chosen task, inspects files, 
   const hash = await eventually(
     async () => (await wallet.openWork(id)).held?.resultHash,
   );
+  const tracked = await wallet.getJob(posted.id, true);
+  expect(tracked.parties?.creatorWallet).toBe(wallet.mainAddress);
+  const [claim] = await findClaimPda({
+    task: task as Address,
+    bidder: tracked.parties!.workerRegistration as Address,
+  });
+  const account = await world.sandbox.chain.readAccountInfo(claim);
+  const claimedAt =
+    Number(getTaskClaimDecoder().decode(account!.data).claimedAt) * 1000;
+  expect(tracked.parties?.claimedAt).toBe(claimedAt);
   const params = { agentId: id, task, hash, part: "text", offset: 0 };
   const chunk = await api["work.inspect"](params, owner);
   expect(chunk.files).toEqual([file]);
@@ -141,7 +163,7 @@ it("reopens a manual funding quote, takes only the chosen task, inspects files, 
   expect(parties).toMatchObject({
     creatorWallet: old.job.buyer,
     workerWallet: agent.address,
-    claimedAt: expect.any(Number),
+    claimedAt,
   });
   expect(parties.workerRegistration).not.toBe(agent.address);
   const approval = await wallet.quoteWork(id, task, "submit");
