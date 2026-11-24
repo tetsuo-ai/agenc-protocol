@@ -53,7 +53,7 @@ import {
 import { claimBudget, budgetForRevision, enrollClaimBudget, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
-import { needsPrivateRoom, type RoomWork } from "./room-work.js";
+import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
 import { assertActiveWorkerConfig, effectiveCapabilities, type WorkerConfig } from "./config.js";
 import {
   assertExecutorPromptFits,
@@ -1908,6 +1908,8 @@ async function executeAndSubmit(
         exitCode: null, signal: null, reason: "aborted",
       });
     }
+    const questions = await ctx.roomWork?.questions?.(binding);
+    if (questions && await waitForRoomAnswer(ctx.stateDir, task, questions)) return { status: "held", task };
     const turn = await ctx.roomWork?.open(binding);
     if (turn?.state === "waiting" || (privateInputs && (!turn || turn.state === "ordinary")))
       return { status: "held", task };
