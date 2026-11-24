@@ -2,12 +2,12 @@
 // person's service manager waits here, locked, until its host hands it the
 // start-up line; afterwards a host proves it holds the unlock secret to be
 // told the owner credential. One JSON line each way.
-import { listenWindowsPipe } from "./client/windows-pipe.js";
+import { listenLocal } from "./client/windows-pipe.js";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import path from "node:path";
-import { MAX_UNLOCK_LINE_BYTES, unlockProof } from "./client/unlock.js";
+import { MAX_UNLOCK_LINE_BYTES, unlockOpenProof, unlockProof, unlockServerProof } from "./client/unlock.js";
 import { WalletError } from "./errors.js";
 
 /** What an open service tells a host that proved it holds the secret. */
@@ -49,6 +49,38 @@ function preparePrivateSocket(socketPath: string): void {
   }
 }
 
+/**
+ * The key this service proves it holds before a host sends it anything
+ * (`client/unlock.ts`): 32 random bytes in the wallet's own folder, made once,
+ * readable by this user only. On Windows that folder sits in the user's
+ * profile, which only the user can read.
+ */
+export function loadUnlockServerKey(file: string): Buffer {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  try {
+    const fd = openSync(file, "wx", 0o600);
+    try {
+      writeSync(fd, randomBytes(32));
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const fd = openSync(file, "r");
+  try {
+    const info = fstatSync(fd);
+    const getuid = process.getuid;
+    if (!info.isFile() || info.size !== 32 || (process.platform !== "win32" &&
+        ((info.mode & 0o077) !== 0 || (typeof getuid === "function" && info.uid !== getuid.call(process))))) {
+      throw new WalletError("INTERNAL", "The unlock key file must be private to you. Remove it and start again.");
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return readFileSync(file);
+}
+
 function sameHex(a: string, b: string): boolean {
   const left = Buffer.from(a, "utf8");
   const right = Buffer.from(b, "utf8");
@@ -65,8 +97,11 @@ export async function listenForUnlock(options: {
   unlock: (startup: unknown) => Promise<void>;
   opened: () => OpenWallet | null;
   log: (line: string) => void;
+  /** Prove this key file (`loadUnlockServerKey`) to every host that asks. Needed on Windows. */
+  serverKeyFile?: string;
 }): Promise<UnlockServer> {
   if (process.platform !== "win32") preparePrivateSocket(options.socketPath);
+  const serverKey = options.serverKeyFile === undefined ? null : loadUnlockServerKey(options.serverKeyFile);
   let unlocking: Promise<void> | null = null;
   const sockets = new Set<Socket>();
 
@@ -77,6 +112,7 @@ export async function listenForUnlock(options: {
     socket.setEncoding("utf8");
     // One value per connection, and it answers one proof only.
     let nonce: string | null = null;
+    let clientNonce: string | null = null;
     let buffered = "";
     const reply = (message: unknown): void => {
       socket.write(`${JSON.stringify(message)}\n`);
@@ -86,7 +122,7 @@ export async function listenForUnlock(options: {
       socket.end();
     };
     const onLine = async (line: string): Promise<void> => {
-      let message: { type?: unknown; startup?: unknown; mac?: unknown };
+      let message: { type?: unknown; startup?: unknown; mac?: unknown; nonce?: unknown };
       try {
         message = JSON.parse(line) as typeof message;
       } catch {
@@ -95,11 +131,14 @@ export async function listenForUnlock(options: {
       }
       if (message.type === "hello") {
         const open = options.opened();
+        clientNonce = typeof message.nonce === "string" && /^[a-f0-9]{64}$/.test(message.nonce) ? message.nonce : null;
+        const proof = (state: string, asked: string | null) =>
+          serverKey !== null && clientNonce !== null ? { proof: unlockServerProof(serverKey, state, clientNonce, asked) } : {};
         if (open === null) {
-          reply({ state: "locked" });
+          reply({ state: "locked", ...proof("locked", null) });
         } else {
           nonce = randomBytes(32).toString("hex");
-          reply({ state: "open", nonce });
+          reply({ state: "open", nonce, ...proof("open", nonce) });
         }
         return;
       }
@@ -149,7 +188,14 @@ export async function listenForUnlock(options: {
           refuse("That is not this wallet's secret.");
           return;
         }
-        reply({ ok: true, socket: open.socket, ownerToken: open.ownerToken });
+        reply({
+          ok: true,
+          socket: open.socket,
+          ownerToken: open.ownerToken,
+          ...(clientNonce !== null
+            ? { proof: unlockOpenProof(open.unlockSecret, clientNonce, asked, open.socket, open.ownerToken) }
+            : {}),
+        });
         socket.end();
         return;
       }
@@ -176,23 +222,15 @@ export async function listenForUnlock(options: {
     });
   };
 
-  if (process.platform === "win32") {
-    const stop = await listenWindowsPipe(options.socketPath,serveConnection);
-    return {socketPath:options.socketPath,close:async () => { for (const socket of sockets) socket.destroy(); stop(); }};
-  }
+  // On Windows this is Node's own named pipe (`client/windows-pipe.ts`).
   const server = createServer(serveConnection);
-  return new Promise<UnlockServer>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.socketPath, () => {
-      server.off("error", reject);
-      resolve({
-        socketPath: options.socketPath,
-        close: () =>
-          new Promise<void>((done) => {
-            for (const socket of sockets) socket.destroy();
-            server.close(() => done());
-          }),
-      });
-    });
-  });
+  await listenLocal(server, options.socketPath);
+  return {
+    socketPath: options.socketPath,
+    close: () =>
+      new Promise<void>((done) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => done());
+      }),
+  };
 }

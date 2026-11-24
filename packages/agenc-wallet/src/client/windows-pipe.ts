@@ -1,125 +1,75 @@
-// libuv does not expose CreateNamedPipe's ACL or PIPE_REJECT_REMOTE_CLIENTS.
-// A fixed Windows helper owns the listener and carries bytes over inherited
-// stdio. Node never creates a second, less restricted listener behind it.
+// Local listeners for the wallet and its hosts on Windows.
+//
+// Every listener without an AppContainer profile (the owner pipe, the broker,
+// the unlock pipe, Desktop's controls) is Node's own named pipe. libuv creates
+// its first instance with FILE_FLAG_FIRST_PIPE_INSTANCE, so a name another
+// program took first fails with EADDRINUSE and nothing is served on it. The
+// default named pipe DACL grants write access only to this user, SYSTEM and
+// the administrators; everyone else may only read. libuv sets no
+// PIPE_REJECT_REMOTE_CLIENTS, so every server here speaks only after the
+// client wrote first: a reader that cannot write gets nothing. (Wine 10 does
+// not enforce the first instance flag; Windows does.) A program of this
+// user's can still take the name first, so no client sends a secret before
+// the service proved it holds it (`hello-proof.ts`, the unlock server key in
+// `unlock.ts`).
+//
+// An AppContainer chat needs an explicit ACE for its AppContainer SID, which
+// Node cannot set. That listener is a fixed, precompiled helper
+// (`market-pipe.exe`, shipped with Desktop) that owns the pipe and carries
+// bytes over its stdio. Node never opens a second, less restricted listener
+// behind it. Nothing here compiles or runs a script.
 import { spawn } from "node:child_process";
-import { Duplex } from "node:stream";
+import { existsSync, statSync } from "node:fs";
+import { createServer, type Server, type Socket } from "node:net";
+import path from "node:path";
 import { createInterface } from "node:readline";
-import { win32 } from "node:path";
-import type { Socket } from "node:net";
+import { Duplex } from "node:stream";
 
-const helper = String.raw`
-using System;
-using System.IO;
-using System.IO.Pipes;
-using System.Threading;
-using System.Collections.Concurrent;
-using System.Security.Principal;
-using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
-public static class MarketPipe {
-  [StructLayout(LayoutKind.Sequential)] struct SA { public int size; public IntPtr descriptor; public int inherit; }
-  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-  static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string s, uint rev, out IntPtr p, IntPtr size);
-  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-  static extern SafePipeHandle CreateNamedPipe(string name, uint access, uint mode, uint max, uint output, uint input, uint timeout, ref SA sa);
-  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
-  [DllImport("userenv.dll", CharSet=CharSet.Unicode)] static extern int DeriveAppContainerSidFromAppContainerName(string name, out IntPtr sid);
-  [DllImport("advapi32.dll")] static extern IntPtr FreeSid(IntPtr sid);
-  static readonly ConcurrentDictionary<int,NamedPipeServerStream> streams = new ConcurrentDictionary<int,NamedPipeServerStream>();
-  static readonly object output = new object();
-  static void Emit(string s) { lock(output) { Console.WriteLine(s); Console.Out.Flush(); } }
-  static void Close(int id) { NamedPipeServerStream stream; if (streams.TryRemove(id,out stream)) stream.Close(); }
-  static void Input() {
-    try {
-      string line;
-      while ((line = Console.ReadLine()) != null) {
-        int space = line.IndexOf(' '), id = int.Parse(line.Substring(0,space));
-        string body = line.Substring(space+1);
-        NamedPipeServerStream f;
-        if (body == "-") Close(id);
-        else if (streams.TryGetValue(id,out f)) {
-          byte[] bytes = Convert.FromBase64String(body);
-          try { f.Write(bytes,0,bytes.Length); } catch(IOException) { Close(id); } catch(ObjectDisposedException) {}
-        }
-      }
-    } finally { Environment.Exit(0); }
-  }
-  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetNamedPipeServerProcessId(SafePipeHandle h,out uint pid);
-  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
-  [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
-  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-  public static void Client(string name) {
-    using (NamedPipeClientStream stream = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous,TokenImpersonationLevel.Identification)) {
-      stream.Connect(4000);
-      uint pid;
-      if (!GetNamedPipeServerProcessId(stream.SafePipeHandle,out pid)) throw new IOException("Unknown pipe server.");
-      IntPtr process = OpenProcess(0x1000,false,pid), token=IntPtr.Zero;
-      try {
-        if (process==IntPtr.Zero || !OpenProcessToken(process,8,out token)) throw new IOException("Unknown pipe owner.");
-        using (WindowsIdentity owner = new WindowsIdentity(token)) {
-          if (owner.User.Value != WindowsIdentity.GetCurrent().User.Value) throw new IOException("Different pipe owner.");
-        }
-      } finally { if(token!=IntPtr.Zero) CloseHandle(token); if(process!=IntPtr.Zero) CloseHandle(process); }
-      Emit("ready");
-      new Thread(delegate() {
-        try { string line; while((line=Console.ReadLine())!=null) { byte[] bytes=Convert.FromBase64String(line);stream.Write(bytes,0,bytes.Length); } }
-        catch (IOException) {} finally { stream.Close(); }
-      }){IsBackground=true}.Start();
-      byte[] data=new byte[16384]; int count;
-      while ((count=stream.Read(data,0,data.Length))>0) Emit(Convert.ToBase64String(data,0,count));
-    }
-  }
-  public static void Run(string name, string profile) {
-    string sid = WindowsIdentity.GetCurrent().User.Value;
-    string acl = "D:P(A;;GA;;;"+sid+")";
-    if (profile.Length != 0) {
-      IntPtr container;
-      if (DeriveAppContainerSidFromAppContainerName(profile,out container) != 0) throw new IOException("AppContainer SID");
-      try { acl += "(A;;GRGW;;;"+new SecurityIdentifier(container).Value+")S:(ML;;NW;;;LW)"; }
-      finally { FreeSid(container); }
-    }
-    IntPtr sd;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptor(acl,1,out sd,IntPtr.Zero)) throw new IOException("Pipe ACL");
-    try {
-      SA sa = new SA(); sa.size = Marshal.SizeOf(sa); sa.descriptor = sd;
-      new Thread(Input){IsBackground=true}.Start();
-      int next=0;
-      while (true) {
-        SafePipeHandle h=CreateNamedPipe(name,0x40000003u | (next==0 ? 0x80000u : 0u),8,64,65536,65536,0,ref sa);
-        if (h.IsInvalid) throw new IOException("CreateNamedPipe failed: "+Marshal.GetLastWin32Error());
-        if(next==0) Emit("ready");
-        NamedPipeServerStream stream=new NamedPipeServerStream(PipeDirection.InOut,true,false,h);
-        try { stream.WaitForConnection(); } catch(IOException) { stream.Dispose(); continue; }
-        int id=++next;
-        streams[id]=stream;
-        Emit(id+" +");
-        new Thread(delegate() {
-          try {
-            byte[] buffer=new byte[16384]; int count;
-            bool checkedUser = false;
-            while((count=stream.Read(buffer,0,buffer.Length))>0) {
-              if (!checkedUser && profile.Length != 0) {
-                bool same = false;
-                try { stream.RunAsClient(delegate { same = WindowsIdentity.GetCurrent(true).User.Value == sid; }); } catch {}
-                if (!same) break;
-                checkedUser = true;
-              }
-              Emit(id+" "+Convert.ToBase64String(buffer,0,count));
-            }
-          } catch(IOException) {} catch(ObjectDisposedException) {}
-          finally { Close(id); Emit(id+" -"); }
-        }){IsBackground=true}.Start();
-        while(streams.Count>=63) Thread.Sleep(10);
-      }
-    } finally { LocalFree(sd); }
+/** Where a host names the AppContainer pipe helper when it passes no path. */
+export const PIPE_HELPER_ENV = "AGENC_MARKET_PIPE_HELPER";
+
+/** The AppContainer pipe helper is missing or did not start. */
+export class PipeHelperUnavailable extends Error {
+  constructor(message = "The Windows pipe helper did not start.") {
+    super(message);
+    this.name = "PipeHelperUnavailable";
   }
 }
-`;
 
+/** Another program already serves this pipe or socket name. */
+export class PipeNameTaken extends Error {
+  readonly code = "EADDRINUSE";
+  constructor() {
+    super("Another program is already using this connection's name, so it was not opened. Close that program and try again.");
+    this.name = "PipeNameTaken";
+  }
+}
+
+/** `server.listen(endpoint)`, with a name taken first as a plain error. */
+export function listenLocal(server: Server, endpoint: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const failed = (error: NodeJS.ErrnoException): void => {
+      reject(error.code === "EADDRINUSE" ? new PipeNameTaken() : error);
+    };
+    server.once("error", failed);
+    server.listen(endpoint, () => {
+      server.off("error", failed);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Serve `accept` on the named pipe `endpoint`. With `profile` (an AppContainer
+ * profile name) the pipe sits under `\\.\pipe\LOCAL\` and also admits that
+ * AppContainer, through the helper named by `options.helper` or
+ * `AGENC_MARKET_PIPE_HELPER`; without one it is Node's own named pipe.
+ */
 export async function listenWindowsPipe(
   endpoint: string,
   accept: (socket: Socket) => void,
   profile = "",
+  options: { helper?: string; startupTimeoutMs?: number } = {},
 ): Promise<() => void> {
   const prefix = profile ? "\\\\.\\pipe\\LOCAL\\" : "\\\\.\\pipe\\";
   if (
@@ -128,33 +78,51 @@ export async function listenWindowsPipe(
     !/^agenc-[a-z0-9-]{1,90}$/i.test(endpoint.slice(prefix.length))
   )
     throw new Error("Invalid Market pipe name.");
-  const script =
-    "$ErrorActionPreference='Stop'\nAdd-Type -TypeDefinition @'\n" +
-    helper +
-    "\n'@\n[MarketPipe]::Run('" +
-    endpoint +
-    "','" +
-    profile +
-    "')";
-  const shell = win32.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const child = spawn(
-    shell,
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  child.stderr.resume();
+  if (!profile) {
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      accept(socket);
+    });
+    await listenLocal(server, endpoint);
+    return () => {
+      server.close();
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+    };
+  }
+  return listenThroughHelper(endpoint, accept, profile, options);
+}
+
+function helperPath(explicit: string | undefined): string {
+  const file = explicit ?? process.env[PIPE_HELPER_ENV] ?? "";
+  if (!file || !(path.win32.isAbsolute(file) || path.isAbsolute(file))) throw new PipeHelperUnavailable();
+  try {
+    if (!existsSync(file) || !statSync(file).isFile()) throw new PipeHelperUnavailable();
+  } catch {
+    throw new PipeHelperUnavailable();
+  }
+  return file;
+}
+
+function listenThroughHelper(
+  endpoint: string,
+  accept: (socket: Socket) => void,
+  profile: string,
+  options: { helper?: string; startupTimeoutMs?: number },
+): Promise<() => void> {
+  const file = helperPath(options.helper);
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(file, [endpoint, profile], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  } catch {
+    return Promise.reject(new PipeHelperUnavailable());
+  }
+  const input = child.stdin!;
+  child.stderr!.resume();
   const clients = new Map<string, Duplex>();
+  let ready = false;
   const stop = () => {
     child.kill();
     for (const s of clients.values()) s.destroy();
@@ -163,25 +131,28 @@ export async function listenWindowsPipe(
   return new Promise((resolve, reject) => {
     const startup = setTimeout(() => {
       stop();
-      reject(new Error("Windows Market pipe startup timed out."));
-    }, 30_000);
-    child.once("error", (error) => {
+      reject(new PipeHelperUnavailable());
+    }, options.startupTimeoutMs ?? 15_000);
+    child.once("error", () => {
       clearTimeout(startup);
       stop();
-      reject(error);
+      if (!ready) reject(new PipeHelperUnavailable());
     });
     child.once("exit", () => {
       clearTimeout(startup);
       stop();
-      reject(new Error("Windows Market pipe stopped."));
+      if (!ready) reject(new PipeHelperUnavailable());
     });
-    child.stdin.on("error", () => stop());
-    createInterface({ input: child.stdout }).on("line", (line) => {
+    input.on("error", () => stop());
+    createInterface({ input: child.stdout! }).on("line", (line) => {
       if (line === "ready") {
+        if (ready) return;
+        ready = true;
         clearTimeout(startup);
         resolve(stop);
         return;
       }
+      if (!ready) return;
       const i = line.indexOf(" "),
         id = line.slice(0, i),
         content = line.slice(i + 1);
@@ -190,11 +161,11 @@ export async function listenWindowsPipe(
         const stream = new Duplex({
           read() {},
           write(chunk: Buffer, _encoding, done) {
-            child.stdin.write(id + " " + chunk.toString("base64") + "\n", done);
+            input.write(id + " " + chunk.toString("base64") + "\n", done);
           },
           destroy(err, done) {
             clients.delete(id);
-            if (child.stdin.writable) child.stdin.write(id + " -\n");
+            if (input.writable) input.write(id + " -\n");
             done(err);
           },
         });
@@ -206,8 +177,7 @@ export async function listenWindowsPipe(
           setTimeout(ms: number, cb?: () => void) {
             clearTimeout(timer);
             if (cb) stream.once("timeout", cb);
-            if (ms > 0)
-              timer = setTimeout(() => stream.emit("timeout"), ms).unref();
+            if (ms > 0) timer = setTimeout(() => stream.emit("timeout"), ms).unref();
             return stream;
           },
         });
@@ -224,75 +194,4 @@ export async function listenWindowsPipe(
       }
     });
   });
-}
-
-/** Verify the user of the server process on the connected handle before sending an owner credential or unlock secret. */
-export function connectWindowsPipe(endpoint: string): Socket {
-  const prefix = "\\\\.\\pipe\\";
-  if (
-    !endpoint.startsWith(prefix) ||
-    !/^agenc-[a-z0-9-]{1,90}$/i.test(endpoint.slice(prefix.length))
-  )
-    throw new Error("Invalid wallet pipe name.");
-  const script =
-    "$ErrorActionPreference='Stop'\nAdd-Type -TypeDefinition @'\n" +
-    helper +
-    "\n'@\n[MarketPipe]::Client('" +
-    endpoint.slice(prefix.length) +
-    "')";
-  const shell = win32.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const child = spawn(
-    shell,
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  let verified = false;
-  const stream = new Duplex({
-    read() {},
-    write(bytes: Buffer, _enc, done) {
-      if (!verified) {
-        done(new Error("The wallet pipe is unverified."));
-        return;
-      }
-      child.stdin.write(bytes.toString("base64") + "\n", done);
-    },
-    final(done) {
-      child.stdin.end();
-      done();
-    },
-    destroy(err, done) {
-      child.kill();
-      done(err);
-    },
-  });
-  child.stderr.resume();
-  child.once("error", (e) => stream.destroy(e));
-  child.stdin.on("error", () => stream.destroy());
-  child.once("exit", () =>
-    verified
-      ? stream.destroy()
-      : stream.destroy(
-          new Error("The wallet did not prove the current Windows user."),
-        ),
-  );
-  createInterface({ input: child.stdout }).on("line", (line) => {
-    if (!verified && line === "ready") {
-      verified = true;
-      stream.emit("connect");
-    } else if (verified && stream.readableLength < 4 * 1024 * 1024)
-      stream.push(Buffer.from(line, "base64"));
-    else stream.destroy();
-  });
-  return stream as Socket;
 }

@@ -29,7 +29,8 @@ import type { AgencWallet } from "./wallet.js";
 import { AssignedRooms } from "./assigned-room.js";
 import { featureCall, featureRoutes } from "./feature-dispatch.js";
 import { ConnectionGrants } from "./connection-grants.js";
-import { listenWindowsPipe } from "./client/windows-pipe.js";
+import { listenLocal } from "./client/windows-pipe.js";
+import { HELLO_NONCE, helloNonce, helloProof, sameProof, type HelloProofContext, type HelloProofStart } from "./client/hello-proof.js";
 import type { ConnectionScope } from "./client/connections.js";
 
 const CONNECTION_METHODS = new Set(["connections.attach", "connections.tool", "connections.info", "connections.changes", "connections.subscribe",
@@ -462,6 +463,29 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     return "The wallet did not accept that credential.";
   }
 
+  /** The proofs this service gives for a proof hello: its owner credential's, and the named agent's. */
+  function serverProofs(context: HelloProofContext): string[] {
+    const proofs = [helloProof(options.ownerToken, "server", context)];
+    if (typeof context.actAs === "string") {
+      proofs.push(helloProof(agentToken(options.ownerToken, context.actAs), "server", context));
+    }
+    return proofs;
+  }
+
+  /** `authenticate` for a proof hello: the client proved a credential without sending it. */
+  function authenticateProof(context: HelloProofContext, proof: unknown): Session | string {
+    if (sameProof(proof, helloProof(options.ownerToken, "client", context))) {
+      if (context.actAs === undefined) return { role: "owner", agentId: null };
+      if (!options.agentExists(context.actAs)) return "That agent does not exist.";
+      return { role: "agent", agentId: context.actAs };
+    }
+    if (typeof context.actAs === "string" && options.agentExists(context.actAs) &&
+        sameProof(proof, helloProof(agentToken(options.ownerToken, context.actAs), "client", context))) {
+      return { role: "agent", agentId: context.actAs };
+    }
+    return "The wallet did not accept that credential.";
+  }
+
   const accept = (socket: Socket, paired: boolean) => {
     if (sockets.size >= MAX_CONNECTIONS) {
       socket.destroy();
@@ -477,6 +501,9 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     };
     let nonce = paired ? randomBytes(32).toString("base64url") : null;
     let challenged = false;
+    // A proof hello in progress (`hello-proof.ts`): its first message was answered.
+    let proving: HelloProofContext | null = null;
+    let proofTried = false;
     const helloTimer = setTimeout(() => {
       if (session === null) socket.destroy();
     }, HELLO_TIMEOUT_MS);
@@ -510,6 +537,25 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
               result = { role: "agent", agentId: c.agentId, connection: c };
             } catch { result = "Pair again in Market. This connection is unavailable."; }
             nonce = null;
+          } else if (!paired && (hello as { hello?: unknown }).hello === 2 && !proofTried) {
+            if (proving === null) {
+              const start = message as Partial<HelloProofStart>;
+              if (typeof start.nonce === "string" && HELLO_NONCE.test(start.nonce) &&
+                  (start.actAs === undefined || typeof start.actAs === "string") &&
+                  (start.events === undefined || typeof start.events === "boolean")) {
+                proving = {
+                  clientNonce: start.nonce,
+                  serverNonce: helloNonce(),
+                  ...(start.actAs !== undefined ? { actAs: start.actAs } : {}),
+                  ...(start.events === true ? { events: true } : {}),
+                };
+                send({ hello: 2, nonce: proving.serverNonce, proofs: serverProofs(proving) });
+                return;
+              }
+            } else {
+              proofTried = true;
+              result = authenticateProof(proving, (message as { proof?: unknown }).proof);
+            }
           } else if (!paired && hello.hello === 1) result = authenticate(hello);
           if (typeof result === "string") {
             const reply: RpcHelloReply = { hello: 1, ok: false, error: result };
@@ -526,7 +572,7 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
             agentId: session.agentId,
           };
           send(reply);
-          if (hello.events === true && session.role === "owner") {
+          if ((proving ? proving.events === true : hello.events === true) && session.role === "owner") {
             unsubscribe = options.wallet.on((event: WalletEvent) => send({ event }));
           }
           return;
@@ -609,30 +655,23 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     });
   };
   const server: Server = createServer(socket => accept(socket,false));
-  let closeOwnerPipe: (() => void) | undefined;
-  if (process.platform === "win32") closeOwnerPipe = await listenWindowsPipe(options.socketPath, socket => accept(socket,false));
-  else await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.socketPath, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  // On Windows this is Node's own named pipe: see `client/windows-pipe.ts` for
+  // why that is private enough with the proof hello.
+  await listenLocal(server, options.socketPath);
   if (process.platform !== "win32") chmodSync(options.socketPath, 0o600);
 
   let closeBroker: (() => void) | undefined;
   try {
     if (grants) {
-      if (process.platform === "win32") closeBroker = await listenWindowsPipe(brokerPath, socket => accept(socket,true));
-      else {
-        prepareSocketPath(brokerPath);
-        const broker = createServer(socket => accept(socket,true));
-        await new Promise<void>((resolve,reject) => { broker.once("error",reject); broker.listen(brokerPath, resolve); });
-        closeBroker = () => { broker.close(); };
-        chmodSync(brokerPath, 0o600);
-      }
+      // The broker's client checks the broker's signature before it proves
+      // anything (`ConnectionGrants.challenge`), on Windows too.
+      prepareSocketPath(brokerPath);
+      const broker = createServer(socket => accept(socket,true));
+      await listenLocal(broker, brokerPath);
+      closeBroker = () => { broker.close(); };
+      if (process.platform !== "win32") chmodSync(brokerPath, 0o600);
     }
-  } catch (error) { closeBroker?.(); closeOwnerPipe?.(); server.close(); throw error; }
+  } catch (error) { closeBroker?.(); server.close(); throw error; }
   const stopEvents = grants ? options.wallet.on(event => {
     if (event.type === "job") grants.changed(event.jobId);
   }) : undefined;
@@ -641,7 +680,6 @@ export async function serveWallet(options: ServeWalletOptions): Promise<WalletSe
     close() {
       stopEvents?.();
       closeBroker?.();
-      closeOwnerPipe?.();
       return new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy();
         server.close(() => {
