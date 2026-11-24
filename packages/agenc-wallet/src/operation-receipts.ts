@@ -51,7 +51,7 @@ function settleOperation(store: StateStore, id: string, state: "confirmed" | "fa
 }
 
 export async function reconcileOperation(chain: Chain, store: StateStore, id: string) {
-  const saved = store.state.moneyOperations?.[id];
+  const saved = store.operation(id);
   if (!saved) return saved;
   if (saved.network && saved.network !== chain.network)
     throw new WalletError("NOT_ALLOWED", "This receipt belongs to a different network.");
@@ -59,7 +59,7 @@ export async function reconcileOperation(chain: Chain, store: StateStore, id: st
   // A missing or pruned signature, even after expiry, is not proof of failure.
   if (outcome === "landed" || outcome === "failed")
     settleOperation(store, id, outcome === "landed" ? "confirmed" : "failed");
-  const current = store.state.moneyOperations?.[id]!;
+  const current = store.operation(id)!;
   if (current.state === "failed" && current.allowance) {
     const debit = await chain.accountChange?.(current.payer as Address, current.receipt.signature).catch(() => null);
     if (debit?.failed && debit.signature === current.receipt.signature && debit.account === current.payer) {
@@ -73,7 +73,7 @@ export async function reconcileOperation(chain: Chain, store: StateStore, id: st
       });
     }
   }
-  return store.state.moneyOperations?.[id]!;
+  return store.operation(id)!;
 }
 
 export async function sendOperation(options: {
@@ -107,7 +107,7 @@ export async function sendOperation(options: {
       const signature = getSignatureFromTransaction(tx);
       store.update(draft => {
         options.checkExpiry?.();
-        if (store.state.moneyOperations?.[id]) throw new WalletError("NOT_ALLOWED", "This operation is already signed.");
+        if (store.operation(id)) throw new WalletError("NOT_ALLOWED", "This operation is already signed.");
         const receipt = { signature, lastValidBlockHeight: String(tx.lifetimeConstraint.lastValidBlockHeight),
           signedTransaction: getBase64EncodedWireTransaction(tx) };
         options.reserve?.(draft, receipt);
@@ -123,10 +123,10 @@ export async function sendOperation(options: {
   const memo = { programAddress: address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), data: Buffer.from("agenc.operation.v1 " + id) };
   try {
     const result = await signedOperation.run(record, () => client.send([...options.instructions, memo], { maxRetries: 0 }));
-    if (store.state.moneyOperations?.[id]?.receipt.signature !== result.signature) throw new WalletError("NETWORK", "The signature did not match.");
+    if (store.operation(id)?.receipt.signature !== result.signature) throw new WalletError("NETWORK", "The signature did not match.");
     settleOperation(store, id, "confirmed");
   } catch (error) {
-    if (!store.state.moneyOperations?.[id]) {
+    if (!store.operation(id)) {
       if (error instanceof WalletError) throw error;
       const cause = (error as Error)?.cause;
       if (cause instanceof WalletError) throw cause;
@@ -149,7 +149,7 @@ export async function sendOperation(options: {
       await reconcileOperation(chain, store, id).catch(() => undefined);
     }
   }
-  return store.state.moneyOperations?.[id]!;
+  return store.operation(id)!;
 }
 
 declare module "./store.js" {

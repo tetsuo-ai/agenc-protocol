@@ -13,6 +13,8 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: false,
+  // node:sqlite is available only with its built-in module prefix.
+  removeNodeProtocol: false,
   // Resolved by the consumer; never inline. litesvm is an optional native
   // module used only by the sandbox.
   external: [

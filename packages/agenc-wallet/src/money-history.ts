@@ -47,9 +47,9 @@ export async function readAccountChange(rpc: Rpc<GetTransactionApi>, account: Ad
       externalSender: meta.err === null && credits.length === 1 ? credits[0]! : null };
 }
 
-export function classifyChange(state: WalletState, change: AccountChange, own: ReadonlySet<string>): HistoryRow {
+export function classifyChange(state: WalletState, change: AccountChange, own: ReadonlySet<string>, archive?: StateStore["archive"]): HistoryRow {
   if (change.failed) return { ...change, kind: "fee" };
-  const op = Object.values(state.moneyOperations ?? {}).find(row => row.receipt.signature === change.signature);
+  const op = Object.values(state.moneyOperations ?? {}).find(row => row.receipt.signature === change.signature) ?? archive?.bySignature(change.signature);
   if (op) return { ...change, ...(op.jobId && { jobId: op.jobId }), kind:
     op.kind === "rating" ? "rating" : op.kind === "retirement" ? "stake return" : "transfer" };
   for (const job of Object.values(state.jobs)) {
@@ -96,8 +96,8 @@ export async function indexAccountChanges(chain: Chain, store: StateStore, accou
   store.update(s => {
     for (const change of [...live.rows, ...(back?.rows ?? [])]) {
       const key = change.signature + "/" + account;
-      if (s.moneyRows?.[key]) continue;
-      const row = classifyChange(s, change, own);
+      if (s.moneyRows?.[key] || store.archive.hasChange(account, change.signature)) continue;
+      const row = classifyChange(s, change, own, store.archive);
       (s.moneyRows ??= {})[key] = row;
       if (row.kind === "deposit") onDeposit(s, row);
     }

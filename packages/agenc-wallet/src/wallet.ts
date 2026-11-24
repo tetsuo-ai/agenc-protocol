@@ -1,5 +1,6 @@
 import { publishTaskReview } from "./task-review-publication.js";
 import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/task-review.js";
+import type { HistoryQuery } from "./client/money-operations.js";
 import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
 import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
@@ -709,7 +710,7 @@ export class AgencWallet {
     if (!requestKey) return work();
     const scope = JSON.stringify([agentId, kind, requestKey]);
     if (Buffer.byteLength(requestKey) > 512) throw new WalletError("BAD_REQUEST", "The purchase identity is too long.");
-    const binding = this.#store.state.purchaseBindings?.[scope];
+    const binding = this.#store.purchaseBinding(scope);
     if (binding !== undefined) {
       if (typeof binding !== "string" && binding.network !== this.#chain.network)
         throw new WalletError("NOT_ALLOWED", "This purchase belongs to a different network.");
@@ -719,7 +720,7 @@ export class AgencWallet {
       const state = this.#store.state;
       // Older installations already have a binding in the original job or
       // archived receipt. Let #sameCall verify its original encoding.
-      const existing = state.callReceipts?.[JSON.stringify([agentId, jobKind, requestKey])] ??
+      const existing = this.#store.purchase(JSON.stringify([agentId, jobKind, requestKey])) ??
         Object.values(state.jobs).find(job => job.agentId === agentId && job.idempotencyKey === requestKey && (job.kind ?? "hire") === jobKind);
       if (!existing) this.#store.update(s => { (s.purchaseBindings ??= {})[scope] = { fingerprint, network: this.#chain.network }; });
     }
@@ -1555,13 +1556,14 @@ export class AgencWallet {
 
   /** Exact owner transfer terms. Opening a quote only records an intention. */
   async quoteTransfer(request: TransferRequest): Promise<TransferQuote> {
-    const quote = await this.#transferTerms(request, operationId(), this.#now() + 120_000);
+    const intent = structuredClone(request);
+    const quote = await this.#transferTerms(intent, operationId(), this.#now() + 120_000);
     await this.#checkMoneyPending(quote.payer);
     this.#store.update(draft => {
       for (const [key, entry] of Object.entries(draft.transferQuotes ?? {})) {
         if (entry.quote.expiresAt <= this.#now() && !draft.moneyOperations?.[key]) delete draft.transferQuotes![key];
       }
-      (draft.transferQuotes ??= {})[quote.id] = { quote, request };
+      (draft.transferQuotes ??= {})[quote.id] = { quote: structuredClone(quote), request: intent };
     });
     return quote;
   }
@@ -1592,7 +1594,8 @@ export class AgencWallet {
   }
 
   contestRegistrations() {
-    const registrations = new Map(Object.entries(this.#store.state.contestRegistrations ?? {}).map(([jobId, reg]) => [reg.agentId, { jobId, agentId: reg.agentId }]));
+    this.#store.checkpoint();
+    const registrations = new Map(this.#store.archive.contestRepresentatives().map(row => [row.agentId, row]));
     for (const job of Object.values(this.#store.state.jobs)) {
       const reg = job.contestRegistration;
       if (reg && job.role === "buying" && job.payer === "main" && job.terms?.contest && job.task)
@@ -1602,22 +1605,22 @@ export class AgencWallet {
   }
 
   async quoteContestRetirement(jobId: string) {
-    const q = await contestStake(this.#chain, this.#store.state, this.mainAddress, jobId, await this.#displayRate(), this.#now() + 120_000);
+    const q = await contestStake(this.#chain, this.#store, this.mainAddress, jobId, await this.#displayRate(), this.#now() + 120_000);
     this.#store.update(s => {
       for (const [id, previous] of Object.entries(s.retirementQuotes ?? {}))
         if (previous.expiresAt <= this.#now() && !s.moneyOperations?.[id]) delete s.retirementQuotes![id];
-      (s.retirementQuotes ??= {})[q.id] = q;
+      (s.retirementQuotes ??= {})[q.id] = structuredClone(q);
     });
     return q;
   }
 
   async retireContestRegistration(id: string) {
     return this.#lock(MAIN_KEY, async () => {
-      const q = this.#store.state.retirementQuotes?.[id];
+      const q = this.#store.state.retirementQuotes?.[id] ?? this.#store.archive.operation(id)?.quotes.retirement;
       if (!q) throw new WalletError("NOT_FOUND", "Review the registration in Market.");
-      if (!this.#store.state.moneyOperations?.[id]) {
+      if (!this.#store.operation(id)) {
         await this.#checkMoneyPending(this.mainAddress);
-        const current = await contestStake(this.#chain, this.#store.state, this.mainAddress, q.jobId, null, q.expiresAt);
+        const current = await contestStake(this.#chain, this.#store, this.mainAddress, q.jobId, null, q.expiresAt);
         if (q.expiresAt <= this.#now() || q.id !== current.id || current.obligations.length)
           throw new WalletError("NOT_ALLOWED", "The registration has obligations or its quote changed.");
       }
@@ -1647,7 +1650,7 @@ export class AgencWallet {
     for (const op of Object.values(state.moneyOperations ?? {})) {
       const entry = state.transferQuotes?.[op.id];
       if (op.state !== "pending" || !entry || entry.quote.network !== this.#chain.network) continue;
-      pending.push({ quote: entry.quote, outcome: { id: op.id, state: op.state, signature: op.receipt.signature,
+      pending.push({ quote: structuredClone(entry.quote), outcome: { id: op.id, state: op.state, signature: op.receipt.signature,
         canRetry: await canRetryOperation(this.#chain, op) } });
     }
     return pending;
@@ -1658,13 +1661,13 @@ export class AgencWallet {
   }
 
   async confirmTransfer(id: string) {
-    const entry = this.#store.state.transferQuotes?.[id];
+    const entry = this.#store.state.transferQuotes?.[id] ?? this.#store.archive.operation(id)?.quotes.transfer;
     if (!entry) throw new WalletError("NOT_FOUND", "That transfer quote does not exist.");
     const { quote, request } = entry;
     const agent = request.agentId ? this.#agentRecord(request.agentId) : null;
     const key = quote.kind === "reclaim" ? agent!.keyId : MAIN_KEY;
     return this.#lock(quote.kind === "reclaim" ? `wallet:${agent!.id}` : MAIN_KEY, async () => {
-      const earlier = this.#store.state.moneyOperations?.[id];
+      const earlier = this.#store.operation(id);
       if (!earlier) {
         await this.#checkMoneyPending(quote.payer);
         if (agent) this.#checkPendingFunding(agent.id);
@@ -1687,7 +1690,7 @@ export class AgencWallet {
           const text = quote.kind === "fund" ? `Gave ${agent!.name} an allowance.` : quote.kind === "reclaim" ?
             `Took money back from ${agent!.name}.` : "Sent money out of your balance.";
           this.#note(draft, { kind, text, lamports: amount, agentId: agent?.id ?? null, signature: result.receipt.signature });
-          draft.moneyOperations![id]!.recorded = true;
+          (draft.moneyOperations ??= {})[id] = { ...result, recorded: true };
           if (draft.lastMainLamports !== null) draft.lastMainLamports = String(quote.kind === "reclaim"
             ? BigInt(draft.lastMainLamports) + amount : BigInt(quote.retained.lamports));
         });
@@ -1727,7 +1730,7 @@ export class AgencWallet {
     const binding = operationFingerprint([request.kind, request.agentId, request.to, request.amount === "all" ? "all" :
       "lamports" in request.amount ? ["lamports", request.amount.lamports] : ["cents", request.amount.usdCents]]);
     const id = await this.#lock("transfer:" + binding, async () => {
-      const previous = this.#store.state.legacyTransfers?.[binding];
+      const previous = this.#store.state.legacyTransfers?.[binding] ?? this.#store.archive.binding("legacy", binding);
       if (previous) throw new WalletError("APPROVAL_REQUIRED",
         `Check transfer receipt ${previous}, or review a new quote for a separate transfer.`);
       if (request.amount === "all") throw new WalletError("APPROVAL_REQUIRED",
@@ -2090,7 +2093,7 @@ export class AgencWallet {
     }
     const existing = Object.values(this.#store.state.jobs).find(
       (job) => job.agentId === agentId && job.idempotencyKey === key && (job.kind ?? "hire") === kind,
-    ) ?? this.#store.state.callReceipts?.[JSON.stringify([agentId, kind, key])];
+    ) ?? this.#store.purchase(JSON.stringify([agentId, kind, key]));
     if (existing === undefined) return null;
     if (fingerprint && existing.inputFingerprint !== fingerprint) {
       this.#checkFingerprint(existing.inputFingerprint, rawFingerprint?.() ?? fingerprint);
@@ -2113,7 +2116,7 @@ export class AgencWallet {
   }
 
   sellerOperation(agentId: string, quoteId: string) {
-    const receipt = sellerReceipt(this.#agentRecord(agentId), quoteId);
+    const receipt = sellerReceipt(this.#agentRecord(agentId), quoteId) ?? this.#store.archive.seller(agentId, quoteId) ?? null;
     if (receipt && receipt.network !== this.#chain.network)
       throw new WalletError("NOT_ALLOWED", "This seller receipt belongs to a different network.");
     return receipt;
@@ -2121,12 +2124,12 @@ export class AgencWallet {
 
   async callOutcome(agentId: string, kind: "hire" | "request", key: string) {
     const method = kind === "hire" ? "hire" : agentId === "" ? "postFromBalance" : "post";
-    const saved = this.#store.state.purchaseBindings?.[JSON.stringify([agentId, method, key.trim()])];
+    const saved = this.#store.purchaseBinding(JSON.stringify([agentId, method, key.trim()]));
     const network = typeof saved === "object" ? saved.network : null;
     if (network && network !== this.#chain.network) throw new WalletError("NOT_ALLOWED", "This purchase belongs to a different network.");
     const result = await this.#sameCall(agentId, key.trim(), kind);
     if (!result) throw new WalletError("NOT_FOUND", "There is no saved outcome for this call.");
-    const job = this.#store.state.jobs[result.job.id] ?? this.#store.state.callReceipts?.[JSON.stringify([agentId, kind, key.trim()])];
+    const job = this.#store.state.jobs[result.job.id] ?? this.#store.purchase(JSON.stringify([agentId, kind, key.trim()]));
     return { ...result, receipt: job ? { operationId: key.trim(), network, agentId, kind,
       payer: job.payer === "main" ? this.mainAddress : job.payer === "agent" ? this.#agentRecord(agentId).address : null,
       listing: job.listing, task: job.task, jobId: job.id, priceLamports: job.priceLamports, terms: job.terms,
@@ -2401,7 +2404,7 @@ export class AgencWallet {
     const panel = this.#panelQuotes.get(id);
     const entry = panel?.approval ?? this.#store.state.approvals[id];
     if (!entry) {
-      const receipt = Object.values(this.#store.state.callReceipts ?? {}).find(job => job.approvalId === id);
+      const receipt = Object.values(this.#store.state.callReceipts ?? {}).find(job => job.approvalId === id) ?? this.#store.archive.purchase(id, true);
       if (receipt) return { status: receipt.phase === "declined" ? "declined" as const : "approved" as const, job: await this.#jobView(receipt, true) };
       throw new WalletError("NOT_FOUND", "That quote is no longer available.");
     }
@@ -4708,17 +4711,17 @@ export class AgencWallet {
       for (const [id, previous] of Object.entries(s.ratingQuotes ?? {}))
         if (previous.expiresAt <= this.#now() && !s.moneyOperations?.[id] && s.requestedRatings?.[previous.jobId]?.quoteId !== id)
           delete s.ratingQuotes![id];
-      (s.ratingQuotes ??= {})[q.id] = q;
+      (s.ratingQuotes ??= {})[q.id] = structuredClone(q);
     });
     return q;
   }
 
   #ratingAuthorization(job: JobRecord, score: number, id: string | undefined, isOwner: boolean, agentId?: string) {
     if (!isOwner && (!agentId || job.agentId !== agentId || job.payer !== "agent")) throw this.#reviewRequired(false);
-    const q = id && this.#store.state.ratingQuotes?.[id];
+    const q = id && (this.#store.state.ratingQuotes?.[id] ?? this.#store.archive.operation(id)?.quotes.rating);
     const payer = job.payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address;
     if (!q || q.jobId !== job.id || q.score !== score || q.payer !== payer || q.task !== job.task || q.listing !== job.listing ||
-        (q.expiresAt <= this.#now() && !this.#store.state.moneyOperations?.[q.id]))
+        (q.expiresAt <= this.#now() && !this.#store.operation(q.id)))
       throw new WalletError("APPROVAL_REQUIRED", "Review the stars, payer, rent and network fee for this hire.");
     return q;
   }
@@ -4738,7 +4741,7 @@ export class AgencWallet {
         const cost = await ratingCost(this.#chain);
         if (cost !== BigInt(quote.maximumDebit.lamports) || this.#chain.transferFeeLamports !== BigInt(quote.fee.lamports))
           throw new WalletError("PRICE_CHANGED", "Rating costs changed. Review a new quote.");
-        if (!this.#store.state.moneyOperations?.[quote.id]) await this.#checkMoneyPending(buyer);
+        if (!this.#store.operation(quote.id)) await this.#checkMoneyPending(buyer);
         const payer = await this.#payerSigner(job);
         const rate = await this.#freshRate();
         await this.#chain.assertSigningRevision?.();
@@ -6394,16 +6397,21 @@ export class AgencWallet {
   }
 
   /** Notice money that arrived in the main balance from outside. */
-  moneyHistory(jobId?: string) {
+  moneyHistory(input: HistoryQuery | string = {}) {
+    const query = typeof input === "string" ? { jobId: input } : input;
+    this.#store.checkpoint();
     const state = this.#store.state;
     const own = new Set(this.#walletIds().map(account => String(account.address)));
-    // A tick can observe the signature before its job finishes recording it.
-    const rows = Object.values(state.moneyRows ?? {}).map(row => {
-      if (row.jobId || row.kind !== "other") return row;
-      return classifyChange(state, row, own);
-    });
-    return { rows: rows.filter(row => !jobId || row.jobId === jobId).sort((a, b) => (b.at ?? 0) - (a.at ?? 0)),
-      gaps: Object.entries(state.moneyCursors ?? {}).flatMap(([account, cursor]) => (cursor.gap ?? cursor.missingCheckpoint) ? [{ account, message: (cursor.gap ?? cursor.missingCheckpoint)! }] : []) };
+    const job = query.jobId && state.jobs[query.jobId];
+    const page = this.#store.archive.page(query, job ? Object.values(job.signatures).filter((s): s is string => !!s) : []);
+    const rows = page.rows.map(row => row.kind === "other" ? classifyChange(state, row, own, this.#store.archive) : row);
+    const gaps = Object.entries(state.moneyCursors ?? {}).flatMap(([account, cursor]) => {
+      const message = cursor.gap ?? cursor.missingCheckpoint;
+      return message && (!query.account || account === query.account) ? [{ account, message }] : [];
+    }).slice(0, 100);
+    const { account, jobId, limit } = query;
+    return { ...page, rows, gaps, query: { ...(account && { account }), ...(jobId && { jobId }),
+      ...(limit !== undefined && { limit: Math.max(1, Math.min(100, Number.isSafeInteger(limit) ? limit : 50)) }) } };
   }
 
   async #noticeDeposits(): Promise<void> {

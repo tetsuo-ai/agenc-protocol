@@ -2,22 +2,23 @@ import { createNoopSigner, getAddressEncoder, type Address } from "@solana/kit";
 import { facade, findAgentPda, getTaskDecoder, getTaskDiscriminatorBytes, resolveProgramAccountsTransport, TASK_CREATOR_OFFSET, TaskStatus, TaskType, values } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "./chain.js";
 import { isRetiredAgent, listingsOf, readAgent } from "./market.js";
-import type { WalletState } from "./store.js";
+import type { StateStore } from "./store.js";
 import { WalletError } from "./errors.js";
 import { money } from "./views.js";
 import { operationFingerprint } from "./operation-receipts.js";
 
-export async function contestStake(chain: Chain, state: WalletState, authority: Address, jobId: string, rate: number | null, expiresAt: number) {
+export async function contestStake(chain: Chain, store: StateStore, authority: Address, jobId: string, rate: number | null, expiresAt: number) {
+  const state = store.state;
   const job = state.jobs[jobId];
   const reg = job ? (job.role === "buying" && job.payer === "main" && job.terms?.contest ? job.contestRegistration : undefined)
-    : state.contestRegistrations?.[jobId];
+    : state.contestRegistrations?.[jobId] ?? store.archive.contest(jobId);
   if (!reg)
     throw new WalletError("NOT_FOUND", "No main-funded contest registration was found.");
   const [registration] = await findAgentPda({ agentId: values.hexToBytes(reg.agentId) });
   const [agent, raw, listings] = await Promise.all([readAgent(chain, registration), chain.readRawAccount(registration), listingsOf(chain, registration)]);
   if (!agent || !raw || agent.authority !== authority) throw new WalletError("NOT_ALLOWED", "The wallet does not own this registration.");
   const related = Object.values(state.jobs).filter(j => j.contestRegistration?.agentId === reg.agentId);
-  const sharedJobs = [...new Set([...related.map(j => j.id), ...Object.keys(state.contestRegistrations ?? {})
+  const sharedJobs = [...new Set([...store.archive.contestJobs(reg.agentId), ...related.map(j => j.id), ...Object.keys(state.contestRegistrations ?? {})
     .filter(id => state.contestRegistrations![id]!.agentId === reg.agentId)])].sort();
   const obligations = related.filter(j => !["failed", "declined", "done"].includes(j.phase)).map(j => j.id);
   // Revision 9 contests refer to their creator authority. A restored or

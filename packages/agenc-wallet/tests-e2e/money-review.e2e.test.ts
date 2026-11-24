@@ -1,4 +1,7 @@
+import { mkdtempSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { restoreBackup } from "../src/backup.js";
 import { generateKeyPairSigner, SolanaError, SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
   SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND } from "@solana/kit";
 import { createRpcTransport, type RpcTransportRpc } from "@tetsuo-ai/marketplace-sdk";
@@ -113,6 +116,28 @@ async function finishContest() {
   return job.id;
 }
 
+it("retains the registration after the final contest leaves the job window", async () => {
+  w = await startWorld();
+  const id = await finishContest();
+  const first = await w.wallet.quoteContestRetirement(id);
+  await restart(s => compact(s, id));
+  expect(w.wallet.contestRegistrations().map(row => row.jobId)).toContain(id);
+  const q = await w.wallet.quoteContestRetirement(id);
+  expect(q.registration).toBe(first.registration);
+  expect(await w.wallet.retireContestRegistration(q.id)).toMatchObject({ actualCreditLamports: q.credit.lamports });
+});
+
+it("returns the agreed request and acceptance criteria after purchase compaction", async () => {
+  w = await startWorld();
+  const a = await w.wallet.createAgent("Buyer");
+  const args = { agentId: a.id, listing: w.listing, request: "Two poems.", acceptance: ["Both use rhyme."], idempotencyKey: "poems" };
+  const hire = await w.wallet.hire(args);
+  await w.wallet.decideApproval(hire.approval!.id, true);
+  await restart(s => compact(s, hire.job.id));
+  const { receipt } = await w.wallet.callOutcome(a.id, "hire", args.idempotencyKey);
+  expect(receipt).toMatchObject({ request: args.request, acceptance: args.acceptance, signatures: { hire: expect.any(String) } });
+});
+
 it("keeps listing creation evidence through an offer edit and restart", async () => {
   w = await startWorld({ earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
     mode: "sandboxed", envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 150 } });
@@ -158,6 +183,51 @@ it("advances the live head during a pruned backfill and later fills the gap", as
   expect(w.wallet.moneyHistory().rows).toHaveLength(3);
 });
 
+it("pages same-time signatures by account and archives terminal evidence outside the signing journal", async () => {
+  w = await startWorld();
+  const agent = await w.wallet.createAgent("Writer");
+  const q = await w.wallet.quoteTransfer({ kind: "fund", agentId: agent.id, amount: { lamports: String(SOL) } });
+  const outcome = await w.wallet.confirmTransfer(q.id);
+  for (let i = 0; i < 8; i++) w.sandbox.fund(w.wallet.mainAddress, 1000n + BigInt(i));
+  await w.wallet.tick();
+  await restart();
+  const account = w.wallet.mainAddress;
+  const first = w.wallet.moneyHistory({ account, limit: 3 });
+  expect(first.rows).toHaveLength(3);
+  expect(first.next).toEqual({ account, signature: first.rows[2]!.signature });
+  const second = w.wallet.moneyHistory({ account, limit: 3, before: first.next! });
+  expect(second.rows).toHaveLength(3);
+  expect([...first.rows, ...second.rows].every(r => r.account === account)).toBe(true);
+  expect(new Set([...first.rows, ...second.rows].map(r => r.signature)).size).toBe(6);
+  const journal = JSON.parse(readFileSync(path.join(w.dataDir, "state.json"), "utf8"));
+  expect(Object.keys(journal.moneyRows ?? {})).toHaveLength(0);
+  expect(journal.moneyOperations?.[q.id]).toBeUndefined();
+  expect(await w.wallet.confirmTransfer(q.id)).toEqual(outcome);
+  expect(await w.balance(agent.address)).toBe(SOL);
+});
+
+it("restores the archived operation, its quote and a legacy replay key from backup", async () => {
+  w = await startWorld({ chain: base => ({ ...base, network: "localnet" }) });
+  const a = await w.wallet.createAgent("Writer");
+  const amount = { lamports: String(SOL) };
+  await w.wallet.fundAgent(a.id, amount);
+  const q = await w.wallet.quoteTransfer({ kind: "fund", agentId: a.id, amount });
+  const first = await w.wallet.confirmTransfer(q.id);
+  await w.wallet.tick();
+  const page = w.wallet.moneyHistory({ account: a.address });
+  const backup = path.join(w.dataDir, "archive-test.backup");
+  const password = "local test archive password";
+  await w.wallet.exportBackup(password, backup);
+  await w.wallet.close();
+  const dataDir = mkdtempSync(path.join(tmpdir(), "receipt-restore-"));
+  await restoreBackup({ dataDir, unlockSecret: w.secret, text: readFileSync(backup, "utf8"), password, now: w.clock.now, network: "localnet" });
+  w.wallet = await w.reopen({ dataDir });
+  expect(await w.wallet.confirmTransfer(q.id)).toEqual(first);
+  expect(w.wallet.moneyHistory({ account: a.address })).toEqual(page);
+  await expect(w.wallet.fundAgent(a.id, amount)).rejects.toThrow(/quote|receipt/i);
+  expect(await w.balance(a.address)).toBe(2n * SOL);
+});
+
 it("restores owner-only pending transfers without sending, and disables retry after blockhash expiry", async () => {
   let drop = false, valid = true, sends = 0;
   w = await startWorld({
@@ -184,26 +254,4 @@ it("restores owner-only pending transfers without sending, and disables retry af
   await w.wallet.confirmTransfer(q.id);
   expect(sends).toBe(1);
   expect(await w.balance(a.address)).toBe(0n);
-});
-
-it("retains the registration after the final contest leaves the job window", async () => {
-  w = await startWorld();
-  const id = await finishContest();
-  const first = await w.wallet.quoteContestRetirement(id);
-  await restart(s => compact(s, id));
-  expect(w.wallet.contestRegistrations().map(row => row.jobId)).toContain(id);
-  const q = await w.wallet.quoteContestRetirement(id);
-  expect(q.registration).toBe(first.registration);
-  expect(await w.wallet.retireContestRegistration(q.id)).toMatchObject({ actualCreditLamports: q.credit.lamports });
-});
-
-it("returns the agreed request and acceptance criteria after purchase compaction", async () => {
-  w = await startWorld();
-  const a = await w.wallet.createAgent("Buyer");
-  const args = { agentId: a.id, listing: w.listing, request: "Two poems.", acceptance: ["Both use rhyme."], idempotencyKey: "poems" };
-  const hire = await w.wallet.hire(args);
-  await w.wallet.decideApproval(hire.approval!.id, true);
-  await restart(s => compact(s, hire.job.id));
-  const { receipt } = await w.wallet.callOutcome(a.id, "hire", args.idempotencyKey);
-  expect(receipt).toMatchObject({ request: args.request, acceptance: args.acceptance, signatures: { hire: expect.any(String) } });
 });
