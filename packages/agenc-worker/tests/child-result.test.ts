@@ -83,3 +83,13 @@ it("refuses a corrupt file, a path, a different room or a delivery with substitu
   ])
     await expect(stageChildResult(path, binding, result)).rejects.toThrow();
 });
+
+it("keeps distinct staged revisions and resumes with the acknowledged folder", async () => {
+  const path = await spool();
+  await parkChildRun(path, binding, binding.purchaseKey);
+  const first = await stageChildResult(path, binding, delivery());
+  const next = await stageChildResult(path, binding, delivery({ ...file, name: "final.txt" }));
+  expect(next.folder).not.toBe(first.folder);
+  await enqueueChildResume(path, binding, binding.purchaseKey, next.receipt);
+  expect((await takeChildResume(path, binding, next.receipt)).inputFolder).toBe(next.folder);
+});

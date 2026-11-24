@@ -63,11 +63,12 @@ export async function stageChildResult(hostSpool: string, expected: ResultBindin
   });
   const group = join(hostSpool, digest([expected.parentTask, expected.claimedAt, expected.roomId]));
   await mkdir(group, { recursive: true, mode: 0o700 });
-  const folder = join(group, "supplier");
+  const folder = join(group, "supplier-" + receipt);
   const staged = await mkdtemp(join(group, ".incoming-"));
   try {
     await mkdir(join(staged, "files"), { mode: 0o700 });
-    for (const f of files) await writeFile(join(staged, "files", f.name), f.bytes, { flag: "wx", mode: 0o400 });
+    for (const f of files)
+      await writeFile(join(staged, "files", f.name), f.bytes, { flag: "wx", mode: 0o400 });
     await writeFile(join(staged, "result.txt"), delivery.text, { mode: 0o400 });
     await writeFile(join(staged, "receipt"), receipt, { mode: 0o400 });
     try {
@@ -120,14 +121,35 @@ async function recordOnce(folder: string, name: string, value: string) {
 export async function parkChildRun(spool: string, room: RoomIdentity, purchaseKey: string) {
   return recordOnce(roomFolder(spool, room), "parked", purchaseKey);
 }
+async function inputFolder(folder: string, purchaseKey: string, receipt: string) {
+  if (receipt === "timeout:" + purchaseKey) {
+    const empty = join(folder, "timeout");
+    await mkdir(empty, { recursive: true, mode: 0o500 });
+    return empty;
+  }
+  if (!/^[0-9a-f]{64}$/.test(receipt)) throw new Error("Invalid supplier receipt.");
+  for (const name of ["supplier-" + receipt, "supplier"]) {
+    // The old fixed folder is readable on upgrade only for its exact receipt.
+    const saved = join(folder, name);
+    const stored = await readFile(join(saved, "receipt"), "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    if (stored === receipt) return saved;
+  }
+  throw new Error("The parked room has no matching supplier result.");
+}
+
 /** Make exactly one durable run available. The room runner consumes it with takeChildResume. */
-export async function enqueueChildResume(spool: string, room: RoomIdentity, purchaseKey: string, receipt: string) {
+export async function enqueueChildResume(
+  spool: string,
+  room: RoomIdentity,
+  purchaseKey: string,
+  receipt: string,
+) {
   const folder = roomFolder(spool, room);
-  if (
-    (await readFile(join(folder, "parked", "value"), "utf8")) !== purchaseKey ||
-    (await readFile(join(folder, "supplier", "receipt"), "utf8")) !== receipt
-  )
+  if ((await readFile(join(folder, "parked", "value"), "utf8")) !== purchaseKey)
     throw new Error("The parked room has no matching supplier result.");
+  await inputFolder(folder, purchaseKey, receipt);
   return recordOnce(folder, "ready", receipt);
 }
 /** A previous start is recovered through the original run ID. It cannot create a second model turn. */
@@ -135,9 +157,10 @@ export async function takeChildResume(spool: string, room: RoomIdentity, receipt
   const folder = roomFolder(spool, room);
   if ((await readFile(join(folder, "ready", "value"), "utf8")) !== receipt)
     throw new Error("The supplier delivery is not ready to resume.");
+  const input = await inputFolder(folder, await readFile(join(folder, "parked", "value"), "utf8"), receipt);
   return {
     runId: receipt,
     start: await recordOnce(folder, "started", receipt),
-    inputFolder: join(folder, "supplier"),
+    inputFolder: input,
   };
 }
