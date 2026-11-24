@@ -49,7 +49,7 @@ describe.each([["up", 1.0001], ["down", 0.9999], ["up by 3%", 1.03], ["down by 3
     const moved = before - await w.balance(wallet.mainAddress);
     expect(moved).toBeGreaterThanOrEqual(BigInt(quote.approval!.price.lamports));
     expect(moved).toBeLessThanOrEqual(BigInt(quote.approval!.fromMain.lamports));
-    expect((await wallet.getJob(quote.job.id)).price.lamports).toBe(quote.approval!.price.lamports);
+    expect((await wallet.getJob(quote.job.id, true)).price.lamports).toBe(quote.approval!.price.lamports);
   });
 
   it("lets an agent within its allowance hire and moves no more than the quoted lamports", async () => {
@@ -66,7 +66,7 @@ describe.each([["up", 1.0001], ["down", 0.9999], ["up by 3%", 1.03], ["down by 3
       .toEqual({ approval: null, status: expect.stringMatching(FUNDED), error: null });
     const moved = before - await w.balance(agent.address);
     expect(moved).toBeGreaterThanOrEqual(BigInt(reference.price.lamports));
-    expect(moved).toBeLessThanOrEqual(BigInt(reference.total.lamports));
+    expect(moved).toBeLessThanOrEqual(BigInt(reference.total!.lamports));
     expect(await w.balance(wallet.mainAddress)).toBe(main);
   });
 
@@ -79,7 +79,7 @@ describe.each([["up", 1.0001], ["down", 0.9999], ["up by 3%", 1.03], ["down by 3
     const moved = before - await w.balance(wallet.mainAddress);
     expect(moved).toBeGreaterThanOrEqual(BigInt(quote.approval!.price.lamports));
     expect(moved).toBeLessThanOrEqual(BigInt(quote.approval!.fromMain.lamports));
-    expect((await wallet.getJob(quote.job.id)).price.lamports).toBe(quote.approval!.price.lamports);
+    expect((await wallet.getJob(quote.job.id, true)).price.lamports).toBe(quote.approval!.price.lamports);
   });
 });
 
@@ -122,7 +122,7 @@ it("asks the owner when a purchase fits the daily allowance at the quote's rate 
   sandbox.fund(address(agent.address), SOL);
   await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents: 1000 } });
   const reference = (await wallet.hire({ agentId: agent.id, listing: w.listing, request: "One poem." }, true)).approval!;
-  const total = BigInt(reference.total.lamports);
+  const total = BigInt(reference.total!.lamports);
   // The whole day's allowance is exactly this purchase at the quote's rate.
   const perDayCents = Number((microcents(total, 100) + 999_999n) / 1_000_000n);
   expect(microcents(total, 110)).toBeGreaterThan(BigInt(perDayCents) * 1_000_000n);
@@ -146,7 +146,7 @@ it("lets the same purchase through on its own when the rate does not move", asyn
   sandbox.fund(address(agent.address), SOL);
   await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents: 1000 } });
   const reference = (await wallet.hire({ agentId: agent.id, listing: w.listing, request: "One poem." }, true)).approval!;
-  const perDayCents = Number((microcents(BigInt(reference.total.lamports), 100) + 999_999n) / 1_000_000n);
+  const perDayCents = Number((microcents(BigInt(reference.total!.lamports), 100) + 999_999n) / 1_000_000n);
   await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents } });
   prices.arm();
   const hired = await wallet.hire({ agentId: agent.id, listing: w.listing, request: "One poem." });
@@ -162,8 +162,8 @@ it("counts a purchase against the day at the quote's rate when SOL/USD fell befo
   await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents: 1000 } });
   const reference = (await wallet.hire({ agentId: agent.id, listing: w.listing, request: "One poem." }, true)).approval!;
   // Room for one purchase at the quote's rate, and for two at the lower rate.
-  const perDayCents = Number((microcents(BigInt(reference.total.lamports), 100) + 999_999n) / 1_000_000n);
-  expect(2n * microcents(BigInt(reference.total.lamports), 50)).toBeLessThanOrEqual(BigInt(perDayCents) * 1_000_000n);
+  const perDayCents = Number((microcents(BigInt(reference.total!.lamports), 100) + 999_999n) / 1_000_000n);
+  expect(2n * microcents(BigInt(reference.total!.lamports), 50)).toBeLessThanOrEqual(BigInt(perDayCents) * 1_000_000n);
   await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents } });
   prices.arm();
   const first = await wallet.hire({ agentId: agent.id, listing: w.listing, request: "One poem." });
