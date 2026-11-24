@@ -280,7 +280,7 @@ describe("offering a service", () => {
     const live = await offerReaches(world, worker.id, "live");
 
     // The worker's wallet is short when the hire arrives.
-    await wallet.reclaimFromAgent(worker.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: worker.id, amount: "all" })).id);
     const { job } = await wallet.hire({
       agentId: buyer.id,
       listing: live.earn.offer!.listing!,
@@ -536,7 +536,7 @@ describe("offering a service", () => {
     const worker = await wallet.createAgent("Worker");
     await setEarnWithApproval(wallet, worker.id, true, 10);
     // Everything else leaves the wallet before the service is offered.
-    await wallet.withdraw(world.listing, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "withdraw", to: world.listing, amount: "all" })).id);
     const quote = await wallet.quoteEarn(worker.id, LINE_WRITER);
     await expect(wallet.approveEarnFunding(quote.quoteId)).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
     await wallet.setOffer(worker.id, LINE_WRITER);

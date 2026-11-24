@@ -1,3 +1,4 @@
+import { ARCHIVE_FILE } from "./money-archive.js";
 // A backup of the wallet: every key and the journal, in one file the person
 // keeps somewhere safe, locked with a password they choose.
 //
@@ -127,7 +128,9 @@ function carriedFiles(dataDir: string): Record<string, string> {
       for (const name of readdirSync(absolute).sort()) take(path.posix.join(relative, name));
       return;
     }
-    if (!info.isFile() || info.size > MAX_CARRIED_FILE_BYTES) return;
+    if (relative === ARCHIVE_FILE || relative === "state.json") {
+      if (!info.isFile() || info.size > MAX_BACKUP_BYTES) throw new WalletError("INTERNAL", "The wallet records exceed the backup limit.");
+    } else if (!info.isFile() || info.size > MAX_CARRIED_FILE_BYTES) return;
     count += 1;
     if (count > MAX_CARRIED_FILES) {
       throw new WalletError("INTERNAL", "This wallet has too many files to back up in one go.");
@@ -135,6 +138,9 @@ function carriedFiles(dataDir: string): Record<string, string> {
     files[relative] = readFileSync(absolute).toString("base64");
   };
   take("state.json");
+  take(ARCHIVE_FILE);
+  if (files["state.json"] && !files[ARCHIVE_FILE] && JSON.parse(Buffer.from(files["state.json"], "base64").toString()).moneyArchiveId)
+    throw new WalletError("INTERNAL", "The wallet receipt archive is missing.");
   take("earn");
   return files;
 }
@@ -197,7 +203,9 @@ export async function createBackup(input: {
         nonce: nonce.toString("base64"),
         sealed: sealed.toString("base64"),
       };
-      return { text: `${JSON.stringify(file)}\n`, header };
+      const text = JSON.stringify(file) + "\n";
+      if (text.length > MAX_BACKUP_BYTES) throw new WalletError("INTERNAL", "The wallet records exceed the backup limit.");
+      return { text, header };
     } finally {
       key.fill(0);
     }
@@ -401,7 +409,7 @@ function safeRelative(relative: string): string | null {
   }
   const parts = relative.split("/");
   if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return null;
-  if (relative !== "state.json" && parts[0] !== "earn") return null;
+  if (relative !== "state.json" && relative !== ARCHIVE_FILE && parts[0] !== "earn") return null;
   return parts.join(path.sep);
 }
 
@@ -441,6 +449,8 @@ export async function restoreBackup(input: {
       // otherwise a wallet just restored would ask to be backed up.
       try {
         const state = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+        if (state.moneyArchiveId && !Object.hasOwn(content.files, ARCHIVE_FILE))
+          throw new Error("Missing wallet receipt archive");
         state.backup = { at: header.createdAt, keyIds: ids };
         bytes = Buffer.from(JSON.stringify(state), "utf8");
       } catch {
@@ -455,7 +465,7 @@ export async function restoreBackup(input: {
   try {
     // Move the wallet that is here out of the way. Nothing is deleted.
     let replaced: string | null = null;
-    const present = ["vault.json", "state.json", "earn"].filter((name) =>
+    const present = ["vault.json", "state.json", ARCHIVE_FILE, "earn"].filter((name) =>
       existsSync(path.join(input.dataDir, name)),
     );
     if (present.length > 0) {
@@ -488,7 +498,7 @@ export async function restoreBackup(input: {
     } catch (error) {
       // Half a restore is worse than none: take out what was just written
       // and put the wallet that was here back exactly as it was.
-      for (const name of ["vault.json", "state.json", "earn"]) {
+      for (const name of ["vault.json", "state.json", ARCHIVE_FILE, "earn"]) {
         rmSync(path.join(input.dataDir, name), { recursive: true, force: true });
       }
       if (replaced !== null) {

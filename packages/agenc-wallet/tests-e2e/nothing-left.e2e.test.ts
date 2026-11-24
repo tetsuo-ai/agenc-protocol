@@ -49,13 +49,14 @@ describe("taking everything back", () => {
     const held = await world.balance(agent.address);
     const mainBefore = await world.balance(wallet.mainAddress);
 
-    const back = await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
+    const back = (await wallet.overview()).agents.find(entry => entry.id === agent.id)!;
     expect(back.balance.lamports).toBe("0");
     expect(await world.balance(agent.address)).toBe(0n);
     // Everything came back but the transfer's own fee.
     expect((await world.balance(wallet.mainAddress)) - mainBefore).toBe(held - FEE);
     // Nothing is left to take back, and the agent can be given money again.
-    await expect(wallet.reclaimFromAgent(agent.id, "all")).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
+    await expect(wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
     expect((await wallet.fundAgent(agent.id, { usdCents: 100 })).balance.usdCents).toBe(100);
   });
 
@@ -66,7 +67,7 @@ describe("taking everything back", () => {
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     expect(job.status).toBe("waiting");
 
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     // The network's minimum, the room for fees the job was set up with, and
     // (revision 9) what a first cancel or turn-down spends on the wallet's
     // marketplace record, so the job can still be cancelled or turned down.
@@ -82,7 +83,7 @@ describe("taking everything back", () => {
     // Once it is tidied, nothing needs the agent's money any more.
     world.clock.now += 2 * 60 * 60_000;
     await wallet.tick();
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     expect(await world.balance(agent.address)).toBe(0n);
   });
 
@@ -96,7 +97,7 @@ describe("taking everything back", () => {
       const earn = (await wallet.overview()).agents[0]!.earn;
       return earn.state === "watching" && earn.setAside.lamports !== "0";
     }, 30_000);
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     expect(await world.balance(agent.address)).toBe(
       await world.sandbox.chain.getMinimumBalanceForRentExemption(0),
     );
@@ -109,7 +110,7 @@ describe("taking everything back", () => {
     const before = await world.balance(wallet.mainAddress);
     const outside = await world.balance(OUTSIDE);
 
-    await wallet.withdraw(OUTSIDE, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "withdraw", to: OUTSIDE, amount: "all" })).id);
     expect(await world.balance(wallet.mainAddress)).toBe(0n);
     expect((await world.balance(OUTSIDE)) - outside).toBe(before - FEE);
     expect((await wallet.overview()).main.balance.lamports).toBe("0");
@@ -124,7 +125,7 @@ describe("taking everything back", () => {
     });
     expect(posted.status).toBe("waiting");
 
-    await wallet.withdraw(OUTSIDE, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "withdraw", to: OUTSIDE, amount: "all" })).id);
     // Revision 9: the first cancel starts the wallet's marketplace record,
     // so that is kept too.
     expect(await world.balance(wallet.mainAddress)).toBe(

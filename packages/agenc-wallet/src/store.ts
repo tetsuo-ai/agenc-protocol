@@ -1,3 +1,5 @@
+import { recordListingCreation } from "./seller-operation.js";
+import { ARCHIVE_FILE, MoneyArchive } from "./money-archive.js";
 import type { JobTerms } from "./client/types.js";
 // The wallet's journal: agents, jobs, approvals and the activity list, in one
 // private JSON file that is rewritten atomically on every change.
@@ -416,6 +418,8 @@ export interface ActivityRecord {
 }
 
 export interface WalletState {
+  moneyArchiveId?: string;
+  contestRegistrations?: Record<string, ContestRegistration>;
   setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;
   version: number;
   createdAt: number;
@@ -515,10 +519,12 @@ function prune(state: WalletState): void {
     .filter(isFinished)
     .sort((a, b) => a.updatedAt - b.updatedAt);
   for (const job of finished.slice(0, Math.max(0, finished.length - MAX_FINISHED_JOBS))) {
+    if (job.contestRegistration && job.terms?.contest && job.role === "buying" && job.payer === "main")
+      (state.contestRegistrations ??= {})[job.id] = job.contestRegistration;
     if (job.idempotencyKey) {
       const key = JSON.stringify([job.agentId, job.kind ?? "hire", job.idempotencyKey]);
       (state.callReceipts ??= {})[key] = {
-        ...job, jobSpec: {}, result: null, changes: [], request: "", acceptance: [],
+        ...job, jobSpec: {}, result: null, changes: [],
       };
     }
     delete state.jobs[job.id];
@@ -597,10 +603,13 @@ export class StateStore {
   readonly #file: string;
   #state: WalletState;
   #closed = false;
+  readonly archive: MoneyArchive;
 
   private constructor(file: string, state: WalletState) {
     this.#file = file;
     this.#state = state;
+    this.archive = new MoneyArchive(path.join(path.dirname(file), ARCHIVE_FILE), state.moneyArchiveId);
+    this.checkpoint();
   }
 
   static open(file: string, now: number = Date.now()): StateStore {
@@ -646,6 +655,12 @@ export class StateStore {
         agent.earn.offers = agentOffers(agent);
         delete agent.earn.offer;
       }
+      // Older seller receipts referenced the current listing. Preserve the
+      // creation proof before a later edit or replacement changes that record.
+      for (const offer of agentOffers(agent)) {
+        if (offer.listing && offer.signatures?.create)
+          recordListingCreation(agent, offer.id, offer.listingIdHex, offer.listing, offer.signatures.create);
+      }
     }
     return new StateStore(file, parsed);
   }
@@ -655,9 +670,28 @@ export class StateStore {
     return this.#state;
   }
 
+  operation(id: string) {
+    return this.#state.moneyOperations?.[id] ?? this.archive.operation(id)?.operation;
+  }
+
+  purchaseBinding(key: string) {
+    return this.#state.purchaseBindings?.[key] ?? this.archive.binding("purchase", key);
+  }
+
+  purchase(key: string) {
+    return this.#state.callReceipts?.[key] ?? this.archive.purchase(key);
+  }
+
+  checkpoint() {
+    if (this.archive.checkpoint(this.#state)) this.#save();
+  }
+
   /** Permanently fence this owner before its directory lock is released. */
   close(): void {
+    if (this.#closed) return;
+    this.checkpoint();
     this.#closed = true;
+    this.archive.close();
   }
 
   /**
@@ -666,6 +700,7 @@ export class StateStore {
    */
   update<T>(mutator: (draft: WalletState) => T): T {
     if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
+    this.checkpoint();
     const draft = structuredClone(this.#state);
     const result = mutator(draft);
     prune(draft);

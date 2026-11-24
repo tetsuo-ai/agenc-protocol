@@ -1,3 +1,5 @@
+import { operationTransport } from "./operation-transport.js";
+import type { AccountChange } from "./money-history.js";
 import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // A whole marketplace in this process, for practice and for tests: the REAL
 // compiled marketplace program running in litesvm, play money, a local
@@ -404,6 +406,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   const settlements = new Map<Address, Settlement>();
   const submissions = new Map<Address, ReviewedDelivery>();
   const reviewEntries = new Map<Address, ReviewAnchor[]>();
+  const settlementSignatures = new Map<Address, string>();
   const settledLogs = new Map<Address, readonly string[]>();
   // The log of the transaction that hired each job, which names its service.
   const hireLogs = new Map<Address, readonly string[]>();
@@ -427,6 +430,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   const landedListingSends = new Set<string>();
   const failedWorkSends = new Set<string>();
   const failedReviewSends = new Set<string>();
+  const moneyChanges: AccountChange[] = [];
   const debits = new Map<string, { payer: Address; fee: bigint; debit: bigint }>();
   const base = market.transport;
   const transport: Transport = {
@@ -441,17 +445,22 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const balances = new Map(message.staticAccounts.map(address => [address, BigInt(svm.getBalance(address) ?? 0)]));
       const before = balances.get(payer)!;
       const result = await base.sendAndConfirm(signedTx).catch(error => {
+        const signature = getSignatureFromTransaction(signedTx);
+        const fee = before - BigInt(svm.getBalance(payer) ?? 0);
+        if (fee > 0n) {
+          failedReviewSends.add(signature);
+          moneyChanges.unshift({ signature, account: payer, delta: String(-fee), payerFee: String(fee),
+            at: Date.now(), failed: true, externalSender: null });
+        }
         if (signal) {
-          const signature = getSignatureFromTransaction(signedTx);
-          const fee = before - BigInt(svm.getBalance(payer) ?? 0);
           debits.set(signature, { payer, fee, debit: fee });
           failedReviewSends.add(signature);
           failedWorkSends.add(signature);
         }
         throw error;
       });
+      landedListingSends.add(result.signature);
       if (signal) {
-        landedListingSends.add(result.signature);
         debits.set(result.signature, { payer, fee: BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length),
           debit: before - BigInt(svm.getBalance(payer) ?? 0) });
       }
@@ -459,6 +468,16 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         const delta = BigInt(svm.getBalance(address) ?? 0n) - balances.get(address)!;
         return delta ? [{ address, lamports: delta.toString() }] : [];
       });
+      for (const change of changes) {
+        const transfers = ("instructions" in message ? message.instructions : []).filter(ix => message.staticAccounts[ix.programAddressIndex] === SYSTEM_PROGRAM_ADDRESS &&
+          ix.data?.length === 12 && Buffer.from(ix.data).readUInt32LE() === 2 && message.staticAccounts[ix.accountIndices?.[1] ?? -1] === change.address);
+        const transfer = transfers.length === 1 ? transfers[0] : null;
+        const sender = transfer && String(Buffer.from(transfer.data!).readBigUInt64LE(4)) === change.lamports ?
+          message.staticAccounts[transfer.accountIndices![0]!] : null;
+        moneyChanges.unshift({ signature: result.signature, account: change.address, delta: change.lamports,
+          payerFee: change.address === payer ? String(BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length)) : "0",
+          at: Date.now(), failed: false, externalSender: sender ?? null });
+      }
       try {
         for (const account of message.staticAccounts) {
           known.add(account);
@@ -501,6 +520,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           }
           if (settled !== null) {
             settlements.set(settled.task, settled);
+            settlementSignatures.set(settled.task, result.signature);
             settledLogs.set(settled.task, result.logs);
           }
         }
@@ -540,7 +560,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
 
   const decorated = options.transport?.(transport) ?? transport;
   const inFlight = new Set<string>();
-  const sending = scopedSendTransport({
+  const sending = operationTransport(scopedSendTransport({
     ...decorated,
     async sendAndConfirm(tx) {
       const signature = getSignatureFromTransaction(tx);
@@ -548,9 +568,18 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       try { return await decorated.sendAndConfirm(tx); }
       finally { inFlight.delete(signature); }
     },
-  });
+  }));
   const chain: Chain = {
     network: "sandbox",
+    operationBlockhashValid: async hash => hash === svm.latestBlockhash(),
+    accountChange: async (account, sig) => moneyChanges.find(row => row.account === account && row.signature === sig) ?? null,
+    accountChanges: async (account, before, until) => {
+      const all = moneyChanges.filter(c => c.account === account);
+      const from = before ? all.findIndex(c => c.signature === before) + 1 : 0;
+      const stop = until ? all.findIndex(c => c.signature === until) : -1;
+      const rows = all.slice(from, stop < 0 ? undefined : stop);
+      return { rows: rows.slice(0, 12), end: rows.length <= 12 };
+    },
     transferFeeLamports: BASE_FEE_LAMPORTS,
     // Local sends execute atomically; no broadcast can arrive after cancellation.
     reviewSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" :
@@ -620,7 +649,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const logs = exit?.logs ?? settledLogs.get(task);
       if (settlement === undefined || logs === undefined) return null;
       const { worker, operator } = settlement;
-      const facts = await settlementFactsFromLogs(logs, task, worker, creator, operator);
+      const facts = await settlementFactsFromLogs(logs, task, worker, creator, operator, exit ? undefined : settlementSignatures.get(task));
       if (facts === null || options?.listing !== true) return facts;
       return { ...facts, listing: hiredListingFromLogs(hireLogs.get(task) ?? [], task, creator, worker) };
     },
@@ -992,7 +1021,9 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
     market,
     deliveries,
     fund(account, amount) {
-      svm.airdrop(account, lamports(amount));
+      const result = svm.airdrop(account, lamports(amount));
+      if (result && "signature" in result) moneyChanges.unshift({ signature: getBase58Decoder().decode(result.signature()), account,
+        delta: String(amount), payerFee: "0", at: Date.now(), failed: false, externalSender: "Sandbox faucet" });
     },
     advanceClock(seconds) {
       const clock = svm.getClock();

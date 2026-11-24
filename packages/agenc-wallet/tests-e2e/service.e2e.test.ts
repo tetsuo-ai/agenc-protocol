@@ -318,14 +318,16 @@ describe("the wallet service", () => {
     expect(delivered.job!.review).toMatchObject({ round: 1, quote_id: expect.any(String) });
     for (const client of [owner, agent]) await expect(client.call("jobs.approve", { jobId: posted.job!.job_id })).rejects.toThrow(/delivery/);
     await expect(agent.call("jobs.approve", { jobId: posted.job!.job_id, quoteId: "0".repeat(64) })).rejects.toThrow(/changed/);
-    const paid = await runMarketTool(agent, agentView.id, "market_review", {
+    const decision = await runMarketTool(agent, agentView.id, "market_review", {
       job_id: posted.job!.job_id,
       action: "approve",
       quote_id: delivered.job!.review!.quote_id,
       rating: 5,
     });
-    expect(paid.ok).toBe(true);
-    expect(paid.job!.status).toBe("paid");
+    // A status preview alone cannot authorize the agent's signature.
+    expect(decision.ok).toBe(false);
+    const { job: paid } = await owner.call("jobs.approve", { jobId: posted.job!.job_id, quoteId: delivered.job!.review!.quote_id });
+    expect(paid.status).toBe("paid");
     const { jobs } = await agent.call("jobs.list", {});
     expect(jobs).toHaveLength(1);
   });

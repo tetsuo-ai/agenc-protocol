@@ -12,7 +12,7 @@ import { AccountRole, getBase58Encoder, type Address, type Signature } from "@so
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencCoordinationInstruction,
-  findTaskPda,
+  findTaskPda, findAgentPda,
   parseAgencCoordinationEvents,
   parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
@@ -125,6 +125,7 @@ export function settlementWorkerIn(value: unknown, task: Address, signature: str
 
 /** What the transactions of a finished job say about it. */
 export interface SettlementFacts {
+  reputation?: { before: number; after: number; signature?: string };
   /** The agent it paid. */
   worker: Address;
   /** What the job paid in all: the agent's share, the fee and any operator or referrer share. */
@@ -168,7 +169,7 @@ export async function settlementFactsIn(
   if (settlement === null) return null;
   const logs = record(record(value)?.meta)?.logMessages;
   if (!Array.isArray(logs) || !logs.every((line) => typeof line === "string")) return null;
-  return settlementFactsFromLogs(logs as string[], task, settlement.worker, creator, settlement.operator);
+  return settlementFactsFromLogs(logs as string[], task, settlement.worker, creator, settlement.operator, signature);
 }
 
 /**
@@ -182,6 +183,7 @@ export async function settlementFactsFromLogs(
   worker: Address,
   creator: Address,
   operator?: Address,
+  signature?: string,
 ): Promise<SettlementFacts | null> {
   const events = parseAgencCoordinationEvents(logs);
   for (const event of events) {
@@ -207,8 +209,21 @@ export async function settlementFactsFromLogs(
     // A shortened log could omit a later fee event. It cannot prove a zero leg.
     const unpaid = !operatorPayment && operator && priceLamports < 10_000n &&
       !logs.includes("Log truncated") && /^Program [1-9A-HJ-NP-Za-km-z]+ success$/u.test(logs.at(-1) ?? "");
+    const updates = events.filter(e => e.eventName === "ReputationChanged" && e.data.reason === 0);
+    let reputation: SettlementFacts["reputation"];
+    // A transaction may settle multiple tasks for the same worker. Attribute
+    // a change only when both the paid task and the reputation event are unique.
+    if (!logs.includes("Log truncated") && events.filter(e => e.eventName === "RewardDistributed" && e.data.recipient === worker).length === 1) {
+      const matches = [];
+      for (const update of updates) {
+        if (update.eventName === "ReputationChanged" && (await findAgentPda({ agentId: Uint8Array.from(update.data.agentId) }))[0] === worker)
+          matches.push({ before: update.data.oldReputation, after: update.data.newReputation });
+      }
+      if (matches.length === 1) reputation = { ...matches[0]!, ...(signature && { signature }) };
+    }
     return {
       worker,
+      ...(reputation && { reputation }),
       ...(unpaid && { unpaidOperator: { address: operator, sellerNet: event.data.amount } }),
       ...(operatorPayment && { operatorPayment }),
       priceLamports,

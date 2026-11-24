@@ -1,3 +1,5 @@
+import { operationTransport } from "./operation-transport.js";
+import { readChangePage, readAccountChange, type AccountChange, type ChangePage } from "./money-history.js";
 import { BASE_FEE_LAMPORTS } from "./network-fee.js";
 import { balanceChanges, workSimulationMessage } from "./work-simulation.js";
 // The one seam between the wallet and a Solana cluster. Everything above this
@@ -61,6 +63,9 @@ export interface RawAccount {
 }
 
 export interface Chain {
+  accountChange?(account: Address, signature: string): Promise<AccountChange | null>;
+  accountChanges?(account: Address, before?: string, until?: string): Promise<ChangePage>;
+  operationBlockhashValid?(blockhash: Blockhash): Promise<boolean>;
   contestHistory?(task: Address, since: string | null, checkpoint?: import("./contest-history.js").ContestCheckpoint): Promise<import("./contest-history.js").ContestHistory>;
   readonly network: WalletNetwork;
   simulateWork?(payer: Address, ix: Instruction, guards?: readonly Instruction[]): Promise<WorkSimulation | null>;
@@ -361,7 +366,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     return value;
   };
   const { readAccount, readAccountInfo } = createSolanaAccountReaders(fetchInfo);
-  const transport = scopedSendTransport(createRpcTransport({ rpc }));
+  const transport = operationTransport(scopedSendTransport(createRpcTransport({ rpc })));
   // Dispatch buyer decisions once, directly. Keep preflight enabled and poll
   // through the normal RPC. Neither the wallet nor the RPC should rebroadcast.
   const direct = createSolanaRpcFromTransport(scopedRpcTransport(baseRpc));
@@ -407,10 +412,13 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   }
   async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
     const outcome = await reviewSendOutcome(receipt);
-    return outcome === "expired" ? "failed" : outcome;
+    return outcome === "expired" ? receipt.operation?.kind === "funding" && receipt.operation.decision ? "pending" : "failed" : outcome;
   }
   const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
   const chain: Chain = usesScopedRequests<Chain>({
+    accountChange: (account, sig) => readAccountChange(rpc, account, sig as Signature),
+    accountChanges: (account, before, until) => readChangePage(rpc, account, before, until),
+    operationBlockhashValid: async hash => (await rpc.isBlockhashValid(hash, { commitment: "confirmed" }).send()).value,
     reviewSendOutcome,
     async reviewDebit(signature, payer) {
       const tx = await rpc.getTransaction(signature as Signature, {

@@ -108,9 +108,12 @@ describe("approvals", () => {
     const { wallet } = world;
     const agent = await wallet.createAgent("My assistant");
     await wallet.fundAgent(agent.id, { usdCents: 500 });
-    const twice = await wallet.fundAgent(agent.id, { usdCents: 500 });
+    const quote = await wallet.quoteTransfer({ kind: "fund", agentId: agent.id, amount: { usdCents: 500 } });
+    await wallet.confirmTransfer(quote.id);
+    const twice = (await wallet.overview()).agents[0]!;
     expect(twice.balance.usdCents).toBe(1_000);
-    const back = await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
+    const back = (await wallet.overview()).agents.find(entry => entry.id === agent.id)!;
     // Nothing still needs this agent's money, so all of it came back.
     expect(back.balance.lamports).toBe("0");
     const out = await wallet.withdraw("11111111111111111111111111111112", { usdCents: 100 });
@@ -118,7 +121,7 @@ describe("approvals", () => {
     await expect(wallet.fundAgent(agent.id, { usdCents: 999_999_999 })).rejects.toMatchObject({
       code: "NOT_ENOUGH_MONEY",
     });
-    await expect(wallet.withdraw(agent.address, "all")).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(wallet.quoteTransfer({ kind: "withdraw", to: agent.address, amount: "all" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("tops an allowance up from the main balance, within the daily rule", async () => {
@@ -134,12 +137,12 @@ describe("approvals", () => {
 
     // Spend it down (here: take it back) and the rule refills, but only up
     // to what is left of today's limit.
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     await wallet.tick();
     // "Take it all back" leaves nothing behind in an agent with nothing to pay for.
     const afterSecond = BigInt((await wallet.overview()).agents[0]!.balance.lamports);
     expect(afterSecond).toBe(100n * CENT - 2n * world.sandbox.chain.transferFeeLamports);
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     await wallet.tick();
     expect(BigInt((await wallet.overview()).agents[0]!.balance.lamports)).toBe(0n);
 

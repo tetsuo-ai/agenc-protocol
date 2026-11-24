@@ -78,7 +78,9 @@ export function onlyPlainTransfers(instructions: unknown): boolean {
     (instructions as readonly Instruction[]).every(
       (instruction) =>
         instruction.programAddress === SYSTEM_PROGRAM ||
-        instruction.programAddress === COMPUTE_BUDGET_PROGRAM,
+        instruction.programAddress === COMPUTE_BUDGET_PROGRAM ||
+        (instruction.programAddress === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" &&
+          !instruction.accounts?.length && Buffer.from(instruction.data ?? []).toString().startsWith("agenc.operation.v1 ")),
     )
   );
 }

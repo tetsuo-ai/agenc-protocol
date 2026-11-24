@@ -263,7 +263,7 @@ it("recovers one activity entry and allowance charge for a landed funding transf
   const { agent } = await liveOffer();
   main = world.wallet.mainAddress;
   await world.wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: { enabled: true, topUpToCents: 0, perDayCents: 1000 } });
-  await world.wallet.reclaimFromAgent(agent.id, "all");
+  await world.wallet.confirmTransfer((await world.wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
   const before = await world.balance(main);
   const initialCharges = state().agents[agent.id]!.refills.length;
   stall = true;
