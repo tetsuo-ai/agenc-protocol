@@ -59,6 +59,10 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       additionalProperties: false,
       required: ["service", "request"],
       properties: {
+        listing_agreement: {type:"object", description:"Signed selection returned by market_inquiry."},
+        operation_id: { type: "string", format: "uuid", description: "A stable purchase ID. Reuse on retry." },
+        private_commitment: {type:"string",pattern:"^[a-f0-9]{64}$"},
+        child_policy_digest: {type:"string",pattern:"^[a-f0-9]{64}$"},
         service: {
           type: "string",
           minLength: 32,
@@ -100,6 +104,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       additionalProperties: false,
       required: ["request", "reward_usd"],
       properties: {
+        operation_id: { type: "string", format: "uuid", description: "A stable purchase ID. Reuse on retry." },
         request: {
           type: "string",
           minLength: 1,
@@ -123,6 +128,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
         },
         deadline: { type: "integer", minimum: 1, description: "Exact delivery deadline in Unix seconds. For a hire this is the buyer's deadline in the brief, within the listing's delivery period." },
         review_window_secs: { type: "integer", minimum: 1, maximum: 604800, description: "Review setting in seconds. Default 86400. Contest selection ends 48 hours after delivery is due." },
+        private_commitment: {type:"string",pattern:"^[a-f0-9]{64}$"},
         min_reputation: { type: "integer", minimum: 0, maximum: 10000, description: "Minimum worker reputation. Default 0." },
         required_capabilities: { type: "string", pattern: "^[1-9][0-9]{0,19}$", description: "Required capability mask as nonzero unsigned 64-bit decimal text. Default 1." },
         acceptance: {
@@ -166,7 +172,8 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       properties: {
         job_id: { type: "string", minLength: 1, maxLength: MAX_MARKET_ID_LENGTH },
         entry_id: { type: "string", maxLength: 64, description: "Contest submission ID from market_status." },
-        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record", "winner", "reject", "release"] },
+        event_id: { type: "string", pattern: "^[0-9a-f]{64}$", description: "For dismiss_reminder, the exact event ID from market_status." },
+        action: { type: "string", enum: ["approve", "ask_changes", "refund", "draft_rejection", "draft_dispute", "record", "winner", "reject", "release", "dismiss_reminder", "rate"] },
         note: {
           type: "string",
           maxLength: 2000,
@@ -179,6 +186,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
           },
         },
         quote_id: { type: "string", pattern: "^[0-9a-f]{64}$", description: "For approve, use the quote ID from market_status for the delivery you reviewed." },
+        rating_quote_id: {type:"string",pattern:"^[a-f0-9]{64}$",description:"The rating quote ID market_review returned for these stars. Without it, market_review returns the quote and pays nothing."},
         rating: {
           type: "integer",
           minimum: 1,
@@ -211,6 +219,11 @@ export interface MarketToolOptions {
 
 /** What every tool returns: JSON a model can read and a host can display. */
 export interface MarketToolResult {
+  /** The quote for a rating's exact score; send its ID to leave those stars. */
+  rating_quote?: { rating_quote_id: string; rating: number; maximum_debit: unknown; fee: unknown; rent: unknown; expires_at: number };
+  actions?: import("./business.js").JobAction[];
+  actions_unavailable?: boolean;
+  receipt?: unknown;
   /** False when nothing happened and the message says why. */
   ok: boolean;
   /** One or two plain sentences: what happened and what to do next. */
@@ -236,6 +249,7 @@ function describeJob(job: JobView, now: number, terms?: ReviewRecord | null) {
     ? { quote_id: quote.id, round: quote.submissionCount, delivery_hash: quote.deliveryHash } : null;
   return {
     job_id: job.id,
+    ...(job.parties && {parties:job.parties}),
     ...(review && { review }),
     // A request has no service: it is the agent's own, open to anyone.
     ...(job.kind === "request" ? { posted_request: job.title } : { service: job.title }),
@@ -363,7 +377,10 @@ export async function runMarketTool(
         {
           agentId,
           listing,
+          ...(args.listing_agreement !== undefined && {listingAgreement: args.listing_agreement as import("./listing-exchange.js").ListingAgreement}),
           request,
+          ...(typeof args.private_commitment==="string" && {privateCommitment:args.private_commitment}),
+          ...(typeof args.child_policy_digest==="string" && {childPolicyDigest:args.child_policy_digest}),
           ...(maxPriceCents !== undefined ? { maxPriceCents } : {}),
           ...jobClockArgs(args),
           ...(acceptance !== undefined ? { acceptance } : {}),
@@ -377,6 +394,7 @@ export async function runMarketTool(
           ok: true,
           message: `Waiting for the user to approve ${formatMoney(job.price)} for ${job.title} in the Market panel. Nothing has been spent. Call market_status with this job_id after they answer.`,
           job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
         };
       }
       if (job.status === "declined") {
@@ -384,6 +402,7 @@ export async function runMarketTool(
           ok: false,
           message: "The user declined this hire. Nothing was spent.",
           job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
         };
       }
       if (job.status === "failed") {
@@ -391,12 +410,14 @@ export async function runMarketTool(
           ok: false,
           message: `The hire did not go through. ${job.error ?? ""}`.trim(),
           job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
         };
       }
       return {
         ok: true,
         message: `${job.statusText} Call market_status with wait set to true to get the delivery.`,
         job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
       };
     }
 
@@ -423,6 +444,7 @@ export async function runMarketTool(
         agentId,
         request,
         reward: { usdCents: rewardCents },
+        ...(typeof args.private_commitment==="string" && {privateCommitment:args.private_commitment}),
         ...(minReputation !== undefined && { minReputation }),
         ...(mask !== undefined && { requiredCapabilities: mask }),
         ...(typeof days === "number" ? { deadlineDays: days } : {}),
@@ -440,6 +462,7 @@ export async function runMarketTool(
           ok: true,
           message: `Waiting for the user to approve ${formatMoney(job.price)} for this request in the Market panel. Nothing has been spent. Call market_status with this job_id after they answer.`,
           job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
         };
       }
       if (job.status === "declined") {
@@ -447,6 +470,7 @@ export async function runMarketTool(
           ok: false,
           message: "The user declined this request. Nothing was spent.",
           job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
         };
       }
       if (job.status === "failed") {
@@ -454,12 +478,14 @@ export async function runMarketTool(
           ok: false,
           message: `The request was not posted and nothing was spent. ${job.error ?? ""}`.trim(),
           job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
         };
       }
       return {
         ok: true,
         message: `${job.statusText} Anyone can read the request. Call market_status with this job_id to follow it.`,
         job: describeJob(job, now()),
+          ...("receipt" in started && {receipt:started.receipt}),
       };
     }
 
@@ -481,10 +507,14 @@ export async function runMarketTool(
       };
       if (jobId === undefined) {
         const { jobs } = await client.call("jobs.list", { agentId, limit: 10 }, callOptions);
+        // The authenticated socket determines whose events are visible. This
+        // reads the durable journal even when the job is outside the first page.
+        const inbox = await client.call("jobs.inbox", {}, callOptions).catch(() => null);
         return {
           ok: true,
           message: jobs.length === 0 ? "You have no jobs yet." : `Your ${jobs.length} most recent jobs.`,
           jobs: await Promise.all(jobs.map(describe)),
+          ...(inbox ? {actions:inbox.actions} : {actions_unavailable:true}),
         };
       }
       if (args.entry_id !== undefined) {
@@ -516,13 +546,51 @@ export async function runMarketTool(
 
     const jobId = text(args.job_id, "job_id", MAX_MARKET_ID_LENGTH, true)!;
     const action = args.action;
+    if (action === "dismiss_reminder") {
+      const id = text(args.event_id, "event_id", 64, true)!;
+      const { actions } = await client.call("jobs.inbox", {}, callOptions);
+      if (!actions.some(action => action.jobId === jobId && action.id === id)) {
+        return { ok: false, message: "This job has no matching unread reminder." };
+      }
+      const { dismissed } = await client.call("jobs.dismiss", { id }, callOptions);
+      return { ok: dismissed, message: dismissed ? "Reminder dismissed." : "The reminder changed. Check the job again." };
+    }
     if (action === "winner" || action === "reject" || action === "release") {
       const entryId = text(args.entry_id, "entry_id", 64, true)!;
       const reason = action === "reject" ? text(args.note, "note", 2000, true)! : undefined;
       const { job } = await client.call("jobs.quoteContest", { jobId, entryId, action, ...(reason && { reason }) }, callOptions);
       return { ok: true, message: "The contest decision is drafted. The owner reviews the quote in Market Jobs.", job: describeJob(job, now()) };
     }
+    if (action === "rate" || (action === "approve" && args.rating !== undefined)) {
+      // Stars cost a fee: show the quote for this exact score first, and send stars only with its ID.
+      const score = args.rating;
+      if (typeof score !== "number" || !Number.isInteger(score) || score < 1 || score > 5) {
+        throw new ToolInputError("rating must be a whole number from 1 to 5.");
+      }
+      if (action === "approve" && (typeof args.quote_id !== "string" || !/^[a-f0-9]{64}$/.test(args.quote_id))) {
+        throw new ToolInputError("Read the delivery with market_status and use its quote_id to approve payment.");
+      }
+      if (typeof args.rating_quote_id !== "string") {
+        const quote = await client.call("jobs.ratingQuote", { jobId, score }, callOptions);
+        return {
+          ok: false,
+          message: `${score} ${score === 1 ? "star costs" : "stars cost"} at most ${formatMoney(quote.maximumDebit)} (fee ${formatMoney(quote.fee)}, rent ${formatMoney(quote.rent)}). Nothing was paid. ` +
+            (action === "approve"
+              ? "To approve with these stars, call market_review again with this rating and rating_quote_id. To approve without stars, leave rating out."
+              : "To leave these stars, call market_review again with action rate, this rating and rating_quote_id."),
+          rating_quote: { rating_quote_id: quote.id, rating: quote.score, maximum_debit: quote.maximumDebit, fee: quote.fee, rent: quote.rent, expires_at: quote.expiresAt },
+        };
+      }
+      if (!/^[a-f0-9]{64}$/.test(args.rating_quote_id)) throw new ToolInputError("Use the rating_quote_id market_review returned.");
+      if (action === "rate") {
+        const { job } = await client.call("jobs.rate", { jobId, score, ratingQuoteId: args.rating_quote_id }, callOptions);
+        return reviewedStatus(job);
+      }
+    }
     if (action === "approve") {
+      if (typeof args.rating_quote_id === "string" && args.rating === undefined) {
+        throw new ToolInputError("Give the rating that rating_quote_id was quoted for, or leave both out.");
+      }
       if (typeof args.quote_id !== "string" || !/^[a-f0-9]{64}$/.test(args.quote_id)) {
         throw new ToolInputError("Read the delivery with market_status and use its quote_id to approve payment.");
       }
@@ -535,7 +603,7 @@ export async function runMarketTool(
       }
       const { job } = await client.call(
         "jobs.approve",
-        { jobId, quoteId: args.quote_id, ...(rating !== undefined ? { rating } : {}) },
+        { jobId, quoteId: args.quote_id, ...(rating !== undefined && typeof args.rating_quote_id==="string" ? { rating, ratingQuoteId:args.rating_quote_id } : {}) },
         callOptions,
       );
       return reviewedStatus(job);

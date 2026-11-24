@@ -62,3 +62,14 @@ export function discoveryPriceCents(text: string): number | null {
   const cents = shiftDecimal(dollars, 2);
   return decimalKey(text, 2) === decimalKey(String(cents)) ? cents : null;
 }
+
+declare module "./types.js" {
+  interface ServiceView {
+    supplier?: import("./purchase-input.js").ListedSupplier;
+    availability?: { identity: import("./listing-exchange.js").ListingIdentity; heartbeat: import("./listing-exchange.js").ListingHeartbeat | null };
+  }
+  interface JobTerms {
+    inquiry?: Awaited<ReturnType<typeof import("./listing-exchange.js").selectedListingTerms>>;
+    admission?: import("./purchase-input.js").PublicPurchaseAdmission;
+  }
+}

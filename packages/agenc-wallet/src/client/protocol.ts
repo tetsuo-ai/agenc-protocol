@@ -1,3 +1,9 @@
+import type { MoneyMethods } from "./money-operations.js";
+import type { ListingMethods } from "./listing-methods.js";
+import type { BusinessMethods } from "./business.js";
+import type { ChildHireMethods } from "./child-hire.js";
+import type { ExchangeMethods } from "./exchange-methods.js";
+import type { ConnectionMethods } from "./connections.js";
 import type { DiscoveryQuery, DiscoveryPage } from "./discovery.js";
 // The request/response table of the wallet service. One entry per method;
 // the server and the client are both typed from it, so they cannot drift.
@@ -34,10 +40,10 @@ export interface SellerOfferInput {
 
 export type ServiceOfferInput = SellerOfferInput;
 
-export interface WalletMethods {
+export interface WalletMethods extends ConnectionMethods, MoneyMethods, ListingMethods, BusinessMethods, ChildHireMethods, ExchangeMethods {
   "work.list": {
     params: { agentId: string; offset?: number; task?: string };
-    result: { jobs: import("./types.js").WorkerJobView[]; next: number | null; held: import("./types.js").WorkerJobView | null };
+    result: { eligibility?:{task:string;code:string;message:string;retryable:boolean}; jobs: import("./types.js").WorkerJobView[]; next: number | null; held: import("./types.js").WorkerJobView | null };
   };
   "work.quote": {
     params: { agentId: string; task: string; action: import("./types.js").WorkAction };
@@ -94,10 +100,13 @@ export interface WalletMethods {
   "market.find": { params: DiscoveryQuery; result: DiscoveryPage };
   "market.hire": {
     params: {
+      childPolicyDigest?:string;
+      listingAgreement?: import("./listing-exchange.js").ListingAgreement;
       agentId: string;
       listing: string;
       /** What the buyer wants done, in plain words. */
       request: string;
+      privateCommitment?:string;
       /** Refuse if the service costs more than this. */
       maxPriceCents?: number;
       expectedPriceLamports?: string;
@@ -128,6 +137,7 @@ export interface WalletMethods {
       agentId: string;
       /** What is wanted, in plain words, written for whoever takes it. */
       request: string;
+      privateCommitment?:string;
       /** What whoever does it is paid. */
       reward: AmountInput;
       /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
@@ -152,6 +162,7 @@ export interface WalletMethods {
     params: {
       contestEntries?: number;
       request: string;
+      privateCommitment?:string;
       reward: AmountInput;
       deadlineDays?: number;
       minReputation?: number;
@@ -175,7 +186,7 @@ export interface WalletMethods {
   "wallet.quoteHire": WalletMethods["market.hire"];
   "wallet.quotePost": { params: WalletMethods["wallet.post"]["params"]; result: WalletMethods["market.post"]["result"] };
 
-  "jobs.callOutcome": { params: { agentId: string; kind: "hire" | "request"; key: string }; result: WalletMethods["market.hire"]["result"] };
+  "jobs.callOutcome": { params: { agentId: string; kind: "hire" | "request"; key: string }; result: WalletMethods["market.hire"]["result"] & {receipt?: Record<string, unknown> | null} };
   "approvals.page": {
     params: { after?: string };
     result: { entries: { id: string; jobId: string }[]; next: string | null };
@@ -234,7 +245,7 @@ export interface WalletMethods {
   };
   /** Accept the delivery and pay the provider. */
   "jobs.approve": {
-    params: { jobId: string; rating?: number; quoteId?: string };
+    params: { jobId: string; rating?: number; ratingQuoteId?: string; quoteId?: string };
     result: { job: JobView };
   };
   "jobs.reviewRecord": { params: { jobId: string; termsOnly?: boolean; before?: string }; result: import("./reviews.js").ReviewRecord };
@@ -257,7 +268,7 @@ export interface WalletMethods {
    * agents made, posting the bond (`JobView.turnDown.bond`). Never an agent's call.
    */
   "jobs.dispute": { params: { jobId: string }; result: { job: JobView } };
-  "jobs.rate": { params: { jobId: string; score: number }; result: { job: JobView } };
+  "jobs.rate": { params: { jobId: string; score: number; ratingQuoteId?: string }; result: { job: JobView } };
 
   "activity.list": {
     params: { limit?: number };
@@ -305,7 +316,7 @@ export interface WalletMethods {
    * replaces the wallet, so the host does it with the service stopped.
    */
   "backup.export": {
-    params: { password: string; file: string };
+    params: { password: string; file: string; businessSnapshot?: string };
     result: { createdAt: number; agents: number; main: string };
   };
   /**
@@ -335,6 +346,7 @@ export type MethodResult<M extends WalletMethod> = WalletMethods[M]["result"];
  * wallets, change its own rules, approve its own request, or withdraw.
  */
 export const AGENT_METHODS: readonly WalletMethod[] = [
+  "agents.self", "jobs.inbox", "jobs.dismiss", "listings.inquiries", "listings.message", "jobs.ratingQuote", "earn.operation", "jobs.readDeliveryChunk", "jobs.exchange", "jobs.acknowledgeDeliveryChunk",
   "work.list",
   "work.quote",
   "market.find",

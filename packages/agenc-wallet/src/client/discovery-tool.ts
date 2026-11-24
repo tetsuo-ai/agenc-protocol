@@ -1,8 +1,9 @@
+import { availabilityView } from "./listing-exchange.js";
 import { formatMoney, formatDuration } from "./format.js";
 import type { ServiceView } from "./types.js";
-import type { WalletClient } from "./socket-client.js";
+
 import type { MarketToolResult, MarketToolSpec } from "./tools.js";
-import { DISCOVERY_CAPABILITY, DISCOVERY_UPDATE, needsDiscovery, SERVICE_STATES, SERVICE_SORTS, type DiscoveryQuery } from "./discovery.js";
+import { DISCOVERY_CAPABILITY, DISCOVERY_UPDATE, needsDiscovery, SERVICE_STATES, SERVICE_SORTS, type DiscoveryQuery, type DiscoveryPage } from "./discovery.js";
 import { dollarsToCents, text, ToolInputError } from "./tool-input.js";
 
 export const discoveryTool: MarketToolSpec = {
@@ -61,6 +62,7 @@ export function describeService(service: ServiceView) {
     price: formatMoney(service.price),
     ...(service.maxPriceCents !== undefined && { max_price_usd: service.maxPriceCents / 100 }),
     listing_version: service.listingVersion,
+    availability: availabilityView(service.availability?.heartbeat ?? null, Date.now()),
     ...(service.maxOpenJobs !== undefined && { max_open_jobs: service.maxOpenJobs, delivery_secs: service.deliverySecs,
       price_lamports: service.price.lamports, tags: service.tags, operator: service.operator,
       operator_fee_bps: service.operatorFeeBps, proceeds: service.proceeds }),
@@ -133,7 +135,7 @@ function choice<T extends string>(value: unknown, choices: readonly T[], name: s
   return match;
 }
 
-export async function findServices(client: WalletClient, args: Record<string, unknown>, callOptions?: { signal?: AbortSignal }): Promise<MarketToolResult> {
+export async function findServices(client: { call(method: "market.find", params: DiscoveryQuery, options?: { signal?: AbortSignal }): Promise<DiscoveryPage> }, args: Record<string, unknown>, callOptions?: { signal?: AbortSignal }): Promise<MarketToolResult & { pending: boolean; records_unavailable: boolean }> {
   const query = text(args.query, "query", 200, false);
   const maxPriceCents = dollarsToCents(args.max_price_usd, "max_price_usd", true);
   const limit =
@@ -197,6 +199,7 @@ export async function findServices(client: WalletClient, args: Record<string, un
     ok: true,
     message: messages.join(" "),
     total,
+    pending: !!pending, records_unavailable: !!recordsUnavailable,
     next_offset: answer.cursor && services.length > 0 && end < total ? end : null,
     next_cursor: end < total ? answer.cursor ?? null : null,
     ...(maxPriceCents !== undefined ? { max_price_usd: args.max_price_usd as number } : {}),

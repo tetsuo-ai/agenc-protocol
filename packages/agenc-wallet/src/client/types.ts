@@ -418,6 +418,7 @@ export interface JobResult {
 }
 
 export interface JobView {
+  parties?: import("./business.js").JobParties;
   contestEntries?: ContestEntry[];
   contestNext?: string | null;
   contestClaims?: { claim: string; workerAuthority: string }[];

@@ -98,6 +98,11 @@ export interface EarnOptions {
   /** Null when this host cannot run jobs (earning is then unavailable). */
   executor: EarnExecutor | null;
   /**
+   * A different way of running jobs for named agents, such as the one seller
+   * the owner paired with a remote room. Every other agent keeps `executor`.
+   */
+  agentExecutors?: Readonly<Record<string, EarnExecutor>>;
+  /**
    * Never take a job that pays more than this. A reward far above the going
    * rate is how a hostile job baits a worker; null disables the check.
    */
@@ -269,7 +274,13 @@ export class EarnHost {
 
   /** Whether this host can run jobs at all. */
   get available(): boolean {
-    return this.#options.executor !== null;
+    return this.#options.executor !== null || Object.keys(this.#options.agentExecutors ?? {}).length > 0;
+  }
+
+  /** How this agent's jobs run: its own executor when the host named one, else the shared one. */
+  executorFor(agentId: string): EarnExecutor | null {
+    const own = this.#options.agentExecutors;
+    return own !== undefined && Object.hasOwn(own, agentId) ? own[agentId]! : this.#options.executor;
   }
 
   /** Whether only jobs from this wallet's own addresses are taken. */
@@ -648,7 +659,7 @@ export class EarnHost {
 
   /** Start (or keep) one loop. Recovery never enters the discovery path. */
   start(agent: EarnAgent, recoveryOnly = false): Promise<void> {
-    const executor = this.#options.executor;
+    const executor = this.executorFor(agent.agentId);
     if (this.#shutdown.signal.aborted || (!recoveryOnly && executor === null)) return Promise.resolve();
     const running = this.#running.get(agent.agentId);
     if (running) return running.firstDiscovery;
@@ -1056,7 +1067,7 @@ export class EarnHost {
 
   /** The worker settings every run for this agent shares. */
   #config(agent: EarnAgent, argv: string[]): WorkerContext["config"] {
-    const executor = this.#options.executor;
+    const executor = this.executorFor(agent.agentId);
     const maxReward =
       this.#options.maxRewardLamports === undefined
         ? DEFAULT_MAX_REWARD_LAMPORTS
