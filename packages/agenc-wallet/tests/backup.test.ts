@@ -148,9 +148,13 @@ describe("a wallet backup", () => {
       expect(vault.address(id)).toBe(folder.addresses[id]);
       expect((await vault.signer(id)).address).toBe(folder.addresses[id]);
     }
-    // The journal comes back as it was, with one note added: this backup covers it.
+    // The journal comes back as it was, with this backup noted as covering it, and each agent's
+    // own spending held for a day from the restore: the ledger is as old as the backup.
+    const original = JSON.parse(readFileSync(path.join(folder.dataDir, "state.json"), "utf8")) as { agents: Record<string, object> };
     expect(JSON.parse(readFileSync(path.join(elsewhere, "state.json"), "utf8"))).toEqual({
-      ...(JSON.parse(readFileSync(path.join(folder.dataDir, "state.json"), "utf8")) as object),
+      ...original,
+      agents: Object.fromEntries(Object.entries(original.agents).map(([id, agent]) =>
+        [id, { ...agent, allowanceUnknownUntil: 1_800_000_100_000 + 86_400_000 }])),
       backup: { at: 1_800_000_000_000, keyIds: ["main", "agent:a1", "agent:a2"] },
     });
     expect(readFileSync(path.join(elsewhere, "earn", "a1", "state.json"), "utf8")).toBe(
