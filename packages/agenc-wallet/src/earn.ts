@@ -48,6 +48,7 @@ import {
 } from "@tetsuo-ai/agenc-worker";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
+import { outputAgreementFromSpec } from "./client/job-exchange.js";
 import { WalletError, describeError } from "./errors.js";
 import { readAgent } from "./market.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
@@ -895,7 +896,9 @@ export class EarnHost {
           ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
         }).modelBudgetCents;
       },
-      executorForTask: async (task, address, reservedCents, listing, metadata, request) => {
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance) => {
+        // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
+        const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
         const ownRequest = this.#ownAddresses().includes(task.creator);
         const room = executor.isolatedJobRoom === true && executor.mode === "sandboxed";
         if (!ownRequest && (listing || metadata || this.ownJobsOnly) && !room)
@@ -927,7 +930,7 @@ export class EarnHost {
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
             return room && (receipt || bundleDir || (paired && pin)) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
-              ...(paired && { privateProcessing: privateProcessing ?? null }) })] : [source];
+              ...(paired && { privateProcessing: privateProcessing ?? null }), ...(outputs && { outputs }) })] : [source];
           }
           if (part === "{task}") return [address];
           if (part === "{servicePin}") {

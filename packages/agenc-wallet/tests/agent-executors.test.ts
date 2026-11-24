@@ -1,3 +1,4 @@
+import { outputAgreementCriterion } from "../src/client/job-exchange.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -103,4 +104,32 @@ it("gives a paired seller's peer the verified request, its usage reservation and
   expect(context).toMatchObject({ task: address, pin, request: "Draw the verified postcard.", privateProcessing: "Runs in the verified job room.", bundleDir: null });
   expect(context.receipt).toMatch(/service-usage/);
   expect(processing).toHaveBeenCalledWith("paired", address);
+});
+
+it("hands the room the verified job's agreed outputs and refuses a malformed agreement", async () => {
+  const pin = { digest: "a".repeat(64), runtimeDigest: "b".repeat(64), permissionDigest: "c".repeat(64), capabilities: "1" as const };
+  const paired: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "/profile.json", "{task}", "{servicePin}", "{jobExpires}", "{pay}", "{requestSource}", "{prompt}"],
+    mode: "sandboxed", isolatedJobRoom: true, envAllowlist: [], timeoutMs: 60_000,
+    readiness: { argv: ["/node", "/job-room.mjs", "peer-ready", "/profile.json"], timeoutMs: 1000 } } as EarnExecutor;
+  const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
+  folders.push(dataDir);
+  const earn = new EarnHost({ dataDir, chain: { clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
+    services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices,
+    options: { executor: local, agentExecutors: { paired }, pollIntervalMs: 10, maxIdlePollIntervalMs: 10 }, log: vi.fn(), notify: vi.fn(),
+    privateProcessing: vi.fn(async () => null) });
+  void earn.start({ agentId: "paired", signer: { address: "x" } as unknown as KeyPairSigner, minRewardLamports: 0n,
+    specialistTerms: () => ({ servicePin: pin }) });
+  await vi.waitFor(() => expect(seen.contexts.length).toBeGreaterThan(0));
+  earn.stopAll?.();
+  const ctx = seen.contexts.at(-1) as { executorForTask: (...args: unknown[]) => Promise<string[]> };
+  const task = { creator: "Buyer1111111111111111111111111111111111111", deadline: 99n, rewardAmount: 1n, requiredCapabilities: 1n };
+  const address = "Task11111111111111111111111111111111111111";
+  const scope = async (acceptance?: string[]) => {
+    const argv = await ctx.executorForTask(task, address, 40, null, null, "Make the table.", acceptance);
+    return JSON.parse(argv[argv.indexOf("external") + 1]!);
+  };
+  expect(await scope(["Name the source.", outputAgreementCriterion({ requiredFiles: ["report.csv"], allowTextOnly: false })]))
+    .toMatchObject({ outputs: { requiredFiles: ["report.csv"], allowTextOnly: false } });
+  expect(await scope(["Name the source."])).not.toHaveProperty("outputs");
+  await expect(scope(["Agreed outputs v1: anything goes"])).rejects.toThrow();
 });
