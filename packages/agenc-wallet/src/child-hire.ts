@@ -223,7 +223,13 @@ export async function escrowStatus(
 ): Promise<ChildEscrow> {
   if (!cached.task) return cached;
   const seen = await inspectJob(chain, address(cached.task), worker);
-  if (!seen) return { ...cached, status: "unknown", action: "Check receipt" };
+  if (!seen) {
+    if (cached.status === "paid" || cached.status === "refunded") return { ...cached, action: null };
+    const paid = await chain.findSettlementSignature?.(address(cached.task));
+    return paid
+      ? { ...cached, status: "paid", signature: paid, action: null }
+      : { ...cached, status: "unknown", action: "Check receipt" };
+  }
   const status = (
     {
       open: "waiting",
@@ -249,6 +255,10 @@ export async function escrowStatus(
     ...cached,
     status,
     deadline,
+    ...(status === "paid" && {
+      signature:
+        (await chain.findSettlementSignature?.(address(cached.task)).catch(() => null)) ?? cached.signature,
+    }),
     reviewEndsAt:
       seen.turnDown?.rulingUntil ??
       seen.turnDown?.disputeUntil ??
@@ -608,7 +618,14 @@ export class ChildHires {
           : job.phase === "failed"
             ? "failed"
             : "dispatching";
-      view.child.status = job.phase === "failed" ? "failed" : job.hiredAt === null ? "starting" : "waiting";
+      view.child.status =
+        job.outcome === "paid" || job.outcome === "refunded"
+          ? job.outcome
+          : job.phase === "failed"
+            ? "failed"
+            : job.hiredAt === null
+              ? "starting"
+              : "waiting";
       view.child.action = job.error ?? (view.phase === "dispatching" ? "Check purchase receipt" : null);
     } else if (view.phase === "approval" && view.quote.expiresAt <= this.p.now()) view.phase = "expired";
     const unknown = (s: ChildEscrow): ChildEscrow => ({
@@ -618,9 +635,7 @@ export class ChildHires {
     });
     const parentWorker = address(record.parentWorker);
     [view.parent, view.child] = await Promise.all([
-      parentWorker
-        ? escrowStatus(this.p.chain, view.parent, parentWorker, false).catch(() => unknown(view.parent))
-        : unknown(view.parent),
+      escrowStatus(this.p.chain, view.parent, parentWorker, false).catch(() => unknown(view.parent)),
       escrowStatus(this.p.chain, view.child, address(view.supplier), true).catch(() => unknown(view.child)),
     ]);
     return view;

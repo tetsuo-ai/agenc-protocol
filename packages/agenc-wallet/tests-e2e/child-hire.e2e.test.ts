@@ -34,6 +34,7 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
     wallet.childHires.request(grant, request),
   ]);
   expect(one.quote.id).toBe(two.quote.id);
+  if (one.quote.terms && "hire" in one.quote.terms) expect(one.payout).toEqual(one.quote.terms.hire);
   expect(await world.balance(seller.address)).toBe(before);
   await expect(wallet.childHires.request(grant, { ...request, brief: "Changed" })).rejects.toThrow(
     /one supplier/,
@@ -78,6 +79,24 @@ it("separates two escrows, recovers the same owner decision, imports only verifi
   await wallet.childHires.acknowledgeImport(grant, result.receipt);
   expect((await confirmPayout(wallet, one.child.jobId)).status).toBe("paid");
   await expect(wallet.rateJob(one.child.jobId, 5, true)).rejects.toThrow(/rating|stars/i);
+  const quoteRating = Reflect.get(wallet, "quoteRating");
+  if (typeof quoteRating === "function") {
+    const q = await quoteRating.call(wallet, one.child.jobId, 5, true);
+    const rate = () => Reflect.apply(wallet.rateJob, wallet, [one.child.jobId, 5, true, undefined, q.id]);
+    const beforeStars = await world.balance(seller.address);
+    if (
+      BigInt(q.maximumDebit.lamports) + world.sandbox.chain.transferFeeLamports <=
+      BigInt(one.reviewReserve.lamports)
+    ) {
+      await rate();
+      expect(beforeStars - (await world.balance(seller.address))).toBeLessThanOrEqual(
+        BigInt(q.maximumDebit.lamports),
+      );
+    } else {
+      await expect(rate()).rejects.toThrow(/cap/);
+      expect(await world.balance(seller.address)).toBe(beforeStars);
+    }
+  }
   world.sandbox.advanceClock(8 * 86400);
   await wallet.refundJob(job.id, true);
   const end = await wallet.childHires.timeline(job.task!);

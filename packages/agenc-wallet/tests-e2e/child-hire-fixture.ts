@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { address } from "@solana/kit";
 import { findClaimPda, getTaskClaimDecoder, getTaskClaimDiscriminatorBytes } from "@tetsuo-ai/marketplace-sdk";
-import { childPolicyCriterion } from "../src/child-hire.js";
+import { childDigest, childPolicyCriterion } from "../src/child-hire.js";
 import { DEFAULT_SELLER_TERMS } from "../src/client/seller-terms.js";
 import type { ChildHirePolicy, ChildHireRequest } from "../src/client/child-hire.js";
 import { readHireableListing, readProgramAccount } from "../src/market.js";
@@ -28,6 +28,9 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
   const finish = join(room, "finish");
   const wait =
     "const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(process.argv[1])){clearInterval(t);process.stdout.write('Parent result');}},50)";
+  // The practice catalog predates fulfilment metadata. Feed its read adapter the
+  // verified metadata projection that C publishes and E accepts on the combined wallet.
+  const catalogue = new Map<string, object>();
   const world = await openWorld({
     earn: {
       executor: {
@@ -41,6 +44,18 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
     },
     config: { reviewWindowSecs: 60n },
     ...options.world,
+    services(services, sandbox) {
+      const base = options.world?.services?.(services, sandbox) ?? services;
+      return {
+        ...base,
+        async listServices(filters) {
+          return (await base.listServices(filters)).map((row) => {
+            const fulfilment = catalogue.get(row.listing);
+            return fulfilment ? { ...row, details: "ready" as const, fulfilment } : row;
+          });
+        },
+      };
+    },
   });
   const { wallet, sandbox } = world;
   const seller = await wallet.createAgent("Selling studio");
@@ -92,13 +107,30 @@ export async function openParentFixture(options: ChildFixtureOptions = {}, openW
   const extra = options.prepareCriteria
     ? await options.prepareCriteria(world, request, seller.address, supplier)
     : [];
-  const { job } = await wallet.hire({
+  const digest = childDigest(policy);
+  const integrated = typeof Reflect.get(wallet, "postListingMessage") === "function";
+  const requirement = extra.find((row) => row.startsWith("Private input handoff v1: "));
+  catalogue.set(listing, {
+    privateInputs: !!requirement,
+    supplier: { version: 1, payingSeller: seller.address, policy, digest },
+  });
+  catalogue.set(supplier, { privateInputs: true });
+  const parentPurchase = await wallet.hire({
     agentId: buyer.id,
     listing,
     request: "Prepare the complete report.",
-    acceptance: [childPolicyCriterion(policy), ...(options.criteria ?? []), ...extra],
+    acceptance: [
+      ...(options.criteria ?? []),
+      ...(integrated ? extra.filter((row) => row !== requirement) : [childPolicyCriterion(policy), ...extra]),
+    ],
+    ...(integrated && {
+      childPolicyDigest: digest,
+      ...(requirement && { privateCommitment: requirement.slice("Private input handoff v1: ".length) }),
+    }),
   });
-  assert.equal(job.status, "waiting");
+  if (parentPurchase.approval) await wallet.decideApproval(parentPurchase.approval.id, true);
+  const job = await wallet.getJob(parentPurchase.job.id, true);
+  assert.ok(job.status === "waiting" || job.status === "working");
   const [claimPda] = await findClaimPda({
     task: address(job.task!),
     bidder: worker,

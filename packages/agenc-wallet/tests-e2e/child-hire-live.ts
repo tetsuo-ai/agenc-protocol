@@ -23,7 +23,7 @@ async function main() {
     const clock = { now: Date.now() };
     const config: WalletConfig = {
       chain: sandbox.chain,
-      services: sandbox.services,
+      services: options.services?.(sandbox.services, sandbox) ?? sandbox.services,
       prices: sandbox.prices,
       dataDir,
       unlockSecret: secret,
@@ -66,7 +66,8 @@ async function main() {
     try {
       await assert.rejects(
         paired.call("child.timeline" as never, { parentTask: grant.parentTask } as never),
-        /allowed|permission|owner/i,
+        (err: unknown) =>
+          err !== null && typeof err === "object" && "code" in err && err.code === "NOT_ALLOWED",
       );
     } finally {
       paired.close();

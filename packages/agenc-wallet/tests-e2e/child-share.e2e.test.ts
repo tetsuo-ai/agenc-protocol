@@ -87,6 +87,13 @@ it.skipIf(!("exchangeContext" in taskThread))(
       await expect(
         wallet.childHires.request(f.grant, { ...request, brief: "Publish all figures" }),
       ).rejects.toThrow(/original buyer/);
+      if (typeof Reflect.get(wallet, "postListingMessage") === "function") {
+        const q = await wallet.childHires.request(f.grant, request);
+        expect(JSON.stringify(q.quote.terms)).not.toContain("source.csv");
+        const funded = await wallet.childHires.decide(f.grant.parentTask, q.quote.id, true);
+        expect(funded.child.task).toBeTruthy();
+        expect(funded.child.task).not.toBe(funded.parent.task);
+      }
       expect(JSON.stringify(await buyer.status())).not.toContain(file.toString());
     } finally {
       await f.world.wallet.close();
