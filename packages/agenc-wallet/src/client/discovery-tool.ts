@@ -1,5 +1,6 @@
 import { availabilityView } from "./listing-exchange.js";
-import { formatMoney, formatDuration } from "./format.js";
+import { formatMoney, formatDuration, formatSol } from "./format.js";
+import type { ListedSupplier } from "./purchase-input.js";
 import type { ServiceView } from "./types.js";
 
 import type { MarketToolResult, MarketToolSpec } from "./tools.js";
@@ -59,6 +60,8 @@ export function describeService(service: ServiceView) {
     ...(service.inputs.length > 0 ? { asks_for: service.inputs } : {}),
     ...(service.outputs.length > 0 ? { hands_back: service.outputs } : {}),
     ...(service.terms.length > 0 ? { terms: service.terms } : {}),
+    // The seller's verified supplier terms. A hire repeats the digest as child_policy_digest once the user agrees.
+    ...supplierView((service as ServiceView & { supplier?: ListedSupplier }).supplier),
     price: formatMoney(service.price),
     ...(service.maxPriceCents !== undefined && { max_price_usd: service.maxPriceCents / 100 }),
     listing_version: service.listingVersion,
@@ -74,6 +77,14 @@ export function describeService(service: ServiceView) {
     delivery:
       service.deliverySecs === null ? "The seller must set a delivery period before you can hire this service." : `within ${formatDuration(service.deliverySecs)}`,
   };
+}
+
+function supplierView(supplier: ListedSupplier | undefined) {
+  if (!supplier) return {};
+  return { supplier: { digest: supplier.digest, paying_seller: supplier.payingSeller,
+    allowed_listings: supplier.policy.allowedListings, max_supplier_spend: formatSol(supplier.policy.maxDebitLamports),
+    return_before: formatDuration(supplier.policy.returnBeforeSecs), review_window: formatDuration(supplier.policy.reviewWindowSecs),
+    sharing: supplier.policy.sharing } };
 }
 
 function plural(count: number, one: string, many: string): string {
