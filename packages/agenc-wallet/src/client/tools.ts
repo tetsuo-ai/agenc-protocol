@@ -59,6 +59,8 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       additionalProperties: false,
       required: ["service", "request"],
       properties: {
+        listing_agreement: {type:"object", description:"Signed selection returned by market_inquiry."},
+        operation_id: { type: "string", format: "uuid", description: "A stable purchase ID. Reuse on retry." },
         service: {
           type: "string",
           minLength: 32,
@@ -100,6 +102,7 @@ export const MARKET_TOOLS: readonly MarketToolSpec[] = [
       additionalProperties: false,
       required: ["request", "reward_usd"],
       properties: {
+        operation_id: { type: "string", format: "uuid", description: "A stable purchase ID. Reuse on retry." },
         request: {
           type: "string",
           minLength: 1,
@@ -363,6 +366,7 @@ export async function runMarketTool(
         {
           agentId,
           listing,
+          ...(args.listing_agreement !== undefined && {listingAgreement: args.listing_agreement as import("./listing-exchange.js").ListingAgreement}),
           request,
           ...(maxPriceCents !== undefined ? { maxPriceCents } : {}),
           ...jobClockArgs(args),

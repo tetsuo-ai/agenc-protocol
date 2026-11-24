@@ -14,6 +14,7 @@
 // a socket in a shared place such as /tmp could otherwise be someone else's.
 // Dependency-free (node built-ins only), so a host can vendor this folder
 // unchanged.
+import {connectWindowsPipe} from "./windows-pipe.js";
 import { createHmac } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { connect } from "node:net";
@@ -87,7 +88,7 @@ export function openBackgroundWallet(options: {
     return Promise.reject(error);
   }
   return new Promise<OpenedBackgroundWallet>((resolve, reject) => {
-    const socket = connect(options.socketPath);
+    const socket = process.platform === "win32" ? connectWindowsPipe(options.socketPath) : connect(options.socketPath);
     let buffered = "";
     let settled = false;
     let sentOwnerToken: string | null = null;

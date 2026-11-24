@@ -1,6 +1,7 @@
 // A small client for the wallet service: newline-delimited JSON over a local
 // socket (a Unix domain socket, or a named pipe on Windows). No dependencies
 // beyond node:net, so a host can vendor this folder unchanged.
+import {connectWindowsPipe} from "./windows-pipe.js";
 import { connect, type Socket } from "node:net";
 import {
   MAX_FRAME_BYTES,
@@ -113,7 +114,7 @@ export function createLineReader(
 /** Connect and authenticate. Rejects when the service refuses the token. */
 export function connectWallet(options: WalletClientOptions): Promise<WalletClient> {
   return new Promise<WalletClient>((resolve, reject) => {
-    const socket: Socket = connect(options.socketPath);
+    const socket: Socket = process.platform === "win32" ? connectWindowsPipe(options.socketPath) : connect(options.socketPath);
     const waiting = new Map<
       number,
       { resolve: (value: unknown) => void; reject: (error: Error) => void }
