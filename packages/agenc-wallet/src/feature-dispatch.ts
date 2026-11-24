@@ -8,7 +8,6 @@ import type { ExchangeMethods } from "./client/exchange-methods.js";
 import type { AgencWallet } from "./wallet.js";
 import { moneyHandlers } from "./money-handlers.js";
 import { listingHandlers } from "./listing-handlers.js";
-import { withPendingFeatures } from "./pending-feature-wallet.js";
 
 type Features = MoneyMethods &
   ListingMethods &
@@ -57,8 +56,8 @@ export function featureRoutes(
   // Owner routes are excluded from AGENT_METHODS and from the paired broker's allowlist.
   return {
     // The feature owners' handlers, unchanged: A's money routes and E's listing routes with their owner checks.
-    ...moneyHandlers(withPendingFeatures(wallet)),
-    ...listingHandlers(withPendingFeatures(wallet)),
+    ...moneyHandlers(wallet),
+    ...listingHandlers(wallet),
     "jobs.inbox": (_, s) =>
       featureCall(wallet, "jobInbox", s.agentId ?? undefined),
     "jobs.dismiss": (p, s) =>

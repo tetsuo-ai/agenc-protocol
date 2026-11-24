@@ -72,7 +72,7 @@ export function childRatingSigner(
           BigInt(child.reviewSpent ?? "0"),
         );
         const ratings = Object.entries(journal.moneyOperations ?? {}).reduce((sum, [previous, op]) => {
-          if (previous === id || op.kind !== "rating" || op.jobId !== job.id || op.state === "expired")
+          if (previous === id || op.kind !== "rating" || op.jobId !== job.id)
             return sum;
           return sum + BigInt(op.fee) + (op.state === "failed" ? 0n : BigInt(op.amount));
         }, 0n);

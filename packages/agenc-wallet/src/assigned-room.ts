@@ -99,7 +99,7 @@ export class AssignedRooms {
       },
     };
     return handleJobExchange(
-      wallet as unknown as ExchangeWallet,
+      wallet,
       host,
       { owner, ...(agent !== undefined && { agentId: agent }) },
       id,

@@ -115,7 +115,10 @@ export interface BusinessMethods {
 
 declare module "./types.js" {
   interface JobTerms {
-    inquiry?: Awaited<ReturnType<typeof import("./listing-exchange.js").selectedListingTerms>>;
+    inquiry?: Awaited<ReturnType<typeof import("./listing-exchange.js").selectedListingTerms>> & {
+      /** The wallet that funds and reviews the task: the buyer agent or the main wallet. */
+      payingCreator?: string;
+    };
   }
   interface WalletOverview {
     businessVersion?: 1;

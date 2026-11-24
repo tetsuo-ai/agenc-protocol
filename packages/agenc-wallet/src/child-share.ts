@@ -20,6 +20,8 @@ type Parties = {
   buyer: string;
   authority: string;
   claimedAt: string;
+  /** B: the stock task's claim generation, part of the exchange context. */
+  generation: string;
   room: string;
 };
 type Bundle = {

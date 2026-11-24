@@ -41,11 +41,10 @@ import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./selle
 import { checkHireOperator, checkOperator } from "./payable-operator.js";
 import { fillCatalogTerms, reducesListingCapacity, resolveTerms, sameChainTerms, sellerProceeds, storedTerms } from "./seller-terms.js";
 import { sellerListingSpec } from "./seller-terms.js";
-import { serviceEconomics } from "./service-economics.js";
 import { sameFundingLamports, sameServiceAdmission } from "./seller-funding-match.js";
 import { readServiceRehearsal } from "./service-rehearsal.js";
 import { fractionalQuoteUsd } from "./job-money.js";
-import { facade, findAgentStatsPda, getAgentStatsSize } from "@tetsuo-ai/marketplace-sdk";
+import { findAgentStatsPda, getAgentStatsSize } from "@tetsuo-ai/marketplace-sdk";
 import type { SellerOfferInput } from "./client/protocol.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
@@ -2701,7 +2700,7 @@ export class AgencWallet {
     return this.#jobView(this.#jobRecord(jobId), true);
   }
 
-  setListingInquiries(agentId: string, listing: string, inquiries: boolean) {
+  async setListingInquiries(agentId: string, listing: string, inquiries: boolean) {
     if (typeof inquiries !== "boolean" || !agentOffers(this.#agentRecord(agentId)).some(offer => offer.listing === listing && offer.listed))
       throw new WalletError("NOT_ALLOWED", "Choose a listing offered by this account.");
     this.#store.update(draft => {

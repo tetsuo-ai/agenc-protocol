@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { featureRoutes } from "../src/feature-dispatch.js";
-import { PENDING_FEATURE_METHODS } from "../src/pending-feature-wallet.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
 import { AgencWallet } from "../src/wallet.js";
 
@@ -63,9 +62,14 @@ describe("feature routes use the feature owners' handlers", () => {
     expect(await code(() => routes()["listings.inquiries"]({ listing: "x" }, agent))).toBe("NOT_AVAILABLE");
   });
 
-  it("lists only methods the wallet still lacks (delete the stand-in once they land)", () => {
-    for (const method of PENDING_FEATURE_METHODS) {
-      expect(typeof (AgencWallet.prototype as unknown as Record<string, unknown>)[method], method).not.toBe("function");
+  it("reaches real wallet methods for every money and listing route (no stand-in left)", () => {
+    const methods = [
+      "quoteTransfer", "confirmTransfer", "pendingTransfers", "operationOutcome", "moneyHistory", "quoteRating",
+      "publishOrdinaryReview", "contestRegistrations", "quoteContestRetirement", "retireContestRegistration",
+      "sellerOperation", "setListingInquiries", "listingExchange", "postListingMessage",
+    ];
+    for (const method of methods) {
+      expect(typeof (AgencWallet.prototype as unknown as Record<string, unknown>)[method], method).toBe("function");
     }
   });
 });
