@@ -13,7 +13,7 @@ import { approvedRecipient } from "./private-inputs.js";
 import { walletRoomWork } from "./room-work.js";
 import { ExchangeJournal, JobExchange, approvedOutputs, approvedRequirement, confirmedParties, stagePrivateInputs, privateRequirementFromSpec, privateOutputPointer, openBuyerOutput, openLegacyBuyerOutput, digest, type Parties, type PrivateBundle } from "./private-inputs.js";
 import type { DeliveryBinding, DeliveryChunkAck, OutputAgreement, PrivateInputPart } from "./client/job-exchange.js";
-import { DEFAULT_OUTPUT_AGREEMENT, checkOutputAgreement, outputAgreementCriterion, outputAgreementFromSpec } from "./client/job-exchange.js";
+import { DEFAULT_OUTPUT_AGREEMENT, OutputAgreementError, checkOutputAgreement, outputAgreementCriterion, outputAgreementFromSpec } from "./client/job-exchange.js";
 import { startProviderHeartbeat, type ServingListing } from "./client/provider-heartbeat.js";
 import { DEFAULT_EARN_IDLE_POLL_INTERVAL_MS } from "./earn.js";
 import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals, unresolvedChildDispatch } from "./business-backup.js";
@@ -227,6 +227,13 @@ function publishedOutputs(spec: Record<string, unknown>): OutputAgreement | unde
   catch { throw new WalletError("NOT_ALLOWED", "This job's agreed outputs are invalid. Review it in Market."); }
 }
 
+/** Why the wallet refuses a purchase's agreed outputs, in words for the person or the agent. */
+function refusedOutputsText(error: unknown): string {
+  return error instanceof OutputAgreementError && error.message.startsWith("\"")
+    ? error.message
+    : "Name up to eight distinct required files and say whether a text-only delivery is accepted.";
+}
+
 function laterRentText(request: boolean) {
   return request
     ? "The network's account deposits rose after you approved this request, so it was cancelled and the reward came back."
@@ -392,6 +399,11 @@ export interface WalletConfig {
   rateWindowMs?: number;
   /** Deadline per listing transport request or confirmation wait. Default 30 seconds. */
   listingTimeoutMs?: number;
+  /**
+   * The owner-only folder of the wallet's own socket. A private job's per-run exchange socket and token file are
+   * made there, so whatever keeps other programs away from the wallet's socket keeps them away from these too.
+   */
+  privateSocketDir?: string;
 }
 
 interface BalanceSnapshot {
@@ -657,6 +669,7 @@ export class AgencWallet {
         roomWork: config.earn?.roomWork ?? (agentId => walletRoomWork({
           session: task => this.#roomSession(agentId, task),
           stateDir: path.join(config.dataDir, "earn", "room-work", agentId),
+          ...(config.privateSocketDir !== undefined && { exchangeDir: config.privateSocketDir }),
         })) },
       dataDir: path.join(config.dataDir, "earn"),
       log: this.#log,
@@ -4759,6 +4772,11 @@ export class AgencWallet {
   }
 
   async stageJobInputs(files: PrivateInputPart[], recipient: string | null, processing: string, outputs?: OutputAgreement) {
+    // A file no delivery can carry is refused here, before the files are staged and any quote is made.
+    if (outputs !== undefined) {
+      try { checkOutputAgreement(outputs); }
+      catch (error) { throw new WalletError("BAD_REQUEST", refusedOutputsText(error)); }
+    }
     // Every new file set records an explicit output agreement, text allowed by default.
     return stagePrivateInputs(await this.#stagingJournal(), files, recipient, processing, outputs ?? DEFAULT_OUTPUT_AGREEMENT);
   }
@@ -4772,7 +4790,7 @@ export class AgencWallet {
   async #agreedOutputLine(requested: OutputAgreement | undefined, admission: PurchaseAdmission): Promise<string[]> {
     let wanted: OutputAgreement | undefined;
     try { wanted = requested === undefined ? undefined : checkOutputAgreement(requested); }
-    catch { throw new WalletError("BAD_REQUEST", "Name up to eight distinct required files and say whether a text-only delivery is accepted."); }
+    catch (error) { throw new WalletError("BAD_REQUEST", refusedOutputsText(error)); }
     if (admission.privateInputs) {
       const staged = approvedOutputs(await this.#stagingJournal(), admission.privateInputs);
       if (!staged) throw new WalletError("NOT_ALLOWED", "Choose the private files again so their agreed outputs are recorded.");

@@ -14,6 +14,7 @@ import type { JobView } from "./types.js";
 
 import { discoveryTool, findServices, type describeService } from "./discovery-tool.js";
 import { dollarsToCents, text, ToolInputError } from "./tool-input.js";
+import { AGREED_OUTPUT_KINDS, agreedOutputProblem } from "./delivery-files.js";
 
 const MAX_MARKET_ID_LENGTH = 128;
 
@@ -328,6 +329,11 @@ function outputsOf(args: Record<string, unknown>): { requiredFiles: string[]; al
     throw new ToolInputError("required_files must be up to 8 plain file names.");
   if (textOnly !== undefined && textOnly !== null && typeof textOnly !== "boolean") throw new ToolInputError("text_only_allowed must be true or false.");
   const requiredFiles = (files ?? []) as string[];
+  // Refused here, before the wallet is asked for anything: a name no delivery can carry.
+  for (const name of requiredFiles) {
+    const problem = agreedOutputProblem(name);
+    if (problem) throw new ToolInputError(`required_files: "${name}" cannot be a required file: ${problem}. A delivery carries these kinds of file: ${AGREED_OUTPUT_KINDS}.`);
+  }
   return { requiredFiles, allowTextOnly: typeof textOnly === "boolean" ? textOnly : requiredFiles.length === 0 };
 }
 

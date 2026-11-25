@@ -1,12 +1,16 @@
 // The job room program's link to the wallet's scoped private exchange for one run.
 // The wallet opens a per-run socket bound to the confirmed claim and room and
-// passes its path and a one-run token in the room's scope (`scope.exchange`).
+// passes its path, and the path of an owner-only file holding the one-run token,
+// in the room's scope (`scope.exchange`). The token itself is never in a
+// program's arguments or environment: other programs of the user can read those.
 // Only these operations exist: no money, no signing, no other job.
+import { lstatSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { ExchangeReceipt, JobMessage, PrivateRequirement } from "./job-exchange.js";
 
-export interface RoomExchangeAddress { socket: string; token: string }
+export interface RoomExchangeAddress { socket: string; tokenFile: string }
 export interface RoomBundle {
   processing?: string;
   outputs?: { requiredFiles: string[]; allowTextOnly: boolean };
@@ -18,15 +22,33 @@ export interface RoomBundle {
 export const ROOM_EXCHANGE_METHODS = ["roomInputs", "importInputs", "returnRoomOutput", "send", "roomTurnState", "status"] as const;
 
 export function checkRoomExchangeAddress(value: unknown): RoomExchangeAddress {
-  const v = value as Partial<RoomExchangeAddress> | null;
-  if (!v || typeof v.socket !== "string" || !v.socket.startsWith("/") || typeof v.token !== "string" || !/^[a-f0-9]{64}$/.test(v.token))
+  const v = value as (Partial<RoomExchangeAddress> & { token?: unknown }) | null;
+  // A token in the scope came through a program's arguments: an older wallet. Never used.
+  if (!v || v.token !== undefined || typeof v.socket !== "string" || !v.socket.startsWith("/") ||
+      typeof v.tokenFile !== "string" || !v.tokenFile.startsWith("/") || dirname(v.tokenFile) !== dirname(v.socket))
     throw new Error("The private exchange link is not valid.");
-  return { socket: v.socket, token: v.token };
+  return { socket: v.socket, tokenFile: v.tokenFile };
+}
+
+/** The one-run token, from the wallet's owner-only file in its owner-only folder. */
+function readRoomExchangeToken(address: RoomExchangeAddress): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const mine = (path: string, folder: boolean) => {
+    const info = lstatSync(path);
+    return (folder ? info.isDirectory() : info.isFile()) && (uid === null || info.uid === uid) && (info.mode & 0o077) === 0;
+  };
+  let token = "";
+  try {
+    if (mine(dirname(address.tokenFile), true) && mine(address.tokenFile, false)) token = readFileSync(address.tokenFile, "utf8");
+  } catch { /* refused below */ }
+  if (!/^[a-f0-9]{64}$/.test(token)) throw new Error("The private exchange link is not valid.");
+  return token;
 }
 
 /** One connection per run. Each call is answered in order. */
 export async function connectRoomExchange(address: RoomExchangeAddress) {
-  const { socket: path, token } = checkRoomExchangeAddress(address);
+  const checked = checkRoomExchangeAddress(address);
+  const path = checked.socket, token = readRoomExchangeToken(checked);
   const socket = connect(path);
   await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
   const lines = createInterface({ input: socket })[Symbol.asyncIterator]();

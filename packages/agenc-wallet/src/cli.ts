@@ -321,6 +321,8 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
     earn: withAgentExecutors(earnOptions(bootstrap), bootstrap.earn?.agentExecutors,
       (executor) => earnOptions({ ...bootstrap, earn: { executor: executor as never } }).executor),
     log,
+    // A private job's exchange is served beside the wallet's own socket (a named pipe on Windows has no folder).
+    ...(process.platform !== "win32" && { privateSocketDir: path.dirname(target.socketPath) }),
   });
   if (sandbox !== null) {
     const practice = BigInt(bootstrap.practiceLamports ?? "500000000");

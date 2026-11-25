@@ -339,6 +339,17 @@ describe("a service as an agent reads it", () => {
     ]);
     expect((await runMarketTool(client, "agent_1", "market_post", { request: "A", reward_usd: 1, required_files: ["../x"] })).ok).toBe(false);
     expect(calls).toHaveLength(3);
+    // A name no delivery can carry is refused with the kinds named, on a post and on a hire, and the wallet is never asked.
+    for (const name of ["report.xlsx", "Makefile", "tool.exe", "photo.jpg"]) {
+      const post = await runMarketTool(client, "agent_1", "market_post", { request: "A", reward_usd: 1, required_files: ["ok.csv", name] });
+      const hire = await runMarketTool(client, "agent_1", "market_hire", { service: SERVICE.listing, request: "A", required_files: [name] });
+      for (const answer of [post, hire]) {
+        expect(answer.ok, name).toBe(false);
+        expect(JSON.stringify(answer), name).toContain(`\\"${name}\\" cannot be a required file`);
+        expect(JSON.stringify(answer), name).toContain(".png, .webp, .pdf, .zip, .txt, .md, .csv, .json");
+      }
+    }
+    expect(calls).toHaveLength(3);
   });
 
   it("rejects invalid filters or offsets without making a wallet call", async () => {
