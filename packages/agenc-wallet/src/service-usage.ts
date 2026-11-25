@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type { ServiceUsage } from "./client/seller-terms.js";
+import { serviceBudget } from "./service-budget.js";
 export type { ServiceUsage } from "./client/seller-terms.js";
 
 declare module "./store.js" {
@@ -40,5 +41,6 @@ export function serviceUsage(stateDir: string, task: string): ServiceUsage | nul
       costUsd = null;
     }
   }
-  return files.length ? { reservedCents, unknownReservedCents, costUsd, runs: files.length } : null;
+  const budgetCents = serviceBudget(stateDir, task);
+  return files.length ? { reservedCents, unknownReservedCents, costUsd, runs: files.length, ...(budgetCents !== null && { budgetCents }) } : null;
 }

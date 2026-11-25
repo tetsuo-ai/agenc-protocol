@@ -12,6 +12,7 @@ import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
 import { deliveryFileProblem } from "./client/delivery-files.js";
 import { reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
+import { recordServiceBudget } from "./service-budget.js";
 import { readServiceRehearsal } from "./service-rehearsal.js";
 import { validServicePin, type SellerTerms } from "./client/seller-terms.js";
 import { serviceEconomics } from "./service-economics.js";
@@ -907,7 +908,7 @@ export class EarnHost {
           ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
         }).modelBudgetCents;
       },
-      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance) => {
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents) => {
         // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
         const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
         const ownRequest = this.#ownAddresses().includes(task.creator);
@@ -935,6 +936,8 @@ export class EarnHost {
         }
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
         const receipt = reservedCents ? reserveServiceRun(stateDir, address, reservedCents) : null;
+        // The job view names the whole job's limit, the figure the claim quote gave (rt5 A 6).
+        if (receipt && budgetTotalCents) recordServiceBudget(stateDir, address, budgetTotalCents);
         // D's paired peer gets the verified request, usage reservation and the buyer-approved processing (or null).
         const privateProcessing = paired ? await this.#privateProcessing(agent.agentId, address).catch(() => null) : undefined;
         return executor.argv.flatMap(part => {

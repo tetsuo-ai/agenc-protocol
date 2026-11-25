@@ -92,6 +92,6 @@ it.skipIf(!program || !assets).each(["register", "upgrade"])("rehearses and serv
       expect(credit.usdCents).toBeGreaterThan(0);
       await panel({ mode: "margin", usage, credit, expectedMargin: "$" + (credit.usdCents! / 100).toFixed(2) });
     }
-    expect(usage).toMatchObject({ costUsd: 0, reservedCents: 10, runs: 1 });
+    expect(usage).toMatchObject({ costUsd: 0, reservedCents: 10, runs: 1, budgetCents: 10 });
   } finally { await buyerWallet.close(); await world.wallet.close(); }
 }, 360000);

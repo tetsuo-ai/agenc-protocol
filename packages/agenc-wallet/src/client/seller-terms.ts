@@ -49,6 +49,8 @@ export interface SellerFundingRows {
 export interface ServiceUsage {
   reservedCents: number;
   unknownReservedCents?: number;
+  /** The whole job's model spending limit, first run and revisions together, when the worker recorded it. */
+  budgetCents?: number;
   costUsd: number | null;
   runs: number;
 }

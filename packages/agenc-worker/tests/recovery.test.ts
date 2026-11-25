@@ -3135,7 +3135,9 @@ describe("durable whole-task model authorization", () => {
     const price = vi.fn(async () => 5000);
     ctx.modelBudgetForTask = price;
     const budgets: number[] = [];
-    ctx.executorForTask = async (_task, _address, reserved) => {
+    const totals: (number | undefined)[] = [];
+    ctx.executorForTask = async (_task, _address, reserved, _listing, _metadata, _request, _acceptance, total) => {
+      totals.push(total);
       // The host cannot begin until the reservation has reached durable storage.
       expect(loadState(stateDir).openClaim?.modelBudget).toEqual({ totalCents: 50, remainingCents: 0 });
       budgets.push(reserved!);
@@ -3165,6 +3167,8 @@ describe("durable whole-task model authorization", () => {
       await resumeOpenClaim({ ...ctx }, agent);
     }
     expect(budgets).toEqual(mode === "legacy" || mode === "exhausted" ? [] : [50]);
+    // The run also hears the whole job's budget, which the seller's job view names (rt5 A 6).
+    expect(totals).toEqual(mode === "legacy" || mode === "exhausted" ? [] : [50]);
     expect(price).not.toHaveBeenCalled();
     expect(loadState(stateDir).openClaim).toBeNull();
     expect(loadState(stateDir).failedJobs).toHaveLength(1);

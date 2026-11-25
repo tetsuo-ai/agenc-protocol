@@ -270,7 +270,7 @@ export type WorkerContext = {
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
   /** `acceptance` is the verified spec's criteria, including the wallet's agreed-outputs line. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[]) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number) => Promise<string[]>;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
   reserveRevisionBudget?: boolean;
   /** Only the isolated job-room adapter supplies its input validator. */
@@ -1966,12 +1966,15 @@ async function executeAndSubmit(
       stdout = result.stdout;
     } else {
       let reservedCents: number | undefined;
+      /** The whole job's model budget, of which this run holds `reservedCents` (the rest waits for revisions). */
+      let budgetTotalCents: number | undefined;
       if (ctx.modelBudgetForTask !== undefined) {
         const state = loadState(ctx.stateDir);
         const marker = state.openClaim;
         if (marker?.task !== task) throw new Error("Cannot authorize untracked work.");
         // Legacy/incomplete attempts have unknown spend. Never replenish them.
         reservedCents = marker.modelBudget?.remainingCents ?? 0;
+        budgetTotalCents = marker.modelBudget?.totalCents;
         if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
         if (ctx.modelSpendDir) {
           const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
@@ -1986,7 +1989,7 @@ async function executeAndSubmit(
       if (!execute) throw new Error("This revision needs an isolated job room.");
       const executeTurn = turn?.state === "ready" ? turn.execute : execute;
       const result = await executeTurn({
-        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance),
+        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents),
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
         timeoutMs: ctx.config.executorTimeoutMs,
