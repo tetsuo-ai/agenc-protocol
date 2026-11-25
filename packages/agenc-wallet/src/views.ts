@@ -2,6 +2,7 @@ import type {} from "./service-usage.js";
 // Turn the journal's records into what a person reads.
 import { contestPage } from "./contest-page.js";
 import { fractionalQuoteUsd } from "./job-money.js";
+import { givenBackHireText, hireRefundAt, workingHireText } from "./hire-wait-words.js";
 import { formatMoney, formatUsd, formatWait } from "./client/format.js";
 import type {
   ActivityView,
@@ -222,11 +223,12 @@ function statusText(
     case "starting":
       return "Placing the order.";
     case "waiting":
+      if (job.providerGaveBack) return givenBackHireText(hireRefundAt(job), now);
       return job.autoRefundAt !== null
         ? `Waiting for the provider to start. If nobody does, the job is cancelled and the price comes back ${formatWait(job.autoRefundAt, now)}.`
         : "Waiting for the provider to start.";
     case "working":
-      return "The provider is working on it.";
+      return workingHireText(job.deadline, now);
     case "changes_requested":
       return "Changes were asked for. The provider is working on them.";
     case "delivered":
