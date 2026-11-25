@@ -118,6 +118,7 @@ import { firstPartyAccounts } from "./first-party.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import { jobListPreview } from "./list-preview.js";
+import { countRatingSpend, servedHireRating } from "./rating-views.js";
 import {
   acceptedApprovers,
   canRateHire, landedRating,
@@ -1318,6 +1319,10 @@ export class AgencWallet {
       view.rating = await landedRating(this.#chain, task, buyer, listing).catch(() => null);
       view.canRate = view.canRate && view.rating === null && (isOwner || job.payer === "agent") &&
         await canRateHire(this.#chain, task, buyer, listing).catch(() => false);
+    }
+    if (job.role === "working" && job.outcome === "paid" && job.task && job.listing) {
+      // The seller sees the stars the buyer gave its own listing (rt5 A 2).
+      view.rating = await servedHireRating(this.#chain, job.task as Address, job.listing as Address).catch(() => null);
     }
     if (this.#store.state.taskReviews?.[job.id]?.published) Object.assign(view, { creatorReview: this.#store.state.taskReviews[job.id]!.packet.review });
     if (this.#store.state.requestedRatings?.[job.id]) Object.assign(view, { pendingRating: this.#store.state.requestedRatings[job.id] });
@@ -5758,7 +5763,17 @@ export class AgencWallet {
         if (op.state !== "confirmed") throw new WalletError("NETWORK", `Rating ${quote.id} is ${op.state}. Check its signature.`);
         actual = await landedRating(this.#chain, task, buyer, listing);
         if (actual === null) throw new WalletError("NETWORK", "Waiting for the rating receipt.");
-        this.#patchJob(jobId, j => { j.signatures.rate = op.receipt.signature; });
+        this.#patchJob(jobId, (j, draft) => {
+          const first = !j.signatures.rate;
+          j.signatures.rate = op.receipt.signature;
+          if (!first) return;
+          // The stars' debit is spending on this job: count it in "Spent on jobs" and say it in Lately (rt5 A 2).
+          countRatingSpend(draft, j, BigInt(quote.maximumDebit.lamports));
+          this.#note(draft, { kind: "paid", text: `Paid for the stars on ${j.title}.`, lamports: BigInt(quote.maximumDebit.lamports),
+            agentId: j.agentId, jobId: j.id, signature: op.receipt.signature });
+        });
+        this.#emit({ type: "activity" });
+        this.#emit({ type: "overview" });
       }
       this.#patchJob(jobId, (j, draft) => {
         j.rating = actual;

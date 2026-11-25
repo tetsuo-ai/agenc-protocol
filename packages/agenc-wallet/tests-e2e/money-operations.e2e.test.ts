@@ -101,10 +101,17 @@ it("binds the original payer, stars and cost, enforces allowance, and reads the 
   await expect(wallet.rateJob(main.job.id, 3, false, a.id, q.id)).rejects.toThrow();
   await expect(wallet.rateJob(main.job.id, 4, true, undefined, q.id)).rejects.toThrow();
   const conflict = await wallet.quoteRating(main.job.id, 1, true);
+  const spentBefore = BigInt((await wallet.overview()).agents.find(x => x.id === a.id)!.spent.lamports);
   expect((await wallet.rateJob(main.job.id, 3, true, undefined, q.id)).rating).toBe(3);
   const after = await w.balance(wallet.mainAddress);
   expect((await wallet.rateJob(main.job.id, 1, true, undefined, conflict.id)).rating).toBe(3);
   expect(await w.balance(wallet.mainAddress)).toBe(after);
+  // rt5 A 2: the stars' debit is spent on the job, once, and Lately says so.
+  const spentAfter = BigInt((await wallet.overview()).agents.find(x => x.id === a.id)!.spent.lamports);
+  expect(spentAfter - spentBefore).toBe(BigInt(q.maximumDebit.lamports));
+  const notes = (await wallet.listActivity()).filter(entry => entry.text.startsWith("Paid for the stars on"));
+  expect(notes).toHaveLength(1);
+  expect(notes[0]!.amount?.lamports).toBe(q.maximumDebit.lamports);
 
   await wallet.setPolicy(a.id, { askAboveCents: 1000, refill: REVIEW_ALLOWANCE });
   await wallet.fundAgent(a.id, { lamports: String(SOL) });
