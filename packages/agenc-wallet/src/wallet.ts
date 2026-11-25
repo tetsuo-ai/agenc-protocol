@@ -2872,7 +2872,8 @@ export class AgencWallet {
     const rate = await this.#freshRate(true);
     if (rate === null) throw new WalletError("NETWORK", "Dollar prices are not available right now, so the price limit cannot be checked.");
     // Only a limit the buyer gave is a dollar bound. Without one the quoted lamports and expiry bind.
-    checkPriceLimit(BigInt(job.priceLamports), buyerPriceLimit(job), rate);
+    // A contest keeps its exact dollar total: its approval may include a stated overage of the daily allowance.
+    checkPriceLimit(BigInt(job.priceLamports), job.terms?.contest ? job.maxPriceCents : buyerPriceLimit(job), rate);
     const { protocolFeeBps } = await readProtocolConfig(this.#chain);
     if (!isRequest(job)) {
       const listing = await readHireableListing(this.#chain, toAddress(job.listing, "service"));

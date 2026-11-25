@@ -102,8 +102,9 @@ it.each([
   }
   world.wallet = await world.reopen();
   rate = 110;
-  await expect(world.wallet.decideApproval(first.id, true)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
   if (maxPriceCents !== undefined) {
+    // A limit the buyer gave binds in dollars: the same lamports now cost more than it allows.
+    await expect(world.wallet.decideApproval(first.id, true)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
     await expect(world.wallet.refreshApproval(first.id)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
     expect((await world.wallet.listApprovals())[0]!.id).toBe(first.id);
     return;
