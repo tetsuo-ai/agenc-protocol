@@ -5944,7 +5944,7 @@ export class AgencWallet {
         throw new WalletError("NOT_ALLOWED", "This job is no longer available for that action.");
       const quote: WorkerQuote = {
         id: newId("work"), agentId, action, job: view, ...quoteTransfers(job, action, rate),
-        dailyRemaining: money(this.#dailyRoom(this.#agentRecord(agentId), rate), rate),
+        dailyRemaining: money(this.#workRoom(this.#agentRecord(agentId), rate), rate),
         expiresAt: quotedAt + Math.min(5 * 60_000, lifetime),
       };
       const terms = workAuthorizationTerms(job, action);
@@ -5984,7 +5984,7 @@ export class AgencWallet {
         signal.throwIfAborted();
         if (rate === undefined || this.#now() >= entry.quote.expiresAt)
           throw new WalletError("NOT_ALLOWED", "Review a new job quote.");
-        if (amount > this.#dailyRoom(this.#agentRecord(agentId), rate))
+        if (amount > this.#workRoom(this.#agentRecord(agentId), rate))
           throw new WalletError("NOT_ALLOWED", "This job exceeds the agent's remaining daily allowance.");
       };
       const authorize = async (current: OpenWork | HeldWork) => {
@@ -6084,6 +6084,20 @@ export class AgencWallet {
     if (rate === null || !rule.enabled || rule.perDayCents <= 0) return 0n;
     const rateMicros = BigInt(Math.ceil(rate * 1_000_000));
     const remaining = remainingJobMicrocents(agent, this.#now(), except, reviewFor, rate);
+    return remaining <= 0n ? 0n : (remaining * 10_000_000n) / rateMicros;
+  }
+
+  /**
+   * A worker action spends the agent's own money. A top-up that moved that
+   * money in was already counted against the day when it moved, so count only
+   * what the agent spends, as a hire does. Counting both left $0.00 right
+   * after the person raised the daily amount.
+   */
+  #workRoom(agent: AgentRecord, rate: number | null): bigint {
+    const rule = agent.policy.refill;
+    if (rate === null || !rule.enabled || rule.perDayCents <= 0) return 0n;
+    const rateMicros = BigInt(Math.ceil(rate * 1_000_000));
+    const remaining = remainingJobMicrocents(agent, this.#now());
     return remaining <= 0n ? 0n : (remaining * 10_000_000n) / rateMicros;
   }
 
