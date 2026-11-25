@@ -48,6 +48,7 @@ import {
 } from "./settlement.js";
 import { readProtocolConfig } from "./market.js";
 import { reviewBlockhash } from "./review-blockhash.js";
+import { provenNeverLanded } from "./send-expiry.js";
 import { deliveryBeforeDecision, readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
 import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
@@ -90,6 +91,12 @@ export interface Chain {
   /** Actual fee and payer debit from a confirmed review receipt. */
   reviewDebit?(signature: string, payer: Address): Promise<{ fee: bigint; debit: bigint } | null>;
   listingSendOutcome?(receipt: PendingListingSend): Promise<ListingSendOutcome>;
+  /**
+   * True only on proof that the saved signed transaction never landed and can
+   * no longer land (see send-expiry.ts). False, absent or a thrown error means
+   * "not proven": the payment stays pending and its payer stays held.
+   */
+  sendNeverLands?(receipt: PendingListingSend): Promise<boolean>;
   /** True only after confirmation, failure, or verified expiry of an interrupted listing send. */
   listingSendSettled?(receipt: PendingListingSend): Promise<boolean>;
   /**
@@ -416,7 +423,10 @@ export function createRpcChain(options: RpcChainOptions): Chain {
   }
   async function listingSendOutcome(receipt: PendingListingSend): Promise<ListingSendOutcome> {
     const outcome = await reviewSendOutcome(receipt);
-    return outcome === "expired" ? receipt.operation?.kind === "funding" && receipt.operation.decision ? "pending" : "failed" : outcome;
+    if (outcome !== "expired") return outcome;
+    if (!(receipt.operation?.kind === "funding" && receipt.operation.decision)) return "failed";
+    // An approved funding decision is settled as failed only on proof that it can never land.
+    return await provenNeverLanded(rpc, receipt).catch(() => false) ? "failed" : "pending";
   }
   const reviewTransactions = new Map<string, readonly ReviewAnchor[]>();
   const chain: Chain = usesScopedRequests<Chain>({
@@ -424,6 +434,7 @@ export function createRpcChain(options: RpcChainOptions): Chain {
     accountChanges: (account, before, until) => readChangePage(rpc, account, before, until),
     operationBlockhashValid: async hash => (await rpc.isBlockhashValid(hash, { commitment: "confirmed" }).send()).value,
     reviewSendOutcome,
+    sendNeverLands: receipt => provenNeverLanded(rpc, receipt),
     async reviewDebit(signature, payer) {
       const tx = await rpc.getTransaction(signature as Signature, {
         commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0,

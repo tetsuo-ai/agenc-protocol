@@ -50,7 +50,32 @@ function settleOperation(store: StateStore, id: string, state: "confirmed" | "fa
   });
 }
 
-export async function reconcileOperation(chain: Chain, store: StateStore, id: string) {
+/**
+ * Settle a signed operation as failed once the chain proves it can never land,
+ * and give back what it held, as the pre-broadcast refusal does. Without the
+ * proof (also when the network cannot be asked) it stays pending.
+ */
+async function releaseExpired(chain: Chain, store: StateStore, id: string, released?: OperationRelease) {
+  const saved = store.operation(id);
+  if (saved?.state !== "pending") return;
+  if (await chain.sendNeverLands?.(saved.receipt).catch(() => false) !== true) return;
+  store.update(draft => {
+    const row = draft.moneyOperations?.[id];
+    if (row?.state !== "pending" || row.receipt.signature !== saved.receipt.signature) return;
+    row.state = "failed";
+    if (row.allowance) {
+      const agent = draft.agents[row.allowance.agentId];
+      if (agent) agent.jobSpends = (agent.jobSpends ?? []).filter(spend => spend.id !== id);
+      delete row.allowance;
+    }
+    released?.(draft, row);
+  });
+}
+
+/** What else an operation reserved when it was signed, given back in the same write that fails it. */
+export type OperationRelease = (draft: WalletState, operation: MoneyOperation) => void;
+
+export async function reconcileOperation(chain: Chain, store: StateStore, id: string, released?: OperationRelease) {
   const saved = store.operation(id);
   if (!saved) return saved;
   if (saved.network && saved.network !== chain.network)
@@ -59,6 +84,8 @@ export async function reconcileOperation(chain: Chain, store: StateStore, id: st
   // A missing or pruned signature, even after expiry, is not proof of failure.
   if (outcome === "landed" || outcome === "failed")
     settleOperation(store, id, outcome === "landed" ? "confirmed" : "failed");
+  // Only the chain's own proof that the signed bytes can never land is.
+  else if (outcome === "expired") await releaseExpired(chain, store, id, released);
   const current = store.operation(id)!;
   if (current.state === "failed" && current.allowance) {
     const debit = await chain.accountChange?.(current.payer as Address, current.receipt.signature).catch(() => null);
@@ -85,7 +112,8 @@ export async function sendOperation(options: {
   reserve?: (draft: WalletState, receipt: PendingListingSend) => void;
 }): Promise<MoneyOperation> {
   const { chain, store, signer, id, fingerprint } = options;
-  const prior = await reconcileOperation(chain, store, id);
+  const released: OperationRelease = (draft, row) => options.refused?.(draft, row.receipt);
+  const prior = await reconcileOperation(chain, store, id, released);
   const client = chain.clientFor(signer);
   const transport = client.transport;
   if (prior) {
@@ -98,7 +126,7 @@ export async function sendOperation(options: {
       if (result?.signature === prior.receipt.signature)
         settleOperation(store, id, "confirmed");
     }
-    return (await reconcileOperation(chain, store, id))!;
+    return (await reconcileOperation(chain, store, id, released))!;
   }
 
   if (!recordsSignedOperations(transport))
@@ -146,7 +174,7 @@ export async function sendOperation(options: {
         options.refused?.(draft, row.receipt);
       });
     } else {
-      await reconcileOperation(chain, store, id).catch(() => undefined);
+      await reconcileOperation(chain, store, id, released).catch(() => undefined);
     }
   }
   return store.operation(id)!;

@@ -33,6 +33,7 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   getSignatureFromTransaction,
+  getTransactionDecoder,
   type Address,
   type Instruction,
   type KeyPairSigner,
@@ -594,6 +595,13 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       return paid?.payer === payer ? paid : null;
     },
     listingSendOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : "failed",
+    // The local chain refuses a saved transaction for good once its blockhash is replaced.
+    sendNeverLands: async ({ signature, signedTransaction }) => {
+      if (!signedTransaction || landedListingSends.has(signature) || failedReviewSends.has(signature) || inFlight.has(signature)) return false;
+      const saved = getTransactionDecoder().decode(Buffer.from(signedTransaction, "base64"));
+      return getSignatureFromTransaction(saved) === signature &&
+        getCompiledTransactionMessageDecoder().decode(saved.messageBytes).lifetimeToken !== svm.latestBlockhash();
+    },
     listingSendSettled: async () => true,
     workOutcome: async ({ signature }) => landedListingSends.has(signature) ? "landed" : failedWorkSends.has(signature) ? "failed" : inFlight.has(signature) ? "pending" : "expired",
     async balanceAfter(tx, payer) {

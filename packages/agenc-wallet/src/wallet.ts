@@ -3,7 +3,7 @@ import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/ta
 import type { HistoryQuery } from "./client/money-operations.js";
 import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
-import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
+import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type MoneyOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { currentSubmission, verifiedEvidence, readEvidenceChunk, acknowledgeEvidenceChunk, requireInspection } from "./delivery-evidence.js";
 import { reviewerScope, roomImportEvidence, type RoomImportScope } from "./delivery-evidence.js";
 import { localExchangeHistory, rememberExchange } from "./exchange-history.js";
@@ -1598,6 +1598,8 @@ export class AgencWallet {
         if (agent.earn.sellerDecisions?.[operation.decision.quoteId]) return;
         recordSellerDecision(agent, operation.decision, landed, signature, operation.lamports);
         if (landed) agentOffers(agent).forEach(clearOfferFundingWait);
+        // Nothing moved: the allowance the decision reserved is free again.
+        else if (operation.charge) agent.refills = agent.refills.filter(row => row.signature !== undefined || row.id !== operation.charge!.id);
       }
       if (!landed || !operation) return;
       if (operation.kind === "funding") {
@@ -1809,8 +1811,27 @@ export class AgencWallet {
     });
   }
 
+  /**
+   * A funding whose signed transfer provably never landed and never can: drop
+   * its journal entry and the allowance it reserved, and close its decision as
+   * not funded, as the pre-broadcast refusal in `#mainToAgent` does.
+   */
+  #releaseFunding(draft: WalletState, op: MoneyOperation): void {
+    if (op.kind !== "fund") return;
+    for (const agent of Object.values(draft.agents)) {
+      if (agent.address !== op.recipient) continue;
+      const sent = agent.earn.pendingListingSends?.find(row => row.signature === op.receipt.signature);
+      const funding = sent?.operation?.kind === "funding" ? sent.operation : undefined;
+      if (sent) agent.earn.pendingListingSends = agent.earn.pendingListingSends!.filter(row => row !== sent);
+      // A charge with a signature belongs to a transfer that landed.
+      agent.refills = agent.refills.filter(row => row.signature !== undefined || (row.id !== op.id && row.id !== funding?.charge?.id));
+      if (funding?.decision && !agent.earn.sellerDecisions?.[funding.decision.quoteId])
+        recordSellerDecision(agent, funding.decision, false, op.receipt.signature, funding.lamports);
+    }
+  }
+
   async operationOutcome(id: string) {
-    const saved = await reconcileOperation(this.#chain, this.#store, id);
+    const saved = await reconcileOperation(this.#chain, this.#store, id, (draft, op) => this.#releaseFunding(draft, op));
     if (!saved) return null;
     const { receipt, allowance: _allowance, ...outcome } = saved;
     return { ...outcome, signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight,
@@ -1887,8 +1908,13 @@ export class AgencWallet {
           throw new WalletError("NOT_ALLOWED", "The funding signature belongs to a different network.");
         const outcome = operation.decision ? await this.#chain.listingSendOutcome?.(receipt) :
           await this.#chain.reviewSendOutcome?.(receipt);
-        if (outcome !== "landed" && outcome !== "failed")
+        if (outcome !== "landed" && outcome !== "failed") {
+          // A funding sent as a journaled operation is released only by that
+          // operation's own proof that it can never land.
+          const sent = Object.values(this.#store.state.moneyOperations ?? {}).find(row => row.receipt.signature === receipt.signature);
+          if (sent && (await this.operationOutcome(sent.id))?.state === "failed") continue;
           throw new WalletError("NOT_AVAILABLE", `Funding is awaiting confirmation. Check receipt ${receipt.signature}.`);
+        }
         this.#finishListingSend(agent.id, receipt.signature, outcome === "landed");
       }
     }
@@ -7535,6 +7561,11 @@ export class AgencWallet {
 
   /** Apply each agent's top-up rule. */
   async #refill(): Promise<void> {
+    // A top-up whose broadcast was lost holds the day's allowance. Settle it
+    // first: once the chain proves it can never land, its reservation is free.
+    for (const op of Object.values(this.#store.state.moneyOperations ?? {})) {
+      if (op.state === "pending") await this.operationOutcome(op.id).catch(() => null);
+    }
     const rate = await this.#freshRate().catch(() => null);
     if (rate === null) return;
     for (const agent of Object.values(this.#store.state.agents)) {
