@@ -31,7 +31,7 @@ it("pays an agent-paid delivery on the person's yes above the daily amount, once
   const paid = await confirmPayout(wallet, jobId);
   expect(paid.status).toBe("paid");
   // The charge is still counted against the agent's day.
-  expect(state().agents[agent.id]!.refills.some(entry => entry.id.startsWith("review:" + jobId))).toBe(true);
+  expect(state().agents[agent.id]!.refills.some(entry => entry.id?.startsWith("review:" + jobId) === true)).toBe(true);
   // A second approval of the same delivery is refused: the yes covers it once.
   const { quote } = await wallet.reviewRecord(jobId, undefined, { termsOnly: true });
   expect(quote?.canPay ?? false).toBe(false);
