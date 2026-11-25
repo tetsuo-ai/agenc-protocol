@@ -325,6 +325,17 @@ export class EarnHost {
       : { state: running.state, lastError: running.lastError };
   }
 
+  /** Whether one of these agents took the task, gave it up and gave its claim back. */
+  gaveBack(agentIds: readonly string[], task: string): boolean {
+    return agentIds.some((agentId) => {
+      try {
+        return loadState(this.stateDir(agentId)).failedJobs.some((job) => job.task === task && job.claimReleased);
+      } catch {
+        return false;
+      }
+    });
+  }
+
   /** Include a claim awaiting upload/submission recovery, even after its loop ends. */
   hasUnfinishedJob(agentId: string): boolean {
     if (this.#running.get(agentId)?.state === "working") return true;

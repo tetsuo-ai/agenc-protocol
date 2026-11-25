@@ -3966,7 +3966,11 @@ export class AgencWallet {
       return;
     }
 
-    if (!request && job.chainStatus === "in_progress" && seen.status === "open" && seen.workers === 0 && !job.providerGaveBack) {
+    if (!request && seen.status === "open" && seen.workers === 0 && !job.providerGaveBack && (
+      job.chainStatus === "in_progress" ||
+      // A claim taken and given back between two looks: this wallet's own seller gave it up.
+      this.#earn.gaveBack(Object.keys(this.#store.state.agents), task)
+    )) {
       // The provider started this hire and gave it back: say so, not "waiting to start".
       this.#patchJob(job.id, (entry) => { entry.providerGaveBack = true; });
     }
