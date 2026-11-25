@@ -34,7 +34,13 @@ describe("approvals", () => {
 
     // The agent-side wait resolves once the person answers.
     const waiting = wallet.waitApproval(approval!.id, 10_000);
+    // The person answers two minutes after the agent asked (rt5 A 5: "Hired" counted from the ask).
+    world.clock.now += 2 * 60_000;
+    const approvedAt = world.clock.now;
     const posted = await wallet.decideApproval(approval!.id, true);
+    const landed = await wallet.getJob(job.id, true);
+    expect(landed.createdAt).toBeLessThan(approvedAt);
+    expect(landed.hiredAt).toBeGreaterThanOrEqual(approvedAt);
     expect(posted.status).toBe("waiting");
     expect((await waiting).decided).toBe(true);
     expect(await world.balance(agent.address)).toBe(0n);

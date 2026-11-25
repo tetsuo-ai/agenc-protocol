@@ -436,6 +436,8 @@ export interface JobView {
   contestReleaseOpen?: boolean;
   /** Deadline observed on the marketplace after funding, in Unix seconds. */
   marketplaceDeadline?: number;
+  /** When the hire or request landed on the marketplace, after the approval, in milliseconds. */
+  hiredAt?: number;
   terms?: JobTerms;
   /** List evidence was shortened or omitted. Use jobs.get/jobs.delivery for details. */
   previewTruncated?: boolean;

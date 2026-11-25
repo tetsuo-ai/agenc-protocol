@@ -334,6 +334,8 @@ export function jobView(
     ...(job.contestQuote && { contestQuote: structuredClone(job.contestQuote) }),
     ...(job.terms && { terms: structuredClone(job.terms) }),
     ...(job.deadline && job.deadline > 0 ? { marketplaceDeadline: job.deadline } : {}),
+    // When the hire landed, after the person's yes: "Hired ... ago" counts from here (rt5 A 5).
+    ...(typeof job.hiredAt === "number" && job.hiredAt > 0 && { hiredAt: job.hiredAt }),
     price,
     status,
     statusText: statusText(job, status, price, context.now, context.usdPerSol),
