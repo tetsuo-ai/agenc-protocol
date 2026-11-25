@@ -334,6 +334,40 @@ async function attemptFreshClaimWithHireSnapshot(
   };
 }
 
+describe("fresh-claim funding shortfall", () => {
+  it("skips a job it cannot fund as retryable, names the shortfall and sends nothing", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-funding-short-"));
+    const payload = { title: "direct task", summary: "underfunded seller" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(JSON.stringify({
+      integrity: { algorithm: "sha256", canonicalization: "json-stable-v1", payloadHash: digest.hex },
+      payload,
+    }));
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Open)],
+      [jobSpecPda, new Uint8Array(getTaskJobSpecEncoder().encode({
+        task: TASK, creator: CREATOR, jobSpecHash: digest.bytes, jobSpecUri: SPEC_URI,
+        createdAt: 1n, updatedAt: 1n, bump: 248, reserved: new Uint8Array(7),
+      }))],
+    ]);
+    const claimTaskWithJobSpec = vi.fn(async () => { throw new AgencError("must not claim", { signature: null }); });
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, events);
+    ctx.readAccountInfo = async () => null;
+    ctx.fetchUri = async () => body;
+    ctx.getBalance = async () => 2_967_200n;
+    const outcome = await processCandidate(ctx, agent, {
+      task: TASK, creator: CREATOR, rewardAmount: REWARD, rewardMint: null, requiredCapabilities: 1n, parentTask: PARENT,
+    });
+    expect(outcome).toMatchObject({ status: "skipped", task: TASK, retryable: true });
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    const short = events.find((event) => event.event === "task.funding-short");
+    expect(short).toMatchObject({ task: TASK, balanceLamports: "2967200" });
+    expect(BigInt(short!.shortfallLamports as string)).toBe(BigInt(short!.requiredLamports as string) - 2_967_200n);
+  });
+});
+
 describe("transaction-boundary recovery", () => {
   it("treats a dusted empty canonical hire PDA as a direct task", async () => {
     const stateDir = mkdtempSync(
@@ -998,7 +1032,9 @@ describe("transaction-boundary recovery", () => {
       requiredCapabilities: 1n,
       parentTask: PARENT,
     };
-    await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow(
+    const outcome = await processCandidate(ctx, agent, candidate);
+    expect(outcome).toMatchObject({ status: "skipped", retryable: true });
+    expect(outcome.status === "skipped" ? outcome.reason : "").toMatch(
       new RegExp(
         `working this task needs at least ${required} lamports.*claim deposit ${deposit}.*worker record rent ${recordRent}.*1 more lamport`,
         "s",

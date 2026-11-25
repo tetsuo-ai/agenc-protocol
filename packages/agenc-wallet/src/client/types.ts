@@ -164,6 +164,13 @@ export interface EarnView {
    * still refuse then.
    */
   retire: { refusal: string | null } | null;
+  /**
+   * Present while a live service of this agent cannot take a hire because the
+   * agent's own money is short: the service, the exact amount to add and one
+   * plain sentence. Gone once the money is there; the worker then takes the
+   * job by itself, without switching Earns off and on.
+   */
+  needsMoney?: { service: string; amount: Money; text: string } | null;
 }
 
 export interface AgentView {

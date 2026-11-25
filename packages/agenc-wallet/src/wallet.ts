@@ -206,6 +206,8 @@ import { readAvailability, currentListingIdentity, publishListingMessage, readLi
 import { publicListingBrief, type ListingAgreement, type ListingMessage } from "./client/listing-exchange.js";
 import { ServiceDiscovery, recordRow, type ServiceContext } from "./service-discovery.js";
 import { priceCeiling } from "./price-ceiling.js";
+import { providerCannotFundText, serviceNeedsMoney } from "./service-needs-money.js";
+import { SERVICE_HOLD_APPROVAL, SERVICE_HOLD_RATING, SERVICE_HOLD_REFUSAL, serviceHoldLamports } from "./service-hold.js";
 import { DISCOVERY_CAPABILITY } from "./client/discovery.js";
 import { KeyVault } from "./vault.js";
 import { activityView, amountWords, approvalView, jobStatus, jobView, money } from "./views.js";
@@ -1201,6 +1203,7 @@ export class AgencWallet {
           retired || facts === null || facts.stake === 0n
             ? null
             : { refusal: this.#retireRefusal(agent, facts, false) },
+        ...(agent.earn.enabled && !retired && serviceNeedsMoney(agent, this.#earn.fundingShort(agent.id), balance, rate)),
       },
       createdAt: agent.createdAt,
     };
@@ -1324,6 +1327,9 @@ export class AgencWallet {
       // The seller sees the stars the buyer gave its own listing (rt5 A 2).
       view.rating = await servedHireRating(this.#chain, job.task as Address, job.listing as Address).catch(() => null);
     }
+    if (job.role === "buying" && view.status === "waiting" && !job.providerGaveBack && job.task &&
+        this.#earn.cannotFund(Object.keys(this.#store.state.agents), job.task))
+      view.statusText = providerCannotFundText(hireRefundAt(job), this.#now());
     if (this.#store.state.taskReviews?.[job.id]?.published) Object.assign(view, { creatorReview: this.#store.state.taskReviews[job.id]!.packet.review });
     if (this.#store.state.requestedRatings?.[job.id]) Object.assign(view, { pendingRating: this.#store.state.requestedRatings[job.id] });
     if (job.task && view.status === "paid") {
@@ -2188,7 +2194,7 @@ export class AgencWallet {
     const hash = await jobSpecHash(spec);
     const deposits = await purchaseDeposits(this.#chain, agent.address as Address);
     const floor = await this.#floor();
-    const need = terms.priceLamports + deposits.total + floor;
+    const need = terms.priceLamports + deposits.total + floor + await this.#serviceHold(agent.address);
     const agentBalance = await this.#chain.getBalance(agent.address as Address);
     const priceCents = lamportsToCents(terms.priceLamports, rate);
     // Without a price the limit cannot be checked, so a person decides.
@@ -2537,7 +2543,7 @@ export class AgencWallet {
     const deposits = await (terms.terms.contest
       ? contestPostCosts(this.#chain, agent.address as Address, "") : requestDeposits(this.#chain, agent.address as Address));
     const floor = await this.#floor();
-    const need = terms.rewardLamports + deposits.total + floor;
+    const need = terms.rewardLamports + deposits.total + floor + await this.#serviceHold(agent.address);
     const agentBalance = await this.#chain.getBalance(agent.address as Address);
     const rewardCents = lamportsToCents(terms.rewardLamports, rate);
     // Without a price the budget cannot be checked, so a person decides.
@@ -2786,7 +2792,8 @@ export class AgencWallet {
     const payer = job.payer;
     const address = payer === "main" ? this.mainAddress : this.#agentRecord(job.agentId).address as Address;
     const deposits = await this.#jobDeposits(job, address);
-    const need = BigInt(job.priceLamports) + deposits.total + await this.#floor();
+    const hold = await this.#serviceHold(address);
+    const need = BigInt(job.priceLamports) + deposits.total + await this.#floor() + hold;
     const available = await this.#chain.getBalance(address);
     await this.#checkJobQuote(job, deposits);
     if (!isRequest(job)) {
@@ -2820,6 +2827,7 @@ export class AgencWallet {
       this.#emit({ type: "overview" });
       throw new WalletError("NOT_ENOUGH_MONEY", payer === "main"
         ? "There is not enough in your balance. Add money and approve this quote again."
+        : hold > 0n && available >= need - hold ? SERVICE_HOLD_APPROVAL
         : "The agent's balance is too low. Fund it and approve this quote again.");
     }
     this.#store.update((draft) => {
@@ -2896,7 +2904,16 @@ export class AgencWallet {
   async #hirePayerAddress(agent: AgentRecord, priceLamports: bigint): Promise<string> {
     const deposits = await purchaseDeposits(this.#chain, agent.address as Address);
     const need = priceLamports + deposits.total + await this.#floor();
-    return await this.#chain.getBalance(agent.address as Address) >= need ? agent.address : this.mainAddress;
+    return await this.#chain.getBalance(agent.address as Address) >= need + await this.#serviceHold(agent.address) ? agent.address : this.mainAddress;
+  }
+
+  /** What a payer's live service keeps for its next job; zero for the main balance or an agent not earning. */
+  async #serviceHold(address: string): Promise<bigint> {
+    if (address === this.mainAddress) return 0n;
+    const agent = Object.values(this.#store.state.agents).find((entry) => entry.address === address);
+    if (agent === undefined) return 0n;
+    const live = agentOffers(agent).filter((offer) => offer.status === "live" && offer.listing);
+    return serviceHoldLamports(agent.earn.enabled, live.map((offer) => BigInt(offer.priceLamports)), (price) => this.#earn.jobReserve(price));
   }
 
   async #agreedTerms(agreement: ListingAgreement, listing: Address, buyer: string) {
@@ -3488,8 +3505,10 @@ export class AgencWallet {
       }
       const floor = await this.#floor();
       const balance = await this.#chain.getBalance(payer.address);
-      if (balance < intent.rewardLamports + deposits.total + floor) {
-        this.#failJob(job.id, "There was not enough money to post the request. Nothing was spent.");
+      const hold = await this.#serviceHold(payer.address);
+      if (balance < intent.rewardLamports + deposits.total + floor + hold) {
+        this.#failJob(job.id, hold > 0n && balance >= intent.rewardLamports + deposits.total + floor ? SERVICE_HOLD_REFUSAL
+          : "There was not enough money to post the request. Nothing was spent.");
         return;
       }
       try {
@@ -3556,8 +3575,10 @@ export class AgencWallet {
       const deposits = await purchaseDeposits(this.#chain, payer.address);
       const floor = await this.#floor();
       const balance = await this.#chain.getBalance(payer.address);
-      if (balance < intent.priceLamports + deposits.total + floor) {
-        this.#failJob(job.id, "There was not enough money to place the order. Nothing was spent.");
+      const hold = await this.#serviceHold(payer.address);
+      if (balance < intent.priceLamports + deposits.total + floor + hold) {
+        this.#failJob(job.id, hold > 0n && balance >= intent.priceLamports + deposits.total + floor ? SERVICE_HOLD_REFUSAL
+          : "There was not enough money to place the order. Nothing was spent.");
         return;
       }
       try {
@@ -5703,6 +5724,9 @@ export class AgencWallet {
     if (job.outcome === "paid" && !await canRateHire(this.#chain, job.task as Address, payer, job.listing as Address))
       throw new WalletError("NOT_ALLOWED", "This hire does not qualify for a listing rating.");
     const cost = await ratingCost(this.#chain);
+    const hold = await this.#serviceHold(payer);
+    if (hold > 0n && await this.#chain.getBalance(payer) < cost + await this.#floor() + hold)
+      throw new WalletError("NOT_ENOUGH_MONEY", SERVICE_HOLD_RATING);
     const rate = await this.#displayRate();
     const q = { id: operationId(), jobId, payer, score, task: job.task, listing: job.listing, expiresAt: this.#now() + 120_000,
       fee: money(this.#chain.transferFeeLamports, rate), rent: money(cost - this.#chain.transferFeeLamports, rate), maximumDebit: money(cost, rate) };
