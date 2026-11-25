@@ -13,7 +13,7 @@ import { ExecutorError, runExecutor, type WorkerContext } from "@tetsuo-ai/agenc
 type RoomWork = NonNullable<WorkerContext["roomWork"]>;
 type VerifiedRoomWork = Parameters<RoomWork["admit"]>[0];
 import type { JobExchangeSession } from "./job-exchange-session.js";
-import type { ExchangeReceipt, JobMessage } from "./client/job-exchange.js";
+import { outputAgreementFromSpec, type ExchangeReceipt, type JobMessage } from "./client/job-exchange.js";
 import { bundleManifest, privateRequirementFromSpec } from "./private-inputs.js";
 import { ROOM_EXCHANGE_METHODS, type RoomExchangeAddress } from "./client/room-exchange.js";
 
@@ -165,6 +165,9 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
   return {
     async admit(binding: VerifiedRoomWork) {
       if (binding.privateInputs && !privateRequirementFromSpec(binding.spec)) throw new Error("The private input terms are not valid.");
+      // Before the claim, so no deposit moves: a public job whose agreed outputs are malformed, repeated, or name a
+      // file no delivery can carry is one this seller could never deliver. (A private job's are in its staged bundle.)
+      outputAgreementFromSpec(binding.spec);
     },
     async questions(binding: VerifiedRoomWork) {
       if (!binding.privateInputs) return undefined;

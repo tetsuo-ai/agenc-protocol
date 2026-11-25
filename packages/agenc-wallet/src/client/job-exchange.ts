@@ -1,3 +1,5 @@
+import { AGREED_OUTPUT_KINDS, agreedOutputProblem } from "./delivery-files.js";
+
 /** Public purchase metadata. All filenames, recipients and contents stay in the exchange. */
 export interface PrivateRequirement {
   version: 1;
@@ -85,10 +87,24 @@ export interface ExchangeReceipt {
   room: string;
 }
 
+/** An output agreement that cannot be used. The message is plain and safe to show to the person or an agent. */
+export class OutputAgreementError extends Error {
+  override name = "OutputAgreementError";
+}
+
+/**
+ * The agreement, checked: up to eight distinct plain file names, each one a file a delivery can really carry under
+ * that name (`agreedOutputProblem`, the rule the delivery check itself uses). Both ends call this: the buyer's
+ * wallet before any quote, and a seller's wallet before it takes a job.
+ */
 export function checkOutputAgreement(value: OutputAgreement): OutputAgreement {
   if (!value || typeof value.allowTextOnly !== "boolean" || !Array.isArray(value.requiredFiles) || value.requiredFiles.length > 8 ||
       value.requiredFiles.some(n => typeof n !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(n) || n.includes("..")) ||
-      new Set(value.requiredFiles.map(n => n.toLowerCase())).size !== value.requiredFiles.length) throw new Error("Invalid promised output manifest.");
+      new Set(value.requiredFiles.map(n => n.toLowerCase())).size !== value.requiredFiles.length) throw new OutputAgreementError("Invalid promised output manifest.");
+  for (const name of value.requiredFiles) {
+    const problem = agreedOutputProblem(name);
+    if (problem) throw new OutputAgreementError(`"${name}" cannot be a required file: ${problem}. A delivery carries these kinds of file: ${AGREED_OUTPUT_KINDS}.`);
+  }
   return { requiredFiles: [...value.requiredFiles], allowTextOnly: value.allowTextOnly };
 }
 
