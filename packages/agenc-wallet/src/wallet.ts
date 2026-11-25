@@ -5984,8 +5984,11 @@ export class AgencWallet {
         signal.throwIfAborted();
         if (rate === undefined || this.#now() >= entry.quote.expiresAt)
           throw new WalletError("NOT_ALLOWED", "Review a new job quote.");
-        if (amount > this.#workRoom(this.#agentRecord(agentId), rate))
-          throw new WalletError("NOT_ALLOWED", "This job exceeds the agent's remaining daily allowance.");
+        // Only the owner decides a work quote: that yes is the person's
+        // approval of this exact quote, and it covers the charge above what is
+        // left of the agent's daily amount for this action only, as a hire's
+        // yes does (`reserveJobSpend`). The charge is still counted against
+        // the day, and every other check stays.
       };
       const authorize = async (current: OpenWork | HeldWork) => {
         if (action === "submit") {

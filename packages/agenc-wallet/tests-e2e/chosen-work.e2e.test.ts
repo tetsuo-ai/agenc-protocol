@@ -81,7 +81,9 @@ describe("chosen open work", () => {
     expect((await wallet.openWork(id)).jobs.map((job) => job.task)).toContain(first);
   }, 30000);
 
-  it("refuses a failed room self-test, exhausted allowance, expired approval and disabled earning", async () => {
+  // The person's yes covers a claim above the daily amount (owner, 0.1.16 real test 2), so
+  // an exhausted allowance is no refusal here; work-allowance-topup.e2e covers that yes.
+  it("refuses a failed room self-test, expired approval and disabled earning", async () => {
     const ready = vi.fn(async () => {});
     const { wallet, id, task } = await setup(ready);
     const quote = () => wallet.quoteWork(id, task, "claim");
@@ -92,7 +94,6 @@ describe("chosen open work", () => {
     await expect(wallet.decideWork((await quote()).id, true)).rejects.toThrow();
     expect((await wallet.openWork(id)).jobs).toHaveLength(2);
     await wallet.setBudget(id, 0);
-    await expect(wallet.decideWork((await quote()).id, true)).rejects.toThrow(/allowance/);
     const pending = await quote();
     await wallet.setEarn(id, false);
     await expect(wallet.decideWork(pending.id, true)).rejects.toThrow(/Earns/);
@@ -378,9 +379,11 @@ it("keeps the private approval intact when both public quote responses are modif
     Object.assign(item.flows[0]!, { to: "someone else" });
   }
   expect(wallet.pendingWork()).toEqual([privateCopy]);
+  // The yes carries out the private copy: this claim, on this task, nothing modified.
   await wallet.setBudget(id, 0);
-  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/allowance/);
-  expect(journal(id).openClaim).toBeNull();
+  expect(await wallet.decideWork(quote.id, true)).toEqual({ approved: true });
+  expect(journal(id).openClaim?.task).toBe(task);
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/expired/);
 });
 
 it.each(["startup", "turn", "resumed turn"])("revokes the chosen executor during %s and keeps the claim", async stage => {
@@ -705,7 +708,7 @@ it("requotes an expired claim when terminal cleanup changes its simulated transf
   await assertBalances(terminal);
 });
 
-it("recovers a previously archived expired claim with Earns off, subject to the owner's allowance", async () => {
+it("recovers a previously archived expired claim with Earns off, with the owner's yes above the allowance", async () => {
   const { wallet, id, sandbox, task } = await setup();
   await completedRoom(id, task);
   const held = (await wallet.openWork(id)).held!;
@@ -723,11 +726,7 @@ it("recovers a previously archived expired claim with Earns off, subject to the 
   await world!.wallet.setBudget(id, 0);
   const quote = await world!.wallet.quoteWork(id, task, "release");
   const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
-  const balance = await world!.balance(claim);
-  await expect(world!.wallet.decideWork(quote.id, true)).rejects.toThrow(/allowance/);
-  expect(await world!.balance(claim)).toBe(balance);
-  await world!.wallet.setBudget(id, 500);
-  await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+  await assertBalances(quote);
   expect(await world!.balance(claim)).toBe(0n);
 });
 

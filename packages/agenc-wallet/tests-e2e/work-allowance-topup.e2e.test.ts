@@ -39,7 +39,10 @@ it("lets an agent take a hand-picked job with money its daily top-up moved in", 
   expect(sandbox.deliveries.size).toBe(1);
 }, 60000);
 
-it("still counts a hand-picked job's own spending against the day", async () => {
+// Found on the owner's Mac (0.1.16 real test 2): an agent that asks every
+// time could never take a hand-picked job, since the person's yes was refused
+// for the daily amount. The yes to the exact quote covers it, once.
+it("lets the person's yes cover a hand-picked job above the daily amount, and still counts it", async () => {
   world = await startWorld({ earn: { executor, chosenRoomEnabled: () => true, checkExecutionReady: async () => {}, pollIntervalMs: 100 } });
   const { wallet, sandbox } = world;
   const { id } = await wallet.createAgent("Worker");
@@ -52,5 +55,12 @@ it("still counts a hand-picked job's own spending against the day", async () => 
   await eventually(async () => (await wallet.openWork(id).catch(() => null))?.jobs.length === 1);
   const quote = await wallet.quoteWork(id, task, "claim");
   expect(BigInt(quote.dailyRemaining.lamports)).toBeLessThan(BigInt(quote.charge.lamports));
-  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/allowance/);
+  expect(await wallet.decideWork(quote.id, true)).toEqual({ approved: true });
+  // The same yes cannot be used twice.
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/expired/);
+  const held = await eventually(async () => { const job = (await wallet.openWork(id)).held; return job?.canSubmit && job; });
+  expect(held).toMatchObject({ task });
+  // The claim was counted against the day: nothing is left of it now.
+  const submit = await wallet.quoteWork(id, task, "submit");
+  expect(submit.dailyRemaining.lamports).toBe("0");
 }, 60000);
