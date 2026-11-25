@@ -39,9 +39,29 @@ describe("the stars on a hire the agent served", () => {
   it("reads the buyer's stars for the agent's own listing", async () => {
     expect(await servedHireRating(await chainWith({ task: task(BUYER), rating: rating(BUYER, LISTING, 5) }), TASK, LISTING)).toBe(5);
   });
-  it("is none before the buyer rates, or without the task", async () => {
+  it("is none before the buyer rates, with or without the task", async () => {
     expect(await servedHireRating(await chainWith({ task: task(BUYER) }), TASK, LISTING)).toBeNull();
-    expect(await servedHireRating(await chainWith({ rating: rating(BUYER, LISTING, 5) }), TASK, LISTING)).toBeNull();
+    expect(await servedHireRating(await chainWith({}), TASK, LISTING)).toBeNull();
+  });
+  it("still reads the stars after the buyer's tidy closed the task (rt6 A 1)", async () => {
+    expect(await servedHireRating(await chainWith({ rating: rating(BUYER, LISTING, 5) }), TASK, LISTING)).toBe(5);
+  });
+  it("refuses a closed task's receipt for another listing or another task", async () => {
+    await expect(servedHireRating(await chainWith({ rating: rating(BUYER, OTHER_LISTING, 5) }), TASK, LISTING)).rejects.toThrow(/does not match/);
+    const [pda] = await findHireRatingPda({ task: TASK });
+    const stray = Uint8Array.from(getHireRatingEncoder().encode({
+      task: at(12), listing: LISTING, buyer: BUYER, score: 5, reviewHash: null, reviewUri: "", ratedAt: 0n, bump: 0, reserved: new Uint8Array(32),
+    }));
+    const chain = { readAccountInfo: async (address: Address) => address === pda
+      ? { data: stray, owner: AGENC_COORDINATION_PROGRAM_ADDRESS, lamports: 1n } : null } as unknown as Chain;
+    await expect(servedHireRating(chain, TASK, LISTING)).rejects.toThrow(/does not match/);
+  });
+  it("ignores a closed task's receipt the marketplace program does not own", async () => {
+    const [pda] = await findHireRatingPda({ task: TASK });
+    const data = rating(BUYER, LISTING, 5);
+    const chain = { readAccountInfo: async (address: Address) => address === pda
+      ? { data, owner: SYSTEM, lamports: 1n } : null } as unknown as Chain;
+    expect(await servedHireRating(chain, TASK, LISTING)).toBeNull();
   });
   it("refuses a receipt for another listing or from someone who did not post the task", async () => {
     await expect(servedHireRating(await chainWith({ task: task(BUYER), rating: rating(BUYER, OTHER_LISTING, 5) }), TASK, LISTING)).rejects.toThrow(/does not match/);
