@@ -287,7 +287,7 @@ describe("offering a service", () => {
       request: "Write one friendly line about tea.",
     });
     await eventually(
-      async () => lines.some((line) => line.includes("task.processing-error") && line.includes("insufficient funds")),
+      async () => lines.some((line) => line.includes("cannot fund") && line.includes("insufficient funds")),
       30_000,
     );
     expect((await wallet.getJob(job.id, true)).status).toBe("waiting");
