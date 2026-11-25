@@ -140,8 +140,9 @@ export async function openLegacyPaidOutput(packet: SignedPacket, parties: Exchan
 async function decryptPayload(payload: string, context: string, header: string, recipientKey: JsonWebKey) {
   const parts: unknown = JSON.parse(payload);
   if (!Array.isArray(parts) || parts.length !== 4 || !parts.every(item => typeof item === "string")) throw new Error("Invalid encrypted packet.");
-  const wrapping = await wrappingKey(recipientKey, parts[0], context, header);
-  const key = await crypto.subtle.unwrapKey("raw", decodeExchangeBase64(parts[1], 40), wrapping, "AES-KW", "AES-GCM", false, ["decrypt"]);
-  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: decodeExchangeBase64(parts[2], 12), additionalData: utf8.encode(header) },
-    key, decodeExchangeBase64(parts[3], 4_499_000)));
+  const [ephemeral, wrapped, nonce, ciphertext] = parts as [string, string, string, string];
+  const wrapping = await wrappingKey(recipientKey, ephemeral, context, header);
+  const key = await crypto.subtle.unwrapKey("raw", decodeExchangeBase64(wrapped, 40), wrapping, "AES-KW", "AES-GCM", false, ["decrypt"]);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: decodeExchangeBase64(nonce, 12), additionalData: utf8.encode(header) },
+    key, decodeExchangeBase64(ciphertext, 4_499_000)));
 }
