@@ -544,7 +544,7 @@ async function assertFreshClaimFunding(
   }
   if (balance < required) {
     const shortfall = required - balance;
-    throw new Error(
+    throw new FundingShortfallError(balance, required,
       `insufficient funds: wallet ${ctx.signer.address} holds ${balance} lamports ` +
         `(${lamportsToSol(balance)} SOL) but working this task needs at least ` +
         `${required} lamports (${lamportsToSol(required)} SOL): ` +
@@ -557,6 +557,14 @@ async function assertFreshClaimFunding(
         `Fund ${ctx.signer.address} with at least ${shortfall} more ` +
         `lamport${shortfall === 1n ? "" : "s"} and retry.`,
     );
+  }
+}
+
+/** The wallet cannot fund a fresh claim through submission; nothing was sent. */
+export class FundingShortfallError extends Error {
+  constructor(readonly balance: bigint, readonly required: bigint, message: string) {
+    super(message);
+    this.name = "FundingShortfallError";
   }
 }
 
@@ -2259,7 +2267,23 @@ export async function processCandidate(
     ctx.log({ event: "task.execution-not-ready", task, reason });
     return { status: "skipped", task, reason, retryable: true };
   }
-  await assertFreshClaimFunding(ctx, agent, decodedTask, options.authorizeChosen ? task : undefined);
+  try {
+    await assertFreshClaimFunding(ctx, agent, decodedTask, options.authorizeChosen ? task : undefined);
+  } catch (error) {
+    // Nothing was claimed: say exactly what is missing and retry this job on
+    // the next tick, so money that arrives later lets it start without a restart.
+    if (!(error instanceof FundingShortfallError)) throw error;
+    ctx.log({
+      event: "task.funding-short",
+      task,
+      wallet: ctx.signer.address,
+      balanceLamports: error.balance.toString(),
+      requiredLamports: error.required.toString(),
+      shortfallLamports: (error.required - error.balance).toString(),
+      reason: error.message,
+    });
+    return { status: "skipped", task, reason: error.message, retryable: true };
+  }
   // A missing host spending limit must stop the claim as well as execution.
   let budget: number | undefined;
   try {
