@@ -175,6 +175,7 @@ import {
   type TurnDownOnChain,
 } from "./market.js";
 import { busyServiceText, hireRefundAt } from "./hire-wait-words.js";
+import { listingIsFull } from "./listing-slot.js";
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
 import { createRecordKeeper, type RecordKeeper } from "./records.js";
 import {
@@ -4442,7 +4443,10 @@ export class AgencWallet {
     // no service to rate, so it is tidied at once.
     if (!isRequest(job) && job.outcome === "paid" && job.rating === null) {
       const window = this.#config.rateWindowMs ?? 60 * 60_000;
-      if (this.#now() - job.updatedAt < window) return;
+      // Stars paid with the approval are still being sent: wait for them.
+      const rating = this.#store.state.requestedRatings?.[job.id];
+      if (this.#now() - job.updatedAt < window &&
+          (rating !== undefined && !rating.message || job.listing === null || !(await listingIsFull(this.#chain, job.listing as Address)))) return;
     }
     const payer = await this.#payerSigner(job);
     const tidy = async (): Promise<string | null> => {
@@ -5163,11 +5167,11 @@ export class AgencWallet {
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
         this.#records.invalidate();
-      }).catch(cause => { throw this.#reviewError(jobId, quote.id, "approve", cause); });
+      }, isOwner).catch(cause => { throw this.#reviewError(jobId, quote.id, "approve", cause); });
     });
     // A request was not hired from a service, so there is nothing to rate.
     if (rating !== undefined && !isRequest(this.#jobRecord(jobId))) {
-      await this.rateJob(jobId, rating, isOwner, agentId, ratingQuoteId).catch((error) => {
+      await this.#rateJob(jobId, rating, isOwner, agentId, ratingQuoteId, isOwner).catch((error) => {
         this.#store.update(s => { (s.requestedRatings ??= {})[jobId] = { quoteId: ratingQuoteId!, message: describeError(error) }; });
       });
     }
@@ -5362,7 +5366,9 @@ export class AgencWallet {
   /** The signed transport supplies the signature before broadcast. Persist the
    * receipt and debit together, including when its acknowledgement never arrives. */
   async #withReviewPayment(job: JobRecord, quote: ReviewQuote, action: ReviewAction | "approve",
-    work: (payer: KeyPairSigner) => Promise<void>): Promise<void> {
+    work: (payer: KeyPairSigner) => Promise<void>,
+    /** The person approved this exact delivery and price: that yes covers the charge above the day's amount, once. */
+    ownerYes = false): Promise<void> {
     const jobId = job.id;
     const cost = BigInt((action === "reject" ? quote.rejectionTotal : action === "dispute" ? quote.disputeTotal : quote.fee).lamports);
     const payer = await this.#payerSigner(job);
@@ -5383,7 +5389,11 @@ export class AgencWallet {
         const child = childForJob(this.#store.state, job);
         const held = child && agentId && childHolds(this.#agentRecord(agentId)).childHolds?.[job.id];
         if (child && (!held || cost > BigInt(held.review) || this.#chain.transferFeeLamports > remainingChildFees(child))) refuseChild("This decision exceeds the supplier review provision.");
-        if (agentId !== null && cost > this.#dailyRoom(this.#agentRecord(agentId), rate, undefined, child ? job.id : undefined)) {
+        // As with a work quote (`decideWork`), the person's yes to paying this
+        // exact delivery covers it above what is left of the agent's daily
+        // amount, for this approval only. It is still counted against the day.
+        if (agentId !== null && !(ownerYes && action === "approve") &&
+            cost > this.#dailyRoom(this.#agentRecord(agentId), rate, undefined, child ? job.id : undefined)) {
           throw new WalletError("NOT_ALLOWED", "This review would exceed the agent's daily allowance.");
         }
       };
@@ -5711,6 +5721,12 @@ export class AgencWallet {
   }
 
   async rateJob(jobId: string, score: number, isOwner: boolean, agentId?: string, quoteId?: string): Promise<JobView> {
+    return this.#rateJob(jobId, score, isOwner, agentId, quoteId, false);
+  }
+
+  /** `withApproval`: the stars came with the person's approval of the payment, whose yes showed their cost. */
+  async #rateJob(jobId: string, score: number, isOwner: boolean, agentId: string | undefined, quoteId: string | undefined,
+    withApproval: boolean): Promise<JobView> {
     const initial = this.#ownedJob(jobId, agentId);
     if (!isOwner && (!agentId || initial.payer !== "agent")) throw this.#reviewRequired(false);
     if (isRequest(initial)) throw new WalletError("NOT_ALLOWED", "Only a hired service can receive listing stars.");
@@ -5735,7 +5751,7 @@ export class AgencWallet {
           amount: BigInt(quote.rent.lamports), instructions: [await facade.rateHire({ task, listing, buyer: payer, score })],
           ...(job.payer === "agent" && rate !== null && { allowance: { agentId: job.agentId, usdPerSol: rate } }),
           reserve: draft => {
-            if (job.payer === "agent" && (rate === null || cost > this.#dailyRoom(draft.agents[job.agentId]!, rate) ||
+            if (job.payer === "agent" && (rate === null || (!(withApproval && isOwner) && cost > this.#dailyRoom(draft.agents[job.agentId]!, rate)) ||
               !reserveJobSpend(draft.agents[job.agentId]!, quote.id, microcents(cost, rate), microcents(cost, rate), this.#now(), isOwner)))
               throw new WalletError("NOT_ALLOWED", "The rating exceeds the agent's allowance.");
           } });
