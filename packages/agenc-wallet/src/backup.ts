@@ -1,3 +1,4 @@
+import { holdRestoredAllowances, markRestoredJobs } from "./job-money.js";
 import { ARCHIVE_FILE } from "./money-archive.js";
 import { BUSINESS_FILE, pauseRestoredBusiness, restoredBusiness, verifyPortableBusiness } from "./business-backup.js";
 import type { PortableBusiness } from "./client/business.js";
@@ -54,6 +55,7 @@ const SCRYPT = { N: 32_768, r: 8, p: 1, maxmem: 96 * 1024 * 1024 } as const;
 /** Largest backup file accepted for reading. */
 const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
 const BACKUP_LIMIT_TEXT = "128 MiB";
+const BACKUP_TOO_LARGE_TEXT = `That file is not an AgenC backup. It is larger than the ${BACKUP_LIMIT_TEXT} limit.`;
 /** Existing size bound for the state and work ledgers. Encrypted exchange records use the aggregate archive limit. */
 const MAX_CARRIED_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_CARRIED_FILES = 4_000;
@@ -305,7 +307,7 @@ export function readBackupFile(file: string): string {
     throw new WalletError("NOT_FOUND", "That backup file could not be read.");
   }
   if (size > MAX_BACKUP_BYTES) {
-    throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
+    throw new WalletError("BAD_REQUEST", BACKUP_TOO_LARGE_TEXT);
   }
   try {
     return readFileSync(file, "utf8");
@@ -332,6 +334,7 @@ function parseBackup(text: unknown): BackupFile {
   const notABackup = (): never => {
     throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
   };
+  if (typeof text === "string" && text.length > MAX_BACKUP_BYTES) throw new WalletError("BAD_REQUEST", BACKUP_TOO_LARGE_TEXT);
   if (typeof text !== "string" || text.length === 0 || text.length > MAX_BACKUP_BYTES) notABackup();
   let value: unknown;
   try {
@@ -487,6 +490,9 @@ export async function restoreBackup(input: {
           return !!ledger.openClaim || ledger.submissions?.some((entry: {settled: boolean}) => !entry.settled);
         });
         pauseRestoredBusiness(state as unknown as WalletState, content.business, input.now, hasWork);
+        // The ledger of what each agent spent today is as old as the backup.
+        holdRestoredAllowances(state as unknown as WalletState, input.now);
+        markRestoredJobs(state as unknown as WalletState);
         bytes = Buffer.from(JSON.stringify(state), "utf8");
       } catch {
         throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");

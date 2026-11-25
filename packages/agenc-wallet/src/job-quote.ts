@@ -41,6 +41,24 @@ export function legacyRefreshLimit(job: JobRecord): number | undefined {
   return job.maxPriceCents;
 }
 
+/**
+ * The dollar limit the buyer gave, if any. A quote without one binds the lamport
+ * price and its expiry: the dollar total it showed is a display at the quote's
+ * rate, so a later SOL/USD move alone must not refuse the unchanged price.
+ */
+export function buyerPriceLimit(job: JobRecord): number | undefined {
+  return job.buyerMaxPriceCents === undefined ? legacyRefreshLimit(job) : job.buyerMaxPriceCents ?? undefined;
+}
+
+/**
+ * The rate an agent's daily allowance is charged at: the higher of the rate the
+ * quote showed and the rate when the money moves, so a purchase never counts
+ * for less than either value.
+ */
+export function allowanceRate(fresh: number, quoted: number | null | undefined): number {
+  return quoted !== null && quoted !== undefined && quoted > fresh ? quoted : fresh;
+}
+
 /** Snapshot a job and its matching approval together. Both panel and agent requests use this quote. */
 export function buildJobQuote(record: JobRecord, input: {
   approvalId: string;

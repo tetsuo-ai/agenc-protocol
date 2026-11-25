@@ -71,7 +71,9 @@ it("requires an owner decision after a budget cut during publication", async () 
   expect((await wallet.decideApproval(result.approval!.id, true)).status).toBe("waiting");
 });
 
-it.each(["approval", "funding"])("enforces the displayed dollar maximum at %s", async stage => {
+// A dollar reward is converted once, at the quote. The quoted lamports and the quote's expiry bind,
+// so a SOL/USD move before the approval or the funding neither refuses the post nor changes the lamports.
+it.each(["approval", "funding"])("posts a dollar reward at its quoted lamports when SOL/USD moves before %s", async stage => {
   let rate = 100;
   world = await startWorld({ config: { prices: { solUsd: async () => rate } }, services: base => ({
     ...base, async publishJobSpec(input) { rate = 200; return base.publishJobSpec(input); },
@@ -79,13 +81,25 @@ it.each(["approval", "funding"])("enforces the displayed dollar maximum at %s", 
   const { wallet } = world;
   const quote = (await wallet.quotePost(post)).approval!;
   expect(quote.maxPriceCents).toBe(100);
+  expect(quote.price.lamports).toBe("10000000");
   const before = await world.balance(wallet.mainAddress);
-  if (stage === "approval") {
-    rate = 200;
-    await expect(wallet.decideApproval(quote.id, true)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
-  } else {
-    expect((await wallet.decideApproval(quote.id, true)).status).toBe("failed");
-  }
+  if (stage === "approval") rate = 200;
+  const job = await wallet.decideApproval(quote.id, true);
+  expect(job.status).toBe("waiting");
+  expect(job.price.lamports).toBe(quote.price.lamports);
+  const moved = before - await world.balance(wallet.mainAddress);
+  expect(moved).toBeGreaterThanOrEqual(BigInt(quote.price.lamports));
+  expect(moved).toBeLessThanOrEqual(BigInt(quote.fromMain.lamports));
+});
+
+it("still refuses a contest when SOL/USD rose after its quote", async () => {
+  let rate = 100;
+  world = await startWorld({ config: { prices: { solUsd: async () => rate } } });
+  const { wallet, sandbox } = world;
+  const quote = (await wallet.quotePost({ ...post, contestEntries: 3, deadline: await sandbox.chain.clusterTime() + 900, reviewWindowSecs: 60 })).approval!;
+  const before = await world.balance(wallet.mainAddress);
+  rate = 101;
+  await expect(wallet.decideApproval(quote.id, true)).rejects.toMatchObject({ code: "PRICE_CHANGED" });
   expect(await world.balance(wallet.mainAddress)).toBe(before);
 });
 
