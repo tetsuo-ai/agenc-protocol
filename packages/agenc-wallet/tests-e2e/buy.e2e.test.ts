@@ -68,7 +68,9 @@ describe("buying from an allowance", () => {
     await wallet.tick();
     const overview = await wallet.overview();
     const view = overview.agents[0]!;
-    expect(view.spent.lamports).toBe((20n * CENT).toString());
+    // The price and the five stars' debit (rt5 A 2: the stars count as spending on the job).
+    const starsNote = (await wallet.listActivity()).find(entry => entry.jobId === job.id && entry.text.startsWith("Paid for the stars on"));
+    expect(view.spent.lamports).toBe((20n * CENT + BigInt(starsNote!.amount!.lamports)).toString());
     expect(view.held.lamports).toBe("0");
     const final = await world.balance(agent.address);
     // Everything the buyer paid, to the lamport: the price, the marker its
