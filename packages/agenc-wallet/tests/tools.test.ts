@@ -292,6 +292,16 @@ async function described(service: unknown): Promise<Record<string, unknown>> {
 }
 
 describe("a service as an agent reads it", () => {
+  it("shows a parent service's supplier terms and the digest market_hire must repeat", async () => {
+    const digest = "d".repeat(64);
+    const supplier = { version: 1, payingSeller: "S".repeat(43), digest, policy: { allowedListings: ["L".repeat(43)],
+      maxDebitLamports: "30000000", returnBeforeSecs: 240, reviewWindowSecs: 600, sharing: "public-brief" } };
+    expect((await described({ ...SERVICE, supplier })).supplier).toEqual({
+      digest, paying_seller: "S".repeat(43), allowed_listings: ["L".repeat(43)], max_supplier_spend: "0.03 SOL",
+      return_before: "4 minutes", review_window: "10 minutes", sharing: "public-brief" });
+    expect((await described(SERVICE)).supplier).toBeUndefined();
+  });
+
   it("passes discovery filters and the offset, and returns navigable IDs and the next offset", async () => {
     const service = { ...SERVICE, listingUrl: `https://agenc.ag/listings/${SERVICE.listing}` };
     const { client, calls } = wallet({ "market.find": { discovery: "service-discovery-v1", cursor: "ranking", services: [service], total: 3, networkFee: usd(22) } });
