@@ -174,6 +174,7 @@ import {
   type RequestIntent,
   type TurnDownOnChain,
 } from "./market.js";
+import { busyServiceText, hireRefundAt } from "./hire-wait-words.js";
 import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
 import { createRecordKeeper, type RecordKeeper } from "./records.js";
 import {
@@ -2111,6 +2112,18 @@ export class AgencWallet {
     return this.#singleJobCall(params.agentId, "hire", params.idempotencyKey, fingerprint, () => this.#hire(params, quoteOnly, fingerprint));
   }
 
+  /** Why a service at its limit of open jobs refuses a hire, naming the buyer's own unfinished hire of it. */
+  #busyServiceWords(listing: string, maxOpenJobs: number): string {
+    const own = Object.values(this.#store.state.jobs).find((job) =>
+      job.role === "buying" && !isRequest(job) && job.listing === listing && job.phase === "active" && job.outcome === null &&
+      (job.chainStatus === null || job.chainStatus === "open" || job.chainStatus === "in_progress"));
+    return busyServiceText(
+      maxOpenJobs,
+      own === undefined ? null : { title: own.title, refundAt: hireRefundAt(own), canCancel: own.chainStatus !== "in_progress" },
+      this.#now(),
+    );
+  }
+
   async #hire(params: Parameters<AgencWallet["hire"]>[0], quoteOnly: boolean, fingerprint: string): Promise<{ job: JobView; approval: ApprovalView | null }> {
     const agent = this.#agentRecord(params.agentId);
     refuseReservedPurchase(params as unknown as Record<string, unknown>);
@@ -2127,7 +2140,7 @@ export class AgencWallet {
     if (agentOffers(agent).some((offer) => offer.listing === listing)) {
       throw new WalletError("NOT_ALLOWED", "An agent cannot hire its own service.");
     }
-    const terms = await readHireableListing(this.#chain, listing);
+    const terms = await readHireableListing(this.#chain, listing, (maxOpenJobs) => this.#busyServiceWords(listing, maxOpenJobs));
     const rate = await this.#freshRate(true);
     const ceiling = params.displayedLimitCents === undefined ? params.maxPriceCents
       : Math.min(params.maxPriceCents ?? Infinity, params.displayedLimitCents);
@@ -3953,6 +3966,10 @@ export class AgencWallet {
       return;
     }
 
+    if (!request && job.chainStatus === "in_progress" && seen.status === "open" && seen.workers === 0 && !job.providerGaveBack) {
+      // The provider started this hire and gave it back: say so, not "waiting to start".
+      this.#patchJob(job.id, (entry) => { entry.providerGaveBack = true; });
+    }
     let autoRefundAt: number | null = null;
     const configuredAt = request ? null : job.autoRefundTimeoutAt ?? (this.#config.autoRefundAfterMs === undefined
       ? null : (job.hiredAt ?? job.createdAt) + this.#config.autoRefundAfterMs);

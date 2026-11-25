@@ -207,7 +207,11 @@ export interface ListingTerms {
  * Read a listing and refuse anything a buyer cannot hire: paused or closed,
  * priced in a token, or at capacity.
  */
-export async function readHireableListing(chain: Chain, listing: Address): Promise<ListingTerms> {
+export async function readHireableListing(
+  chain: Chain,
+  listing: Address,
+  busyWords?: (maxOpenJobs: number) => string,
+): Promise<ListingTerms> {
   const account = await readListing(chain, listing);
   if (account === null) {
     throw new WalletError("NOT_FOUND", "That service does not exist.");
@@ -219,7 +223,7 @@ export async function readHireableListing(chain: Chain, listing: Address): Promi
     throw new WalletError("NOT_AVAILABLE", "That service is priced in a token this wallet does not pay with yet.");
   }
   if (account.maxOpenJobs > 0 && account.openJobs >= account.maxOpenJobs) {
-    throw new WalletError("NOT_AVAILABLE", "That service is busy right now. Try again later.");
+    throw new WalletError("NOT_AVAILABLE", busyWords?.(account.maxOpenJobs) ?? "That service is busy right now. Try again later.");
   }
   let name = "Service";
   let category: string | null = null;

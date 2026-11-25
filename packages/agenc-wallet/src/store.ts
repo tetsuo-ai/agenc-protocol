@@ -295,6 +295,8 @@ export interface JobRecord {
   autoRefundAt: number | null;
   /** Explicit local timeout, separate from the chain-derived display timestamp. */
   autoRefundTimeoutAt?: number;
+  /** A hire whose provider took it and gave it back (seen started, then open with nobody on it). */
+  providerGaveBack?: boolean;
   outcome: "paid" | "refunded" | "problem" | null;
   changesRequested: boolean;
   result: JobResult | null;
