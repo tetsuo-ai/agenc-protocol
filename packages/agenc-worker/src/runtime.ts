@@ -58,6 +58,7 @@ import { assertActiveWorkerConfig, effectiveCapabilities, type WorkerConfig } fr
 import {
   assertExecutorPromptFits,
   ExecutorError,
+  SELLER_SETUP_EXIT,
   preflightExecutor,
   runExecutor,
 } from "./executor.js";
@@ -1425,6 +1426,48 @@ async function releaseWithinGraceIfUnfetchable(
 }
 
 /**
+ * A job the seller's setup cannot run (`SELLER_SETUP_EXIT`: its AI model
+ * refused its key). It is given up at once, and the claim is given back while
+ * that is still free (within its first hour), so the buyer is not left
+ * waiting on a job nobody can do; later than that the claim stays until it
+ * can be released, as for any job given up.
+ */
+async function giveUpForSellerSetup(
+  ctx: WorkerContext,
+  agent: WorkerAgent,
+  task: Address,
+  decodedTask: Task,
+): Promise<void> {
+  const marker = loadState(ctx.stateDir).openClaim;
+  if (marker === null || marker.task !== task) return;
+  const failed: OpenClaim = { ...marker, ranWork: true, failures: (marker.failures ?? 0) + 1 };
+  // The executor's own words stay in the log (`task.execution-failed`); this is what the seller reads.
+  const why = "the seller's AI model could not run this job, so it was not tried again";
+  let released = false;
+  // The task as read before the claim may still say Open: the claim itself decides.
+  if (!ctx.dryRun && !marker.chosen &&
+      decodedTask.taskType !== TaskType.Competitive && decodedTask.taskType !== TaskType.BidExclusive) {
+    try {
+      const claim = await readClaim(ctx, agent, task);
+      const now = claim === null ? 0 : await clusterNowSeconds(ctx);
+      if (claim !== null && Number(claim.claimedAt) + Number(values.CLAIM_RELEASE_GRACE_SECS) - now >= RELEASE_LANDING_MARGIN_SECS) {
+        const signature = await sendReleaseClaim(ctx, agent, task, decodedTask);
+        released = true;
+        ctx.log({ event: "claim.released", task, how: "released", signature, depositBack: true });
+      }
+    } catch (error) {
+      ctx.log({ event: "claim.release-failed", task, reason: redactSensitiveText(formatDiagnosticError(error)) });
+    }
+  }
+  giveUpJob(ctx, loadState(ctx.stateDir), failed, {
+    cause: "attempts",
+    reason: released ? `${why}; the claim was given back and the deposit came back` : why,
+    rewardAmount: decodedTask.rewardAmount.toString(),
+    claimReleased: released,
+  });
+}
+
+/**
  * Whether the buyer's note failed to arrive (no answer, or a host down or
  * busy), rather than arriving wrong or being refused for good.
  */
@@ -1966,6 +2009,11 @@ async function executeAndSubmit(
       return { status: "execution-failed", task, reason };
     }
     ctx.log({ event: "task.execution-failed", task, reason });
+    if (error instanceof ExecutorError && error.detail.reason === "exit" && error.detail.exitCode === SELLER_SETUP_EXIT) {
+      // No later try can work until the seller fixes its setup: stop now, without spending again.
+      await giveUpForSellerSetup(ctx, agent, task, decodedTask);
+      return { status: "execution-failed", task, reason };
+    }
     noteJobFailure(ctx, task, reason, { rewardAmount: decodedTask.rewardAmount, ranWork: true });
     return { status: "execution-failed", task, reason };
   }
