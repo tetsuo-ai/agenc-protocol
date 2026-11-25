@@ -268,6 +268,25 @@ describe("e2e: a worker looks after its own jobs", () => {
     expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.Open);
   });
 
+  it("gives a job its seller's AI model cannot run (a refused key) up on its first try and gives the claim back at once", async () => {
+    const w = await world([process.execPath, "-e", "process.exit(78)", "{prompt}"]);
+    const first = await runTickOnce(w.ctx);
+    expect(first.outcome?.status).toBe("execution-failed");
+    expect(w.events.filter((event) => event.event === "task.retry-scheduled")).toHaveLength(0);
+    const given = loadState(w.stateDir);
+    expect(given.openClaim).toBeNull();
+    expect(given.failedJobs).toEqual([
+      expect.objectContaining({ task: w.task, cause: "attempts", attempts: 1, claimReleased: true,
+        reason: expect.stringMatching(/seller's AI model could not run this job/) }),
+    ]);
+    expect(w.events.find((event) => event.event === "claim.released")).toMatchObject({ task: w.task, how: "released", depositBack: true });
+    const agentPda = await w.workerAgent();
+    const [claim] = await findClaimPda({ task: w.task, bidder: agentPda });
+    expect(accountData(w.svm, claim)).toBeNull();
+    // The task is open again at once, not held by a job nobody here can do.
+    expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(TaskStatus.Open);
+  });
+
   it("gives back a claim after its first hour: the deposit goes to the buyer and the lapse is counted", async () => {
     const w = await world(
       [process.execPath, "-e", "process.exit(3)", "{prompt}"],

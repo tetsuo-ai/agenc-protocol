@@ -48,6 +48,14 @@ export const DEFAULT_MAX_EXECUTOR_PROMPT_BYTES =
 const BASE_ENV_ALLOWLIST = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"] as const;
 
 /** Thrown when the executor fails (non-zero exit, signal, timeout, overflow). */
+/**
+ * The executor's exit when the job cannot run on this seller's setup at all
+ * (sysexits' EX_CONFIG): the seller's AI model refused its key, so every
+ * other try would fail the same way and use up the job's model budget. The
+ * worker gives such a job up at once and gives the claim back where it can.
+ */
+export const SELLER_SETUP_EXIT = 78;
+
 export class ExecutorError extends Error {
   override name = "ExecutorError";
   constructor(

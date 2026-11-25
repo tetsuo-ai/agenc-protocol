@@ -38,6 +38,7 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "../src/runtime.js";
+import { SELLER_SETUP_EXIT } from "../src/executor.js";
 import { emptyState, loadState, saveState } from "../src/state.js";
 
 const TASK = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
@@ -288,6 +289,25 @@ describe("a job whose work keeps failing", () => {
     ]);
     // Somebody else ending a job is not the worker failing.
     expect(state.consecutiveFailures).toBe(0);
+  });
+});
+
+describe("a job the seller's AI model cannot run (its key was refused)", () => {
+  it("is given up after its first try, never tried again, and says why", async () => {
+    const { stateDir, ctx, events, runs, waitOut } = await heldJob();
+    ctx.config.executor = [process.execPath, "-e", `process.stderr.write("grok key refused"); process.exit(${SELLER_SETUP_EXIT})`, "{prompt}"];
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    expect(runs()).toBe(1);
+    const state = loadState(stateDir);
+    expect(state.openClaim).toBeNull();
+    expect(state.failedJobs).toEqual([expect.objectContaining({
+      task: TASK, cause: "attempts", attempts: 1, rewardAmount: REWARD.toString(),
+      reason: expect.stringMatching(/seller's AI model could not run this job/),
+    })]);
+    expect(events.filter((event) => event.event === "task.retry-scheduled")).toHaveLength(0);
+
+    for (let poll = 0; poll < 3; poll += 1) await resumeOpenClaim(ctx, agent);
+    expect(runs()).toBe(1);
   });
 });
 
