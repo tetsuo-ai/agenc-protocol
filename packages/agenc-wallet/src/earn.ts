@@ -230,6 +230,8 @@ interface Running {
   lastError: string | null;
   /** Set while the worker takes no new job after several failed in a row. */
   paused: string | null;
+  /** The last job it could not fund: what its wallet must hold to take it. Cleared once a job starts. */
+  fundingShort?: { task: string; requiredLamports: bigint; at: number } | null;
 }
 
 export class EarnHost {
@@ -323,6 +325,16 @@ export class EarnHost {
     return running === undefined
       ? { state: "off", lastError: null }
       : { state: running.state, lastError: running.lastError };
+  }
+
+  /** The job this agent could not fund, with what its wallet must hold to take it, or null. */
+  fundingShort(agentId: string): { task: string; requiredLamports: bigint; at: number } | null {
+    return this.#running.get(agentId)?.fundingShort ?? null;
+  }
+
+  /** Whether one of these agents could not fund this task the last time it tried it. */
+  cannotFund(agentIds: readonly string[], task: string): boolean {
+    return agentIds.some((agentId) => this.#running.get(agentId)?.fundingShort?.task === task);
   }
 
   /** Whether one of these agents took the task, gave it up and gave its claim back. */
@@ -773,8 +785,25 @@ export class EarnHost {
         case "task.resuming-open-claim":
         case "task.resuming-executed-result":
         case "task.resuming-submission":
+          if (entry.fundingShort) {
+            entry.fundingShort = null;
+            this.#notify(agent.agentId, { type: "state" });
+          }
           setState("working");
           break;
+        case "task.funding-short": {
+          // Nothing was claimed. The worker tries this job again on its own
+          // once the money is there; Market says what is missing meanwhile.
+          const required = typeof event.requiredLamports === "string" && /^\d+$/.test(event.requiredLamports) ? BigInt(event.requiredLamports) : null;
+          if (required === null || typeof event.task !== "string") break;
+          const before = entry.fundingShort;
+          entry.fundingShort = { task: event.task, requiredLamports: required, at: Date.now() };
+          if (before?.task !== event.task || before.requiredLamports !== required) {
+            this.#log(`earn ${agent.agentId}: cannot fund ${event.task}: ${String(event.reason ?? "").slice(0, 300)}`);
+            this.#notify(agent.agentId, { type: "state" });
+          }
+          break;
+        }
         case "task.execution-not-ready":
           this.#log(`earn ${agent.agentId}: job room not ready: ${String(event.reason ?? "")}`);
           setState("error", "The job room is not ready. No job was taken.");
