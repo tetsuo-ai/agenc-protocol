@@ -146,6 +146,20 @@ async function waitFor<T>(
   }
 }
 
+/** A content-addressed spec envelope the worker verifies against its hash. */
+function specEnvelope(payloadHash: string, payload: unknown): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      integrity: {
+        algorithm: "sha256",
+        canonicalization: "json-stable-v1",
+        payloadHash,
+      },
+      payload,
+    }),
+  );
+}
+
 /** Worker-bot log passthrough: surface the interesting events, drop noise. */
 function workerLogLine(
   log: (line: string) => void,
@@ -222,9 +236,19 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
   log(`provider bot: registered agent ${providerAgent}`);
 
   const listingId = values.randomId32();
-  const listingSpecHash = await values.descriptionHash(
-    `agenc dev listing for ${deps.listing.name}`,
-  );
+  // The worker reads and verifies the advertised service before it claims a
+  // hire, so the listing commits to real content-addressed metadata (the same
+  // envelope shape as the job spec) that the sandbox resolver can serve.
+  const listingPayload = {
+    name: deps.listing.name,
+    description: `agenc dev listing for ${deps.listing.name}`,
+    category: deps.listing.category,
+    tags: deps.listing.tags,
+  };
+  const listingDigest = await values.canonicalJobSpecHash(listingPayload);
+  const listingSpecHash = listingDigest.bytes;
+  const listingSpecUri = `agenc://job-spec/sha256/${values.bytesToHex(listingSpecHash)}`;
+  const listingEnvelope = specEnvelope(listingDigest.hex, listingPayload);
   await deps.provider.client.createServiceListing({
     providerAgent,
     authority: deps.provider.signer,
@@ -237,7 +261,7 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     >[0]["category"],
     tags: deps.listing.tags,
     specHash: listingSpecHash,
-    specUri: `agenc://job-spec/sha256/${values.bytesToHex(listingSpecHash)}`,
+    specUri: listingSpecUri,
     price: deps.listing.priceLamports,
     priceMint: null,
     requiredCapabilities: 1n,
@@ -281,16 +305,7 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
   const jobSpecDigest = await values.canonicalJobSpecHash(jobSpecPayload);
   const jobSpecHash = jobSpecDigest.bytes;
   const jobSpecUri = `agenc://job-spec/sha256/${values.bytesToHex(jobSpecHash)}`;
-  const jobSpecEnvelope = new TextEncoder().encode(
-    JSON.stringify({
-      integrity: {
-        algorithm: "sha256",
-        canonicalization: "json-stable-v1",
-        payloadHash: jobSpecDigest.hex,
-      },
-      payload: jobSpecPayload,
-    }),
-  );
+  const jobSpecEnvelope = specEnvelope(jobSpecDigest.hex, jobSpecPayload);
   const hireResult = await hireAndActivate(deps.buyer.client, {
     hire: {
       listing,
@@ -380,10 +395,9 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     getBalance: deps.getBalance,
     getMinimumBalanceForRentExemption: deps.getMinimumBalanceForRentExemption,
     resolveAgencUri: async (uri) => {
-      if (uri !== jobSpecUri) {
-        throw new Error(`unknown sandbox job-spec URI: ${uri}`);
-      }
-      return jobSpecEnvelope;
+      if (uri === jobSpecUri) return jobSpecEnvelope;
+      if (uri === listingSpecUri) return listingEnvelope;
+      throw new Error(`unknown sandbox job-spec URI: ${uri}`);
     },
     stateDir: deps.stateDir,
     log: workerLogLine(log),
