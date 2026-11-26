@@ -1,6 +1,6 @@
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS, CLAIM_TASK_DISCRIMINATOR, CLAIM_TASK_WITH_JOB_SPEC_DISCRIMINATOR,
-  COMPLETE_TASK_DISCRIMINATOR, REGISTER_AGENT_DISCRIMINATOR, RELEASE_CLAIM_DISCRIMINATOR, SUBMIT_TASK_RESULT_DISCRIMINATOR,
+  COMPLETE_TASK_DISCRIMINATOR, DISPUTE_REJECTION_DISCRIMINATOR, REGISTER_AGENT_DISCRIMINATOR, RELEASE_CLAIM_DISCRIMINATOR, SUBMIT_TASK_RESULT_DISCRIMINATOR,
 } from "@tetsuo-ai/marketplace-sdk";
 import { getBase58Encoder } from "@solana/kit";
 import type { HistoryRow } from "./client/money-operations.js";
@@ -11,7 +11,7 @@ import type { WalletState } from "./store.js";
  * (rt11: a setup or offer funding, a worker's claim and its delivery read
  * "Other change"). Written when the wallet signs or lands the send.
  */
-export type SentKind = "funding" | "claim" | "submit" | "release";
+export type SentKind = "funding" | "claim" | "submit" | "release" | "dispute";
 export interface SentRecord { kind: SentKind; agentId: string; jobId?: string; at: number }
 declare module "./store.js" {
   interface WalletState { sentRecords?: Record<string, SentRecord> }
@@ -30,7 +30,7 @@ export function recordSent(draft: WalletState, signature: string, record: SentRe
 }
 
 const SENT_KINDS: Record<SentKind, HistoryRow["kind"]> = {
-  funding: "transfer", claim: "job claim", submit: "job delivery", release: "job release",
+  funding: "transfer", claim: "job claim", submit: "job delivery", release: "job release", dispute: "dispute",
 };
 
 export function sentKind(state: WalletState, signature: string): { kind: HistoryRow["kind"]; jobId?: string } | null {
@@ -45,6 +45,8 @@ const INSTRUCTION_KINDS: [ArrayLike<number>, AccountStep][] = [
   [SUBMIT_TASK_RESULT_DISCRIMINATOR, "job delivery"],
   [COMPLETE_TASK_DISCRIMINATOR, "job delivery"],
   [RELEASE_CLAIM_DISCRIMINATOR, "job release"],
+  // rt14-a: a dispute's bond and its deposit read "Other change".
+  [DISPUTE_REJECTION_DISCRIMINATOR, "dispute"],
 ];
 
 /**
@@ -63,4 +65,4 @@ export function instructionKind(instructions: readonly unknown[]): AccountStep |
   }
   return null;
 }
-export type AccountStep = "registration" | "job claim" | "job delivery" | "job release";
+export type AccountStep = "registration" | "job claim" | "job delivery" | "job release" | "dispute";
