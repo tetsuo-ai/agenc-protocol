@@ -13,7 +13,7 @@ export function moneyHandlers(wallet: AgencWallet): Handlers {
     "wallet.confirmTransfer": async (p, session) => { owner(session); return wallet.confirmTransfer(p.id); },
     "wallet.pendingTransfers": async (_p, session) => { owner(session); return wallet.pendingTransfers(); },
     "wallet.operationOutcome": async (p, session) => { owner(session); return wallet.operationOutcome(p.id); },
-    "wallet.moneyHistory": async (p, session) => { owner(session); return wallet.moneyHistory(p); },
+    "wallet.moneyHistory": async (p, session) => { owner(session); return wallet.readMoneyHistory(p); },
     "jobs.ratingQuote": async (p, session) => wallet.quoteRating(p.jobId, p.score, session.role === "owner", session.agentId ?? undefined),
     "jobs.publishReview": async (p, session) => { owner(session); return wallet.publishOrdinaryReview(p.jobId, p.stars, p.text); },
     "jobs.contestRegistrations": async (_p, session) => { owner(session); return wallet.contestRegistrations(); },

@@ -3,6 +3,7 @@ import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/ta
 import type { HistoryQuery } from "./client/money-operations.js";
 import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
+import { catchUp, historyBehind } from "./history-live.js";
 import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type MoneyOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { currentSubmission, verifiedEvidence, readEvidenceChunk, acknowledgeEvidenceChunk, requireInspection } from "./delivery-evidence.js";
 import { reviewerScope, roomImportEvidence, type RoomImportScope } from "./delivery-evidence.js";
@@ -4235,6 +4236,12 @@ export class AgencWallet {
     });
     if (quote.action === "cancel") this.#recordRefund(job.id, signature, null);
     if (quote.action === "winner") this.#recordPaid(job.id, signature);
+    // rt12-a: a contest's deposits came back to the main balance with no Lately line.
+    if (quote.action === "cleanup") this.#patchJob(job.id, (record, draft) => {
+      const back = (quote.transfers ?? []).reduce((sum, t) => sum + BigInt(t.amount.lamports), 0n);
+      this.#note(draft, { kind: "tidied", text: `Collected the deposits from ${record.title}.`, lamports: back,
+        agentId: record.agentId === "" ? null : record.agentId, jobId: record.id, signature });
+    });
   }
 
   async #reconcileContest(job: JobRecord) {
@@ -7792,6 +7799,18 @@ export class AgencWallet {
     const { account, jobId, limit } = query;
     return { ...page, rows, gaps, query: { ...(account && { account }), ...(jobId && { jobId }),
       ...(limit !== undefined && { limit: Math.max(1, Math.min(100, Number.isSafeInteger(limit) ? limit : 50)) }) } };
+  }
+
+  /**
+   * The history as Market reads it (rt13-a bug 4: an open history lagged Home by up to a
+   * minute). Catch up with the chain first; while a recent move of money this wallet made is
+   * still missing, say so instead of showing a history that disagrees with Home.
+   */
+  async readMoneyHistory(input: HistoryQuery = {}) {
+    const caught = input.before ? true : await catchUp(() => this.#noticeDeposits());
+    const page = this.moneyHistory(input);
+    const accounts = this.#walletIds().map(account => String(account.address));
+    return { ...page, catchingUp: !caught || historyBehind(this.#store.state, this.#store.archive, accounts, this.#now()) };
   }
 
   async #noticeDeposits(): Promise<void> {
