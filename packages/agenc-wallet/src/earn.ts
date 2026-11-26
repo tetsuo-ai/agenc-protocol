@@ -10,6 +10,7 @@ import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // What can go wrong is bounded twice: the agent's wallet holds only what the
 // person gave it, and the executor is whatever the host configured (for the
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
+import { fundingShortLogLine } from "./earn-log-lines.js";
 import { deliveryFileProblem } from "./client/delivery-files.js";
 import { reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
 import { recordServiceBudget } from "./service-budget.js";
@@ -800,7 +801,7 @@ export class EarnHost {
           const before = entry.fundingShort;
           entry.fundingShort = { task: event.task, requiredLamports: required, at: Date.now() };
           if (before?.task !== event.task || before.requiredLamports !== required) {
-            this.#log(`earn ${agent.agentId}: cannot fund ${event.task}: ${String(event.reason ?? "").slice(0, 300)}`);
+            this.#log(fundingShortLogLine(agent.agentId, event.task, event.reason));
             this.#notify(agent.agentId, { type: "state" });
           }
           break;
