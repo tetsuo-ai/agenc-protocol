@@ -5454,6 +5454,15 @@ export class AgencWallet {
         const words = await this.#amountWords();
         throw new WalletError("NOT_ENOUGH_MONEY", `This decision needs ${words.cost(cost)}. Add at least ${words.add(cost - balance)}.`);
       }
+      // The network refuses a payment that leaves a wallet holding something
+      // below its minimum (it may be emptied, or keep the minimum), and still
+      // takes the fee. Say so before signing anything.
+      const floor = await this.#floor();
+      if (balance > cost && balance - cost < floor) {
+        const words = await this.#amountWords();
+        throw new WalletError("NOT_ENOUGH_MONEY",
+          `This decision needs ${words.cost(cost)}, and the wallet must keep ${words.cost(floor)} after it. Add at least ${words.add(cost + floor - balance)}.`);
+      }
       const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
       const checkRoom = () => {
         const child = childForJob(this.#store.state, job);
@@ -5462,7 +5471,10 @@ export class AgencWallet {
         // As with a work quote (`decideWork`), the person's yes to paying this
         // exact delivery covers it above what is left of the agent's daily
         // amount, for this approval only. It is still counted against the day.
-        if (agentId !== null && !(ownerYes && action === "approve") &&
+        // A turn-down and a dispute are the person's decisions only (an agent
+        // never makes them), so the person's yes to that exact quote covers
+        // them the same way, once.
+        if (agentId !== null && !(ownerYes && ownerYesCovers(action)) &&
             cost > this.#dailyRoom(this.#agentRecord(agentId), rate, undefined, child ? job.id : undefined)) {
           throw new WalletError("NOT_ALLOWED", "This review would exceed the agent's daily allowance.");
         }
@@ -5579,7 +5591,7 @@ export class AgencWallet {
             break;
           }
         }
-      });
+      }, isOwner);
     }).catch(cause => { throw this.#reviewError(jobId, review.quoteId, review.action, cause); });
     if (review.action === "dispute") {
       this.#frozenWork.delete(initial.task as Address);
@@ -7927,4 +7939,9 @@ function earnFailureSentence(failure: EarnedJob["failure"] & object): string {
         ? `Your agent stopped after ${failure.attempts} tries: ${failureWords(failure.reason)}.`
         : `Your agent could not do this job: ${failureWords(failure.reason)}.`;
   }
+}
+
+/** Decisions that only the person makes: their yes to the exact quote covers the charge above the agent's daily amount, once. */
+function ownerYesCovers(action: ReviewAction | "approve"): boolean {
+  return action === "approve" || action === "reject" || action === "dispute";
 }
