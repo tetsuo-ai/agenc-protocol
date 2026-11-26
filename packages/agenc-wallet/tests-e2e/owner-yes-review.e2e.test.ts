@@ -104,3 +104,21 @@ it("disputes a turn-down of its own agent's work on the person's yes above the d
   await expect(wallet.confirmReview(sellerJob.id, draft, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
   expect(charges(seller.id)).toHaveLength(1);
 }, 120_000);
+
+it("refuses before signing a turn-down that would leave the agent below the network's minimum, and loses no fee", async () => {
+  const { wallet, agent, jobId } = await agentPaidDelivery();
+  const svm = w!.sandbox.market.svm;
+  const { address } = await import("@solana/kit");
+  const { quote } = await wallet.reviewRecord(jobId, undefined, { termsOnly: true });
+  const total = BigInt(quote!.rejectionTotal.lamports);
+  // Seen in the built app: the person added exactly the missing amount plus a little, and the network refused
+  // the payment ("insufficient funds for rent") after the fee was taken.
+  const left = 95_000n;
+  svm.setAccount({ ...svm.getAccount(address(agent.address))!, lamports: total + left } as never);
+  const draft = await wallet.draftReview(jobId, "reject", "The haiku has four lines.");
+  const error = await wallet.confirmReview(jobId, draft, true).catch(cause => cause);
+  expect(error).toMatchObject({ code: "NOT_ENOUGH_MONEY", message: expect.stringContaining("must keep") });
+  expect(await w!.balance(agent.address)).toBe(total + left);
+  expect(charges(agent.id)).toEqual([]);
+  expect((await wallet.getJob(jobId, true)).status).toBe("delivered");
+});

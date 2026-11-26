@@ -5454,6 +5454,15 @@ export class AgencWallet {
         const words = await this.#amountWords();
         throw new WalletError("NOT_ENOUGH_MONEY", `This decision needs ${words.cost(cost)}. Add at least ${words.add(cost - balance)}.`);
       }
+      // The network refuses a payment that leaves a wallet holding something
+      // below its minimum (it may be emptied, or keep the minimum), and still
+      // takes the fee. Say so before signing anything.
+      const floor = await this.#floor();
+      if (balance > cost && balance - cost < floor) {
+        const words = await this.#amountWords();
+        throw new WalletError("NOT_ENOUGH_MONEY",
+          `This decision needs ${words.cost(cost)}, and the wallet must keep ${words.cost(floor)} after it. Add at least ${words.add(cost + floor - balance)}.`);
+      }
       const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
       const checkRoom = () => {
         const child = childForJob(this.#store.state, job);
