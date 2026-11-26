@@ -3882,6 +3882,18 @@ export class AgencWallet {
     this.#emit({ type: "overview" });
   }
 
+  /** One of this wallet's own agents delivered the job just paid: its row reads the payment now. */
+  #sellerSeesPaid(task: string | null): void {
+    if (task === null || this.#closed) return;
+    for (const agentId of Object.keys(this.#store.state.agents)) {
+      void this.#earn.checkPaidNow(agentId, task).then((read) => {
+        if (!read || this.#closed) return;
+        this.#emit({ type: "activity" });
+        this.#emit({ type: "overview" });
+      }, () => undefined);
+    }
+  }
+
   #recordPaid(jobId: string, signature: string | null): void {
     this.#patchJob(jobId, (entry, draft) => {
       if (entry.outcome === "paid") return;
@@ -3908,6 +3920,7 @@ export class AgencWallet {
     this.#dropBalances();
     this.#emit({ type: "activity" });
     this.#emit({ type: "overview" });
+    this.#sellerSeesPaid(this.#store.state.jobs[jobId]?.task ?? null);
   }
 
   /** active: mirror the chain, refund a job nobody takes, fetch a delivery. */

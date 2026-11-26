@@ -623,6 +623,19 @@ export class EarnHost {
     }
   }
 
+  /**
+   * This wallet just paid a job one of its own agents delivered: read the
+   * settlement now rather than at the next poll (rt11-b: the seller's row
+   * still read "Delivered" about 70 s after the buyer paid). True when read.
+   */
+  async checkPaidNow(agentId: string, task: string): Promise<boolean> {
+    if (!this.jobs(agentId).some((job) => job.task === task && job.state === "delivered")) return false;
+    const dispatch = this.activeHeldLane(agentId, false);
+    if (!dispatch) return false;
+    await dispatch((ctx, worker) => checkSettlements(ctx, worker));
+    return true;
+  }
+
   workerLane(agentId: string, heldOnly = false, readonly = false): WorkerDispatch {
     const running = this.#running.get(agentId);
     const dispatch = readonly ? running?.read : running?.dispatch;
