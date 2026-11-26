@@ -42,7 +42,9 @@ export interface MoneyMethods {
   "wallet.confirmTransfer": { params: { id: string }; result: PaymentOutcome };
   "wallet.pendingTransfers": { params: Record<string, never>; result: { quote: TransferQuote; outcome: PaymentOutcome }[] };
   "wallet.operationOutcome": { params: { id: string }; result: PaymentOutcome | null };
-  "wallet.moneyHistory": { params: HistoryQuery; result: { query: Omit<HistoryQuery, "before">; next: HistoryCursor | null; rows: HistoryRow[]; gaps: { account: string; message: string }[] } };
+  "wallet.moneyHistory": { params: HistoryQuery; result: { query: Omit<HistoryQuery, "before">; next: HistoryCursor | null; rows: HistoryRow[]; gaps: { account: string; message: string }[];
+    /** True while a recent move of money this wallet made is not in the history yet. */
+    catchingUp?: boolean } };
   "jobs.ratingQuote": { params: { jobId: string; score: number }; result: RatingQuote };
   "jobs.publishReview": { params: { jobId: string; stars: number; text: string }; result: import("./task-review.js").SignedTaskReview };
   "jobs.contestRegistrations": { params: Record<string, never>; result: { jobId: string; agentId: string }[] };

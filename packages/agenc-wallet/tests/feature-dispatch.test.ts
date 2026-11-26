@@ -22,10 +22,10 @@ describe("feature routes use the feature owners' handlers", () => {
   });
 
   it("forwards the complete money history query", async () => {
-    const moneyHistory = vi.fn(async () => ({ rows: [] }));
+    const readMoneyHistory = vi.fn(async () => ({ rows: [] }));
     const query = { account: "acct", jobId: "job", before: { account: "acct", signature: "sig" }, limit: 50 };
-    await routes({ moneyHistory })["wallet.moneyHistory"](query, owner);
-    expect(moneyHistory).toHaveBeenCalledWith(query);
+    await routes({ readMoneyHistory })["wallet.moneyHistory"](query, owner);
+    expect(readMoneyHistory).toHaveBeenCalledWith(query);
   });
 
   it("lets a seller read only its own operation", async () => {
