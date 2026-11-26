@@ -1,7 +1,11 @@
 import type { StateStore, WalletState } from "./store.js";
 
-/** How far back a Lately line's money must already be in the history (rt13-a bug 4). */
-export const HISTORY_CATCH_UP_WINDOW_MS = 15 * 60_000;
+/**
+ * How far back a Lately line's money must already be in the history (rt13-a bug 4). Short on
+ * purpose: a send the network never kept has no row ever, and "still catching up" must not
+ * keep Market re-reading the history (every read asks the network about every account).
+ */
+export const HISTORY_CATCH_UP_WINDOW_MS = 2 * 60_000;
 /** How long one read of the history waits for the chain before it answers what it has. */
 export const HISTORY_CATCH_UP_WAIT_MS = 5_000;
 
