@@ -15,7 +15,7 @@ export interface AllowanceCharge {
 }
 
 export type ListingOperation =
-  | { kind: "funding"; decision?: SellerDecision; lamports: string; text: string; charge?: AllowanceCharge; mainBalance: string; priorObservation: string | null }
+  | { kind: "funding"; decision?: SellerDecision; lamports: string; fee?: string; text: string; charge?: AllowanceCharge; mainBalance: string; priorObservation: string | null }
   | { kind: "create"; listing: string; offerId?: string; listingId?: string; name: string; lamports: string }
   | { kind: "state"; state: "Active" | "Paused" | "Retired"; listings: readonly string[]; lamports: string }
   | { kind: "update" | "approval"; listings: readonly string[]; lamports: string };

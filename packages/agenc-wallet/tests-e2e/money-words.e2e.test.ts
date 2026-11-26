@@ -5,6 +5,7 @@
 // named the price only while the hire moved the price, its deposits and its rent.
 // Each Lately line names the person's own agent and the money that moved.
 import { afterEach, expect, it } from "vitest";
+import { generateKeyPairSigner } from "@solana/kit";
 import { moneyHandlers } from "../src/money-handlers.js";
 import { CENT, confirmDecision, eventually, HAIKU, REVIEW_ALLOWANCE, SOL, setEarnWithApproval, startWorld, type World } from "./harness.js";
 
@@ -55,7 +56,31 @@ it("says a one-off move of money to an agent as history says it, not as an allow
   const sent = await w.wallet.confirmTransfer(q.id);
   const line = (await w.wallet.listActivity()).find(a => a.signature === sent.signature)!;
   expect(line.text).toBe("Moved money to My assistant.");
-  expect(line.amount?.lamports).toBe(String(SOL / 10n));
+  // rt15-c: what left your balance, its network fee included, as the card's maximum debit counts it.
+  expect(line.amount?.lamports).toBe(q.maximumDebit.lamports);
+  expect(BigInt(q.maximumDebit.lamports)).toBe(SOL / 10n + BigInt(q.fee.lamports));
+});
+
+// Owner real test 15 (rt15-c bug 1): the setup card said "Moves $3.38 from your main balance" and the
+// balance fell $3.38, but Lately said "Approved funding for My assistant to earn. $3.37": no transfer fee.
+it("names a worker setup's funding with its transfer fee, as the card counts it and the balance fell", async () => {
+  w = await startWorld();
+  const agent = await w.wallet.createAgent("My assistant");
+  const before = await w.balance(w.wallet.mainAddress);
+  const quote = await w.wallet.quoteEarn(agent.id);
+  expect(BigInt(quote.transferFee.lamports)).toBeGreaterThan(0n);
+  await w.wallet.approveEarnFunding(quote.quoteId);
+  const fell = before - await w.balance(w.wallet.mainAddress);
+  const line = (await w.wallet.listActivity()).find(a => a.text === "Approved funding for My assistant to earn.")!;
+  expect(line.amount?.lamports).toBe(String(fell));
+  expect(line.amount?.lamports).toBe(quote.totalFromMain.lamports);
+  // A withdrawal names what left the balance, fee included; a take-back names what arrived.
+  const out = await w.wallet.quoteTransfer({ kind: "withdraw", to: (await generateKeyPairSigner()).address, amount: { lamports: String(SOL) } });
+  const main = await w.balance(w.wallet.mainAddress);
+  const sent = await w.wallet.confirmTransfer(out.id);
+  const left = main - await w.balance(w.wallet.mainAddress);
+  expect((await w.wallet.listActivity()).find(a => a.signature === sent.signature)?.amount?.lamports).toBe(String(left));
+  expect(String(left)).toBe(out.maximumDebit.lamports);
 });
 
 it("says what a hire moved from the agent's money in its Lately line, not the price alone", async () => {
