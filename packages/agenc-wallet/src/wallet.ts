@@ -4510,6 +4510,7 @@ export class AgencWallet {
       }
     });
     this.#dropBalances();
+    if (signature !== null) await this.#historyAfterSend();
     this.#emit({ type: "job", jobId: job.id });
     this.#emit({ type: "overview" });
   }
@@ -5806,6 +5807,7 @@ export class AgencWallet {
       this.#records.invalidate();
       this.#dropBalances();
     }));
+    await this.#historyAfterSend();
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
 
@@ -7749,6 +7751,8 @@ export class AgencWallet {
   }
 
   async #noticeDeposits(): Promise<void> {
+    // One reader of the history checkpoints at a time: the housekeeping pass, or a send that just landed.
+    await this.#lock("money-history", async () => {
     const accounts = this.#walletIds().map(a => a.address);
     const own = new Set<string>(accounts);
     for (const account of accounts) {
@@ -7756,6 +7760,17 @@ export class AgencWallet {
         this.#note(draft, { kind: "added", text: "Money arrived in your balance.", lamports: BigInt(row.delta) + BigInt(row.payerFee), signature: row.signature });
       });
     }
+    });
+  }
+
+  /**
+   * Record the history rows of the wallet's own send that just landed (stars, a tidy), so
+   * "Read wallet history" matches Home at once, not after the next idle housekeeping pass
+   * up to five minutes later (rt10 A bug 1). A failed read waits for that pass.
+   */
+  async #historyAfterSend(): Promise<void> {
+    if (this.#closed) return;
+    await this.#noticeDeposits().catch((error) => this.#log(`history after send: ${describeError(error)}`));
   }
 
   /** Apply each agent's top-up rule. */
