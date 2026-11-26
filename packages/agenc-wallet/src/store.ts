@@ -460,6 +460,10 @@ export interface WalletState extends ChildHireState {
     updatedAt?: number;
     reviewDeadlineAt?: number;
     turnDown?: JobRecord["turnDown"];
+    /** The stars the buyer gave this job, as last read from the chain, so lists show them too (rt8-a). */
+    servedRating?: number;
+    /** No more stars can come: they were read, or the task closed without any. Lists stop reading. */
+    servedRatingFinal?: boolean;
   }>;
 
   /** Final keyed outcomes outlive the activity feed and finished-job list. */

@@ -118,7 +118,7 @@ import { firstPartyAccounts } from "./first-party.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import { jobListPreview } from "./list-preview.js";
-import { countRatingSpend, servedHireRating } from "./rating-views.js";
+import { countRatingSpend, servedHireRating, servedHireRatingRead } from "./rating-views.js";
 import {
   acceptedApprovers,
   canRateHire, landedRating,
@@ -1326,6 +1326,7 @@ export class AgencWallet {
     if (job.role === "working" && job.outcome === "paid" && job.task && job.listing) {
       // The seller sees the stars the buyer gave its own listing (rt5 A 2).
       view.rating = await servedHireRating(this.#chain, job.task as Address, job.listing as Address).catch(() => null);
+      if (view.rating !== null) this.#keepServedRating(job.id, { score: view.rating, final: true });
     }
     if (job.role === "buying" && view.status === "waiting" && !job.providerGaveBack && job.task &&
         this.#earn.cannotFund(Object.keys(this.#store.state.agents), job.task))
@@ -4518,6 +4519,7 @@ export class AgencWallet {
       }
     });
     this.#dropBalances();
+    if (signature !== null) await this.#historyAfterSend();
     this.#emit({ type: "job", jobId: job.id });
     this.#emit({ type: "overview" });
   }
@@ -4687,7 +4689,7 @@ export class AgencWallet {
         hash: entry.resultHashHex,
         dataBase64: Buffer.from(entry.resultUri ?? "").toString("base64"),
       } } : {}),
-      rating: null,
+      rating: this.#store.state.workRecords?.[`earn_${agentId}_${entry.task}`]?.servedRating ?? null,
       tidied: true,
       signatures: entry.settlementSignature === null ? {} : { accept: entry.settlementSignature },
       changes: [],
@@ -4717,6 +4719,16 @@ export class AgencWallet {
       this.#store.update(draft => { ((draft.workRecords ??= {})[id] ??= {}).parties = parties; });
     }
     return parties ?? existing;
+  }
+
+  #keepServedRating(jobId: string, read: { score: number | null; final: boolean }): void {
+    const saved = this.#store.state.workRecords?.[jobId];
+    if (this.#closed || (saved?.servedRating === (read.score ?? undefined) && !!saved?.servedRatingFinal === read.final)) return;
+    this.#store.update(draft => {
+      const record = ((draft.workRecords ??= {})[jobId] ??= {});
+      if (read.score !== null) record.servedRating = read.score;
+      if (read.final) record.servedRatingFinal = true;
+    });
   }
 
   /** Hydrate a seller record without losing evidence on a transient fetch failure. */
@@ -4787,6 +4799,15 @@ export class AgencWallet {
     }
     const shown = records.slice(cursor + 1, cursor + 1 + limit);
     await Promise.all(shown.filter((job) => job.role === "working").map((job) => this.#workDelivery(job)));
+    // The seller's list shows the buyer's stars as its job view does (rt8-a): kept on the work
+    // record, read from the chain only until no more can come.
+    await Promise.all(shown.filter((job) => job.role === "working" && job.outcome === "paid" && job.task && job.listing &&
+      !this.#store.state.workRecords?.[job.id]?.servedRatingFinal).map(async (job) => {
+      const read = await servedHireRatingRead(this.#chain, job.task as Address, job.listing as Address).catch(() => null);
+      if (read === null) return;
+      this.#keepServedRating(job.id, read);
+      job.rating = read.score;
+    }));
 
     const context = {
       usdPerSol: await this.#displayRate(),
@@ -5814,6 +5835,7 @@ export class AgencWallet {
       this.#records.invalidate();
       this.#dropBalances();
     }));
+    await this.#historyAfterSend();
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
 
@@ -7757,6 +7779,8 @@ export class AgencWallet {
   }
 
   async #noticeDeposits(): Promise<void> {
+    // One reader of the history checkpoints at a time: the housekeeping pass, or a send that just landed.
+    await this.#lock("money-history", async () => {
     const accounts = this.#walletIds().map(a => a.address);
     const own = new Set<string>(accounts);
     for (const account of accounts) {
@@ -7764,6 +7788,17 @@ export class AgencWallet {
         this.#note(draft, { kind: "added", text: "Money arrived in your balance.", lamports: BigInt(row.delta) + BigInt(row.payerFee), signature: row.signature });
       });
     }
+    });
+  }
+
+  /**
+   * Record the history rows of the wallet's own send that just landed (stars, a tidy), so
+   * "Read wallet history" matches Home at once, not after the next idle housekeeping pass
+   * up to five minutes later (rt10 A bug 1). A failed read waits for that pass.
+   */
+  async #historyAfterSend(): Promise<void> {
+    if (this.#closed) return;
+    await this.#noticeDeposits().catch((error) => this.#log(`history after send: ${describeError(error)}`));
   }
 
   /** Apply each agent's top-up rule. */

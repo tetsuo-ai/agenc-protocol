@@ -24,6 +24,16 @@ export async function servedHireRating(chain: Chain, task: Address, listing: Add
   return closedTaskRating(chain, task, listing);
 }
 
+/**
+ * The served rating, and whether it can still change: stars once given stay, and a closed task
+ * can get none (rate_hire needs the task). A list reads a seller job only until this is final.
+ */
+export async function servedHireRatingRead(chain: Chain, task: Address, listing: Address): Promise<{ score: number | null; final: boolean }> {
+  const row = await readTask(chain, task);
+  const score = row ? await landedRating(chain, task, row.creator as Address, listing) : await closedTaskRating(chain, task, listing);
+  return { score, final: score !== null || row === null };
+}
+
 async function closedTaskRating(chain: Chain, task: Address, listing: Address): Promise<number | null> {
   const [pda] = await findHireRatingPda({ task });
   const receipt = await readProgramAccount(chain, pda, getHireRatingDiscriminatorBytes(), bytes => getHireRatingDecoder().decode(bytes));
