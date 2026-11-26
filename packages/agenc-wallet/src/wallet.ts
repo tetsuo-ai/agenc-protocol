@@ -5568,7 +5568,7 @@ export class AgencWallet {
               const record = turnDownRecord(frozen);
               if (record) entry.turnDown = record;
               this.#note(state, { kind: "note", text: `You turned down ${entry.title}. The provider can dispute it within 72 hours.`,
-                agentId: entry.agentId || null, jobId, signature });
+                lamports: BigInt(quote.rejectionTotal.lamports), agentId: entry.agentId || null, jobId, signature });
             });
             break;
           }
