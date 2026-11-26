@@ -3645,6 +3645,12 @@ export class AgencWallet {
       const chainRefundAt = deadline > 0 ? this.#now() + Math.max(0, deadline - clock) * 1000 : null;
       const refundAt = timeoutAt === null ? chainRefundAt
         : chainRefundAt === null ? timeoutAt : Math.min(timeoutAt, chainRefundAt);
+      // What moved from the payer, read from the hire's own transactions (its price or reward included).
+      const sent = this.#jobRecord(job.id);
+      const activated = signature ?? sent.signatures.activate
+        ?? childForJob(this.#store.state, sent)?.purchaseSends?.find(a => a.step === "activate" && a.outcome === "landed")?.signature;
+      const moved = await hireMovedLamports(this.#chain, payer.address,
+        [sent.signatures.hire, ...(sent.signatures.approval === undefined ? [] : [sent.signatures.approval]), activated]);
       this.#patchJob(job.id, (entry, draft) => {
         entry.phase = "active";
         const child = childForJob(draft, entry);
@@ -3658,7 +3664,7 @@ export class AgencWallet {
           text: request
             ? `${agent?.name ?? "You"} posted a request: ${entry.title}.`
             : `${agent?.name ?? "An agent"} hired ${entry.title}.`,
-          lamports: hireMovedLamports(entry),
+          ...(moved !== null && { lamports: moved }),
           agentId: agent === undefined ? null : entry.agentId,
           jobId: entry.id,
           signature: entry.signatures.hire ?? null,

@@ -6,7 +6,7 @@
 // Each Lately line names the person's own agent and the money that moved.
 import { afterEach, expect, it } from "vitest";
 import { moneyHandlers } from "../src/money-handlers.js";
-import { confirmDecision, eventually, REVIEW_ALLOWANCE, SOL, setEarnWithApproval, startWorld, type World } from "./harness.js";
+import { CENT, confirmDecision, eventually, HAIKU, REVIEW_ALLOWANCE, SOL, setEarnWithApproval, startWorld, type World } from "./harness.js";
 
 let w: World | null = null;
 afterEach(async () => { await w?.wallet.close(); w = null; });
@@ -74,7 +74,60 @@ it("says what a hire moved from the agent's money in its Lately line, not the pr
   expect(line.text).toBe(`My assistant hired ${(await wallet.getJob(hire.job.id, true)).title}.`);
   const price = BigInt((await wallet.getJob(hire.job.id, true)).price.lamports);
   expect(moved).toBeGreaterThan(price);
-  // The card's total: price, deposits that come back and rent; network fees are at most cents.
-  expect(BigInt(line.amount!.lamports)).toBeGreaterThan(price);
-  expect(moved - BigInt(line.amount!.lamports) < SOL / 1000n && BigInt(line.amount!.lamports) - moved < SOL / 1000n).toBe(true);
+  // What left the agent: price, deposits that come back, rent and network fees.
+  expect(line.amount?.lamports).toBe(String(moved));
+});
+
+// Review 0.1.17 money 2, MAJOR 1: the line read the card's deposits total, which has no price.
+// At $0.20 the missing price matched what stays behind; a $5.00 hire moved $6.66 and Lately said "$1.86".
+it("names what a $5.00 hire moved from the agent, price included", async () => {
+  w = await startWorld();
+  const { wallet, sandbox } = w;
+  const listing = await sandbox.addService({ ...HAIKU, name: "Sonnet Writer", priceLamports: 500n * CENT });
+  const agent = await wallet.createAgent("My assistant");
+  await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: REVIEW_ALLOWANCE });
+  await wallet.fundAgent(agent.id, { usdCents: 900 });
+  await wallet.setPolicy(agent.id, ASKS_EVERY_TIME);
+  const before = await w.balance(agent.address);
+  const hire = await wallet.hire({ agentId: agent.id, listing, request: "A sonnet." });
+  await wallet.decideApproval(hire.approval!.id, true);
+  await eventually(async () => (await wallet.listActivity()).some(a => a.kind === "hired"));
+  const moved = before - await w.balance(agent.address);
+  expect(moved).toBeGreaterThan(500n * CENT);
+  const line = (await wallet.listActivity()).find(a => a.kind === "hired")!;
+  expect(line.text).toBe("My assistant hired Sonnet Writer.");
+  expect(line.amount?.lamports).toBe(String(moved));
+});
+
+it("names what a request with a large reward moved from the agent, reward included", async () => {
+  w = await startWorld();
+  const { wallet } = w;
+  const agent = await wallet.createAgent("My assistant");
+  await wallet.setPolicy(agent.id, { askAboveCents: 5000, refill: REVIEW_ALLOWANCE });
+  await wallet.fundAgent(agent.id, { usdCents: 3000 });
+  await wallet.setPolicy(agent.id, { askAboveCents: 5000, refill: { enabled: false, topUpToCents: 0, perDayCents: 0 } });
+  const before = await w.balance(agent.address);
+  const { job, approval } = await wallet.post({ agentId: agent.id, request: "A sonnet about rain.", reward: { usdCents: 2000 } });
+  if (approval) await wallet.decideApproval(approval.id, true);
+  await eventually(async () => (await wallet.listActivity()).some(a => a.kind === "hired" && a.jobId === job.id));
+  const moved = before - await w.balance(agent.address);
+  expect(moved).toBeGreaterThan(2000n * CENT);
+  const line = (await wallet.listActivity()).find(a => a.kind === "hired")!;
+  expect(line.text).toBe("My assistant posted a request: A sonnet about rain.");
+  expect(line.amount?.lamports).toBe(String(moved));
+});
+
+it("gives a hire's line no amount when its transactions cannot be read, never a wrong one", async () => {
+  w = await startWorld({ chain: chain => ({ ...chain, accountChange: async () => { throw new Error("read failed"); } }) });
+  const { wallet, listing } = w;
+  const agent = await wallet.createAgent("My assistant");
+  await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: REVIEW_ALLOWANCE });
+  await wallet.fundAgent(agent.id, { usdCents: 300 });
+  await wallet.setPolicy(agent.id, ASKS_EVERY_TIME);
+  const hire = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+  await wallet.decideApproval(hire.approval!.id, true);
+  await eventually(async () => (await wallet.listActivity()).some(a => a.kind === "hired"));
+  const line = (await wallet.listActivity()).find(a => a.kind === "hired")!;
+  expect(line.text).toMatch(/^My assistant hired /);
+  expect(line.amount ?? null).toBeNull();
 });
