@@ -38,6 +38,13 @@ it("shows the seller the buyer's 5 stars after the tidy closed the task", async 
   await eventually(async () => { await wallet.tick(); return (await readTask(sandbox.chain, task)) === null; }, 60_000);
 
   const earnId = `earn_${seller.id}_${task}`;
+  // rt8-a: the seller's list agrees with its job view, even before the view was opened.
+  const listed = await eventually(async () => {
+    await wallet.tick();
+    const row = (await wallet.listJobs({ role: "working" }, true)).find(j => j.id === earnId);
+    return row?.status === "paid" ? row : null;
+  }, 60_000);
+  expect(listed.rating).toBe(5);
   const sold = await eventually(async () => {
     await wallet.tick();
     const view = await wallet.getJob(earnId, true);
@@ -46,6 +53,11 @@ it("shows the seller the buyer's 5 stars after the tidy closed the task", async 
   expect(sold.rating).toBe(5);
   // Opened again later (rt6: 1 and 10 minutes after payment), still the same.
   expect((await wallet.getJob(earnId, true)).rating).toBe(5);
+  // Kept on the work record: a later list makes no chain read for it and still shows 5.
+  expect((await wallet.listJobs({ role: "working" }, true)).find(j => j.id === earnId)?.rating).toBe(5);
+  await wallet.close();
+  w.wallet = await w.reopen();
+  expect((await w.wallet.listJobs({ role: "working" }, true)).find(j => j.id === earnId)?.rating).toBe(5);
   // The buyer's own view still reads its stars.
-  expect((await wallet.getJob(job.id, true)).rating).toBe(5);
+  expect((await w.wallet.getJob(job.id, true)).rating).toBe(5);
 }, 180_000);
