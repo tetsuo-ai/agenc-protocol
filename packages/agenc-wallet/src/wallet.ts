@@ -3,6 +3,7 @@ import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/ta
 import type { HistoryQuery } from "./client/money-operations.js";
 import { contestStake } from "./contest-retirement.js";
 import { classifyChange, indexAccountChanges } from "./money-history.js";
+import { catchUp, historyBehind } from "./history-live.js";
 import { canRetryOperation, operationId, operationFingerprint, reconcileOperation, sendOperation, type MoneyOperation, type TransferRequest, type TransferQuote, type RatingQuote } from "./operation-receipts.js";
 import { currentSubmission, verifiedEvidence, readEvidenceChunk, acknowledgeEvidenceChunk, requireInspection } from "./delivery-evidence.js";
 import { reviewerScope, roomImportEvidence, type RoomImportScope } from "./delivery-evidence.js";
@@ -39,6 +40,9 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // An agent can never name a destination, an amount to send, or a transaction.
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
+import { recordSent } from "./sent-records.js";
+import { disputeMovedLamports, disputeNoteText, hireMovedLamports, turnDownNoteText } from "./money-words.js";
+import { paymentBackLamports, paymentBackNoteText, tidiedNoteText } from "./money-words.js";
 import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
 import { recordListingCreation, recordSellerDecision, sellerReceipt } from "./seller-operation.js";
 import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
@@ -118,7 +122,7 @@ import { firstPartyAccounts } from "./first-party.js";
 import { checkBackup, createBackup, readBackupFile, writeBackupFile } from "./backup.js";
 import { describeError, WalletError } from "./errors.js";
 import { jobListPreview } from "./list-preview.js";
-import { countRatingSpend, servedHireRating } from "./rating-views.js";
+import { countRatingSpend, servedHireRating, servedHireRatingRead } from "./rating-views.js";
 import {
   acceptedApprovers,
   canRateHire, landedRating,
@@ -1326,6 +1330,7 @@ export class AgencWallet {
     if (job.role === "working" && job.outcome === "paid" && job.task && job.listing) {
       // The seller sees the stars the buyer gave its own listing (rt5 A 2).
       view.rating = await servedHireRating(this.#chain, job.task as Address, job.listing as Address).catch(() => null);
+      if (view.rating !== null) this.#keepServedRating(job.id, { score: view.rating, final: true });
     }
     if (job.role === "buying" && view.status === "waiting" && !job.providerGaveBack && job.task &&
         this.#earn.cannotFund(Object.keys(this.#store.state.agents), job.task))
@@ -1631,8 +1636,11 @@ export class AgencWallet {
       }
       if (!landed || !operation) return;
       if (operation.kind === "funding") {
+        recordSent(draft, signature, { kind: "funding", agentId, at: this.#now() });
         if (operation.charge) this.#reserveCharge(agent, operation.charge, signature);
-        this.#note(draft, { kind: "allowance", agentId, signature, text: operation.text, lamports: BigInt(operation.lamports) });
+        // rt15-c: what left the main balance, its transfer fee included, as the setup card counts it.
+        const fee = BigInt(operation.fee ?? this.#chain.transferFeeLamports);
+        this.#note(draft, { kind: "allowance", agentId, signature, text: operation.text, lamports: BigInt(operation.lamports) + fee });
         // Replaying an old receipt must not overwrite a newer balance observation.
         if (completed || draft.lastMainLamports === operation.priorObservation) {
           draft.lastMainLamports = (BigInt(operation.mainBalance) - BigInt(operation.lamports)).toString();
@@ -1723,7 +1731,7 @@ export class AgencWallet {
         if (!funding.decision) this.#store.update((draft) => this.#reserveCharge(draft.agents[agent.id]!, reserved));
       }
       const operation: ListingOperation = {
-        kind: "funding", lamports: lamports.toString(), mainBalance: mainBalance.toString(),
+        kind: "funding", lamports: lamports.toString(), fee: this.#chain.transferFeeLamports.toString(), mainBalance: mainBalance.toString(),
         priorObservation: this.#store.state.lastMainLamports, text,
         ...(reservation && { charge: reservation }),
         ...(funding?.decision && { decision: funding.decision }),
@@ -1911,9 +1919,12 @@ export class AgencWallet {
         this.#store.update(draft => {
           if (result.recorded) return;
           const kind = quote.kind === "fund" ? "allowance" : quote.kind === "reclaim" ? "returned" : "withdrawn";
-          const text = quote.kind === "fund" ? `Gave ${agent!.name} an allowance.` : quote.kind === "reclaim" ?
+          // rt14-a: a one-off move is not the daily allowance; say it as history says it.
+          const text = quote.kind === "fund" ? `Moved money to ${agent!.name}.` : quote.kind === "reclaim" ?
             `Took money back from ${agent!.name}.` : "Sent money out of your balance.";
-          this.#note(draft, { kind, text, lamports: amount, agentId: agent?.id ?? null, signature: result.receipt.signature });
+          // What left your balance, its network fee included, as the card's maximum debit counts it. A take-back names what arrived.
+          const moved = quote.kind === "reclaim" ? amount : amount + BigInt(quote.fee.lamports);
+          this.#note(draft, { kind, text, lamports: moved, agentId: agent?.id ?? null, signature: result.receipt.signature });
           (draft.moneyOperations ??= {})[id] = { ...result, recorded: true };
           if (draft.lastMainLamports !== null) draft.lastMainLamports = String(quote.kind === "reclaim"
             ? BigInt(draft.lastMainLamports) + amount : BigInt(quote.retained.lamports));
@@ -3639,6 +3650,12 @@ export class AgencWallet {
       const chainRefundAt = deadline > 0 ? this.#now() + Math.max(0, deadline - clock) * 1000 : null;
       const refundAt = timeoutAt === null ? chainRefundAt
         : chainRefundAt === null ? timeoutAt : Math.min(timeoutAt, chainRefundAt);
+      // What moved from the payer, read from the hire's own transactions (its price or reward included).
+      const sent = this.#jobRecord(job.id);
+      const activated = signature ?? sent.signatures.activate
+        ?? childForJob(this.#store.state, sent)?.purchaseSends?.find(a => a.step === "activate" && a.outcome === "landed")?.signature;
+      const moved = await hireMovedLamports(this.#chain, payer.address,
+        [sent.signatures.hire, ...(sent.signatures.approval === undefined ? [] : [sent.signatures.approval]), activated]);
       this.#patchJob(job.id, (entry, draft) => {
         entry.phase = "active";
         const child = childForJob(draft, entry);
@@ -3652,7 +3669,7 @@ export class AgencWallet {
           text: request
             ? `${agent?.name ?? "You"} posted a request: ${entry.title}.`
             : `${agent?.name ?? "An agent"} hired ${entry.title}.`,
-          lamports: BigInt(entry.priceLamports),
+          ...(moved !== null && { lamports: moved }),
           agentId: agent === undefined ? null : entry.agentId,
           jobId: entry.id,
           signature: entry.signatures.hire ?? null,
@@ -3879,6 +3896,18 @@ export class AgencWallet {
     this.#emit({ type: "overview" });
   }
 
+  /** One of this wallet's own agents delivered the job just paid: its row reads the payment now. */
+  #sellerSeesPaid(task: string | null): void {
+    if (task === null || this.#closed) return;
+    for (const agentId of Object.keys(this.#store.state.agents)) {
+      void this.#earn.checkPaidNow(agentId, task).then((read) => {
+        if (!read || this.#closed) return;
+        this.#emit({ type: "activity" });
+        this.#emit({ type: "overview" });
+      }, () => undefined);
+    }
+  }
+
   #recordPaid(jobId: string, signature: string | null): void {
     this.#patchJob(jobId, (entry, draft) => {
       if (entry.outcome === "paid") return;
@@ -3905,6 +3934,24 @@ export class AgencWallet {
     this.#dropBalances();
     this.#emit({ type: "activity" });
     this.#emit({ type: "overview" });
+    this.#sellerSeesPaid(this.#store.state.jobs[jobId]?.task ?? null);
+  }
+
+  /**
+   * rt16-b bug 3: part of the deposits comes back to the payer in the payment's own transaction.
+   * Its own Lately line names it, so Lately adds up to what the balance did. One read, once.
+   */
+  async #notePaymentBack(jobId: string, payer: Address, signature: string): Promise<void> {
+    if (this.#store.state.jobs[jobId]?.paymentBackLamports) return;
+    const back = await paymentBackLamports(this.#chain, payer, signature);
+    if (back === null) return;
+    this.#patchJob(jobId, (entry, draft) => {
+      if (entry.paymentBackLamports) return;
+      entry.paymentBackLamports = back.toString();
+      this.#note(draft, { kind: "tidied", text: paymentBackNoteText(entry.title), lamports: back,
+        agentId: entry.agentId === "" ? null : entry.agentId, jobId: entry.id, signature });
+    });
+    this.#emit({ type: "activity" });
   }
 
   /** active: mirror the chain, refund a job nobody takes, fetch a delivery. */
@@ -4076,6 +4123,7 @@ export class AgencWallet {
           });
           if (settled.paidProvider) {
             this.#recordPaid(job.id, settled.signature);
+            await this.#notePaymentBack(job.id, payer.address, settled.signature);
           } else {
             const disputed = seen.turnDown.rulingUntil !== null;
             this.#recordRefund(
@@ -4219,6 +4267,12 @@ export class AgencWallet {
     });
     if (quote.action === "cancel") this.#recordRefund(job.id, signature, null);
     if (quote.action === "winner") this.#recordPaid(job.id, signature);
+    // rt12-a: a contest's deposits came back to the main balance with no Lately line.
+    if (quote.action === "cleanup") this.#patchJob(job.id, (record, draft) => {
+      const back = (quote.transfers ?? []).reduce((sum, t) => sum + BigInt(t.amount.lamports), 0n);
+      this.#note(draft, { kind: "tidied", text: `Collected the deposits from ${record.title}.`, lamports: back,
+        agentId: record.agentId === "" ? null : record.agentId, jobId: record.id, signature });
+    });
   }
 
   async #reconcileContest(job: JobRecord) {
@@ -4475,10 +4529,19 @@ export class AgencWallet {
           (rating !== undefined && !rating.message || job.listing === null || !(await listingIsFull(this.#chain, job.listing as Address)))) return;
     }
     const payer = await this.#payerSigner(job);
+    let tidiedBack: bigint | null = null;
     const tidy = async (): Promise<string | null> => {
       const confirmedTidy = childForJob(this.#store.state, job)?.purchaseSends?.find(a => a.step === "tidy" && a.outcome === "landed");
       const sent = confirmedTidy?.signature ?? await withPurchaseStep(this.#store, this.#chain, job, "tidy", this.#chain.transferFeeLamports,
         () => sendTidy(this.#chain, payer, job.task as Address, this.#provider(job)));
+      // What came back, for the activity line (rt10: "Collected the deposits" named no amount), read from
+      // this tidy's own transaction: housekeeping tidies jobs of one payer in parallel, so the payer's
+      // balance before and after can include another job's tidy or hold.
+      if (!confirmedTidy && sent !== null) {
+        const change = await this.#chain.accountChange?.(payer.address, sent).catch(() => null);
+        const delta = change && !change.failed ? BigInt(change.delta) : 0n;
+        if (delta > 0n) tidiedBack = delta;
+      }
       this.#store.update((draft) => {
         const entry = draft.jobs[job.id];
         if (entry === undefined) return;
@@ -4502,7 +4565,8 @@ export class AgencWallet {
         entry.signatures.close = signature;
         this.#note(draft, {
           kind: "tidied",
-          text: `Collected the deposits from ${entry.title}.`,
+          text: tidiedNoteText(entry.title, entry.paymentBackLamports),
+          ...(tidiedBack !== null && { lamports: tidiedBack }),
           agentId: entry.agentId === "" ? null : entry.agentId,
           jobId: entry.id,
           signature,
@@ -4510,6 +4574,7 @@ export class AgencWallet {
       }
     });
     this.#dropBalances();
+    if (signature !== null) await this.#historyAfterSend();
     this.#emit({ type: "job", jobId: job.id });
     this.#emit({ type: "overview" });
   }
@@ -4679,7 +4744,7 @@ export class AgencWallet {
         hash: entry.resultHashHex,
         dataBase64: Buffer.from(entry.resultUri ?? "").toString("base64"),
       } } : {}),
-      rating: null,
+      rating: this.#store.state.workRecords?.[`earn_${agentId}_${entry.task}`]?.servedRating ?? null,
       tidied: true,
       signatures: entry.settlementSignature === null ? {} : { accept: entry.settlementSignature },
       changes: [],
@@ -4709,6 +4774,16 @@ export class AgencWallet {
       this.#store.update(draft => { ((draft.workRecords ??= {})[id] ??= {}).parties = parties; });
     }
     return parties ?? existing;
+  }
+
+  #keepServedRating(jobId: string, read: { score: number | null; final: boolean }): void {
+    const saved = this.#store.state.workRecords?.[jobId];
+    if (this.#closed || (saved?.servedRating === (read.score ?? undefined) && !!saved?.servedRatingFinal === read.final)) return;
+    this.#store.update(draft => {
+      const record = ((draft.workRecords ??= {})[jobId] ??= {});
+      if (read.score !== null) record.servedRating = read.score;
+      if (read.final) record.servedRatingFinal = true;
+    });
   }
 
   /** Hydrate a seller record without losing evidence on a transient fetch failure. */
@@ -4779,6 +4854,15 @@ export class AgencWallet {
     }
     const shown = records.slice(cursor + 1, cursor + 1 + limit);
     await Promise.all(shown.filter((job) => job.role === "working").map((job) => this.#workDelivery(job)));
+    // The seller's list shows the buyer's stars as its job view does (rt8-a): kept on the work
+    // record, read from the chain only until no more can come.
+    await Promise.all(shown.filter((job) => job.role === "working" && job.outcome === "paid" && job.task && job.listing &&
+      !this.#store.state.workRecords?.[job.id]?.servedRatingFinal).map(async (job) => {
+      const read = await servedHireRatingRead(this.#chain, job.task as Address, job.listing as Address).catch(() => null);
+      if (read === null) return;
+      this.#keepServedRating(job.id, read);
+      job.rating = read.score;
+    }));
 
     const context = {
       usdPerSol: await this.#displayRate(),
@@ -5192,6 +5276,7 @@ export class AgencWallet {
         if (stars) this.#store.update(s => { (s.requestedRatings ??= {})[jobId] = { quoteId: stars.id }; });
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
+        await this.#notePaymentBack(jobId, payer.address, signature);
         this.#records.invalidate();
       }, isOwner).catch(cause => { throw this.#reviewError(jobId, quote.id, "approve", cause); });
     });
@@ -5410,7 +5495,19 @@ export class AgencWallet {
         const words = await this.#amountWords();
         throw new WalletError("NOT_ENOUGH_MONEY", `This decision needs ${words.cost(cost)}. Add at least ${words.add(cost - balance)}.`);
       }
+      // The network refuses a payment that leaves a wallet holding something
+      // below its minimum (it may be emptied, or keep the minimum), and still
+      // takes the fee. Say so before signing anything.
+      const floor = await this.#floor();
+      if (balance > cost && balance - cost < floor) {
+        const words = await this.#amountWords();
+        throw new WalletError("NOT_ENOUGH_MONEY",
+          `This decision needs ${words.cost(cost)}, and the wallet must keep ${words.cost(floor)} after it. Add at least ${words.add(cost + floor - balance)}.`);
+      }
       const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
+      // Without a dollar price the charge cannot be counted against the agent's
+      // day, so refuse before signing, as contest decisions do.
+      if (agentId !== null && rate === null) throw new WalletError("NETWORK", "Dollar prices are unavailable. Try again in a minute.");
       const checkRoom = () => {
         const child = childForJob(this.#store.state, job);
         const held = child && agentId && childHolds(this.#agentRecord(agentId)).childHolds?.[job.id];
@@ -5418,7 +5515,10 @@ export class AgencWallet {
         // As with a work quote (`decideWork`), the person's yes to paying this
         // exact delivery covers it above what is left of the agent's daily
         // amount, for this approval only. It is still counted against the day.
-        if (agentId !== null && !(ownerYes && action === "approve") &&
+        // A turn-down and a dispute are the person's decisions only (an agent
+        // never makes them), so the person's yes to that exact quote covers
+        // them the same way, once.
+        if (agentId !== null && !(ownerYes && ownerYesCovers(action)) &&
             cost > this.#dailyRoom(this.#agentRecord(agentId), rate, undefined, child ? job.id : undefined)) {
           throw new WalletError("NOT_ALLOWED", "This review would exceed the agent's daily allowance.");
         }
@@ -5514,6 +5614,7 @@ export class AgencWallet {
           }
           case "reject": {
             const { signature } = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash, await this.#amountWords(), quote, BigInt(quote.rejectionRent.lamports));
+            const ownSeller = await this.#ownAgentNameAt(provider);
             this.#forgetRecordCost(job);
             const frozen = await this.#readFreezeBack(task, provider);
             this.#patchJob(jobId, (entry, state) => {
@@ -5523,19 +5624,23 @@ export class AgencWallet {
               entry.reviewDeadlineAt = frozen ? frozen.rulingUntil ?? frozen.disputeUntil : null;
               const record = turnDownRecord(frozen);
               if (record) entry.turnDown = record;
-              this.#note(state, { kind: "note", text: `You turned down ${entry.title}. The provider can dispute it within 72 hours.`,
-                agentId: entry.agentId || null, jobId, signature });
+              this.#note(state, { kind: "note", text: turnDownNoteText(entry.title, ownSeller),
+                lamports: BigInt(quote.rejectionTotal.lamports), agentId: entry.agentId || null, jobId, signature });
             });
             break;
           }
           case "dispute": {
             const sent = await sendDisputeTurnDown(this.#chain, payer, task, provider, await this.#amountWords(), reason);
-            this.#store.update(state => this.#note(state, { kind: "note", text: "The seller disputed the turn-down.",
-              lamports: sent.bondLamports, agentId: job.agentId, jobId, signature: sent.signature }));
+            // rt14-a bug 3: name the person's own agent and what left it, the bond with its deposit.
+            this.#store.update(state => {
+              this.#note(state, { kind: "note", text: disputeNoteText(state.agents[job.agentId]?.name),
+                lamports: disputeMovedLamports(quote, sent), agentId: job.agentId, jobId, signature: sent.signature });
+              recordSent(state, sent.signature, { kind: "dispute", agentId: job.agentId, jobId, at: this.#now() });
+            });
             break;
           }
         }
-      });
+      }, isOwner);
     }).catch(cause => { throw this.#reviewError(jobId, review.quoteId, review.action, cause); });
     if (review.action === "dispute") {
       this.#frozenWork.delete(initial.task as Address);
@@ -5546,6 +5651,14 @@ export class AgencWallet {
     this.#emit({ type: "activity" });
     this.#emit({ type: "overview" });
     return this.getJob(jobId, true);
+  }
+
+  /** The name of the person's own agent registered at this marketplace address, or null for someone else's. */
+  async #ownAgentNameAt(providerAgent: Address): Promise<string | null> {
+    for (const agent of Object.values(this.#store.state.agents)) {
+      if (await this.#earn.marketplaceAgent(agent.id).catch(() => null) === providerAgent) return agent.name;
+    }
+    return null;
   }
 
   async #publishDecision(job: JobRecord, payer: KeyPairSigner, review: ReviewConfirmation, parentHash: string | null) {
@@ -5806,6 +5919,7 @@ export class AgencWallet {
       this.#records.invalidate();
       this.#dropBalances();
     }));
+    await this.#historyAfterSend();
     return this.#jobView(this.#jobRecord(jobId), isOwner);
   }
 
@@ -5861,7 +5975,12 @@ export class AgencWallet {
       const held = await heldWork(ctx, agent);
       const page = held || existing ? { jobs: [], next: null, eligibility: target ? workEligibility(target, "held") : undefined } : await browseOpenWork(ctx, agent, offset, target);
       const view = (job: OpenWork | HeldWork) => workerJob(job, rate, this.#chain.transferFeeLamports);
-      return { ...("eligibility" in page && page.eligibility && { eligibility: page.eligibility }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoom && this.#agentRecord(agentId).earn.enabled } : null };
+      // Jobs left out only because this agent's own money cannot pay to take them (rt15-a): how many, and the least it needs.
+      const short = "shortOfMoney" in page ? page.shortOfMoney : undefined;
+      return { ...("eligibility" in page && page.eligibility && { eligibility: page.eligibility }),
+        // The page's listing was gone, so this is page 1 of a new one (review 0.1.17 money 8, MAJOR 1).
+        ...("relisted" in page && page.relisted && { relisted: true as const }),
+        ...(short && { shortOfMoney: { jobs: short.jobs, needs: money(short.neededLamports, rate), add: amountWords(rate).add(BigInt(short.neededLamports)) } }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoom && this.#agentRecord(agentId).earn.enabled } : null };
     });
   }
 
@@ -6097,6 +6216,7 @@ export class AgencWallet {
           saveWorkerState(ctx.stateDir, state);
         }
         const micros = (amount * BigInt(Math.ceil(rate! * 1_000_000)) + 9_999_999n) / 10_000_000n;
+        this.#store.update(draft => recordSent(draft, receipt.signature, { kind: action, agentId, jobId: task, at: this.#now() }));
         this.#store.update(draft => this.#reserveCharge(draft.agents[agentId]!, {
           id, lamports: charge.lamports, usdCents: Number(micros) / 1_000_000, ts: this.#now(),
           signature: receipt.signature, work: { lastValidBlockHeight: receipt.lastValidBlockHeight, fee: job.networkFee.lamports, rate: rate! },
@@ -7748,7 +7868,21 @@ export class AgencWallet {
       ...(limit !== undefined && { limit: Math.max(1, Math.min(100, Number.isSafeInteger(limit) ? limit : 50)) }) } };
   }
 
+  /**
+   * The history as Market reads it (rt13-a bug 4: an open history lagged Home by up to a
+   * minute). Catch up with the chain first; while a recent move of money this wallet made is
+   * still missing, say so instead of showing a history that disagrees with Home.
+   */
+  async readMoneyHistory(input: HistoryQuery = {}) {
+    const caught = input.before ? true : await catchUp(() => this.#noticeDeposits());
+    const page = this.moneyHistory(input);
+    const accounts = this.#walletIds().map(account => String(account.address));
+    return { ...page, catchingUp: !caught || historyBehind(this.#store.state, this.#store.archive, accounts, this.#now()) };
+  }
+
   async #noticeDeposits(): Promise<void> {
+    // One reader of the history checkpoints at a time: the housekeeping pass, or a send that just landed.
+    await this.#lock("money-history", async () => {
     const accounts = this.#walletIds().map(a => a.address);
     const own = new Set<string>(accounts);
     for (const account of accounts) {
@@ -7756,6 +7890,17 @@ export class AgencWallet {
         this.#note(draft, { kind: "added", text: "Money arrived in your balance.", lamports: BigInt(row.delta) + BigInt(row.payerFee), signature: row.signature });
       });
     }
+    });
+  }
+
+  /**
+   * Record the history rows of the wallet's own send that just landed (stars, a tidy), so
+   * "Read wallet history" matches Home at once, not after the next idle housekeeping pass
+   * up to five minutes later (rt10 A bug 1). A failed read waits for that pass.
+   */
+  async #historyAfterSend(): Promise<void> {
+    if (this.#closed) return;
+    await this.#noticeDeposits().catch((error) => this.#log(`history after send: ${describeError(error)}`));
   }
 
   /** Apply each agent's top-up rule. */
@@ -7868,4 +8013,9 @@ function earnFailureSentence(failure: EarnedJob["failure"] & object): string {
         ? `Your agent stopped after ${failure.attempts} tries: ${failureWords(failure.reason)}.`
         : `Your agent could not do this job: ${failureWords(failure.reason)}.`;
   }
+}
+
+/** Decisions that only the person makes: their yes to the exact quote covers the charge above the agent's daily amount, once. */
+function ownerYesCovers(action: ReviewAction | "approve"): boolean {
+  return action === "approve" || action === "reject" || action === "dispute";
 }

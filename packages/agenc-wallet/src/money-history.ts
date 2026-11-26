@@ -1,6 +1,7 @@
 import type { Address, GetSignaturesForAddressApi, GetTransactionApi, Rpc, Signature } from "@solana/kit";
 import type { Chain } from "./chain.js";
 import type { StateStore, WalletState } from "./store.js";
+import { instructionKind, sentKind } from "./sent-records.js";
 
 import type { AccountChange, HistoryRow } from "./client/money-operations.js";
 export type { AccountChange, HistoryRow } from "./client/money-operations.js";
@@ -42,7 +43,8 @@ export async function readAccountChange(rpc: Rpc<GetTransactionApi>, account: Ad
       if (p.type !== "transfer" || p.info?.destination !== account || String(p.info.lamports) !== String(delta + fee)) return [];
       return p.info.source ? [p.info.source] : [];
     });
-    return { signature, account, delta: String(delta), payerFee: String(fee),
+    const step = index === 0 && meta.err === null ? instructionKind(tx!.transaction.message.instructions) : null;
+    return { signature, account, delta: String(delta), payerFee: String(fee), ...(step && { step }),
       failed: meta.err !== null, at: tx!.blockTime == null ? null : Number(tx!.blockTime) * 1000,
       externalSender: meta.err === null && credits.length === 1 ? credits[0]! : null };
 }
@@ -57,8 +59,20 @@ export function classifyChange(state: WalletState, change: AccountChange, own: R
     if (effect) return { ...change, jobId: job.id, kind: effect === "close" ? "rent" :
       effect === "cancel" || (effect === "settle" && job.outcome === "refunded") ? "refund" :
       effect === "accept" || effect === "settle" ? "settlement" : effect === "hire" ? "job funding" :
-      effect === "approval" ? "job check" : effect === "rate" ? "rating" : "job update" };
+      effect === "approval" ? "job check" : effect === "rate" ? "rating" :
+      // rt16-b 5: a turn-down read "Job update", the words of a hire's other job updates.
+      effect === "reject" ? "turn-down" : "job update" };
   }
+  // What the wallet sent itself (rt11): a funding to an agent, a worker's claim, delivery or release.
+  const sent = sentKind(state, change.signature);
+  if (sent) return { ...change, ...sent };
+  // A service's own sends (rt8-b: offer setup read "Other change"): its listing, its changes, its safety check.
+  for (const agent of Object.values(state.agents)) {
+    for (const offer of agent.earn.offers ?? []) {
+      if (Object.values(offer.signatures ?? {}).includes(change.signature)) return { ...change, kind: "service setup" };
+    }
+  }
+  if (change.step) return { ...change, kind: change.step };
   if (change.externalSender && !own.has(change.externalSender)) return { ...change, kind: "deposit" };
   if (change.externalSender)
     return { ...change, kind: "transfer" };

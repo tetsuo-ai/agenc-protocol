@@ -43,7 +43,9 @@ export type ServiceOfferInput = SellerOfferInput;
 export interface WalletMethods extends ConnectionMethods, MoneyMethods, ListingMethods, BusinessMethods, ChildHireMethods, ExchangeMethods {
   "work.list": {
     params: { agentId: string; offset?: number; task?: string };
-    result: { eligibility?:{task:string;code:string;message:string;retryable:boolean}; jobs: import("./types.js").WorkerJobView[]; next: number | null; held: import("./types.js").WorkerJobView | null };
+    /** shortOfMoney: open jobs this page left out only because the agent's own money cannot pay the claim deposit and rent; needs is the least more money that takes one of them, and add that amount in dollars rounded up to a cent. */
+    /** next names a page of one listing; pass it back as offset. relisted: that listing was gone, so these jobs are page 1 of a new listing and replace every job read before. */
+    result: { eligibility?:{task:string;code:string;message:string;retryable:boolean}; relisted?: true; shortOfMoney?: { jobs: number; needs: import("./types.js").Money; add: string }; jobs: import("./types.js").WorkerJobView[]; next: number | null; held: import("./types.js").WorkerJobView | null };
   };
   "work.quote": {
     params: { agentId: string; task: string; action: import("./types.js").WorkAction };

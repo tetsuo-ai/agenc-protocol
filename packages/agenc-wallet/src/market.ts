@@ -480,14 +480,16 @@ async function jobDeposits(
   // The marketplace keeps one record per paying wallet of how often it posts:
   // made, and kept, on that wallet's first job of either kind.
   const [rateLimit] = await findCreateTaskHumanlessAuthorityRateLimitPda({ creator: payer });
+  let firstRecordRent = 0n;
   if ((await chain.readAccountInfo(rateLimit)) === null) {
     const once = await rent(getAuthorityRateLimitSize());
     total += once;
     kept += once;
+    firstRecordRent = once;
   }
   const cancellationRent = await creatorRecordCost(chain, payer, rent);
   const networkFees = jobNetworkFees(chain.transferFeeLamports);
-  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent };
+  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent, ...(firstRecordRent > 0n && { firstRecordRent }) };
 }
 
 /**
@@ -1270,7 +1272,7 @@ export async function sendDisputeTurnDown(
   providerAgent: Address,
   words: AmountWords = SOL_AMOUNT_WORDS,
   evidence?: { hash: Uint8Array; uri: string },
-): Promise<{ signature: string; bondLamports: bigint }> {
+): Promise<{ signature: string; bondLamports: bigint; depositLamports: bigint }> {
   await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -1314,7 +1316,7 @@ export async function sendDisputeTurnDown(
       evidenceUri: evidence?.uri ?? "",
     }),
   ], { maxRetries: 0 });
-  return { signature: result.signature, bondLamports: turnDown.bondLamports };
+  return { signature: result.signature, bondLamports: turnDown.bondLamports, depositLamports: bondRent };
 }
 
 /**

@@ -202,7 +202,9 @@ describe("refunds", () => {
     // fee and the buyer's record, once.
     expect(beforeTurnDown - (await world.balance(agent.address))).toBe(5_000n + recordRent);
     expect((await wallet.overview()).agents[0]!.held.lamports).toBe(job.price.lamports);
-    expect((await wallet.listActivity()).some((entry) => /turned down/.test(entry.text))).toBe(true);
+    // Lately names what the turn-down moved (rt12-a): the fee and the record, the same as the balance.
+    const turnDownLine = (await wallet.listActivity()).find((entry) => /turned down/.test(entry.text));
+    expect(turnDownLine?.amount?.lamports).toBe((5_000n + recordRent).toString());
 
     // Before the dispute time is up nothing settles.
     sandbox.advanceClock(71 * 3600);

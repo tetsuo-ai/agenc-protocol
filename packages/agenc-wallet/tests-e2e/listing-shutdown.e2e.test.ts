@@ -287,7 +287,8 @@ it("recovers one activity entry and allowance charge for a landed funding transf
     sent.release();
     const journal = state();
     expect(journal.activity.filter((entry) => entry.signature === landed)).toMatchObject([
-      { kind: "allowance", agentId: agent.id, lamports: amount },
+      // What left the main balance, the transfer fee included (rt15-c).
+      { kind: "allowance", agentId: agent.id, lamports: debit.toString() },
     ]);
     expect(journal.agents[agent.id]!.refills).toHaveLength(initialCharges + 1);
     expect(journal.agents[agent.id]!.refills.filter((charge) => charge.signature === landed)).toMatchObject([

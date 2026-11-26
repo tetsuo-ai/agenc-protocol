@@ -102,7 +102,7 @@ it("uses the quoted rent shortfall and fee when the payer has exactly the displa
   expect(state().agents[agent.id]!.refills.filter(r => r.id?.startsWith("review:")).map(r => r.lamports)).toEqual([quote.rejectionTotal.lamports]);
 });
 
-it("preflights allowance before publication and serializes concurrent decisions for the same payer", async () => {
+it("preflights money before publication and serializes concurrent decisions for the same payer", async () => {
   const published = vi.fn();
   world = await startWorld({ services: base => ({ ...base, postChangeRequest: async (...args) => {
     published(); return base.postChangeRequest!(...args);
@@ -111,13 +111,18 @@ it("preflights allowance before publication and serializes concurrent decisions 
   const jobs = [await hire(agent.id), await hire(agent.id, await world.sandbox.addService({ ...HAIKU, name: "Second writer" }))];
   await world.sandbox.workOnce();
   await Promise.all(jobs.map(job => world.wallet.getJob(job.id, true)));
-  const approve = async (id: string) => world.wallet.confirmReview(id, await world.wallet.draftReview(id, "reject", "A line is missing."), true);
+  const turnDown = async (id: string) => world.wallet.confirmReview(id, await world.wallet.draftReview(id, "reject", "A line is missing."), true);
+  // The person's yes covers a turn-down above the agent's daily amount (rt12-a bug 1), but never money the agent does not have.
   await world.wallet.setPolicy(agent.id, { askAboveCents: 500, refill: { ...REVIEW_ALLOWANCE, enabled: false } });
-  await expect(approve(jobs[0]!.id)).rejects.toThrow(/allowance/);
-  expect(published).not.toHaveBeenCalled();
   // Different providers share one creator record. Both first-turn-down quotes include its rent.
   const total = (await world.wallet.reviewRecord(jobs[0]!.id)).quote!.rejectionTotal;
-  await world.wallet.setPolicy(agent.id, { askAboveCents: 500, refill: { ...REVIEW_ALLOWANCE, perDayCents: Math.ceil(Number(total.lamports) / 100000 + state().agents[agent.id]!.jobSpends!.reduce((sum, row) => sum + Number(row.microcents) / 1_000_000, 0)) } });
+  const svm = world.sandbox.market.svm;
+  const payer = () => svm.getAccount(address(agent.address))!;
+  svm.setAccount({ ...payer(), lamports: BigInt(total.lamports) - 1n } as never);
+  await expect(turnDown(jobs[0]!.id)).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
+  expect(published).not.toHaveBeenCalled();
+  // Enough for one of the two: only one is sent, and it is charged once.
+  svm.setAccount({ ...payer(), lamports: BigInt(total.lamports) } as never);
   const drafts = await Promise.all(jobs.map(job => world.wallet.draftReview(job.id, "reject", "A line is missing.")));
   const outcomes = await Promise.allSettled(jobs.map((job, i) => world.wallet.confirmReview(job.id, drafts[i]!, true)));
   expect(outcomes.filter(result => result.status === "fulfilled")).toHaveLength(1);

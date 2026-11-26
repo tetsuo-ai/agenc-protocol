@@ -55,6 +55,14 @@ function candidate(task: Address, data: Task) {
 }
 
 async function openTerms(ctx: WorkerContext, agent: WorkerAgent, task: Address, facts: VerifiedCandidate, reservedCents?: number) {
+  const terms = await openTermsOrShort(ctx, agent, task, facts, reservedCents);
+  return terms && "shortLamports" in terms ? null : terms;
+}
+
+/** A job this agent could take but for its own money: what taking it needs beyond the agent's balance. */
+type ShortOfMoney = { shortLamports: bigint };
+
+async function openTermsOrShort(ctx: WorkerContext, agent: WorkerAgent, task: Address, facts: VerifiedCandidate, reservedCents?: number) {
   if (facts.isHire || facts.task.creator === ctx.signer.address || !ctx.simulateWork) return null;
   const details = await taskTerms(ctx, agent, task, facts.task);
   if (!details) return null;
@@ -65,13 +73,21 @@ async function openTerms(ctx: WorkerContext, agent: WorkerAgent, task: Address, 
     ctx.simulateWork(ix), readClaimAccountRentMinimums(ctx.getMinimumBalanceForRentExemption!),
     workerRecordShortfall(ctx, agent), reservedCents ?? ctx.modelBudgetForTask?.(facts.task, task),
   ]);
-  if (!simulation || !modelBudgetCents || !Number.isSafeInteger(modelBudgetCents) || modelBudgetCents <= 0) return null;
-  const claimRent = BigInt(simulation.changes.find(c => c.address === details.claimAccount)?.delta ?? 0) - BigInt(details.deposit);
+  if (!modelBudgetCents || !Number.isSafeInteger(modelBudgetCents) || modelBudgetCents <= 0) return null;
   const submissionRent = details.direct ? 0n : rents.submission;
+  const balance = await ctx.getBalance!(ctx.signer.address);
+  if (!simulation) {
+    // A claim the agent cannot pay for does not simulate: name what it needs from the claim account's rent.
+    const estimate = claimFundingRequirement({ claim: rents.claim, submission: submissionRent }, {
+      depositLamports: BigInt(details.deposit), recordRentLamports: recordRent,
+    });
+    return balance < estimate ? { shortLamports: estimate - balance } satisfies ShortOfMoney : null;
+  }
+  const claimRent = BigInt(simulation.changes.find(c => c.address === details.claimAccount)?.delta ?? 0) - BigInt(details.deposit);
   const required = claimFundingRequirement({ claim: claimRent, submission: submissionRent }, {
     depositLamports: BigInt(details.deposit), recordRentLamports: recordRent,
   });
-  if (await ctx.getBalance!(ctx.signer.address) < required) return null;
+  if (balance < required) return { shortLamports: required - balance } satisfies ShortOfMoney;
   const brief = decodeHostedBrief(facts.spec.content);
   return {
     ...details, title: jobTitle(facts.spec.content) ?? "Open job", request: brief.request, criteria: brief.acceptance, brief: brief.raw,
@@ -92,6 +108,7 @@ const eligibilityReasons = {
   reputation: ["This worker's current reputation is below the task minimum.", false],
   registration: ["Register this worker before requesting a claim.", false],
   held: ["Finish or release the worker's current job before choosing another.", true],
+  funds: ["This worker's own money cannot cover the claim deposit and rent for this task. Give the agent money in Market, then list again.", false],
   policy: ["This task does not meet the worker's verified job or spending requirements.", false],
   unavailable: ["Market could not verify this task or simulate the claim. Try again.", true],
 } as const;
@@ -123,54 +140,86 @@ async function inspect(ctx: WorkerContext, agent: WorkerAgent, task: Address) {
       return refused(outcome.status === "skipped" && (outcome.retryable || /error|unreachable/i.test(outcome.reason)) ? "unavailable" : "policy");
     }
     if (verified.isHire || read.task.creator === ctx.signer.address) return refused("policy");
-    const job = await openTerms(ctx, agent, task, verified);
+    const job = await openTermsOrShort(ctx, agent, task, verified);
+    if (job && "shortLamports" in job) return { ...refused("funds"), shortLamports: job.shortLamports };
     return job ? { job, eligibility: workEligibility(task, "available") } : refused("unavailable");
   } catch {
     return refused("unavailable");
   }
 }
 
-type Page = { addresses: Address[]; index: number; agent: Address; dir: string; created: number };
-const pages = new Map<number, Page>();
-let cursor = 0;
+// Each listing is kept by a generation, and `next` names it: generation * 2^20 + index.
+// An offset 0 call opens a new generation and leaves the older ones alone, so a chat's
+// page 2 never reads a list Market or another chat made since (review 0.1.17 money 8,
+// MAJOR 1). A listing lives 5 minutes after its last read. A position whose listing is
+// gone (expired, a wallet restart, another worker's, or one a chat made up) lists again
+// from the start and says `relisted`, so the chat drops what it had. A new listing is
+// never read at an old index.
+type Listing = { key: string; addresses: Address[]; used: number };
+const listings = new Map<number, Listing>();
+const PAGE_SPAN = 2 ** 20;
+const LISTING_TTL_MS = 300000;
+const LISTINGS_PER_WORKER = 4;
+const LISTINGS_MAX = 128;
+let generation = 0;
+
+/** Jobs left out of a page only because the agent's own money cannot pay to take them. */
+export type ShortOfMoneyJobs = { jobs: number; neededLamports: string };
 
 export async function browseOpenWork(ctx: WorkerContext, agent: WorkerAgent, offset: number, task?: Address) {
   if (task) {
     const exact = await inspect(ctx, agent, task);
-    return { jobs: exact.job ? [exact.job] : [], next: null, eligibility: exact.eligibility };
+    return { jobs: exact.job ? [exact.job] : [], next: null, eligibility: exact.eligibility,
+      ...("shortLamports" in exact && { shortOfMoney: { jobs: 1, neededLamports: exact.shortLamports!.toString() } }) };
   }
   const now = Date.now();
-  for (const [key, page] of pages) if (page.created < now - 300000) pages.delete(key);
-  let page = pages.get(offset);
-  if (!offset) {
+  for (const [gen, entry] of listings) if (entry.used < now - LISTING_TTL_MS) listings.delete(gen);
+  const key = `${ctx.stateDir}\n${agent.agentPda}`;
+  const gen = Math.floor(offset / PAGE_SPAN);
+  const kept = offset ? listings.get(gen) : undefined;
+  let page = kept?.key === key ? kept : undefined;
+  const start = page ? offset % PAGE_SPAN : 0;
+  const relisted = offset !== 0 && !page;
+  let current = gen;
+  if (!page) {
     const rows = await listDirectClaimableTasks(ctx.gpa, { capabilities: ctx.config.capabilities,
       nowUnixTimestamp: BigInt(await ctx.clusterTime!()), deadlineSafetySeconds: 0n });
     rows.sort((a, b) => a.account.rewardAmount === b.account.rewardAmount ? a.address.localeCompare(b.address, "en")
       : a.account.rewardAmount > b.account.rewardAmount ? -1 : 1);
-    page = { addresses: rows.map(r => r.address), index: 0, dir: ctx.stateDir, agent: agent.agentPda, created: now };
+    page = { key, addresses: rows.slice(0, PAGE_SPAN - 1).map(r => r.address), used: now };
+    current = ++generation;
+    const own = [...listings].filter(([, entry]) => entry.key === key);
+    for (const [old] of own.slice(0, Math.max(0, own.length - LISTINGS_PER_WORKER + 1))) listings.delete(old);
+    if (listings.size >= LISTINGS_MAX) listings.delete(listings.keys().next().value!);
+    listings.set(current, page);
   }
-  if (!page || page.dir !== ctx.stateDir || page.agent !== agent.agentPda) throw new Error("Refresh the jobs list for a new page.");
+  page.used = now;
   const jobs: OpenWork[] = [];
-  let index = page.index;
+  let index = Math.min(start, page.addresses.length);
+  let shortJobs = 0;
+  let needed: bigint | null = null;
   // Leave room in the wallet's 1 MiB frame for prices and the response envelope.
   let bytes = 0;
   pageRows: while (jobs.length < 10 && index < page.addresses.length) {
     const batch = page.addresses.slice(index, index + Math.min(4, 10 - jobs.length));
     const results = await Promise.all(batch.map(address => inspect(ctx, agent, address)));
-    for (const { job } of results) {
+    for (const result of results) {
+      const { job } = result;
       if (job !== null) {
         const size = Buffer.byteLength(JSON.stringify(job));
         if (jobs.length && bytes + size > 800 * 1024) break pageRows;
         jobs.push(job);
         bytes += size;
+      } else if ("shortLamports" in result) {
+        shortJobs++;
+        if (needed === null || result.shortLamports! < needed) needed = result.shortLamports!;
       }
       index++;
     }
   }
-  if (index === page.addresses.length) return { jobs, next: null };
-  if (pages.size >= 128) pages.delete(pages.keys().next().value!);
-  pages.set(++cursor, { ...page, index });
-  return { jobs, next: cursor };
+  const shortOfMoney: ShortOfMoneyJobs | undefined = needed === null ? undefined : { jobs: shortJobs, neededLamports: needed.toString() };
+  return { jobs, next: index >= page.addresses.length ? null : current * PAGE_SPAN + index,
+    ...(relisted && { relisted: true as const }), ...(shortOfMoney && { shortOfMoney }) };
 }
 
 export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signal: AbortSignal, task: Address,

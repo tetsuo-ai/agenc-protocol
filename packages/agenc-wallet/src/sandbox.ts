@@ -84,6 +84,7 @@ import {
 } from "./chain.js";
 import { contestEvents } from "./contest-history.js";
 import { scopedSendTransport, transportSignal } from "./transport-scope.js";
+import { instructionKind } from "./sent-records.js";
 import { WalletError } from "./errors.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import { sendDisputeTurnDown, sendFrozenRuling } from "./market.js";
@@ -471,6 +472,8 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
         const delta = BigInt(svm.getBalance(address) ?? 0n) - balances.get(address)!;
         return delta ? [{ address, lamports: delta.toString() }] : [];
       });
+      const step = instructionKind(("instructions" in message ? message.instructions : [])
+        .map(ix => ({ programId: message.staticAccounts[ix.programAddressIndex], data: ix.data })));
       for (const change of changes) {
         const transfers = ("instructions" in message ? message.instructions : []).filter(ix => message.staticAccounts[ix.programAddressIndex] === SYSTEM_PROGRAM_ADDRESS &&
           ix.data?.length === 12 && Buffer.from(ix.data).readUInt32LE() === 2 && message.staticAccounts[ix.accountIndices?.[1] ?? -1] === change.address);
@@ -479,7 +482,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
           message.staticAccounts[transfer.accountIndices![0]!] : null;
         moneyChanges.unshift({ signature: result.signature, account: change.address, delta: change.lamports,
           payerFee: change.address === payer ? String(BASE_FEE_LAMPORTS * BigInt(Object.keys(signedTx.signatures).length)) : "0",
-          at: Date.now(), failed: false, externalSender: sender ?? null });
+          at: Date.now(), failed: false, externalSender: sender ?? null, ...(step && change.address === payer && { step }) });
       }
       try {
         for (const account of message.staticAccounts) {

@@ -451,6 +451,7 @@ export function approvalView(
     ...(approval.networkFees !== undefined && { networkFees: quotedMoney(approval.networkFees) }),
     ...(approval.retainedRent !== undefined && { retainedRent: quotedMoney(approval.retainedRent) }),
     ...(approval.cancellationRent !== undefined && { cancellationRent: quotedMoney(approval.cancellationRent) }),
+    ...(approval.firstRecordRent !== undefined && { firstRecordRent: quotedMoney(approval.firstRecordRent) }),
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,

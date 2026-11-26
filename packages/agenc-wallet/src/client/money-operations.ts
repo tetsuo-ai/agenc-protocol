@@ -16,12 +16,16 @@ export interface RatingQuote {
 export interface AccountChange {
   signature: string; account: string; delta: string; payerFee: string; at: number | null;
   externalSender: string | null; failed: boolean;
+  /** The marketplace step this account's own receipt took, when it paid for one. */
+  step?: "registration" | "job claim" | "job delivery" | "job release" | "dispute";
 }
 export interface HistoryCursor { account: string; signature: string }
 export interface HistoryQuery { account?: string; jobId?: string; before?: HistoryCursor; limit?: number }
 
 export interface HistoryRow extends AccountChange {
-  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "other";
+  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "service setup" | "other"
+    | "registration" | "job claim" | "job delivery" | "job release" | "dispute"
+    | "turn-down";
   jobId?: string;
 }
 
@@ -39,7 +43,9 @@ export interface MoneyMethods {
   "wallet.confirmTransfer": { params: { id: string }; result: PaymentOutcome };
   "wallet.pendingTransfers": { params: Record<string, never>; result: { quote: TransferQuote; outcome: PaymentOutcome }[] };
   "wallet.operationOutcome": { params: { id: string }; result: PaymentOutcome | null };
-  "wallet.moneyHistory": { params: HistoryQuery; result: { query: Omit<HistoryQuery, "before">; next: HistoryCursor | null; rows: HistoryRow[]; gaps: { account: string; message: string }[] } };
+  "wallet.moneyHistory": { params: HistoryQuery; result: { query: Omit<HistoryQuery, "before">; next: HistoryCursor | null; rows: HistoryRow[]; gaps: { account: string; message: string }[];
+    /** True while a recent move of money this wallet made is not in the history yet. */
+    catchingUp?: boolean } };
   "jobs.ratingQuote": { params: { jobId: string; score: number }; result: RatingQuote };
   "jobs.publishReview": { params: { jobId: string; stars: number; text: string }; result: import("./task-review.js").SignedTaskReview };
   "jobs.contestRegistrations": { params: Record<string, never>; result: { jobId: string; agentId: string }[] };

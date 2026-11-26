@@ -198,7 +198,9 @@ export async function findServices(client: { call(method: "market.find", params:
     messages.push(offset === 0 && end === total
       ? `Found ${plural(total, "service", "services")}.`
       : `Showing services ${offset + 1} to ${end} of ${total}.`);
-    messages.push(`Each job also costs about ${formatMoney(networkFee)} in network fees, which are not returned even if the job is cancelled. Tell the user the name and price before hiring.`);
+    // rt10: an agent repeated this figure as "plus ~$0.13 network fee": it is mostly the rent the marketplace keeps,
+    // network fees are under a cent, and a hire's own answer gives its card's exact figures.
+    messages.push(`Each job also keeps about ${formatMoney(networkFee)} as rent kept by the marketplace and network fees, not returned even if the job is cancelled; a balance's first job keeps more. A hire's answer gives its card's exact figures: repeat those, not this estimate. Tell the user the name and price before hiring.`);
   } else {
     messages.push(total > 0 ? "There are no more services on this page." : "No matching services found.");
   }
