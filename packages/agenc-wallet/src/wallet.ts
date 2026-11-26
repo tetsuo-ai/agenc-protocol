@@ -4475,10 +4475,17 @@ export class AgencWallet {
           (rating !== undefined && !rating.message || job.listing === null || !(await listingIsFull(this.#chain, job.listing as Address)))) return;
     }
     const payer = await this.#payerSigner(job);
+    let tidiedBack: bigint | null = null;
     const tidy = async (): Promise<string | null> => {
       const confirmedTidy = childForJob(this.#store.state, job)?.purchaseSends?.find(a => a.step === "tidy" && a.outcome === "landed");
+      // What came back, for the activity line (rt10: "Collected the deposits" named no amount).
+      const before = confirmedTidy ? null : await this.#chain.getBalance(payer.address).catch(() => null);
       const sent = confirmedTidy?.signature ?? await withPurchaseStep(this.#store, this.#chain, job, "tidy", this.#chain.transferFeeLamports,
         () => sendTidy(this.#chain, payer, job.task as Address, this.#provider(job)));
+      if (before !== null && sent !== null) {
+        const after = await this.#chain.getBalance(payer.address).catch(() => null);
+        if (after !== null && after > before) tidiedBack = after - before;
+      }
       this.#store.update((draft) => {
         const entry = draft.jobs[job.id];
         if (entry === undefined) return;
@@ -4503,6 +4510,7 @@ export class AgencWallet {
         this.#note(draft, {
           kind: "tidied",
           text: `Collected the deposits from ${entry.title}.`,
+          ...(tidiedBack !== null && { lamports: tidiedBack }),
           agentId: entry.agentId === "" ? null : entry.agentId,
           jobId: entry.id,
           signature,
