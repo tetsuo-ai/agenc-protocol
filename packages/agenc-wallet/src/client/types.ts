@@ -622,6 +622,8 @@ export interface ApprovalView {
   networkFees?: Money;
   retainedRent?: Money;
   cancellationRent?: Money;
+  /** Part of `retainedRent`: the payer's marketplace record, paid on its first job only. */
+  firstRecordRent?: Money;
   /** Maximum marketplace share at settlement, included in the price. */
   marketFee?: { bps: number; amount: Money };
   refundableDeposit?: Money;

@@ -42,6 +42,9 @@ describe("money arriving in the main balance", () => {
     expect(kinds).toContain("tidied");
     // Its deposits did come back to the main balance...
     expect(await world.balance(wallet.mainAddress)).toBeGreaterThan(beforeTidy);
+    // ...and the line that says so names what came back (rt10: "Collected the deposits" had no amount).
+    const tidied = (await wallet.listActivity()).find((entry) => entry.kind === "tidied")!;
+    expect(BigInt(tidied.amount!.lamports)).toBe(await world.balance(wallet.mainAddress) - beforeTidy);
     // ...and that is not money arriving.
     expect(await arrivals(world)).toEqual(["Money arrived in your balance."]);
     // A minute later they are counted in.

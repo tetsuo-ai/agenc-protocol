@@ -119,6 +119,7 @@ export function buildJobQuote(record: JobRecord, input: {
     networkFees: deposits.networkFees.toString(),
     retainedRent: (deposits.kept - deposits.cancellationRent - BigInt(record.contestRegistration?.rent ?? "0") - BigInt(record.contestRegistration?.stake ?? "0")).toString(),
     cancellationRent: deposits.cancellationRent.toString(),
+    ...(deposits.firstRecordRent !== undefined && deposits.firstRecordRent > 0n && { firstRecordRent: deposits.firstRecordRent.toString() }),
     quoteRate: rate,
     createdAt: now,
     expiresAt,

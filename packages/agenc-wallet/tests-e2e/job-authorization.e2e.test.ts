@@ -262,3 +262,16 @@ it("rounds fractional price ceilings down to lamports, including exact decimal b
   expect(fractionalQuoteUsd(1_990_000n, 100)).toBe("0.199");
   expect(fractionalQuoteUsd(1n, 71.64297517)).toBe("0.00000007164297517");
 });
+
+// rt9 bug 2: a first post carries the payer's marketplace record, kept for good, and says how much of the rent it is.
+it("names the first job's marketplace record in the quote, and not on the next job", async () => {
+  world = await startWorld();
+  const { wallet } = world;
+  const first = (await wallet.quotePost(post)).approval!;
+  expect(BigInt(first.firstRecordRent!.lamports)).toBeGreaterThan(0n);
+  expect(BigInt(first.firstRecordRent!.lamports)).toBeLessThanOrEqual(BigInt(first.retainedRent!.lamports));
+  expect((await wallet.decideApproval(first.id, true)).status).toBe("waiting");
+  const next = (await wallet.quotePost(post)).approval!;
+  expect(next.firstRecordRent).toBeUndefined();
+  expect(BigInt(first.retainedRent!.lamports) - BigInt(next.retainedRent!.lamports)).toBe(BigInt(first.firstRecordRent!.lamports));
+});
