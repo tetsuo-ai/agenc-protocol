@@ -5471,6 +5471,9 @@ export class AgencWallet {
           `This decision needs ${words.cost(cost)}, and the wallet must keep ${words.cost(floor)} after it. Add at least ${words.add(cost + floor - balance)}.`);
       }
       const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
+      // Without a dollar price the charge cannot be counted against the agent's
+      // day, so refuse before signing, as contest decisions do.
+      if (agentId !== null && rate === null) throw new WalletError("NETWORK", "Dollar prices are unavailable. Try again in a minute.");
       const checkRoom = () => {
         const child = childForJob(this.#store.state, job);
         const held = child && agentId && childHolds(this.#agentRecord(agentId)).childHolds?.[job.id];

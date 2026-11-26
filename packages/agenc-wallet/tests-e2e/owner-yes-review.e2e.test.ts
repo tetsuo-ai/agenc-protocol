@@ -122,3 +122,46 @@ it("refuses before signing a turn-down that would leave the agent below the netw
   expect(charges(agent.id)).toEqual([]);
   expect((await wallet.getJob(jobId, true)).status).toBe("delivered");
 });
+
+// Independent money review of 0.1.17, MAJOR 1: with the dollar price unreadable the person's yes to a
+// turn-down, a dispute or an approval paid from the agent's own money went through and was never counted
+// against the agent's day. It is refused before signing, and goes through, counted once, when prices are back.
+async function agentPaidDeliveryWithPrices() {
+  let down = false;
+  w = await startWorld({ config: { prices: { solUsd: async () => down ? null : 100 } } });
+  const { wallet, sandbox, listing } = w;
+  const agent = await wallet.createAgent("My assistant");
+  await wallet.setPolicy(agent.id, { askAboveCents: 1000, refill: REVIEW_ALLOWANCE });
+  await wallet.fundAgent(agent.id, { usdCents: 300 });
+  await wallet.setPolicy(agent.id, ASKS_EVERY_TIME);
+  const hire = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
+  await wallet.decideApproval(hire.approval!.id, true);
+  expect(await sandbox.workOnce()).toBe(1);
+  expect((await wallet.getJob(hire.job.id, true)).status).toBe("delivered");
+  return { wallet, agent, jobId: hire.job.id, prices: (up: boolean) => { down = !up; } };
+}
+
+for (const action of ["reject", "approve"] as const) {
+  it(`refuses an agent-paid ${action} on the person's yes while dollar prices are unavailable, then counts it once`, async () => {
+    const { wallet, agent, jobId, prices } = await agentPaidDeliveryWithPrices();
+    const { quote } = await wallet.reviewRecord(jobId, undefined, { termsOnly: true });
+    const cost = BigInt((action === "reject" ? quote!.rejectionTotal : quote!.fee).lamports);
+    const before = await w!.balance(agent.address);
+    const decide = action === "reject"
+      ? async () => { const draft = await wallet.draftReview(jobId, action, "The haiku has four lines."); return () => wallet.confirmReview(jobId, draft, true); }
+      : async () => () => wallet.approveJob(jobId, undefined, true, undefined, quote!.id);
+    const yes = await decide();
+    prices(false);
+    await expect(yes()).rejects.toMatchObject({ code: "NETWORK", message: "Dollar prices are unavailable. Try again in a minute." });
+    expect(await w!.balance(agent.address)).toBe(before);
+    expect(charges(agent.id)).toEqual([]);
+    expect(state().reviewIntents?.[jobId]?.receipt).toBeUndefined();
+    expect((await wallet.getJob(jobId, true)).status).toBe("delivered");
+    prices(true);
+    await yes();
+    // A turn-down moves exactly its total; a payment also brings record rent back to the agent.
+    if (action === "reject") expect(before - await w!.balance(agent.address)).toBe(cost);
+    expect(charges(agent.id)).toEqual([String(cost)]);
+    expect((await wallet.getJob(jobId, true)).status).not.toBe("delivered");
+  });
+}
