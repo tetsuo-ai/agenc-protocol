@@ -393,6 +393,8 @@ export interface ApprovalRecord {
   networkFees?: string;
   retainedRent?: string;
   cancellationRent?: string;
+  /** Part of `retainedRent`: the payer's marketplace record, paid on its first job only. */
+  firstRecordRent?: string;
   protocolFeeBps?: number;
   terms?: JobTerms;
   acceptance?: string[];

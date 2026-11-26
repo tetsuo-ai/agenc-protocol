@@ -5,7 +5,9 @@ import { WalletError } from "./errors.js";
 import { childHolds } from "./child-hire-store.js";
 import type { AgentRecord } from "./store.js";
 
-export type JobDeposits = { total: bigint; kept: bigint; networkFees: bigint; cancellationRent: bigint };
+export type JobDeposits = { total: bigint; kept: bigint; networkFees: bigint; cancellationRent: bigint;
+  /** Part of `kept`: the paying wallet's marketplace record, made and kept on its first job only. */
+  firstRecordRent?: bigint };
 export function jobNetworkFees(transactionFee: bigint): bigint {
   // Create, pin, pay or cancel, then tidy. Moderation supplies a separate
   // fixed two-signature transaction whose instructions the wallet validates.

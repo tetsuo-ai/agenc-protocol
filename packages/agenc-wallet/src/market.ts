@@ -480,14 +480,16 @@ async function jobDeposits(
   // The marketplace keeps one record per paying wallet of how often it posts:
   // made, and kept, on that wallet's first job of either kind.
   const [rateLimit] = await findCreateTaskHumanlessAuthorityRateLimitPda({ creator: payer });
+  let firstRecordRent = 0n;
   if ((await chain.readAccountInfo(rateLimit)) === null) {
     const once = await rent(getAuthorityRateLimitSize());
     total += once;
     kept += once;
+    firstRecordRent = once;
   }
   const cancellationRent = await creatorRecordCost(chain, payer, rent);
   const networkFees = jobNetworkFees(chain.transferFeeLamports);
-  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent };
+  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent, ...(firstRecordRent > 0n && { firstRecordRent }) };
 }
 
 /**
