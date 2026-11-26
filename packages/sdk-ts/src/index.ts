@@ -79,3 +79,5 @@ export {
   NEW_PROTOCOL_CONFIG_SIZE,
   type CapabilitySet,
 } from "./facade/surface.js";
+
+export * as lighthouse from "./lighthouse.js";

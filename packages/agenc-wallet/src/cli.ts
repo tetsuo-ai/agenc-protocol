@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { watch } from "node:fs";
 /**
  * `agenc-wallet <init|serve|status>` — run the wallet as a small local service.
  *
@@ -43,9 +44,11 @@ import {
 import { defaultSocketPath, serveWallet } from "./server.js";
 import { openDetailsCache } from "./listing-details.js";
 import { createHostedServices, type MarketServices } from "./services.js";
-import { restoreBackup } from "./backup.js";
+import { readBackupFile, restoreBackup } from "./backup.js";
 import { hideFromLog, logSafe } from "./log.js";
 import { listenForUnlock } from "./unlock-server.js";
+import { withAgentExecutors } from "./agent-executors.js";
+import { unlockServerKeyFile } from "./client/unlock.js";
 import { readPrivateFile, writePrivateFileAtomic } from "./vault.js";
 import { AgencWallet } from "./wallet.js";
 
@@ -96,10 +99,14 @@ interface Bootstrap {
   unlockSecret: string;
   ownerToken: string;
   earn?: {
-    executor: { argv: string[]; mode: string; envAllowlist?: string[]; timeoutMs?: number } | null;
+    executor: { argv: string[]; mode: string; isolatedJobRoom?: boolean; reserveRevisionBudget?: boolean; envAllowlist?: string[]; timeoutMs?: number; readiness?: { argv: string[]; timeoutMs?: number } } | null;
     maxRewardLamports?: string | null;
     /** Take jobs only from this wallet's own addresses. */
     ownJobsOnly?: boolean;
+    /** Path of Desktop's non-secret earning preference, supplied only at bootstrap. */
+    chosenRoomSetting?: string;
+    /** A different executor for named agents (a seller paired with a remote room). */
+    agentExecutors?: Record<string, NonNullable<NonNullable<Bootstrap["earn"]>["executor"]>>;
   } | null;
   hosted?: {
     siteUrl?: string;
@@ -191,17 +198,42 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
   if (executor.mode !== "sandboxed" && executor.mode !== "safe" && executor.mode !== "unsafe") {
     throw new WalletError("BAD_REQUEST", "The earn executor mode is not valid.");
   }
+  const readiness = executor.readiness;
+  if (readiness !== undefined && (
+    readiness === null || typeof readiness !== "object" ||
+    !Array.isArray(readiness.argv) || readiness.argv.length === 0 ||
+    readiness.argv.some((part) => typeof part !== "string" || part.includes("{prompt}")) ||
+    (readiness.timeoutMs !== undefined && (!Number.isSafeInteger(readiness.timeoutMs) || readiness.timeoutMs <= 0 || readiness.timeoutMs > 120_000))
+  )) {
+    throw new WalletError("BAD_REQUEST", "The readiness self-test needs an argv list and a timeout of at most 120 seconds.");
+  }
   const maxReward = bootstrap.earn?.maxRewardLamports;
+  const chosenRoomSetting = bootstrap.earn?.chosenRoomSetting;
   return {
     executor: {
       argv: executor.argv,
       mode: executor.mode,
       envAllowlist: executor.envAllowlist ?? [],
+      isolatedJobRoom: executor.isolatedJobRoom === true,
+      reserveRevisionBudget: executor.reserveRevisionBudget === true,
       timeoutMs: executor.timeoutMs ?? 15 * 60_000,
+      ...(readiness === undefined ? {} : { readiness }),
     },
     ...(maxReward === undefined
       ? {}
       : { maxRewardLamports: maxReward === null ? null : BigInt(maxReward) }),
+    ...(typeof chosenRoomSetting === "string" && path.isAbsolute(chosenRoomSetting)
+      ? { watchChosenRoom: (revoke: () => void) => {
+        const watcher = watch(path.dirname(chosenRoomSetting), (_event, file) => {
+          if (!file || file === path.basename(chosenRoomSetting)) revoke();
+        });
+        watcher.on("error", revoke);
+        return () => watcher.close();
+      }, chosenRoomEnabled: () => {
+        try {
+          return JSON.parse(readFileSync(chosenRoomSetting, "utf8"))?.takeJobsFromOthers === true;
+        } catch { return false; }
+      } } : {}),
     ...(bootstrap.earn?.ownJobsOnly === true ? { ownJobsOnly: true } : {}),
   };
 }
@@ -236,6 +268,7 @@ interface OpenService {
 }
 
 interface ServeTarget {
+  background?: boolean;
   network: WalletNetwork;
   dataDir: string;
   socketPath: string;
@@ -285,8 +318,11 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
     chain,
     services,
     prices,
-    earn: earnOptions(bootstrap),
+    earn: withAgentExecutors(earnOptions(bootstrap), bootstrap.earn?.agentExecutors,
+      (executor) => earnOptions({ ...bootstrap, earn: { executor: executor as never } }).executor),
     log,
+    // A private job's exchange is served beside the wallet's own socket (a named pipe on Windows has no folder).
+    ...(process.platform !== "win32" && { privateSocketDir: path.dirname(target.socketPath) }),
   });
   if (sandbox !== null) {
     const practice = BigInt(bootstrap.practiceLamports ?? "500000000");
@@ -297,11 +333,14 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
   const server = await serveWallet({
     wallet,
     socketPath: target.socketPath,
+    grantFile: path.join(dataDir, "connection-grants.json"),
+    network, background: target.background === true,
     ownerToken: bootstrap.ownerToken,
     agentExists: (agentId) => wallet.hasAgent(agentId),
     log,
   });
   wallet.start();
+  const stopHeartbeats = wallet.startListingHeartbeats();
 
   let houseTimer: ReturnType<typeof setInterval> | null = null;
   if (sandbox !== null) {
@@ -338,6 +377,7 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
     wallet,
     socketPath: server.socketPath,
     stop: async () => {
+      stopHeartbeats();
       if (houseTimer !== null) clearInterval(houseTimer);
       await server.close();
       // Pauses this wallet's services on the marketplace: nobody is left to
@@ -364,7 +404,7 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
     rpcUrlFlag: values["rpc-url"] as string | undefined,
   };
   if (typeof values["unlock-socket"] === "string") {
-    return serveLocked(target, path.resolve(values["unlock-socket"]));
+    return serveLocked({ ...target, background: true }, path.resolve(values["unlock-socket"]), unlockServerKeyFile(baseDir));
   }
   const bootstrapFile = path.join(baseDir, "bootstrap.json");
   // A host that manages this service writes the start-up line to stdin and
@@ -411,12 +451,13 @@ async function serve(values: Record<string, string | boolean | undefined>): Prom
  * over the start-up line on `unlockSocket`, then serve until signalled. The
  * unlock secret is only ever in this process's memory.
  */
-async function serveLocked(target: ServeTarget, unlockSocket: string): Promise<number> {
+async function serveLocked(target: ServeTarget, unlockSocket: string, serverKeyFile: string): Promise<number> {
   let open: OpenService | null = null;
   let secret: Buffer | null = null;
   let ownerToken: string | null = null;
   const unlockServer = await listenForUnlock({
     socketPath: unlockSocket,
+    serverKeyFile,
     unlock: async (startup) => {
       const bootstrap = parseBootstrap(JSON.stringify(startup ?? null));
       open = await openService(target, bootstrap);
@@ -540,7 +581,7 @@ async function restore(values: Record<string, string | boolean | undefined>): Pr
   const { header, replaced } = await restoreBackup({
     dataDir,
     unlockSecret: secret,
-    text: readFileSync(path.resolve(values.file), "utf8"),
+    text: readBackupFile(path.resolve(values.file)),
     password,
     network,
     now: Date.now(),
@@ -571,6 +612,7 @@ async function main(): Promise<number> {
     return values.help === true ? 0 : 2;
   }
   if (command === "init") return init(values);
+  if (command === "public-discovery") return (await import("./public-discovery.js")).servePublicCatalog();
   if (command === "serve") return serve(values);
   if (command === "status") return status(values);
   if (command === "restore") return restore(values);

@@ -1,0 +1,801 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { address, getCompiledTransactionMessageDecoder } from "@solana/kit";
+import { loadState, saveState } from "@tetsuo-ai/agenc-worker";
+import { lighthouse, findAgentPda, findClaimPda, findTaskSubmissionPda, findWorkerStatsPda, getAgentRegistrationDecoder, getAgentRegistrationEncoder, getTaskDecoder, getTaskEncoder, getTaskSubmissionDecoder, SubmissionStatus, TaskStatus, values } from "@tetsuo-ai/marketplace-sdk";
+import type { WorkerQuote } from "../src/client/types.js";
+import { AGENT_METHODS } from "../src/client/protocol.js";
+import { CENT, eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
+
+let world: World | undefined;
+afterEach(async () => { await world?.wallet.close(); world = undefined; });
+const executor = { argv: [process.execPath, "-e", "process.stdout.write('Room output')", "{prompt}"],
+  mode: "sandboxed" as const, timeoutMs: 3000, envAllowlist: [] };
+
+async function setup(ready = async () => {}, tamper = () => false, enabled = () => true, options: NonNullable<Parameters<typeof startWorld>[0]> = {}) {
+  world = await startWorld({
+    services: services => ({ ...services, resolveAgencUri: (...args) => tamper()
+      ? Promise.resolve(new TextEncoder().encode('{"instructions":"changed"}'))
+      : services.resolveAgencUri!(...args) }),
+    ...options,
+    earn: { executor, chosenRoomEnabled: enabled, checkExecutionReady: ready, pollIntervalMs: 100, ...options.earn },
+  });
+  const { wallet, sandbox } = world;
+  const { id } = await wallet.createAgent("Worker");
+  wallet.chooseWork(id, true);
+  const post = (title: string) => sandbox.postOpenJob({ title, instructions: "Write one line.", rewardLamports: 50n * CENT, deadlineSeconds: 7200 });
+  const first = await post("First job");
+  const other = await post("Second job");
+  await wallet.fundAgent(id, { usdCents: 2000 });
+  await wallet.setPolicy(id, { askAboveCents: 500, refill: { enabled: true, topUpToCents: 1, perDayCents: 500 } });
+  await setEarnWithApproval(wallet, id, true);
+  await eventually(async () => (await wallet.openWork(id).catch(() => null))?.jobs.length === 2);
+  return { wallet, sandbox, id, task: other.task, first: first.task };
+}
+
+async function assertBalances(quote: WorkerQuote, outcome: Pick<WorkerQuote, "balances" | "flows"> = quote) {
+  const before = await Promise.all(outcome.balances.map(row => world!.balance(row.account)));
+  for (const flow of outcome.flows) {
+    expect(flow.amount.usdCents).not.toBeNull();
+    expect(flow.to).toBeTruthy();
+    expect(flow.from).toBeTruthy();
+  }
+  expect(await world!.wallet.decideWork(quote.id, true)).toEqual({ approved: true });
+  for (const [i, row] of outcome.balances.entries()) {
+    expect(row.net.usdCents).not.toBeNull();
+    expect(await world!.balance(row.account) - before[i]!).toBe(BigInt(row.net.lamports));
+  }
+}
+const journal = (id: string) => loadState(path.join(world!.dataDir, "earn", id));
+async function completedRoom(id: string, task: string) {
+  const wallet = world!.wallet;
+  await wallet.decideWork((await wallet.quoteWork(id, task, "claim")).id, true);
+  return eventually(async () => (await wallet.openWork(id)).held?.resultHash);
+}
+
+describe("chosen open work", () => {
+  it.each(["submit", "release"] as const)("claims only the chosen job, holds its room result and waits for %s", async (action) => {
+    const { wallet, id, task, first, sandbox } = await setup();
+    expect((await wallet.openWork(id, 0, first)).jobs.map((job) => job.task)).toEqual([first]);
+    const q = await wallet.quoteWork(id, task, "claim");
+    expect(q.job).toMatchObject({ title: "Second job", deposit: { lamports: "5000000" }, reviewSeconds: 3600 });
+    expect(await wallet.quoteWork(id, task, "claim")).toEqual(q);
+    expect(wallet.pendingWork()).toEqual([q]);
+    await assertBalances(q);
+    await expect(wallet.decideWork(q.id, true)).rejects.toThrow();
+    const held = await eventually(async () => {
+      const job = (await wallet.openWork(id)).held;
+      return job?.canSubmit && job;
+    });
+    expect(held).toMatchObject({ task, preview: "Room output", resultBytes: 11, resultHash: expect.stringMatching(/^[a-f0-9]{64}$/), canRelease: true });
+    expect(sandbox.deliveries.size).toBe(0);
+    const next = await wallet.quoteWork(id, task, action);
+    expect(next.balances.find(row => row.account === next.job.worker)?.net.lamports).toBe(action === "submit" ? "2204040" : "7298760");
+    expect(next.flows).toEqual(expect.arrayContaining([expect.objectContaining({ label: action === "submit" ? "Submission rent" : "Claim rent and remaining balance returned" })]));
+    await assertBalances(next);
+    expect(sandbox.deliveries.size).toBe(action === "submit" ? 1 : 0);
+    expect((await wallet.openWork(id)).held).toBeNull();
+    expect((await wallet.openWork(id)).jobs.map((job) => job.task)).toContain(first);
+  }, 30000);
+
+  // The person's yes covers a claim above the daily amount (owner, 0.1.16 real test 2), so
+  // an exhausted allowance is no refusal here; work-allowance-topup.e2e covers that yes.
+  it("refuses a failed room self-test, expired approval and disabled earning", async () => {
+    const ready = vi.fn(async () => {});
+    const { wallet, id, task } = await setup(ready);
+    const quote = () => wallet.quoteWork(id, task, "claim");
+    const stale = await quote();
+    world!.clock.now += 300001;
+    await expect(wallet.decideWork(stale.id, true)).rejects.toThrow(/expired/);
+    ready.mockRejectedValueOnce(new Error("self-test failed"));
+    await expect(wallet.decideWork((await quote()).id, true)).rejects.toThrow();
+    expect((await wallet.openWork(id)).jobs).toHaveLength(2);
+    await wallet.setBudget(id, 0);
+    const pending = await quote();
+    await wallet.setEarn(id, false);
+    await expect(wallet.decideWork(pending.id, true)).rejects.toThrow(/Earns/);
+    expect(world!.sandbox.deliveries.size).toBe(0);
+  }, 30000);
+
+  it("checks the live Take jobs switch again after the claim self-test", async () => {
+    let enabled = true;
+    const ready = async () => { enabled = false; };
+    const { wallet, id, task } = await setup(ready, undefined, () => enabled);
+    const quote = await wallet.quoteWork(id, task, "claim");
+    await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+    enabled = true;
+    expect((await wallet.openWork(id)).jobs).toHaveLength(2);
+    expect(world!.sandbox.deliveries.size).toBe(0);
+  });
+
+  it("rechecks the exact spec and fails closed when its published contents change", async () => {
+    let changed = false;
+    const { wallet, id, task } = await setup(undefined, () => changed);
+    const q = await wallet.quoteWork(id, task, "claim");
+    changed = true;
+    expect((await wallet.openWork(id)).jobs).toEqual([]);
+    await expect(wallet.decideWork(q.id, true)).rejects.toThrow();
+    expect(world!.sandbox.deliveries.size).toBe(0);
+  });
+
+  it("holds the same room output over restart and refuses a release at the grace boundary", async () => {
+    const { wallet, id, task, sandbox } = await setup();
+    await wallet.decideWork((await wallet.quoteWork(id, task, "claim")).id, true);
+    await eventually(async () => (await wallet.openWork(id)).held?.canSubmit);
+    await wallet.close();
+    world!.wallet = await world!.reopen();
+    const restarted = world!.wallet;
+    await eventually(async () => (await restarted.openWork(id).catch(() => null))?.held?.canSubmit);
+    expect(restarted.pendingWork()).toEqual([]);
+    expect(sandbox.deliveries.size).toBe(0);
+    sandbox.advanceClock(3600);
+    const early = await restarted.quoteWork(id, task, "release");
+    expect(early.expiresAt).toBe(world!.clock.now + 1000);
+    expect(early.job.depositReturns).toBe(true);
+    sandbox.advanceClock(1);
+    await expect(restarted.decideWork(early.id, true)).rejects.toThrow(/window|quote/);
+    const late = await restarted.quoteWork(id, task, "release");
+    expect(late.job).toMatchObject({ canRelease: true, depositReturns: false });
+    expect(late.job.releaseWindow?.notice).toContain(`buyer (${late.job.buyer}) gets the deposit`);
+    expect(late.afterWindow).toBeUndefined();
+    expect(late.balances.find(row => row.account === late.job.worker)?.net.lamports).toBe("2298760");
+    expect(late.balances.find(row => row.account === late.job.buyer)?.net.lamports).toBe("5000000");
+    await assertBalances(late);
+    expect((await restarted.openWork(id)).held).toBeNull();
+  });
+
+  it("does not use a fallback executor when restarted without the isolated room", async () => {
+    const { wallet, id, task, sandbox } = await setup();
+    await wallet.decideWork((await wallet.quoteWork(id, task, "claim")).id, true);
+    await wallet.close();
+    const called = vi.fn(async () => {});
+    world!.wallet = await world!.reopen({ earn: {
+      executor, chosenRoomEnabled: () => false, ownJobsOnly: true, checkExecutionReady: called, pollIntervalMs: 30,
+    } });
+    expect(await world!.wallet.openWork(id)).toMatchObject({ jobs: [], held: { canRelease: true, canSubmit: false } });
+    await expect(world!.wallet.quoteWork(id, task, "submit")).rejects.toThrow();
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await world!.wallet.setEarn(id, false);
+    await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+    expect(called).not.toHaveBeenCalled();
+    expect(sandbox.deliveries.size).toBe(0);
+  });
+
+  it("requires a room for chosen work and keeps owner decisions off agent connections", async () => {
+    world = await startWorld({ earn: { executor, ownJobsOnly: true, chosenRoomEnabled: () => true } });
+    const { id } = await world.wallet.createAgent("Worker");
+    expect(() => world!.wallet.chooseWork(id, true)).toThrow(/room/);
+    expect(AGENT_METHODS.filter((m) => m.startsWith("work."))).toEqual(["work.list", "work.quote"]);
+  });
+});
+
+it.each([3600, 3601])("discloses both recipients and reconciles a release landing %i seconds after claim", async delay => {
+  let approved = false;
+  let verifiedClock = false;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (approved) {
+        const message = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+        if (message.version !== 0) throw new Error("Expected a version 0 release transaction.");
+        const guards = message.instructions.filter(ix => message.staticAccounts[ix.programAddressIndex] === lighthouse.LIGHTHOUSE);
+        // Clock, then the claim (identity and balance), Rent and the task's dispute flag.
+        expect(guards).toHaveLength(5);
+        for (const guard of guards) {
+          expect(guard.accountIndices).toHaveLength(1);
+          expect(guard.accountIndices![0]!).toBeGreaterThanOrEqual(message.header.numSignerAccounts);
+        }
+        expect(message.staticAccounts[guards[0]!.accountIndices![0]!]).toBe("SysvarC1ock11111111111111111111111111111111");
+        verifiedClock = true;
+        world!.sandbox.advanceClock(delay);
+      }
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  const quote = await wallet.quoteWork(id, task, "release");
+  const { worker, buyer, deposit, releaseWindow, releaseBy } = quote.job;
+  expect(quote.job.depositReturns).toBe(true);
+  expect(releaseWindow!.notice).toContain(`at or before ${new Date(releaseBy! * 1000).toISOString()}, the worker (${worker}) gets the deposit`);
+  expect(releaseWindow!.notice).toContain(`A fresh late release pays the buyer (${buyer})`);
+  expect(quote.flows).toContainEqual(expect.objectContaining({ to: worker, amount: deposit }));
+  expect(quote.afterWindow).toBeUndefined();
+  const before = await world!.balance(buyer);
+  approved = true;
+  if (delay === 3600) {
+    await assertBalances(quote);
+    expect(journal(id).failedJobs.find(row => row.task === task)?.claimReleased).toBe(true);
+  } else {
+    const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+    const held = await world!.balance(claim);
+    await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+    expect(await world!.balance(claim)).toBe(held);
+    expect(journal(id).openClaim?.task).toBe(task);
+  }
+  expect(verifiedClock).toBe(true);
+  expect(await world!.balance(buyer)).toBe(before);
+  if (delay > 3600) {
+    approved = false;
+    await eventually(async () => (await wallet.openWork(id)).held?.canRelease);
+    const fresh = await wallet.quoteWork(id, task, "release");
+    expect(fresh.job.depositReturns).toBe(false);
+    await assertBalances(fresh);
+    expect(await world!.balance(buyer) - before).toBe(BigInt(deposit.lamports));
+  }
+});
+
+it("refuses an approved release that crosses the boundary while signing, before reserving or sending", async () => {
+  let delay = false, broadcasts = 0;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async getLatestBlockhash() {
+      if (delay) world!.sandbox.advanceClock(3601);
+      return base.getLatestBlockhash();
+    }, async sendAndConfirm(tx) {
+      if (delay) broadcasts++;
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  const hash = await completedRoom(id, task);
+  const quote = await wallet.quoteWork(id, task, "release");
+  delay = true;
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/return window changed/);
+  delay = false;
+  expect(broadcasts).toBe(0);
+  const submit = await wallet.quoteWork(id, task, "submit");
+  expect(submit.job.resultHash).toBe(hash);
+  expect(submit.dailyRemaining).toEqual(quote.dailyRemaining);
+});
+
+it("quotes the worker on both sides of the window for a claim protected by a prior dispute", async () => {
+  const { wallet, sandbox, id, task } = await setup();
+  await completedRoom(id, task);
+  const svm = sandbox.market.svm;
+  const raw = svm.getAccount(task)!;
+  if (!raw.exists) throw new Error("Missing task");
+  const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+  const reserved = Uint8Array.from(data.reserved);
+  reserved[13] = 1;
+  svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, reserved })) } as never);
+  const early = await wallet.quoteWork(id, task, "release");
+  expect(early.job.releaseWindow?.notice).toContain(`A fresh late release pays the worker (${early.job.worker})`);
+  expect(early.afterWindow).toBeUndefined();
+  sandbox.advanceClock(3601);
+  const late = await wallet.quoteWork(id, task, "release");
+  expect(late.job.releaseWindow?.notice).toContain(`The worker (${late.job.worker}) gets the deposit`);
+  await assertBalances(late);
+});
+
+it("returns residual claim rent to the worker when the balance cannot fund a late deposit", async () => {
+  const { wallet, sandbox, id, task } = await setup();
+  await completedRoom(id, task);
+  const original = await wallet.quoteWork(id, task, "release");
+  const claim = original.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+  const svm = sandbox.market.svm;
+  const raw = svm.getAccount(address(claim))!;
+  if (!raw.exists) throw new Error("Missing claim");
+  // One lamport below a full forfeitable deposit, as can happen with a rent change.
+  svm.setAccount({ ...raw, lamports: raw.lamports - 1n } as never);
+  await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
+  const early = await wallet.quoteWork(id, task, "release");
+  expect(early.job.deposit.lamports).toBe("0");
+  expect(early.afterWindow).toBeUndefined();
+  sandbox.advanceClock(3601);
+  const buyer = await world!.balance(early.job.buyer);
+  const late = await wallet.quoteWork(id, task, "release");
+  expect(late.job.depositReturns).toBeNull();
+  await assertBalances(late);
+  expect(await world!.balance(early.job.buyer)).toBe(buyer);
+});
+
+it("charges only the fee and restores the completed result after a landed release fails", async () => {
+  let freeze = false;
+  let sends = 0;
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (!freeze) return base.sendAndConfirm(tx);
+      sends++;
+      const svm = world!.sandbox.market.svm;
+      const raw = svm.getAccount(task)!;
+      if (!raw.exists) throw new Error("Missing task");
+      const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+      svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, status: TaskStatus.Disputed })) } as never);
+      try { return await base.sendAndConfirm(tx); }
+      finally { svm.setAccount(raw as never); }
+    } }),
+  });
+  const hash = await completedRoom(id, task);
+  const refund = await wallet.quoteWork(id, task, "release");
+  const buyer = await world!.balance(refund.job.buyer);
+  const worker = await world!.balance(refund.job.worker);
+  freeze = true;
+  await expect(wallet.decideWork(refund.id, true)).rejects.toThrow();
+  freeze = false;
+  expect(sends).toBe(1);
+  expect(await world!.balance(refund.job.buyer)).toBe(buyer);
+  expect(await world!.balance(refund.job.worker)).toBe(worker - 5000n);
+  await eventually(async () => (await wallet.openWork(id)).held?.canSubmit);
+  const submit = await wallet.quoteWork(id, task, "submit");
+  expect(BigInt(refund.dailyRemaining.lamports) - BigInt(submit.dailyRemaining.lamports)).toBe(5000n);
+  expect(submit.job.resultHash).toBe(hash);
+  expect(sandbox.deliveries.size).toBe(0);
+  await assertBalances(submit);
+});
+
+it("refunds a provably unused submission reservation and requires a new approval for a second send", async () => {
+  let refuse = false;
+  let attempts = 0;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (refuse) { attempts++; throw new Error("dropped before broadcast"); }
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  const original = await wallet.quoteWork(id, task, "submit");
+  refuse = true;
+  await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
+  await eventually(async () => (await wallet.openWork(id)).held?.canSubmit);
+  await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
+  const retry = await wallet.quoteWork(id, task, "submit");
+  expect(retry.dailyRemaining).toEqual(original.dailyRemaining);
+  expect(retry.id).not.toBe(original.id);
+  expect(attempts).toBe(1);
+  refuse = false;
+  await assertBalances(retry);
+});
+
+it("recognizes a signed release after losing its response and restarting", async () => {
+  let lose = false;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    chain: base => ({ ...base, workOutcome: receipt => lose ? Promise.resolve("pending") : base.workOutcome!(receipt) }),
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      const result = await base.sendAndConfirm(tx);
+      if (lose) throw new Error("connection closed after confirming");
+      return result;
+    } }),
+  });
+  await completedRoom(id, task);
+  const release = await wallet.quoteWork(id, task, "release");
+  lose = true;
+  await expect(wallet.decideWork(release.id, true)).rejects.toThrow();
+  expect(journal(id).openClaim?.chosenAttempt?.signature).toBeTruthy();
+  await wallet.close();
+  lose = false;
+  world!.wallet = await world!.reopen();
+  await eventually(async () => !journal(id).openClaim);
+  expect(journal(id).failedJobs.find(row => row.task === task)).toMatchObject({ chosen: true, cause: "released", claimReleased: true });
+});
+
+it("keeps the private approval intact when both public quote responses are modified", async () => {
+  const { wallet, id, task } = await setup();
+  const quote = await wallet.quoteWork(id, task, "claim");
+  const privateCopy = structuredClone(quote);
+  for (const item of [quote, wallet.pendingWork()[0]!]) {
+    Object.assign(item, { action: "release" });
+    Object.assign(item.charge, { lamports: "0" });
+    Object.assign(item.job, { task: "another task" });
+    Object.assign(item.flows[0]!, { to: "someone else" });
+  }
+  expect(wallet.pendingWork()).toEqual([privateCopy]);
+  // The yes carries out the private copy: this claim, on this task, nothing modified.
+  await wallet.setBudget(id, 0);
+  expect(await wallet.decideWork(quote.id, true)).toEqual({ approved: true });
+  expect(journal(id).openClaim?.task).toBe(task);
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow(/expired/);
+});
+
+it.each(["startup", "turn", "resumed turn"])("revokes the chosen executor during %s and keeps the claim", async stage => {
+  const dir = mkdtempSync(path.join(tmpdir(), "chosen-room-"));
+  const started = path.join(dir, "started"), turn = path.join(dir, "turn"), stopped = path.join(dir, "stopped");
+  const child = `const fs=require("node:fs"); process.on("SIGTERM",()=>{ fs.writeFileSync(${JSON.stringify(stopped)},"off"); process.exit(0) });
+    fs.writeFileSync(${JSON.stringify(started)},"self-test"); setTimeout(()=>fs.writeFileSync(${JSON.stringify(turn)},"turn"),${stage === "startup" ? 2000 : 5}); setInterval(()=>{},1000);`;
+  let enabled = true;
+  const earn = { executor: { ...executor, argv: [process.execPath, "-e", child, "{prompt}"], timeoutMs: 10000 },
+    chosenRoomEnabled: () => enabled, checkExecutionReady: async () => {}, pollIntervalMs: 100 };
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, { earn });
+  await wallet.decideWork((await wallet.quoteWork(id, task, "claim")).id, true);
+  if (stage === "resumed turn") {
+    await wallet.close();
+    world!.wallet = await world!.reopen({ earn });
+  }
+  await eventually(async () => existsSync(stage === "startup" ? started : turn));
+  enabled = false;
+  await eventually(async () => existsSync(stopped));
+  if (stage === "startup") expect(existsSync(turn)).toBe(false);
+  expect(journal(id).openClaim).toMatchObject({ task, chosen: true });
+  expect(journal(id).openClaim?.execution).toBeUndefined();
+  expect(world!.sandbox.deliveries.size).toBe(0);
+});
+
+it.each(["offline", "invalid"])("holds a chosen claim through %s spec recovery and past the refund window", async kind => {
+  let fail = false;
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
+    earn: { executor, maxJobAttempts: 1 },
+    services: base => ({ ...base, async resolveAgencUri(...args) {
+      if (fail) { if (kind === "offline") throw new Error("host offline"); return new TextEncoder().encode("wrong"); }
+      return base.resolveAgencUri!(...args);
+    } }),
+  });
+  const claim = await wallet.quoteWork(id, task, "claim");
+  await wallet.decideWork(claim.id, true);
+  fail = true;
+  const buyer = await world!.balance(claim.job.buyer);
+  await eventually(async () => !!(journal(id).openClaim?.ownerDecision || journal(id).openClaim?.fetchWaits));
+  expect((await wallet.openWork(id)).held).toMatchObject({ canRelease: true, releaseWindow: { phase: "early" } });
+  sandbox.advanceClock(3700);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  expect(journal(id).openClaim).toMatchObject({ chosen: true, task });
+  expect(await world!.balance(claim.job.buyer)).toBe(buyer);
+  await assertBalances(await wallet.quoteWork(id, task, "release"));
+});
+
+it("prices only the shortfall on a pre-funded worker record, in the quote and the funding gate", async () => {
+  const { wallet, id, task, sandbox } = await setup();
+  const [agent] = await findAgentPda({ agentId: values.hexToBytes(journal(id).agentIdHex!) });
+  const [record] = await findWorkerStatsPda({ worker: agent });
+  const original = await wallet.quoteWork(id, task, "claim");
+  sandbox.fund(record, 1000000n);
+  const q = await wallet.quoteWork(id, task, "claim");
+  expect(BigInt(q.job.recordRent.lamports)).toBe(BigInt(original.job.recordRent.lamports) - 1000000n);
+  expect(q.flows.find(row => row.to === record)?.amount).toEqual(q.job.recordRent);
+  const svm = sandbox.market.svm;
+  const raw = svm.getAccount(q.job.worker as never)!;
+  const reserve = [q.job.deposit, q.job.feeReserve, q.job.rent, q.job.recordRent, q.job.futureRent].reduce((sum, v) => sum + BigInt(v.lamports), 0n);
+  svm.setAccount({ ...raw, lamports: reserve - 1n } as never);
+  expect((await wallet.openWork(id, 0, task)).jobs).toEqual([]);
+  await expect(wallet.decideWork(q.id, true)).rejects.toThrow();
+  svm.setAccount({ ...raw, lamports: reserve } as never);
+  await assertBalances(await wallet.quoteWork(id, task, "claim"));
+});
+
+it("offers direct payment at the worker reputation rate and refuses self-posts and insufficient reputation", async () => {
+  const { wallet, sandbox, id } = await setup();
+  const self = await wallet.post({ agentId: id, request: "Draw a flower", reward: { usdCents: 20 } });
+  expect(self.job.task).toBeTruthy();
+  expect((await wallet.openWork(id, 0, self.job.task!)).jobs).toEqual([]);
+  await expect(wallet.quoteWork(id, self.job.task!, "claim")).rejects.toThrow();
+  const direct = await sandbox.postOpenJob({ title: "Direct", instructions: "Answer", rewardLamports: 50n * CENT, minReputation: 9000, settlement: "auto" });
+  expect((await wallet.openWork(id, 0, direct.task)).jobs).toEqual([]);
+  const [agent] = await findAgentPda({ agentId: values.hexToBytes(journal(id).agentIdHex!) });
+  const raw = sandbox.market.svm.getAccount(agent)!;
+  if (!raw.exists) throw new Error("Worker registration missing");
+  const before = getAgentRegistrationDecoder().decode(Uint8Array.from(raw.data));
+  sandbox.market.svm.setAccount({ ...raw, data: Uint8Array.from(getAgentRegistrationEncoder().encode({ ...before, reputation: 9500 })) } as never);
+  const claim = await wallet.quoteWork(id, direct.task, "claim");
+  expect(claim.job.direct).toBe(true);
+  const task = getTaskDecoder().decode((await sandbox.chain.readAccount(direct.task))!);
+  const reward = task.rewardAmount;
+  expect(BigInt(claim.job.payout.lamports)).toBe(reward - reward * BigInt(Math.max(1, task.protocolFeeBps - 15)) / 10000n);
+  await assertBalances(claim);
+  await eventually(async () => (await wallet.openWork(id)).held?.canSubmit);
+  const complete = await wallet.quoteWork(id, direct.task, "submit");
+  expect(complete.job.direct).toBe(true);
+  expect(complete.flows.find(x => x.label === "Worker payout")?.amount).toEqual(claim.job.payout);
+  await assertBalances(complete);
+});
+
+it("admits a second contest entrant after submission and names the treasury and selection deadline", async () => {
+  const { wallet, sandbox, id } = await setup();
+  const { task } = await sandbox.postOpenJob({ title: "Contest", instructions: "Enter", rewardLamports: 50n * CENT, settlement: "contest" });
+  await completedRoom(id, task);
+  const submission = await wallet.quoteWork(id, task, "submit");
+  expect(submission.job.canRelease).toBe(false);
+  expect(submission.job.releaseBy).toBeNull();
+  await assertBalances(submission);
+  const other = await wallet.createAgent("Another worker");
+  wallet.chooseWork(other.id, true);
+  await wallet.fundAgent(other.id, { usdCents: 2000 });
+  await wallet.setPolicy(other.id, { askAboveCents: 500, refill: { enabled: true, topUpToCents: 1, perDayCents: 500 } });
+  await setEarnWithApproval(wallet, other.id, true);
+  await eventually(async () => (await wallet.openWork(other.id).catch(() => null))?.jobs.some(job => job.task === task));
+  const entry = await wallet.quoteWork(other.id, task, "claim");
+  expect(entry.job).toMatchObject({ contest: true, selectionDeadline: entry.job.deadline + 172800, treasury: submission.job.treasury });
+  await assertBalances(entry);
+  await expect(wallet.quoteWork(other.id, task, "release")).rejects.toThrow();
+  expect(getTaskDecoder().decode((await sandbox.chain.readAccount(task))!).status).toBe(TaskStatus.PendingValidation);
+  await eventually(async () => (await wallet.openWork(other.id)).held?.canSubmit);
+  const second = await wallet.quoteWork(other.id, task, "submit");
+  expect(second.job.preview).toBe("Room output");
+  await assertBalances(second);
+  for (const workerId of [id, other.id]) {
+    const [bidder] = await findAgentPda({ agentId: values.hexToBytes(journal(workerId).agentIdHex!) });
+    const [claim] = await findClaimPda({ task, bidder });
+    const [submissionPda] = await findTaskSubmissionPda({ claim });
+    expect(getTaskSubmissionDecoder().decode((await sandbox.chain.readAccount(submissionPda))!))
+      .toMatchObject({ worker: bidder, claim, status: SubmissionStatus.Submitted });
+  }
+});
+
+it("pages a stable set of eligible addresses and reads an exact brief without holding the signing lane", async () => {
+  const directRead = new AsyncLocalStorage<boolean>();
+  let withheld: string | undefined;
+  let unblock!: () => void;
+  let enter!: () => void;
+  const waiting = new Promise<void>(resolve => { unblock = resolve; });
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, { chain: base => ({ ...base, gpa: new Proxy(base.gpa, {
+    get(target, key) {
+      if (directRead.getStore() && key === "getProgramAccounts") throw new Error("Unexpected full scan during an exact lookup");
+      return Reflect.get(target, key);
+    },
+  }) }), services: base => ({
+    ...base, async resolveAgencUri(...args) {
+      if (withheld && String(args[0]).includes(withheld)) { enter(); await waiting; }
+      return base.resolveAgencUri!(...args);
+    },
+  }) });
+  const request = "A".repeat(4500) + " final requirement";
+  const acceptance = Array.from({ length: 11 }, (_, i) => String(i) + "B".repeat(320));
+  const posted: Awaited<ReturnType<typeof sandbox.postOpenJob>>[] = [];
+  for (let i = 0; i < 10; i++) posted.push(await sandbox.postOpenJob({ title: "Row " + i, instructions: "", rewardLamports: 50n * CENT,
+    brief: { fullDescription: request, shortDescription: "Short", acceptanceCriteria: acceptance, index: i } }));
+  await sandbox.postOpenJob({ title: "Ineligible", instructions: "No", rewardLamports: 80n * CENT, minReputation: 10000 });
+  const first = await wallet.openWork(id);
+  expect(first.jobs).toHaveLength(10);
+  const added = await sandbox.postOpenJob({ title: "New highest", instructions: "Changed order", rewardLamports: 90n * CENT });
+  const second = await wallet.openWork(id, first.next!);
+  expect(second.next).toBeNull();
+  const addresses = [...first.jobs, ...second.jobs].map(x => x.task);
+  expect(new Set(addresses).size).toBe(12);
+  expect(addresses).not.toContain(added.task);
+  expect(addresses).toEqual([...addresses].sort((a, b) => a.localeCompare(b, "en")));
+  const exact = await directRead.run(true, () => wallet.openWork(id, 0, posted[0]!.task));
+  expect(exact.jobs[0]).toMatchObject({ request, criteria: acceptance });
+  const raw = JSON.parse(exact.jobs[0]!.brief);
+  expect(raw).toMatchObject({ shortDescription: "Short", index: 0 });
+  const hash = await values.canonicalJobSpecHash(raw);
+  withheld = hash.hex;
+  const slow = wallet.openWork(id, 0, posted[0]!.task);
+  try {
+    await entered;
+    await completedRoom(id, task);
+    await assertBalances(await wallet.quoteWork(id, task, "release"));
+  } finally { unblock(); }
+  expect((await slow).jobs[0]?.task).toBe(posted[0]!.task);
+}, 30000);
+
+it("refuses a release when the stock instruction cannot be simulated", async () => {
+  const { getReleaseClaimDiscriminatorBytes } = await import("@tetsuo-ai/marketplace-sdk");
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, { chain: base => ({
+    ...base, simulateWork: (payer, ix) => getReleaseClaimDiscriminatorBytes().every((v, i) => ix.data?.[i] === v)
+      ? Promise.resolve(null) : base.simulateWork!(payer, ix),
+  }) });
+  await completedRoom(id, task);
+  expect((await wallet.openWork(id)).held).toMatchObject({ canRelease: false, canSubmit: true });
+  await expect(wallet.quoteWork(id, task, "release")).rejects.toThrow();
+});
+
+it("retains the signed claim reservation over restart until it proves unused", async () => {
+  let drop = false, pending = true;
+  const { wallet, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (drop) throw new Error("no broadcast receipt");
+      return base.sendAndConfirm(tx);
+    } }),
+    chain: base => ({ ...base, workOutcome: receipt => drop && pending ? Promise.resolve("pending") : base.workOutcome!(receipt) }),
+  });
+  const quote = await wallet.quoteWork(id, task, "claim");
+  drop = true;
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+  expect(journal(id).openClaim).toMatchObject({ chosen: true, phase: "claiming", claimTransactionSignature: expect.any(String), claimLastValidBlockHeight: expect.any(String) });
+  await wallet.close();
+  world!.wallet = await world!.reopen();
+  expect((await world!.wallet.openWork(id)).jobs).toEqual([]);
+  pending = false;
+  await eventually(async () => !journal(id).openClaim);
+  const retry = await world!.wallet.quoteWork(id, task, "claim");
+  expect(retry.dailyRemaining).toEqual(quote.dailyRemaining);
+  expect(retry.id).not.toBe(quote.id);
+});
+
+it("leaves an exhausted 0.1.15 claim with no ownership flag for an owner decision after restart", async () => {
+  const { wallet, id, task } = await setup();
+  const quote = await wallet.quoteWork(id, task, "claim");
+  await wallet.decideWork(quote.id, true);
+  const claim = quote.flows.find(row => row.label === "Claim deposit")!.to;
+  await wallet.close();
+  const state = journal(id);
+  const { claimedAt } = state.openClaim!;
+  state.openClaim = null;
+  state.failedJobs.push({ task, claimedAt, failedAt: claimedAt, cause: "attempts", reason: "spec unavailable",
+    attempts: 3, claimReleased: false });
+  // Serialize the old worker's exact disk format, bypassing the new encoder.
+  writeFileSync(path.join(world!.dataDir, "earn", id, "state.json"), JSON.stringify(state));
+  const balance = await world!.balance(claim);
+  world!.wallet = await world!.reopen();
+  // Startup runs upkeep before the watcher's first discovery.
+  await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held?.canRelease || (await world!.balance(claim)) === 0n);
+  expect(await world!.balance(claim)).toBe(balance);
+  expect((await world!.wallet.openWork(id)).held).toMatchObject({ task, canSubmit: false, canRelease: true });
+  await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+  expect(await world!.balance(claim)).toBe(0n);
+});
+
+it.each(["still held", "already closed"] as const)("reconciles a timestamp-only legacy release that is %s", async outcome => {
+  const { wallet, id, task } = await setup();
+  const hash = await completedRoom(id, task);
+  const saved = journal(id);
+  if (outcome === "already closed") await assertBalances(await wallet.quoteWork(id, task, "release"));
+  await wallet.close();
+  saved.openClaim!.releaseRequestedAt = new Date(Date.now() - 121_000).toISOString();
+  saveState(path.join(world!.dataDir, "earn", id), saved);
+  world!.wallet = await world!.reopen();
+  if (outcome === "already closed") {
+    await eventually(async () => journal(id).openClaim === null);
+    expect(journal(id).failedJobs).toContainEqual(expect.objectContaining({ task, cause: "released", claimReleased: true }));
+    return;
+  }
+  const held = await eventually(async () => {
+    const page = await world!.wallet.openWork(id).catch(() => null);
+    return page?.held?.canSubmit && page.held;
+  });
+  expect(held).toMatchObject({ resultHash: hash, canSubmit: true, canRelease: true });
+  await assertBalances(await world!.wallet.quoteWork(id, task, "submit"));
+});
+
+it.each(["review", "contest", "auto"] as const)("quotes and closes an expired %s claim only after owner approval", async settlement => {
+  const { wallet, sandbox, id } = await setup();
+  const { task } = await sandbox.postOpenJob({ title: "Expired job", instructions: "Write one line.", rewardLamports: 50n * CENT,
+    deadlineSeconds: settlement === "review" ? 900 : 7200, ...(settlement !== "review" && { settlement }) });
+  const claimed = await wallet.quoteWork(id, task, "claim");
+  await assertBalances(claimed);
+  const held = await eventually(async () => (await wallet.openWork(id)).held);
+  const claim = claimed.flows.find(row => row.label === "Claim deposit")!.to;
+  const balance = await world!.balance(claim);
+  sandbox.advanceClock(held.expiresAt! - await sandbox.chain.clusterTime());
+  expect((await wallet.openWork(id)).held).toMatchObject({ canRelease: false });
+  sandbox.advanceClock(1);
+  await wallet.close();
+  world!.wallet = await world!.reopen();
+  const page = await eventually(async () => world!.wallet.openWork(id).catch(() => null));
+  expect(page.held).toMatchObject({ task, cleanup: true, canSubmit: false, canRelease: true });
+  await expect(world!.wallet.quoteWork(id, task, "submit")).rejects.toThrow();
+  const quote = await world!.wallet.quoteWork(id, task, "release");
+  const recipient = settlement === "contest" ? held.treasury : held.buyer;
+  expect(quote.flows).toEqual(expect.arrayContaining([
+    expect.objectContaining({ from: claim, to: recipient, amount: claimed.job.deposit }),
+    expect.objectContaining({ from: claim, to: held.worker, amount: claimed.job.rent }),
+    expect.objectContaining({ to: held.worker, amount: expect.objectContaining({ lamports: "1000" }) }),
+  ]));
+  expect(quote.job.cleanupRecipient).toBe(recipient);
+  expect(quote.charge).toEqual(quote.job.networkFee);
+  await world!.wallet.decideWork(quote.id, false);
+  expect(await world!.balance(claim)).toBe(balance);
+  await assertBalances(await world!.wallet.quoteWork(id, task, "release"));
+  expect(await world!.balance(claim)).toBe(0n);
+  expect((await world!.wallet.openWork(id)).held).toBeNull();
+});
+
+it("holds both actions while an old release can still land, then restores the saved result", async () => {
+  const { wallet, id, task } = await setup();
+  const hash = await completedRoom(id, task);
+  await wallet.close();
+  const state = journal(id);
+  state.openClaim!.releaseRequestedAt = new Date().toISOString();
+  saveState(path.join(world!.dataDir, "earn", id), state);
+  world!.wallet = await world!.reopen();
+  const pending = await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held);
+  expect(pending).toMatchObject({ resultHash: hash, canSubmit: false, canRelease: false });
+  const originalNow = Date.now;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => originalNow() + 121_000);
+  try {
+    await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held?.canSubmit);
+    expect((await world!.wallet.openWork(id)).held).toMatchObject({ resultHash: hash, canRelease: true });
+    expect(world!.sandbox.deliveries.size).toBe(0);
+  } finally { clock.mockRestore(); }
+});
+
+it("requotes an expired claim when terminal cleanup changes its simulated transfers", async () => {
+  const { wallet, sandbox, id, task } = await setup();
+  await completedRoom(id, task);
+  const held = (await wallet.openWork(id)).held!;
+  sandbox.advanceClock(held.expiresAt! - await sandbox.chain.clusterTime() + 1);
+  const live = await wallet.quoteWork(id, task, "release");
+  const raw = sandbox.market.svm.getAccount(task)!;
+  if (!raw.exists) throw new Error("Missing task");
+  const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+  const reserved = Uint8Array.from(data.reserved);
+  reserved[13] = 1; // A prior dispute protects the worker's deposit.
+  sandbox.market.svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({
+    ...data, status: TaskStatus.Completed, reserved,
+  })) } as never);
+  await expect(wallet.decideWork(live.id, true)).rejects.toThrow(/changed/);
+  const terminal = await wallet.quoteWork(id, task, "release");
+  expect(terminal.job.cleanupRecipient).toBe(held.worker);
+  expect(terminal.flows.some(row => row.label === "Cleanup reward")).toBe(false);
+  await assertBalances(terminal);
+});
+
+it("recovers a previously archived expired claim with Earns off, with the owner's yes above the allowance", async () => {
+  const { wallet, id, sandbox, task } = await setup();
+  await completedRoom(id, task);
+  const held = (await wallet.openWork(id)).held!;
+  await wallet.setEarn(id, false);
+  await wallet.close();
+  sandbox.advanceClock(held.expiresAt! - await sandbox.chain.clusterTime() + 1);
+  const state = journal(id);
+  const marker = state.openClaim!;
+  state.openClaim = null;
+  state.failedJobs.push({ chosen: true, task, claimedAt: marker.claimedAt, failedAt: new Date().toISOString(),
+    cause: "expired", reason: "the time to deliver ran out", attempts: 0, claimReleased: false });
+  saveState(path.join(world!.dataDir, "earn", id), state);
+  world!.wallet = await world!.reopen({ earn: { executor: null } });
+  await eventually(async () => (await world!.wallet.openWork(id).catch(() => null))?.held?.canRelease);
+  await world!.wallet.setBudget(id, 0);
+  const quote = await world!.wallet.quoteWork(id, task, "release");
+  const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+  await assertBalances(quote);
+  expect(await world!.balance(claim)).toBe(0n);
+});
+
+it.each(["rent falls", "claim topped up", "dispute filed"] as const)("refuses a signed late release when the %s before it lands", async change => {
+  let mutate: (() => void) | null = null;
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      if (mutate) { mutate(); mutate = null; }
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  const svm = sandbox.market.svm;
+  const claim = address((await wallet.quoteWork(id, task, "release")).flows.find(row => row.label === "Claim deposit returned or paid")!.from);
+  if (change !== "dispute filed") {
+    // One lamport below a full forfeitable deposit: the late quote pays nothing to the buyer.
+    const raw = svm.getAccount(claim);
+    if (!raw.exists) throw new Error("Missing claim");
+    svm.setAccount({ ...raw, lamports: raw.lamports - 1n } as never);
+  }
+  sandbox.advanceClock(3601);
+  const quote = await wallet.quoteWork(id, task, "release");
+  expect(quote.job.releaseWindow?.phase).toBe("late");
+  expect(quote.job.deposit.lamports).toBe(change === "dispute filed" ? quote.job.deposit.lamports : "0");
+  if (change === "dispute filed") expect(quote.job.depositReturns).toBe(false);
+  const buyer = await world!.balance(quote.job.buyer);
+  const held = await world!.balance(claim);
+  mutate = () => {
+    if (change === "rent falls") {
+      const rent = svm.getRent();
+      rent.lamportsPerByteYear -= 1n;
+      svm.setRent(rent);
+    } else if (change === "claim topped up") {
+      const raw = svm.getAccount(claim);
+      if (raw.exists) svm.setAccount({ ...raw, lamports: raw.lamports + 1n } as never);
+    } else {
+      const raw = svm.getAccount(address(task))!;
+      if (!raw.exists) throw new Error("Missing task");
+      const data = getTaskDecoder().decode(Uint8Array.from(raw.data));
+      const reserved = Uint8Array.from(data.reserved);
+      reserved[13] = 1;
+      svm.setAccount({ ...raw, data: Uint8Array.from(getTaskEncoder().encode({ ...data, reserved })) } as never);
+    }
+  };
+  await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+  expect(mutate).toBeNull();
+  // The quoted recipient and amount never changed: nothing moved.
+  expect(await world!.balance(quote.job.buyer)).toBe(buyer);
+  expect(await world!.balance(claim)).toBe(held + (change === "claim topped up" ? 1n : 0n));
+  expect(journal(id).openClaim?.task).toBe(task);
+});
+
+it("pays exactly the late quote when nothing changed, with the landing clock asserted at or after the boundary", async () => {
+  let guards: string[] = [];
+  const { wallet, sandbox, id, task } = await setup(undefined, undefined, undefined, {
+    transport: base => ({ ...base, async sendAndConfirm(tx) {
+      const message = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+      if ("instructions" in message) guards = message.instructions.filter(ix => message.staticAccounts[ix.programAddressIndex] === lighthouse.LIGHTHOUSE)
+        .map(ix => message.staticAccounts[ix.accountIndices![0]!]!);
+      return base.sendAndConfirm(tx);
+    } }),
+  });
+  await completedRoom(id, task);
+  sandbox.advanceClock(3601);
+  const quote = await wallet.quoteWork(id, task, "release");
+  expect(quote.job.depositReturns).toBe(false);
+  const buyer = await world!.balance(quote.job.buyer);
+  await assertBalances(quote);
+  expect(await world!.balance(quote.job.buyer) - buyer).toBe(BigInt(quote.job.deposit.lamports));
+  const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
+  expect(guards).toEqual(["SysvarC1ock11111111111111111111111111111111", claim, claim, lighthouse.RENT, task]);
+});

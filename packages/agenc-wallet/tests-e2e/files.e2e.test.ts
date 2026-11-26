@@ -1,3 +1,4 @@
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // Files with a delivery, end to end against the real program: a provider
 // leaves a picture in its outbox, the delivery lists it, and the buyer's
 // wallet reads the list, fetches the file by its fingerprint and checks it.
@@ -24,7 +25,7 @@ async function hirePostcard(started: World): Promise<string> {
   const agent = await wallet.createAgent("My assistant");
   await wallet.setPolicy(agent.id, {
     askAboveCents: 500,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   await wallet.fundAgent(agent.id, { usdCents: 400 });
   const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A postcard for my desk." });
@@ -71,7 +72,7 @@ describe("a delivery with a picture", () => {
     await expect(wallet.jobFile("job_nope", listed.sha256)).rejects.toThrow();
 
     // Paying for it works as for any delivery.
-    const paid = await wallet.approveJob(jobId, 5, true);
+    const paid = await confirmPayout(wallet, jobId, 5);
     expect(paid.status).toBe("paid");
   }, 120_000);
 
@@ -107,8 +108,8 @@ describe("an agent that delivers files", () => {
     // outbox named by its fingerprint, and list it at the end of the delivery.
     const program = [
       "const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');",
-      "const [seenFile, outbox, prefix, pay, agent] = process.argv.slice(1);",
-      "fs.writeFileSync(seenFile, JSON.stringify({ outbox, prefix, pay, agent }));",
+      "const [seenFile, outbox, prefix, pay, agent, source] = process.argv.slice(1);",
+      "fs.writeFileSync(seenFile, JSON.stringify({ outbox, prefix, pay, agent, source }));",
       "const bytes = Buffer.from('city,temp\\nOslo,4\\n');",
       "const sha = crypto.createHash('sha256').update(bytes).digest('hex');",
       "fs.writeFileSync(path.join(outbox, sha), bytes);",
@@ -118,7 +119,7 @@ describe("an agent that delivers files", () => {
     world = await startWorld({
       earn: {
         executor: {
-          argv: [process.execPath, "-e", program, seen, "{outbox}", "{files}", "{pay}", "{agent}", "{prompt}"],
+          argv: [process.execPath, "-e", program, seen, "{outbox}", "{files}", "{pay}", "{agent}", "{requestSource}", "{prompt}"],
           mode: "sandboxed",
           envAllowlist: [],
           timeoutMs: 30_000,
@@ -128,18 +129,19 @@ describe("an agent that delivers files", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     await sandbox.postOpenJob({ title: "A table", instructions: "Send a small table.", rewardLamports: 50n * CENT });
     // The file and the delivery that lists it are both in the store.
     await eventually(async () => sandbox.deliveries.size === 2, 30_000);
 
     const started = JSON.parse(readFileSync(seen, "utf8")) as Record<string, string>;
     expect(started.agent).toBe(agent.id);
+    expect(started.source).toBe("external");
     expect(path.basename(started.outbox!)).toBe("outbox");
     expect(started.outbox).toContain(world.dataDir);
     expect(started.prefix).toBe("agenc://artifact/sha256/");
-    // The least a job this agent takes pays: ten cents.
-    expect(started.pay).toBe("10");
+    // This job pays fifty cents, even though the minimum is ten.
+    expect(started.pay).toBe("50");
 
     const bodies = [...sandbox.deliveries.values()].map((bytes) => new TextDecoder().decode(bytes));
     const delivery = bodies.find((body) => body.startsWith("The table you asked for."))!;

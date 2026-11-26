@@ -10,8 +10,8 @@
 //    did (MarketServices.finishedJobs). That is the one thing taken on its
 //    word: each job's own record on the chain must then say it was finished
 //    and paid, by whom and for how much, or the job does not count. A job's
-//    record also names the description of the service it was hired from,
-//    which ties it to one of that agent's services.
+//    hire record or rating identifies the listing even when sibling services
+//    share a description or a search sees only one of them.
 //  - Tidied jobs: that list reads only what is still open on the chain, and
 //    tidying a paid job closes its link to the service, so the list soon
 //    forgets it. When an agent's registration says it finished more jobs
@@ -34,12 +34,15 @@ import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   facade,
   findAgentStatsPda,
+  findHireRecordPda,
   getAgentRegistrationDecoder,
   getAgentRegistrationDiscriminatorBytes,
   getAgentStatsDecoder,
   getAgentStatsDiscriminatorBytes,
   getHireRatingDecoder,
   getHireRatingDiscriminatorBytes,
+  getHireRecordDecoder,
+  getHireRecordDiscriminatorBytes,
   getServiceListingDecoder,
   getServiceListingDiscriminatorBytes,
   getTaskDecoder,
@@ -99,8 +102,6 @@ export interface RecordRow {
   specHashHex: string | null;
 }
 
-const hex = (bytes: ArrayLike<number>): string => Buffer.from(Uint8Array.from(bytes)).toString("hex");
-
 function startsWith(data: Uint8Array, prefix: ArrayLike<number>): boolean {
   if (data.length < prefix.length) return false;
   for (let index = 0; index < prefix.length; index += 1) {
@@ -129,8 +130,6 @@ interface FinishedTask {
   buyer: string;
   priceLamports: bigint;
   feeLamports: bigint;
-  /** The description hash of the service it was hired from (the first half of its description). */
-  listingSpecHex: string;
 }
 
 /** A finished job whose record was compacted: only its buyer is left. */
@@ -166,7 +165,6 @@ function finishedTask(account: RawAccount | null): FinishedTask | CompactedTask 
     buyer: task.creator,
     priceLamports: task.rewardAmount,
     feeLamports: (task.rewardAmount * bps) / 10_000n,
-    listingSpecHex: hex(task.description.slice(0, 32)),
   };
 }
 
@@ -418,97 +416,74 @@ export async function readMarketRecord(source: RecordSource, rows: readonly Reco
   // Each job's own record decides whether it counts.
   const tasks = [...new Set([...claimed.keys(), ...rated.map(([task]) => task)])];
   const taskAccounts = tasks.length === 0 ? [] : await chain.readRawAccounts(tasks as Address[]);
-  const specListings = new Map<string, string[]>();
-  for (const row of rows) {
-    if (row.specHashHex === null) continue;
-    const key = `${row.providerAgent} ${row.specHashHex}`;
-    specListings.set(key, [...(specListings.get(key) ?? []), row.listing]);
-  }
+  const finished = tasks.map((task, index) => ({ task, record: finishedTask(taskAccounts[index] ?? null) }));
+  const unrated = finished.filter(({ task, record }) => record && !("compacted" in record) && !ratings.has(task));
+  const hirePdas = await Promise.all(unrated.map(async ({ task }) => {
+    const [pda] = await findHireRecordPda({ task: task as Address });
+    return pda;
+  }));
+  const hireAccounts = hirePdas.length ? await chain.readRawAccounts(hirePdas) : [];
+  const hiredFrom = new Map<string, Address>();
+  unrated.forEach(({ task }, index) => {
+    const hire = decoded(hireAccounts[index] ?? null, getHireRecordDiscriminatorBytes(), (data) =>
+      getHireRecordDecoder().decode(data),
+    );
+    if (hire?.task === task) hiredFrom.set(task, hire.listing);
+  });
+
   const jobs: PaidJob[] = [];
   const factsCache = source.settledFacts ?? new Map<string, SettlementFacts | null>();
   let factLookups = 0;
   let factsFailed = false;
   let pending = settled.pending;
-  for (const [index, task] of tasks.entries()) {
-    const found = finishedTask(taskAccounts[index] ?? null);
-    if (found === null) continue;
+  for (const { task, record } of finished) {
+    if (record === null) continue;
     const rating = ratings.get(task);
-    if ("compacted" in found) {
-      // A compacted job counts only by what the transaction that paid for
-      // it says. The agent it paid must be the one the list or the rating
-      // names. Its rating, or the event the program logged when it was
-      // hired, ties it to one service.
+    const ratedProvider = rating && listingProvider.get(rating.listing);
+    const provider = ratedProvider ?? claimed.get(task);
+    if (!provider) continue;
+
+    let listing = ratedProvider ? rating!.listing : hiredFrom.get(task) ?? null;
+    let payment: Pick<FinishedTask, "priceLamports" | "feeLamports"> | null = "compacted" in record ? null : record;
+    // Tidying removes the hire record. Its historical hire event still names the
+    // listing; compacted tasks also need the settlement for their price and fee.
+    if (payment === null || listing === null) {
       let paid = factsCache.get(task);
-      if (paid === undefined) {
-        const find = source.chain.findSettlement;
-        if (find === undefined) continue;
-        const named = claimed.get(task);
+      if (paid === undefined && chain.findSettlement) {
         if (factsFailed) {
-          if (named !== undefined) unread.add(named);
+          unread.add(provider);
           continue;
         }
         if (factLookups >= SETTLEMENT_LOOKUPS_PER_READ) {
-          pending += 1;
+          pending++;
           continue;
         }
-        factLookups += 1;
+        factLookups++;
         try {
-          // Only an unrated job needs its hire read for its service.
-          paid = await find(task as Address, found.buyer as Address, { listing: rating === undefined });
+          paid = await chain.findSettlement(task as Address, record.buyer as Address, { listing: listing === null });
         } catch {
           factsFailed = true;
-          if (named !== undefined) unread.add(named);
+          unread.add(provider);
           continue;
         }
         factsCache.set(task, paid);
       }
-      if (paid === null) continue;
-      const ratedProvider =
-        rating !== undefined && listingProvider.has(rating.listing)
-          ? listingProvider.get(rating.listing)!
-          : null;
-      const provider = ratedProvider ?? claimed.get(task) ?? null;
-      if (provider === null || provider !== paid.worker) continue;
-      // The service: the rating's, else the one the hire's own event names
-      // when it is one of this agent's services.
-      const hiredFrom =
-        paid.listing !== null && listingProvider.get(paid.listing) === provider ? paid.listing : null;
-      const job: PaidJob = {
-        task,
-        listing: ratedProvider !== null ? rating!.listing : hiredFrom,
-        provider,
-        buyer: found.buyer,
-        priceLamports: paid.priceLamports,
-        feeLamports: paid.feeLamports,
-        score: rating !== undefined && rating.buyer === found.buyer ? rating.score : null,
-      };
-      if (isFirstPartyJob(job, facts.get(provider)?.wallet ?? null, firstParty)) continue;
-      jobs.push(job);
-      continue;
+      if (paid) {
+        if (paid.worker !== provider) continue;
+        listing ??= paid.listing;
+        payment ??= paid;
+      }
     }
-    const record = found;
-    // A rating ties its job to a service, and so to its agent, for good;
-    // otherwise the job's description does, when it names exactly one of
-    // the agent's services.
-    let provider = claimed.get(task) ?? null;
-    let listing: string | null = null;
-    if (rating !== undefined && listingProvider.has(rating.listing)) {
-      provider = listingProvider.get(rating.listing)!;
-      listing = rating.listing;
-    } else if (provider !== null) {
-      const matches = specListings.get(`${provider} ${record.listingSpecHex}`) ?? [];
-      listing = matches.length === 1 ? matches[0]! : null;
-    }
-    if (provider === null) continue;
+    if (payment === null) continue;
+    if (listing !== null && listingProvider.has(listing) && listingProvider.get(listing) !== provider) continue;
     const job: PaidJob = {
       task,
       listing,
       provider,
       buyer: record.buyer,
-      priceLamports: record.priceLamports,
-      feeLamports: record.feeLamports,
-      // Only the job's own buyer rates it.
-      score: rating !== undefined && rating.buyer === record.buyer ? rating.score : null,
+      priceLamports: payment.priceLamports,
+      feeLamports: payment.feeLamports,
+      score: rating?.buyer === record.buyer ? rating.score : null,
     };
     if (isFirstPartyJob(job, facts.get(provider)?.wallet ?? null, firstParty)) continue;
     jobs.push(job);
@@ -560,27 +535,28 @@ export function createRecordKeeper(source: RecordSource, now: () => number = Dat
     settledBy: source.settledBy ?? new Map(),
     settledFacts: source.settledFacts ?? new Map(),
   };
-  let known: { at: number; record: MarketRecord } | null = null;
+  let known: { at: number; record: MarketRecord; coverage: string } | null = null;
   let reading: Promise<void> | null = null;
   let failedAt: number | null = null;
   let stale = false;
 
-  function due(rows: readonly RecordRow[]): boolean {
+  function due(coverage: string): boolean {
     if (stale) return true;
     if (failedAt !== null && now() - failedAt < RECORD_RETRY_MS) return false;
     if (known === null || now() - known.at >= RECORD_TTL_MS) return true;
-    const facts = known.record.facts;
-    return rows.some((row) => !facts.has(row.providerAgent));
+    return coverage !== known.coverage;
   }
 
   return {
     async read(rows, waitMs) {
-      if (reading === null && due(rows)) {
+      // The provider history scan uses the description hashes of the requested listings.
+      const coverage = rows.map((row) => `${row.providerAgent}:${row.listing}:${row.specHashHex}`).sort().join(",");
+      if (reading === null && due(coverage)) {
         stale = false;
         const asked = [...rows];
         reading = readMarketRecord(reader, asked).then(
           (record) => {
-            known = { at: now(), record };
+            known = { at: now(), record, coverage };
             failedAt = null;
             // Jobs still to look up: the next read goes on with them.
             if (record.pending > 0) stale = true;
@@ -605,7 +581,8 @@ export function createRecordKeeper(source: RecordSource, now: () => number = Dat
         ]);
         clearTimeout(timer);
       }
-      return { record: known?.record ?? null, reading: reading !== null };
+      const covered = known?.coverage === coverage;
+      return { record: covered ? known!.record : null, reading: reading !== null || (!covered && failedAt === null) };
     },
     invalidate() {
       stale = true;

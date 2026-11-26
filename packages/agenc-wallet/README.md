@@ -27,8 +27,8 @@ live; no mainnet hire has been made with this package yet.
   approves is then paid from the main balance, so a new agent is usable
   before it holds anything.
 - A hire **above the agent's limit**, or one its allowance cannot cover,
-  waits for a person. On approval it is paid from the allowance if that
-  covers it, otherwise from the main balance.
+  waits for a person. The quote fixes which balance pays. Approval checks that the quoted balance
+  still covers the cost.
 - A price is **held** until the delivery is approved. A job nobody starts is
   cancelled automatically and the price returns.
 - An agent connection can find, hire, post, check and review **its own**
@@ -154,20 +154,33 @@ weighs its fee, and a service starts at three stars with the weight of four
 0.05 SOL jobs. So three four-star jobs rank above one five-star job of any
 size, and a record of paid jobs ranks above one cheap five-star rating.
 
+Both hires and public requests accept up to eight acceptance checks and a
+`reviewWindowSecs` of 1 to 604800 (default 86400). The published brief
+records its exact delivery timestamp. Public requests enforce that timestamp
+on chain. Hires enforce the listing's delivery period measured from the
+block in which the hire lands. The job view reports that marketplace
+deadline and the exact review closing time once each is known.
+
 ## Posting a request
 
 When nothing on offer fits, a request can be posted for anyone on the
-marketplace to take: what is wanted, the reward, and how many days to deliver
-in (1 to 30, 7 by default). It is the marketplace's single-worker task with
+marketplace to take. The brief includes the work, reward, acceptance checks,
+and a delivery deadline. Supply `deadline` in Unix seconds or `deadlineDays`
+(1 to 30, default 7). Public requests accept `minReputation` (0 to 10000,
+default 0) and `requiredCapabilities` (a nonzero unsigned 64-bit mask as
+a decimal string, default `"1"`). It is the marketplace's single-worker task with
 the buyer's review forced on (`create_task_humanless`), with the same
 requester-paid safety check and pinned request as a hire. Nobody can take it
 until the request is pinned.
 
 - `wallet.post` (owner only): the person posts from the main balance.
-  Asking is the yes. `overview.postCost` is the quote to show first: what is
-  kept (the job record, the safety check of the request, the fees, and on a
-  balance's first job the record of how often it posts) and what is set
-  aside and comes back when the job ends.
+  It remains a direct owner command. Interactive clients prepare a quote
+  with `wallet.quotePost` or `wallet.quoteHire` and confirm its ID with
+  `approvals.decide`. An unconfirmed panel quote expires or is discarded
+  when the service restarts. An approved ID resolves to the same saved job.
+  Each quote includes the payer's contribution, fee, refundable deposit,
+  total, cap, brief and expiry. A changed deposit or expired quote needs
+  a fresh decision.
 - `market.post` (an agent method): an agent posts from its own money. Within
   its daily budget, when its money covers the reward and the deposits, it is
   posted at once; anything else waits for the person, as a hire does, with
@@ -301,6 +314,47 @@ back when the agent delivers, and goes to the buyer if the agent never does.
 The agent's first job also starts its marketplace record (kept). The wallet
 counts both in what the agent needs before it can take jobs.
 
+A sandboxed executor must supply a job-room self-test before it may claim.
+Desktop can send this in its existing startup JSON:
+
+```json
+{
+  "earn": {
+    "executor": {
+      "argv": ["/absolute/job-room", "run", "{agent}", "{prompt}"],
+      "mode": "sandboxed",
+      "envAllowlist": [],
+      "timeoutMs": 900000,
+      "readiness": {
+        "argv": ["/absolute/job-room", "self-test", "{agent}"],
+        "timeoutMs": 30000
+      }
+    }
+  }
+}
+```
+
+`readiness.argv` is a host command, invoked without a shell or buyer text.
+It must check that the room and required runtime assets are available and
+that the room self-test passes. Exit zero means ready. A missing command,
+nonzero exit, timeout, or shutdown prevents the claim and its journal entry.
+The probe uses the executor's environment allowlist and an isolated folder.
+The default probe timeout is 30 seconds; the CLI accepts at most 120 seconds.
+`{agent}` is replaced in the probe's arguments. No prompt is appended.
+
+In-process hosts may instead set
+`EarnOptions.checkExecutionReady({ agentId, signal? }): Promise<void>`.
+Resolve only after the self-test passes; reject to defer. A readiness failure
+is retried using targeted task reads every normal poll, without a new scan.
+
+For a hire, the executor prompt now includes a separate
+`UNTRUSTED ADVERTISED SERVICE` section before `UNTRUSTED JOB SPEC`.
+It contains the canonical listing payload, including scope and deliverables,
+verified against the hash frozen in the hired task. An updated listing uses
+the original content address. Missing or changed metadata prevents a claim.
+Both sections are task data and cannot authorize tools, wallet access, or spending.
+Recovery and revision runs use the same service commitment.
+
 On its own that loop only takes open jobs anyone may claim. Hires go to a
 listed service, so an agent with nothing listed is never hired.
 
@@ -312,9 +366,14 @@ folder. Three more are replaced the same way:
   delivery (see below). Empty when this network has nowhere to keep them.
 - `{files}`: what a file's sha-256 is added to, to make its address in the
   delivery store. Empty with `{outbox}`.
-- `{pay}`: the least a job this agent takes pays, in US cents, so the
-  executor can keep what it spends on a job under what the job earns. Empty
-  when the going rate is not known.
+- `{pay}`: the attempt's reserved model budget in whole US cents. The wallet
+  fixes the whole-job budget from its reward and the SOL price before claiming,
+  rounds down, and saves it across recovery and revisions. It reserves the
+  remaining budget before starting the executor. Until the host supplies trusted
+  usage receipts, every started attempt consumes its full reservation, including
+  failures and interruptions. An exhausted or legacy unknown-spend attempt is
+  never retried with a fresh budget. Missing or invalid pricing and rewards below
+  one cent stop new claims. Upload and submission retries reuse saved output.
 
 ### Files with a delivery
 
@@ -363,6 +422,74 @@ await owner.call("earn.offer", {
 });
 ```
 
+Before enabling earning or saving an offer, Desktop must show the complete
+funding quote. `offerCost` and `wordsCost` describe only marketplace costs;
+they are not funding quotes.
+
+```ts
+const quote = await owner.call("earn.quote", { agentId, offer, offerId });
+// Show totalFromMain and its breakdown. If requiresApproval is true,
+// wait for the person's explicit approval before this owner-only call:
+await owner.call("earn.approveFunding", { quoteId: quote.quoteId });
+// Use the quoted SOL price so an exchange-rate change does not reprice it.
+await owner.call("earn.offer", {
+  agentId, offerId,
+  offer: { ...offer, price: { lamports: quote.offerPrice!.lamports } },
+});
+await owner.call("earn.set", { agentId, enabled: true, minPayCents: 10 });
+```
+
+`earn.quote({ agentId })` quotes the current offers and enabling earning,
+including background upkeep. Passing `offer` quotes adding or updating that
+service, plus other pending offers. It reads balances, rents, registration
+and checks without signing, publishing or transferring. It returns:
+
+```ts
+{
+  quoteId: string, agentId: string, expiresAt: number,
+  offerPrice: Money | null,
+  registration: Money, listings: Money, checks: Money,
+  workingReserve: Money, networkReserve: Money, agentBalance: Money,
+  requiredBalance: Money, fromMain: Money, transferFee: Money,
+  totalFromMain: Money, dailyRemaining: Money, requiresApproval: boolean
+}
+// Money = { lamports: string, usdCents: number | null }
+```
+
+`registration` includes the stake, registration rent and fee headroom.
+`workingReserve` includes one claim deposit based on the highest advertised
+price, the first worker record, claim and submission rents, worker fees,
+and four earlier jobs' claim and submission rents. A claim deposit comes
+back on delivery, so only one price-based deposit is needed for serial work.
+`listings` and `checks` include all pending listing records, description
+checks and their fee headroom. `networkReserve` keeps the agent account alive.
+`requiredBalance` is their sum. `fromMain` is the shortfall after its current
+balance; `totalFromMain` adds the main wallet's transfer fee. These are
+conservative funding bounds, not promises that all reserves will be spent.
+
+Quotes expire after five minutes and do not survive a wallet restart.
+Approval moves at most the quoted amount to that quote's agent, once, and
+returns `AgentView`. A higher agent balance reduces the transfer. Approval
+funds the agent; it does not enable earning or save the offer. Get a new quote
+if the agent's balance or the intended offer changes before continuing.
+`earn.quote` and `earn.approveFunding` are owner-only RPC methods.
+
+Automatic registration, offer creation, edits and description-check funding
+share the agent's rolling 24-hour refill allowance. All transferred money,
+including reserves and the transfer fee, counts. An above-budget `earn.set`
+throws `APPROVAL_REQUIRED`; background offers show `status: "problem"` with
+an approval message and move no money. Quote and explicitly approve funding
+to continue. Missing dollar pricing also requires approval. An approved
+transfer counts in that day's usage, even above the cap. Charges are saved
+before sending; ambiguous or failed sends conservatively retain their charge
+for 24 hours. Old journals' refill entries are also counted.
+
+Offers must cost at most 1 SOL, or the configured worker maximum if lower.
+Higher prices are refused for both creation and edits. Existing oversized
+offers are paused until their prices are lowered and cannot receive automatic funding. A service hire below the
+agent's open-job minimum is accepted only after canonical hire provenance is
+checked. Unrelated open-market jobs keep the person's minimum.
+
 The wallet then does the rest by itself, one step per housekeeping pass, and
 reads the chain before each step so it can be interrupted anywhere:
 
@@ -396,12 +523,33 @@ is killed outright leaves its listing up until the next start.
 Two things keep a hire from sitting unstarted, because nobody else can take
 a hire of this agent's service:
 
-- The stock watcher reports a job once. While an agent offers a service the
-  wallet starts the watch afresh every minute (`serviceRefreshMs`), so a hire
-  it could not take at first sight is looked at again.
+- The watcher reports a job once. While an agent offers a service the
+  wallet starts the watch afresh every fifteen minutes (`serviceRefreshMs`).
+  Readiness failures retry every minute without restarting the watch.
 - A job's deposits stay out until its buyer pays, which can take a day. When
   a service goes on offer the agent's wallet is given enough for four
   earlier jobs to be out at once. That money stays the agent's allowance.
+
+Each wallet listing admits one open hire (`maxOpenJobs: 1`). The program
+rejects concurrent buyers beyond this capacity. Reconciliation updates older
+unlimited listings to this cap. A slot is freed by `close_task`, not by delivery
+or payment, so a buyer who delays cleanup can keep the listing busy. Multiple
+listings can still have one hire each; the worker executes them serially.
+Unstarted hires now wait until their on-chain delivery deadline before an
+automatic refund. Hosts can explicitly set `autoRefundAfterMs` for an earlier
+refund. The chain deadline always remains an upper bound.
+
+Discovery starts at 60 seconds and doubles after quiet sweeps up to five
+minutes. New candidates reset that backoff. The worker uses only the discovery
+read source, avoiding the SDK's independent signature polling fallback.
+Housekeeping runs every minute while busy and every five minutes while idle.
+Explicit poll and housekeeping intervals still override these defaults.
+
+The local one-day test measured 1,536 program scans at five weighted units each
+and 1,829 ordinary reads: **9,509 units/day** for one seller with one live
+listing and no jobs. Discovery alone uses 7,680. This is a local timer
+simulation using the audit's RPC weights, not a live provider bill. More agents,
+listings, active jobs, and UI reads add usage; this is not an account-wide quota.
 
 An agent cannot hire its own service. Another agent of the same wallet can.
 
@@ -501,8 +649,60 @@ On a real network, and nothing else:
 - A description is plain text. A provider's links and sample files are not
   shown.
 - A file with a delivery is at most 256 KB, because that is what the
-  marketplace's store keeps. `{pay}` is the least a job pays, not what the
-  job at hand pays: the worker does not tell the executor about the job.
+  marketplace's store keeps.
+
+## Delivery and job records
+
+`jobs.get` and `jobs.list` return `JobView.acceptance: string[]` for the buyer's
+acceptance criteria. Seller records also include the request, delivery preview,
+files and original artifact URI. New work archives its complete request and
+criteria outside the worker's hot journal. Older work tries to recover its
+verified job spec while available. Wallet evidence caches are pruned by encoded
+bytes and count, preserving compact unresolved-review metadata.
+
+Each `jobs.list` row is at most 4 KiB of encoded JSON, including escaping and
+UTF-8. All variable evidence fields and arrays share that bound, so 200 rows fit
+within the 1 MiB socket frame. `JobView.previewTruncated?: boolean` signals
+shortened or omitted evidence. Oversized links are omitted instead of shortened.
+Use `jobs.get` for full request and criteria, and `jobs.delivery` for full results.
+
+An exact-job delivery preview is at most 20,000 characters. `JobResult.textTruncated` is true
+when more text exists. Read `jobs.delivery` with `{ jobId: string }` to get
+`{ result: JobResult }` with the complete verified text and `textTruncated: false`.
+This read uses the same owner or agent scope as `jobs.get`. Failed reads can be
+retried. Hosts must show `result.uri` whenever present, including when text is
+shown. Desktop must adopt this link behavior and the full-delivery read.
+
+Page through `jobs.list` using `{ role?, agentId?, limit?, before? }`. Set `before`
+to the last job ID of the previous page. Keep the same filters while paging.
+The response remains `{ jobs: JobView[] }`. Stop on a short or empty page. An
+expired cursor returns `NOT_FOUND`; restart from the first page. Exact
+`jobs.get` reads search the full retained ledger, including old unresolved jobs.
+
+Turning earning off stops new work. Wallet housekeeping still reconciles payments
+and collects overdue reviews. Settlement notices can replay after a crash. The
+wallet records each task's credit with its earnings and activity in one write.
+
+Paid delivery recovery uses `Chain.findSettledDelivery(task, creator)` when the
+submission account is already closed. RPC-backed and sandbox chains implement
+this optional method. It returns `{ worker, proofHashHex, resultData }` or null
+from authenticated completion events. A custom chain without history can recover
+only final pointers it observed in accepted submission accounts. The paid
+transition authenticates the final commitment even when an earlier revision was
+verified, replaces stale evidence, and persists that check across restart. If the
+final commitment cannot yet be authenticated, the old revision is not shown as
+the paid result; a later exact-job read retries.
+
+Upgrades pause unlimited listings before repairing their finite cap. Existing
+hires can finish or refund while admissions are paused; resumption requires a
+successful update to the seller's funded capacity. A saved zero selects five funded slots. An older offer with no capacity field keeps its one-slot default. Open legacy jobs reconcile their displayed
+refund time to the chain deadline, retaining an explicitly configured earlier
+timeout separately from that display value.
+
+## Outstanding seller controls (wiring audit rows 34 and 35)
+
+* Row 34. The wallet generates the listing ID. Caller-selected deterministic IDs still need ownership, collision and replay checks. Public links and work samples still need a validated metadata schema and buyer display.
+* Row 35. Listings still require capability bit 1. Seller-selected capabilities need validation against the provider registration and the worker capabilities used to admit hires.
 
 ## Develop
 

@@ -1,4 +1,8 @@
+import type {} from "./service-usage.js";
 // Turn the journal's records into what a person reads.
+import { contestPage } from "./contest-page.js";
+import { fractionalQuoteUsd } from "./job-money.js";
+import { givenBackHireText, hireRefundAt, workingHireText } from "./hire-wait-words.js";
 import { formatMoney, formatUsd, formatWait } from "./client/format.js";
 import type {
   ActivityView,
@@ -177,13 +181,21 @@ function statusText(
   usdPerSol: number | null,
 ): string {
   const amount = formatMoney(price);
+  if (job.role === "buying" && status === "delivered" && job.tokenReward) {
+    return "Delivered. This wallet cannot pay token rewards.";
+  }
   if (
     job.role === "buying" &&
-    job.refundBlockedLamports !== undefined &&
+    !job.terms?.contest && job.refundBlockedLamports !== undefined &&
     (status === "waiting" || status === "working")
   ) {
     return blockedRefundText(job, job.refundBlockedLamports, usdPerSol);
   }
+  if (job.terms?.contest && status === "delivered") return job.contestReleaseOpen
+    ? "The selection window has closed. Remaining submitters can collect their shares."
+    : "Contest entries are ready to review.";
+  if (job.terms?.contest && status === "waiting") return "Waiting for contest entries. You can review a refund quote in Jobs.";
+  if (job.terms?.contest && status === "paid") return "The contest prize was paid.";
   if (job.role === "buying" && job.kind === "request") return requestText(job, status, amount, now);
   if (job.role === "working") {
     switch (status) {
@@ -211,11 +223,12 @@ function statusText(
     case "starting":
       return "Placing the order.";
     case "waiting":
+      if (job.providerGaveBack) return givenBackHireText(hireRefundAt(job), now);
       return job.autoRefundAt !== null
         ? `Waiting for the provider to start. If nobody does, the job is cancelled and the price comes back ${formatWait(job.autoRefundAt, now)}.`
         : "Waiting for the provider to start.";
     case "working":
-      return "The provider is working on it.";
+      return workingHireText(job.deadline, now);
     case "changes_requested":
       return "Changes were asked for. The provider is working on them.";
     case "delivered":
@@ -305,7 +318,8 @@ export function jobView(
   // Only a hired service can be rated: a rating is kept on its listing.
   const canRate = buying && kind === "hire" && status === "paid" && job.rating === null && !job.tidied;
   // Turning a delivery down is a person's call.
-  const canTurnDown = buying && status === "delivered" && context.isOwner;
+  const page = job.terms?.contest ? contestPage(job) : null;
+  const canTurnDown = !job.terms?.contest && buying && status === "delivered" && context.isOwner && !job.tokenReward;
   return {
     id: job.id,
     role: job.role,
@@ -313,6 +327,15 @@ export function jobView(
     agentId: job.agentId,
     title: job.title,
     request: job.request,
+    acceptance: [...job.acceptance],
+    ...(page && { contestEntries: page.entries, contestNext: page.next, contestReleaseOpen: job.contestReleaseOpen ?? false,
+      contestCancel: job.contestCancel ?? false, contestCleanup: job.contestCleanup ?? false, contestClaims: job.contestClaims ?? [],
+      ...(job.contestSettlements?.length && { contestReceipt: job.contestSettlements.at(-1)! }) }),
+    ...(job.contestQuote && { contestQuote: structuredClone(job.contestQuote) }),
+    ...(job.terms && { terms: structuredClone(job.terms) }),
+    ...(job.deadline && job.deadline > 0 ? { marketplaceDeadline: job.deadline } : {}),
+    // When the hire landed, after the person's yes: "Hired ... ago" counts from here (rt5 A 5).
+    ...(typeof job.hiredAt === "number" && job.hiredAt > 0 && { hiredAt: job.hiredAt }),
     price,
     status,
     statusText: statusText(job, status, price, context.now, context.usdPerSol),
@@ -321,11 +344,15 @@ export function jobView(
     task: job.task,
     listing: job.listing || null,
     provider: job.providerAgent || null,
+    ...(job.modelUsage && { modelUsage: job.modelUsage, settledSellerCredit: job.settledSellerLamports == null ? null : money(job.settledSellerLamports, context.usdPerSol) }),
+    ...(job.parties && { parties: { ...job.parties } }),
     // A delivery saved before files could come with one has no list.
-    result: job.result === null ? null : { ...job.result, files: job.result.files ?? [] },
+    // A verified earlier revision is not evidence of the paid commitment.
+    result: job.result === null || (job.role === "buying" && job.outcome === "paid" && !job.finalDeliveryChecked)
+      ? null : { ...job.result, files: job.result.files ?? [] },
     autoApproveAt:
-      status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
-    autoRefundAt: status === "waiting" ? job.autoRefundAt : null,
+      !job.terms?.contest && !job.tokenReward && status === "delivered" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
+    autoRefundAt: !job.terms?.contest && status === "waiting" ? job.autoRefundAt : null,
     reviewEndsAt:
       status === "in_review" && job.reviewDeadlineAt !== null ? job.reviewDeadlineAt * 1000 : null,
     turnDown: status === "in_review" ? turnDownView(job, context.usdPerSol) : null,
@@ -339,14 +366,16 @@ export function jobView(
       revision9TurnDown(job)!.rulingUntil === null &&
       revision9TurnDown(job)!.disputeOpen &&
       revision9TurnDown(job)!.providerSuspended !== true,
-    canApprove: buying && status === "delivered",
+    approvalInMarket: buying && job.payer !== "agent",
+    canApprove: !job.terms?.contest && buying && status === "delivered" && !job.tokenReward,
     // Without a way to deliver the words, asking for changes would send a
     // delivery back with a request the provider can never read.
-    canAskChanges: buying && status === "delivered" && context.changesCanBeSent,
+    canAskChanges: !job.terms?.contest && buying && status === "delivered" && context.changesCanBeSent,
     canRefund:
-      buying &&
+      buying && (!job.terms?.contest || status === "needs_approval") &&
       (status === "needs_approval" ||
-        status === "waiting" ||
+        // An agent cancels only a job it paid for itself.
+        (status === "waiting" && (context.isOwner || job.payer === "agent")) ||
         // Turning down a delivery is a person's call, not an agent's.
         canTurnDown),
     canRate,
@@ -375,6 +404,7 @@ function savedService(
   const saved: Partial<NonNullable<ApprovalRecord["service"]>> = service;
   return {
     ...service,
+    summary: saved.details === "unavailable" || saved.details === "loading" ? null : service.summary,
     description: saved.description ?? null,
     tags: saved.tags ?? [],
     inputs: saved.inputs ?? [],
@@ -396,7 +426,31 @@ export function approvalView(
   usdPerSol: number | null,
 ): ApprovalView {
   const kind = approval.kind ?? "hire";
+  if (approval.quoteRate !== undefined) usdPerSol = approval.quoteRate;
+  const quotedMoney = (lamports: string | bigint): Money => {
+    const amount = money(lamports, usdPerSol);
+    const exact = usdPerSol === null ? undefined : fractionalQuoteUsd(BigInt(lamports), usdPerSol);
+    return exact === undefined ? amount : { ...amount, quotedUsd: exact };
+  };
   return {
+    ...(approval.contestOverage && { contestOverage: approval.contestOverage }),
+    ...(approval.contestOverBudget && { contestOverBudget: true }),
+    ...(approval.terms?.contest && { contestCosts: {
+      entryRent: money(approval.entryRentLamports ?? "0", usdPerSol),
+      firstWorkerRecord: money(approval.workerRecordLamports ?? "0", usdPerSol),
+      entryDeposit: money(approval.terms.contest.entryDepositLamports, usdPerSol),
+      registrationRent: money(approval.contestRegistration?.rent ?? "0", usdPerSol),
+      registrationStake: money(approval.contestRegistration?.stake ?? "0", usdPerSol),
+    } }),
+    ...(approval.terms && { terms: structuredClone(approval.terms), acceptance: [...(approval.acceptance ?? [])] }),
+    ...(approval.protocolFeeBps !== undefined && { marketFee: {
+      bps: approval.protocolFeeBps,
+      amount: quotedMoney(BigInt(approval.priceLamports) * BigInt(approval.protocolFeeBps) / 10_000n),
+    } }),
+    ...(approval.maxPriceCents !== undefined && { maxPriceCents: approval.maxPriceCents }),
+    ...(approval.networkFees !== undefined && { networkFees: quotedMoney(approval.networkFees) }),
+    ...(approval.retainedRent !== undefined && { retainedRent: quotedMoney(approval.retainedRent) }),
+    ...(approval.cancellationRent !== undefined && { cancellationRent: quotedMoney(approval.cancellationRent) }),
     id: approval.id,
     jobId: approval.jobId,
     agentId: approval.agentId,
@@ -405,10 +459,12 @@ export function approvalView(
     service:
       kind === "request" || approval.service === null ? null : savedService(approval.service, usdPerSol),
     request: approval.request,
-    price: money(approval.priceLamports, usdPerSol),
-    deposits: money(approval.depositsLamports, usdPerSol),
-    fees: money(approval.keptLamports, usdPerSol),
-    fromMain: money(approval.fromMainLamports, usdPerSol),
+    refundableDeposit: quotedMoney(BigInt(approval.depositsLamports) - BigInt(approval.keptLamports)),
+    total: quotedMoney(BigInt(approval.priceLamports) + BigInt(approval.depositsLamports)),
+    price: quotedMoney(approval.priceLamports),
+    deposits: quotedMoney(approval.depositsLamports),
+    fees: quotedMoney(BigInt(approval.keptLamports) - BigInt(approval.contestRegistration?.rent ?? 0) - BigInt(approval.contestRegistration?.stake ?? 0)),
+    fromMain: quotedMoney(approval.fromMainLamports),
     createdAt: approval.createdAt,
     expiresAt: approval.expiresAt,
   };

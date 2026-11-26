@@ -1,3 +1,4 @@
+import { briefDeliverable } from "../src/job-brief.js";
 // REAL on-chain worker loop against the compiled agenc-coordination program
 // (litesvm): a creator registers + creates + activates a CreatorReview task
 // (driven through the SDK facade, mirroring the SDK's client.e2e suite), then
@@ -32,7 +33,7 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "../src/runtime.js";
-import { hexToBytes, loadState } from "../src/state.js";
+import { hexToBytes, loadState, readJobEvidence } from "../src/state.js";
 import { sha256, sha256Hex } from "../src/result.js";
 import { DEFAULT_MAX_EXECUTOR_PROMPT_BYTES } from "../src/executor.js";
 import {
@@ -73,9 +74,13 @@ function jobSpecDocument(payload: Record<string, unknown>): {
   };
 }
 
+const agreed = { deadline: 1_800_000_123, reviewWindowSecs: 1, listingDurationSecs: 3600, eligibility: null };
 const SPEC = jobSpecDocument({
   title: "haiku",
-  summary: "write a haiku about solana on stdout",
+  shortDescription: "write a haiku",
+  fullDescription: "write a haiku about solana on stdout",
+  acceptanceCriteria: ["Use three lines."],
+  deliverables: [briefDeliverable(agreed)],
 });
 
 /**
@@ -243,6 +248,10 @@ describe("e2e: one worker tick against the real program", () => {
     // Worker agent was registered on-chain by ensureRegistered.
     const state = loadState(stateDir);
     expect(state.agentIdHex).not.toBeNull();
+    expect(readJobEvidence(stateDir, state.submissions.find(entry => entry.task === task)!)).toEqual({
+      request: "write a haiku about solana on stdout", acceptance: ["Use three lines."],
+      terms: agreed, marketplaceDeadline: Number(getTaskDecoder().decode(accountData(svm, task)!).deadline),
+    });
     const [workerAgent] = await findAgentPda({
       agentId: hexToBytes(state.agentIdHex!),
     });
@@ -328,7 +337,7 @@ describe("e2e: one worker tick against the real program", () => {
     // falls back to earnings + task PDA.
     expect(reports[0]!.receiptUrl).toBeNull();
     const settledEvent = events.find((e) => e.event === "settlement.observed");
-    expect(settledEvent?.message).toBe(`earned 0.00198 SOL — task ${task}`);
+    expect(settledEvent?.message).toBe(`earned 0.00198 SOL. task ${task}`);
 
     const after = loadState(stateDir);
     expect(after.submissions[0]!.settled).toBe(true);
@@ -521,4 +530,10 @@ describe("e2e: one worker tick against the real program", () => {
     expect(afterOversized.currentWorkers).toBe(0);
     expect(loadState(stateDir).openClaim).toBeNull();
   });
+});
+
+it("shows the short hosted description when a post omits its long description", async () => {
+  const { decodeHostedBrief } = await import("../src/hosted-brief.js");
+  const spec = JSON.stringify({ title: "Post", shortDescription: "Every word of the request.", acceptanceCriteria: ["All terms apply."] });
+  expect(decodeHostedBrief(new TextEncoder().encode(spec))).toEqual({ raw: spec, request: "Every word of the request.", acceptance: ["All terms apply."] });
 });

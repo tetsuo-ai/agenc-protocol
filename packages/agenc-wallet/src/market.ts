@@ -1,3 +1,4 @@
+import { jobNetworkFees, type JobDeposits } from "./job-money.js";
 // Chain-facing marketplace steps for the buyer side: read a listing, resolve
 // the moderation gate, hire, activate, review, cancel, tidy up.
 //
@@ -7,7 +8,10 @@
 // intent before and outcome after, which is what makes the whole purchase
 // resumable after a crash without ever paying twice: a task address is fixed
 // by (buyer, random task id), and the program creates it at most once.
-import { getAddressEncoder, type Address, type KeyPairSigner } from "@solana/kit";
+import { claimGeneration, decisionAssertions, hireCostAssertions, laterRentWithinApproval, recordCostGuards, type BoundDelivery } from "./money-assertions.js";
+import { reviewMemo } from "./review-memo.js";
+import { withListingOperation } from "./transport-scope.js";
+import { address, getAddressEncoder, type Address, type KeyPairSigner, type Instruction, type TransactionPartialSigner, type TransactionSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
@@ -25,6 +29,7 @@ import {
   findModerationAttestorPda,
   findModerationConfigPda,
   findProtocolConfigPda,
+  findTaskAttestorConfigPda, getTaskAttestorConfigDiscriminatorBytes,
   findTaskJobSpecPda,
   findTaskModerationPda,
   findTaskPda,
@@ -38,6 +43,7 @@ import {
   getCreatorStatsDiscriminatorBytes,
   getCreatorStatsSize,
   getDisputeBondSize,
+  getHireRatingDecoder, getHireRatingDiscriminatorBytes,
   getHireRecordDecoder,
   getHireRecordDiscriminatorBytes,
   getHireRecordSize,
@@ -77,6 +83,7 @@ import {
   type ServiceListing,
   type Task,
   type TaskSubmission,
+  lighthouse,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "./chain.js";
 import { SYSTEM_PROGRAM_ADDRESS } from "./chain.js";
@@ -112,7 +119,7 @@ function startsWith(data: Uint8Array, prefix: ArrayLike<number>): boolean {
  * Read and decode one program account. Returns null when the account is
  * absent, owned by another program, closed (tombstoned) or of another type.
  */
-async function readProgramAccount<T>(
+export async function readProgramAccount<T>(
   chain: Chain,
   account: Address,
   discriminator: ArrayLike<number>,
@@ -182,6 +189,9 @@ function bytesEqual(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
 
 /** Listing terms as a buyer needs them, read fresh from the chain. */
 export interface ListingTerms {
+  maxOpenJobs: number;
+  operator: Address | null;
+  operatorFeeBps: number;
   listing: Address;
   providerAgent: Address;
   name: string;
@@ -197,7 +207,11 @@ export interface ListingTerms {
  * Read a listing and refuse anything a buyer cannot hire: paused or closed,
  * priced in a token, or at capacity.
  */
-export async function readHireableListing(chain: Chain, listing: Address): Promise<ListingTerms> {
+export async function readHireableListing(
+  chain: Chain,
+  listing: Address,
+  busyWords?: (maxOpenJobs: number) => string,
+): Promise<ListingTerms> {
   const account = await readListing(chain, listing);
   if (account === null) {
     throw new WalletError("NOT_FOUND", "That service does not exist.");
@@ -209,7 +223,7 @@ export async function readHireableListing(chain: Chain, listing: Address): Promi
     throw new WalletError("NOT_AVAILABLE", "That service is priced in a token this wallet does not pay with yet.");
   }
   if (account.maxOpenJobs > 0 && account.openJobs >= account.maxOpenJobs) {
-    throw new WalletError("NOT_AVAILABLE", "That service is busy right now. Try again later.");
+    throw new WalletError("NOT_AVAILABLE", busyWords?.(account.maxOpenJobs) ?? "That service is busy right now. Try again later.");
   }
   let name = "Service";
   let category: string | null = null;
@@ -228,6 +242,9 @@ export async function readHireableListing(chain: Chain, listing: Address): Promi
     providerAgent: account.providerAgent,
     name,
     category,
+    maxOpenJobs: account.maxOpenJobs,
+    operator: isDefaultAddress(account.operator) ? null : account.operator,
+    operatorFeeBps: account.operatorFeeBps,
     priceLamports: account.price,
     version: account.version,
     specHash: new Uint8Array(account.specHash),
@@ -416,8 +433,9 @@ export async function findTaskGate(
 export function purchaseDeposits(
   chain: Chain,
   buyer: Address,
-): Promise<{ total: bigint; kept: bigint }> {
-  return jobDeposits(chain, buyer, true);
+  rent?: (space: number) => bigint,
+): Promise<JobDeposits> {
+  return jobDeposits(chain, buyer, true, rent);
 }
 
 /**
@@ -427,7 +445,7 @@ export function purchaseDeposits(
 export function requestDeposits(
   chain: Chain,
   creator: Address,
-): Promise<{ total: bigint; kept: bigint }> {
+): Promise<JobDeposits> {
   return jobDeposits(chain, creator, false);
 }
 
@@ -435,8 +453,8 @@ async function jobDeposits(
   chain: Chain,
   payer: Address,
   hired: boolean,
-): Promise<{ total: bigint; kept: bigint }> {
-  const rent = (space: number) => chain.getMinimumBalanceForRentExemption(space);
+  rent: (space: number) => bigint | Promise<bigint> = space => chain.getMinimumBalanceForRentExemption(space),
+): Promise<JobDeposits> {
   const [taskRent, escrowRent, hireRent, validationRent, jobSpecRent, approvalRent, markerRent] =
     await Promise.all([
       rent(TASK_ACCOUNT_SPACE),
@@ -467,11 +485,9 @@ async function jobDeposits(
     total += once;
     kept += once;
   }
-  // A paying wallet's first turn-down or cancel (a refund included) also
-  // starts its record of those, paid then, before the refund. That is not set
-  // aside here: it is shown on the job (`creatorRecordCost`), kept back when
-  // everything is taken out of the wallet, and asked for when it is missing.
-  return { total, kept };
+  const cancellationRent = await creatorRecordCost(chain, payer, rent);
+  const networkFees = jobNetworkFees(chain.transferFeeLamports);
+  return { total: total + cancellationRent + networkFees, kept: kept + cancellationRent, networkFees, cancellationRent };
 }
 
 /**
@@ -492,7 +508,9 @@ export async function cancelShortfall(chain: Chain, payer: Address): Promise<big
  * Its first turn-down or cancel pays it, before any refund, and it never
  * comes back.
  */
-export async function creatorRecordCost(chain: Chain, creator: Address): Promise<bigint> {
+export async function creatorRecordCost(chain: Chain, creator: Address,
+  rent: (space: number) => bigint | Promise<bigint> = space => chain.getMinimumBalanceForRentExemption(space),
+): Promise<bigint> {
   const [record] = await findCreatorStatsPda({ authority: creator });
   const info = await chain.readAccountInfo(record);
   if (
@@ -502,14 +520,13 @@ export async function creatorRecordCost(chain: Chain, creator: Address): Promise
   ) {
     return 0n;
   }
-  return chain.getMinimumBalanceForRentExemption(getCreatorStatsSize());
+  return rent(getCreatorStatsSize());
 }
 
 /** An owner-aware reader over the wallet's chain, for the SDK's turn-down readers. */
-function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
+export function snapshotReader(chain: Chain): facade.ReadAccountSnapshot {
   return async (account) => {
-    const info = await chain.readAccountInfo(account);
-    return info === null ? null : { owner: info.owner, data: info.data };
+    return chain.readRawAccount(account);
   };
 }
 
@@ -535,14 +552,15 @@ async function requireBalanceFor(
   cost: bigint,
   what: string,
   words: AmountWords,
+  fee = FEE_HEADROOM_LAMPORTS,
 ): Promise<void> {
-  if (cost === 0n) return;
+  if (cost === 0n && fee === FEE_HEADROOM_LAMPORTS) return;
   const balance = await chain.getBalance(payer);
-  const needed = cost + FEE_HEADROOM_LAMPORTS;
+  const needed = cost + fee;
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
+      `${what} starts your marketplace record, which costs ${words.cost(cost)} once and does not come back. Add at least ${words.add(needed - balance)} and try again.`,
     );
   }
 }
@@ -583,9 +601,11 @@ export async function sendHire(
   buyer: KeyPairSigner,
   intent: HireIntent,
   gate: GateAccounts,
+  protocolFeeBps: number,
+  rentTerms: string,
 ): Promise<string> {
-  const client = chain.clientFor(buyer);
-  const result = await client.hireFromListingHumanless({
+  const guards = await hireCostAssertions(protocolFeeBps, rentTerms);
+  const ix = await facade.hireFromListingHumanless({
     creator: buyer,
     listing: intent.listing,
     providerAgent: intent.providerAgent,
@@ -598,7 +618,7 @@ export async function sendHire(
     ...gateArgs(gate),
     ...(gate.record !== undefined ? { listingModeration: gate.record } : {}),
   });
-  return result.signature;
+  return (await chain.clientFor(buyer).send([...guards, ix])).signature;
 }
 
 /**
@@ -636,6 +656,9 @@ export async function hireLanded(
 // door a wallet with no registered agent uses.
 
 export interface RequestIntent {
+  maxEntries?: number;
+  minReputation: number;
+  requiredCapabilities: bigint;
   taskId: Uint8Array;
   /** Canonical hash of the published request. The task commits to it. */
   jobSpecHash: Uint8Array;
@@ -666,11 +689,11 @@ export async function sendRequest(
     await facade.createTaskHumanless({
       creator,
       taskId: intent.taskId,
-      requiredCapabilities: 1n,
+      requiredCapabilities: intent.requiredCapabilities,
       description: requestDescription(intent.jobSpecHash),
       rewardAmount: intent.rewardLamports,
       deadline: intent.deadline,
-      minReputation: 0,
+      minReputation: intent.minReputation,
       reviewWindowSecs: intent.reviewWindowSecs,
     }),
   ]);
@@ -686,14 +709,17 @@ export async function requestLanded(
   chain: Chain,
   creator: Address,
   task: Address,
-  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash">,
+  intent: Pick<RequestIntent, "rewardLamports" | "jobSpecHash" | "minReputation" | "requiredCapabilities" | "deadline" | "maxEntries">,
 ): Promise<boolean> {
   const account = await readTask(chain, task);
   if (account === null) return false;
   const mismatch = (): never => {
     throw new WalletError("INTERNAL", "A job on the marketplace does not match the wallet's records.");
   };
-  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports) mismatch();
+  if (account.creator !== creator || account.rewardAmount !== intent.rewardLamports ||
+      account.minReputation !== intent.minReputation || account.requiredCapabilities !== intent.requiredCapabilities ||
+      account.deadline !== intent.deadline || account.maxWorkers !== (intent.maxEntries ?? 1) ||
+      Number(account.taskType) !== (intent.maxEntries === undefined ? 0 : 2)) mismatch();
   if (!bytesEqual(new Uint8Array(account.description), requestDescription(intent.jobSpecHash))) mismatch();
   if ((await readHireRecord(chain, task)) !== null) mismatch();
   return true;
@@ -740,17 +766,30 @@ export async function sendActivation(
   buyer: KeyPairSigner,
   input: { task: Address; jobSpecHash: Uint8Array; jobSpecUri: string },
   gate: GateAccounts,
+  /** Approved Rent bytes (hex) of a hire. The job spec's deposit is checked against them, also at landing. */
+  approvedRentTerms?: string,
 ): Promise<string> {
   const client = chain.clientFor(buyer);
-  const result = await client.setTaskJobSpec({
+  const spec = {
     task: input.task,
     creator: buyer,
     jobSpecHash: input.jobSpecHash,
     jobSpecUri: input.jobSpecUri,
     ...gateArgs(gate),
     ...(gate.record !== undefined ? { taskModeration: gate.record } : {}),
-  });
-  return result.signature;
+  };
+  if (approvedRentTerms === undefined) return (await client.setTaskJobSpec(spec)).signature;
+  const current = await laterRentWithinApproval(chain, approvedRentTerms, [TASK_JOB_SPEC_SPACE]);
+  if (current === null) throw new LaterRentRose();
+  const guard = lighthouse.assertBytes(lighthouse.RENT, 0, Buffer.from(current, "hex"));
+  return (await client.send([guard, await facade.setTaskJobSpec(spec)])).signature;
+}
+
+/** A hire's later account would cost more than the buyer approved. */
+export class LaterRentRose extends WalletError {
+  constructor() {
+    super("PRICE_CHANGED", "The network's account deposits rose after you approved this job.");
+  }
 }
 
 const STATUS_NAMES: Record<number, ChainTaskStatus> = {
@@ -791,6 +830,8 @@ export interface TurnDownOnChain {
 
 export interface JobOnChain {
   status: ChainTaskStatus;
+  /** Closed markers no longer carry the reward mint. */
+  tokenReward?: boolean;
   /** Unix seconds; 0 when the task has no deadline. */
   deadline: number;
   rewardLamports: bigint;
@@ -844,7 +885,7 @@ export async function readTurnDownOnChain(
   };
 }
 
-async function readSubmission(
+export async function readSubmission(
   chain: Chain,
   task: Address,
   providerAgent: Address,
@@ -859,6 +900,26 @@ async function readSubmission(
   );
   if (account === null || account.task !== task) return null;
   return { address: submission, claim, account };
+}
+
+export async function settledOperatorPayment(chain: Chain, task: Address) {
+  const read = await facade.readTask(snapshotReader(chain), task);
+  if (read.kind === "missing") return null;
+  const creator = read.kind === "closed" ? read.marker.creator : read.task.creator;
+  const facts = await chain.findSettlement?.(task, creator, { includeFrozen: true });
+  if (facts?.operatorPayment) return facts.operatorPayment;
+  if (!facts?.unpaidOperator) return null;
+  const { address, sellerNet } = facts.unpaidOperator;
+  // The task pins the operator at hire. After cleanup the marker has no terms,
+  // so require the original hire and the operator slot of its paid settlement.
+  if (read.kind === "closed") {
+    const hire = await chain.findSettlement?.(task, creator, { includeFrozen: true, listing: true });
+    if (!hire?.listing || hire.unpaidOperator?.address !== address || hire.unpaidOperator.sellerNet !== sellerNet) return null;
+  } else if (
+    read.task.operator !== address || read.task.operatorFeeBps === 0 || read.task.rewardAmount !== facts.priceLamports ||
+    read.task.rewardAmount * BigInt(read.task.operatorFeeBps) >= 10_000n
+  ) return null;
+  return { address, paid: 0n, forfeited: 0n, sellerNet };
 }
 
 /**
@@ -911,6 +972,7 @@ export async function inspectJob(
     status,
     deadline: Number(account.deadline),
     rewardLamports: account.rewardAmount,
+    tokenReward: account.rewardMint.__option === "Some",
     workers: account.currentWorkers,
     completions: account.completions,
     activated: await isActivated(chain, task),
@@ -958,16 +1020,58 @@ async function settlementPayees(
   };
 }
 
+async function sendBuyerDecision(
+  chain: Chain, payer: KeyPairSigner, task: Address, provider: Address,
+  action: "approve" | "change" | "reject", ix: Instruction, expected: BoundDelivery, costGuards: readonly Instruction[] = [],
+) {
+  const [claim] = await findClaimPda({ task, bidder: provider });
+  const [submission] = await findTaskSubmissionPda({ claim });
+  const account = await readTask(chain, task);
+  if (!account) throw new WalletError("NOT_FOUND", "That job no longer exists.");
+  // Cost checks come first. The receipt reader expects the three decision
+  // guards immediately before the memo.
+  const guards = [...costGuards, ...decisionAssertions(task, account, submission, expected)];
+  let refusal: WalletError | undefined;
+  // The SDK obtains a fresh lifetime and assembles the message before calling
+  // this signer. Keep the claim read here, after uploads, quotes and RPC setup.
+  const signer: TransactionPartialSigner = {
+    address: payer.address,
+    async signTransactions(transactions, config) {
+      const [current, now] = await Promise.all([readSubmission(chain, task, provider).then(found => found?.account), readTask(chain, task)]);
+      if (!current || !now || claimGeneration(now) !== expected.claimGeneration || current.claim !== claim || current.worker !== provider || current.status !== SubmissionStatus.Submitted ||
+          current.submissionCount !== expected.submissionCount || values.bytesToHex(Uint8Array.from(current.proofHash)) !== expected.deliveryHash) {
+        refusal = new WalletError("NOT_ALLOWED", "The delivery changed before signing. Open the new delivery and review it again.");
+        throw refusal;
+      }
+      return payer.signTransactions(transactions, config);
+    },
+  };
+  try {
+    return await chain.clientFor(signer, { review: true }).send([...guards, reviewMemo(action, claim, expected), ix], { maxRetries: 0 });
+  } catch (error) {
+    // The SDK wraps errors raised by a signer.
+    throw refusal ?? error;
+  }
+}
+
 /** Accept the delivery: releases the held price to the provider. */
 export async function sendApproval(
   chain: Chain,
   buyer: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  expected: BoundDelivery & {treasury?: string},
+  approvedPayees?: Pick<Payees, "workerAuthority" | "treasury">,
 ): Promise<string> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
   const payees = await settlementPayees(chain, account, providerAgent);
+  if (expected.treasury && payees.treasury !== expected.treasury)
+    throw new WalletError("PRICE_CHANGED", "The treasury changed. Review the current settlement quote.");
+  if (approvedPayees && (payees.workerAuthority !== approvedPayees.workerAuthority || payees.treasury !== approvedPayees.treasury ||
+      payees.operator !== null || payees.referrer !== null)) {
+    throw new WalletError("PRICE_CHANGED", "The payout recipients changed. Review a new quote.");
+  }
   const [hireRecord] = await findHireRecordPda({ task });
   const [creatorCompletionBond] = await findCreatorCompletionBondPda({
     task,
@@ -977,8 +1081,7 @@ export async function sendApproval(
     task,
     workerAuthority: payees.workerAuthority,
   });
-  const client = chain.clientFor(buyer);
-  const result = await client.acceptTaskResult({
+  const ix = await facade.acceptTaskResult({
     task,
     worker: providerAgent,
     creator: buyer,
@@ -990,6 +1093,7 @@ export async function sendApproval(
     ...(payees.operator !== null ? { operator: payees.operator } : {}),
     ...(payees.referrer !== null ? { referrer: payees.referrer } : {}),
   });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "approve", ix, expected);
   return result.signature;
 }
 
@@ -1000,12 +1104,11 @@ export async function sendChangesRequest(
   task: Address,
   providerAgent: Address,
   changesHash: Uint8Array,
+  expected: BoundDelivery,
 ): Promise<string> {
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
-  const client = chain.clientFor(buyer);
-  const result = await client.send([
-    await facade.requestChanges({ task, claim, creator: buyer, changesHash }),
-  ]);
+  const ix = await facade.requestChanges({ task, claim, creator: buyer, changesHash });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "change", ix, expected);
   return result.signature;
 }
 
@@ -1084,24 +1187,16 @@ export async function sendRejectAndFreeze(
   providerAgent: Address,
   rejectionHash: Uint8Array,
   words: AmountWords = SOL_AMOUNT_WORDS,
+  expected: BoundDelivery,
+  /** The record lamports the buyer approved. A higher current charge is refused. */
+  approvedRecordLamports?: bigint,
 ): Promise<{ signature: string; recordLamports: bigint }> {
   // The revision first, so a person on the wrong one is not asked for money.
   await chain.assertSigningRevision?.();
-  const cost = await facade.missingRecordCost(
-    snapshotReader(chain),
-    (space) => chain.getMinimumBalanceForRentExemption(space),
-    { creator: buyer.address, workerAgent: providerAgent },
-  );
-  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words);
-  const client = chain.clientFor(buyer);
-  const result = await client.send([
-    await facade.rejectAndFreeze({
-      task,
-      worker: providerAgent,
-      creator: buyer,
-      rejectionHash,
-    }),
-  ]);
+  const cost = await recordCostGuards(chain, { creator: buyer.address, workerAgent: providerAgent }, approvedRecordLamports);
+  await requireBalanceFor(chain, buyer.address, cost.lamports, "Turning this down", words, chain.transferFeeLamports);
+  const ix = await facade.rejectAndFreeze({ task, worker: providerAgent, creator: buyer, rejectionHash });
+  const result = await sendBuyerDecision(chain, buyer, task, providerAgent, "reject", ix, expected, cost.guards);
   return { signature: result.signature, recordLamports: cost.lamports };
 }
 
@@ -1119,6 +1214,7 @@ export async function sendFrozenExpiry(
   sender: KeyPairSigner,
   task: Address,
   providerAgent: Address,
+  expectedTreasury?: string,
 ): Promise<{ signature: string; paidProvider: boolean }> {
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -1127,6 +1223,8 @@ export async function sendFrozenExpiry(
     throw new WalletError("NOT_ALLOWED", "This turned-down job cannot be settled yet.");
   }
   const payees = await settlementPayees(chain, account, providerAgent);
+  if (expectedTreasury && payees.treasury !== expectedTreasury)
+    throw new WalletError("PRICE_CHANGED", "The treasury changed. Review the settlement recipient.");
   const [claim] = await findClaimPda({ task, bidder: providerAgent });
   const [hireRecord] = await findHireRecordPda({ task });
   const client = chain.clientFor(sender);
@@ -1147,6 +1245,15 @@ export async function sendFrozenExpiry(
   return { signature: result.signature, paidProvider: turnDown.expiryDue === "pays_provider" };
 }
 
+export async function disputeDeposit(chain: Chain, task: Address): Promise<bigint> {
+  const [rent, account] = await Promise.all([
+    chain.getMinimumBalanceForRentExemption(getDisputeBondSize()),
+    facade.findRejectionDisputeBondPda(task).then(address => chain.readRawAccount(address)),
+  ]);
+  if (account && (account.data.length || account.owner !== "11111111111111111111111111111111")) return rent;
+  return rent > (account?.lamports ?? 0n) ? rent - (account?.lamports ?? 0n) : 0n;
+}
+
 /**
  * The provider disputes a buyer's turn-down of its delivery (revision 9),
  * posting the bond: 10% of the price, at least 0.01 SOL, plus the bond
@@ -1162,6 +1269,7 @@ export async function sendDisputeTurnDown(
   task: Address,
   providerAgent: Address,
   words: AmountWords = SOL_AMOUNT_WORDS,
+  evidence?: { hash: Uint8Array; uri: string },
 ): Promise<{ signature: string; bondLamports: bigint }> {
   await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
@@ -1176,7 +1284,7 @@ export async function sendDisputeTurnDown(
   if (turnDown.providerSuspended) {
     throw new WalletError(
       "NOT_ALLOWED",
-      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. Nothing changed. If nobody disputes it in time, the price goes back to the buyer.",
+      "The marketplace has suspended this agent, and a suspended agent cannot dispute a turn-down. If nobody disputes it in time, the price goes back to the buyer.",
     );
   }
   if ((await chain.clusterTime()) > turnDown.disputeUntil) {
@@ -1186,13 +1294,13 @@ export async function sendDisputeTurnDown(
   if (submission === null) {
     throw new WalletError("NOT_FOUND", "The turned-down delivery could not be found.");
   }
-  const bondRent = await chain.getMinimumBalanceForRentExemption(getDisputeBondSize());
-  const needed = turnDown.bondLamports + bondRent + FEE_HEADROOM_LAMPORTS;
+  const bondRent = await disputeDeposit(chain, task);
+  const needed = turnDown.bondLamports + bondRent + chain.transferFeeLamports;
   const balance = await chain.getBalance(provider.address);
   if (balance < needed) {
     throw new WalletError(
       "NOT_ENOUGH_MONEY",
-      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again. Nothing changed.`,
+      `Disputing this turn-down needs ${words.cost(needed)}: the bond of ${words.cost(turnDown.bondLamports)}, a deposit of ${words.cost(bondRent)} that comes back, and network fees. Add at least ${words.add(needed - balance)} and try again.`,
     );
   }
   const client = chain.clientFor(provider);
@@ -1202,10 +1310,10 @@ export async function sendDisputeTurnDown(
       worker: providerAgent,
       creator: account.creator,
       authority: provider,
-      evidenceHash: new Uint8Array(submission.account.proofHash),
-      evidenceUri: "",
+      evidenceHash: evidence?.hash ?? new Uint8Array(submission.account.proofHash),
+      evidenceUri: evidence?.uri ?? "",
     }),
-  ]);
+  ], { maxRetries: 0 });
   return { signature: result.signature, bondLamports: turnDown.bondLamports };
 }
 
@@ -1367,6 +1475,11 @@ export async function sendTidy(
   task: Address,
   providerAgent: Address | null,
 ): Promise<string | null> {
+  const instruction = await prepareTidy(chain, buyer, task, providerAgent);
+  return instruction ? (await chain.clientFor(buyer).send([instruction])).signature : null;
+}
+
+export async function prepareTidy(chain: Chain, buyer: TransactionSigner, task: Address, providerAgent: Address | null) {
   const read = await facade.readTask(snapshotReader(chain), task);
   if (read.kind === "missing") return null;
   if (read.kind === "task") {
@@ -1411,6 +1524,11 @@ export async function sendTidy(
     }
   }
 
+  const [attestor] = await findTaskAttestorConfigPda({ task });
+  const attestorInfo = await chain.readAccountInfo(attestor);
+  if (attestorInfo?.owner === AGENC_COORDINATION_PROGRAM_ADDRESS && startsWith(attestorInfo.data, getTaskAttestorConfigDiscriminatorBytes())) {
+    children.push({ kind: "creatorFunded", account: attestor });
+  }
   for (const record of await buyerPaidModerationRecords(chain, task, buyer.address)) {
     children.push({ kind: "namedRecipient", account: record, recipient: buyer.address });
   }
@@ -1426,8 +1544,7 @@ export async function sendTidy(
     task,
     creator: buyer.address,
   });
-  const client = chain.clientFor(buyer);
-  const result = await client.closeTask({
+  return facade.closeTask({
     task,
     authority: buyer,
     creatorCompletionBond,
@@ -1435,12 +1552,25 @@ export async function sendTidy(
     ...(activated ? {} : { taskJobSpec: null }),
     children,
   });
-  return result.signature;
 }
 
 /** What leaving a rating costs: the record's deposit (never returned) plus a fee. */
 export async function ratingCost(chain: Chain): Promise<bigint> {
-  return (await chain.getMinimumBalanceForRentExemption(HIRE_RATING_SPACE)) + 5_000n;
+  return (await chain.getMinimumBalanceForRentExemption(HIRE_RATING_SPACE)) + chain.transferFeeLamports;
+}
+
+export async function landedRating(chain: Chain, task: Address, buyer: Address, listing: Address) {
+  const [pda] = await findHireRatingPda({ task });
+  const row = await readProgramAccount(chain, pda, getHireRatingDiscriminatorBytes(), bytes => getHireRatingDecoder().decode(bytes));
+  if (row && (row.task !== task || row.listing !== listing || row.buyer !== buyer || row.score < 1 || row.score > 5))
+    throw new WalletError("NOT_ALLOWED", "The rating receipt does not match this hire.");
+  return row?.score ?? null;
+}
+
+export async function canRateHire(chain: Chain, task: Address, buyer: Address, listing: Address) {
+  const [row, hire] = await Promise.all([readTask(chain, task), readHireRecord(chain, task)]);
+  return row?.creator === buyer && Number(row.status) === TaskStatus.Completed && hire?.listing === listing &&
+    facade.isHireRatingFeeQualified(row);
 }
 
 /** Whether this buyer already rated this job. */
@@ -1492,6 +1622,7 @@ export async function listingAddressFor(
 }
 
 export interface ListingOffer {
+  terms: import("./client/seller-terms.js").SellerTerms;
   providerAgent: Address;
   listingId: Uint8Array;
   name: string;
@@ -1505,10 +1636,9 @@ export interface ListingOffer {
 }
 
 /**
- * Create the listing. Hires are not capped: the marketplace only lowers a
- * listing's open-job count when a buyer tidies the finished job, so a cap
- * would let one buyer who never tidies block every later hire. The worker
- * still takes one job at a time.
+ * Admit hires up to the chosen capacity. The program enforces this atomically,
+ * including concurrent buyers. close_task frees the slot after settlement.
+ * A delayed close conservatively keeps the service busy.
  */
 export async function sendCreateListing(
   chain: Chain,
@@ -1521,16 +1651,16 @@ export async function sendCreateListing(
     listingId: offer.listingId,
     name: offer.name,
     category: offer.category as never,
-    tags: [],
+    tags: offer.terms.tags,
     specHash: offer.specHash,
     specUri: offer.specUri,
     price: offer.priceLamports,
     priceMint: null,
-    requiredCapabilities: 1n,
+    requiredCapabilities: BigInt(offer.terms.servicePin?.capabilities ?? "1"),
     defaultDeadlineSecs: BigInt(offer.deliverySecs),
-    maxOpenJobs: 0,
-    operator: null,
-    operatorFeeBps: 0,
+    maxOpenJobs: offer.terms.maxOpenJobs,
+    operator: offer.terms.operator ? address(offer.terms.operator) : null,
+    operatorFeeBps: offer.terms.operatorFeeBps,
   });
   return result.signature;
 }
@@ -1543,27 +1673,31 @@ export async function sendUpdateListing(
     listing: Address;
     providerAgent: Address;
     priceLamports: bigint;
+    terms: ListingOffer["terms"];
     spec: { hash: Uint8Array; uri: string } | null;
+    deliverySecs?: number | undefined;
   },
 ): Promise<string> {
-  const result = await chain.clientFor(provider).send([
-    await facade.updateServiceListing({
-      listing: input.listing,
-      providerAgent: input.providerAgent,
-      authority: provider,
-      price: input.priceLamports,
-      ...(input.spec === null
-        ? { specHash: null, specUri: null }
-        : { specHash: input.spec.hash, specUri: input.spec.uri }),
-      tags: null,
-      requiredCapabilities: null,
-      defaultDeadlineSecs: null,
-      maxOpenJobs: null,
-      operator: null,
-      operatorFeeBps: null,
-    }),
-  ]);
-  return result.signature;
+  return withListingOperation({ kind: "update", listings: [input.listing], lamports: "0" }, async () => {
+    const result = await chain.clientFor(provider).send([
+      await facade.updateServiceListing({
+        listing: input.listing,
+        providerAgent: input.providerAgent,
+        authority: provider,
+        price: input.priceLamports,
+        ...(input.spec === null
+          ? { specHash: null, specUri: null }
+          : { specHash: input.spec.hash, specUri: input.spec.uri }),
+        tags: values.encodeListingTags(input.terms.tags),
+        requiredCapabilities: BigInt(input.terms.servicePin?.capabilities ?? "1"),
+        defaultDeadlineSecs: BigInt(input.terms.deliverySecs),
+        maxOpenJobs: input.terms.maxOpenJobs,
+        operator: input.terms.operator ? address(input.terms.operator) : SYSTEM_PROGRAM_ADDRESS,
+        operatorFeeBps: input.terms.operatorFeeBps,
+      }),
+    ]);
+    return result.signature;
+  });
 }
 
 /**
@@ -1575,15 +1709,8 @@ export async function sendListingState(
   provider: KeyPairSigner,
   input: { listing: Address; providerAgent: Address; state: "Active" | "Paused" | "Retired" },
 ): Promise<string> {
-  const result = await chain.clientFor(provider).send([
-    await facade.setServiceListingState({
-      listing: input.listing,
-      authority: provider,
-      providerAgent: input.providerAgent,
-      state: input.state,
-    }),
-  ]);
-  return result.signature;
+  const sent = await sendListingStates(chain, provider, input.providerAgent, [input.listing], input.state);
+  return sent.get(input.listing)!;
 }
 
 /**
@@ -1611,7 +1738,8 @@ export async function sendListingStates(
     const instructions = await Promise.all(
       batch.map((listing) => facade.setServiceListingState({ listing, authority: provider, providerAgent, state })),
     );
-    const { signature } = await chain.clientFor(provider).send(instructions);
+    const signature = await withListingOperation({ kind: "state", state, listings: batch, lamports: "0" },
+      async () => (await chain.clientFor(provider).send(instructions)).signature);
     for (const listing of batch) sent.set(listing, signature);
   }
   return sent;

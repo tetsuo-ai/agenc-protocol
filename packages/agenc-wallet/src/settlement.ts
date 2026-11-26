@@ -8,11 +8,11 @@
 // the agent says it for good: it names the job and the agent, the program
 // checked both before it paid, and the events the program logged in it say
 // how much the job paid and what fee the marketplace took.
-import { AccountRole, getBase58Encoder, type Address } from "@solana/kit";
+import { AccountRole, getBase58Encoder, type Address, type Signature } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencCoordinationInstruction,
-  findTaskPda,
+  findTaskPda, findAgentPda,
   parseAgencCoordinationEvents,
   parseAgencCoordinationInstruction,
 } from "@tetsuo-ai/marketplace-sdk";
@@ -28,6 +28,7 @@ export interface SentInstruction {
 export interface Settlement {
   task: Address;
   worker: Address;
+  operator?: Address;
 }
 
 /**
@@ -37,7 +38,7 @@ export interface Settlement {
  * on a job that needs no review. A dispute's ruling is left out: it may pay
  * either side.
  */
-export function settlementOf(instruction: SentInstruction): Settlement | null {
+export function settlementOf(instruction: SentInstruction, includeFrozen = false): Settlement | null {
   if (instruction.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) return null;
   let parsed: ReturnType<typeof parseAgencCoordinationInstruction>;
   try {
@@ -55,10 +56,16 @@ export function settlementOf(instruction: SentInstruction): Settlement | null {
     case AgencCoordinationInstruction.AcceptTaskResult:
     case AgencCoordinationInstruction.AutoAcceptTaskResult:
     case AgencCoordinationInstruction.CompleteTask:
-      return { task: parsed.accounts.task.address, worker: parsed.accounts.worker.address };
+      break;
+    case AgencCoordinationInstruction.ResolveRejectFrozen:
+    case AgencCoordinationInstruction.ExpireRejectFrozen:
+      if (!includeFrozen) return null;
+      break;
     default:
       return null;
   }
+  const { task, worker, operator } = parsed.accounts;
+  return { task: task.address, worker: worker.address, ...(operator && { operator: operator.address }) };
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -68,7 +75,7 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 /** An instruction as JSON-RPC sends one it cannot read itself: addresses and base58 bytes. */
-function sentInstruction(value: unknown): SentInstruction | null {
+export function sentInstruction(value: unknown): SentInstruction | null {
   const entry = record(value);
   if (entry === null || typeof entry.programId !== "string" || typeof entry.data !== "string") return null;
   const accounts = entry.accounts;
@@ -88,7 +95,7 @@ function sentInstruction(value: unknown): SentInstruction | null {
  * one asked for, or does not settle that job. Instructions another program
  * called count as well: the program checked them the same way.
  */
-export function settlementWorkerIn(value: unknown, task: Address, signature: string): Address | null {
+function settlementIn(value: unknown, task: Address, signature: string, includeFrozen: boolean): Settlement | null {
   const answer = record(value);
   const meta = record(answer?.meta);
   if (meta === null || meta.err !== null) return null;
@@ -106,20 +113,28 @@ export function settlementWorkerIn(value: unknown, task: Address, signature: str
   for (const raw of [...outer, ...inner]) {
     const instruction = sentInstruction(raw);
     if (instruction === null) continue;
-    const settled = settlementOf(instruction);
-    if (settled !== null && settled.task === task) return settled.worker;
+    const settled = settlementOf(instruction, includeFrozen);
+    if (settled !== null && settled.task === task) return settled;
   }
   return null;
 }
 
+export function settlementWorkerIn(value: unknown, task: Address, signature: string, includeFrozen = false): Address | null {
+  return settlementIn(value, task, signature, includeFrozen)?.worker ?? null;
+}
+
 /** What the transactions of a finished job say about it. */
 export interface SettlementFacts {
+  reputation?: { before: number; after: number; signature?: string };
   /** The agent it paid. */
   worker: Address;
   /** What the job paid in all: the agent's share, the fee and any operator or referrer share. */
   priceLamports: bigint;
   /** The marketplace's fee taken out of it. */
   feeLamports: bigint;
+  /** An operator account named by the settlement, with no paid or forfeited fee event in its complete logs. */
+  unpaidOperator?: { address: Address; sellerNet: bigint };
+  operatorPayment?: { address: Address; paid: bigint; forfeited: bigint; sellerNet: bigint };
   /**
    * The service it was hired from, as the program's own hire event names it
    * (for the same job, buyer and agent), or null when no such event was read.
@@ -148,12 +163,13 @@ export async function settlementFactsIn(
   task: Address,
   signature: string,
   creator: Address,
+  includeFrozen = false,
 ): Promise<SettlementFacts | null> {
-  const worker = settlementWorkerIn(value, task, signature);
-  if (worker === null) return null;
+  const settlement = settlementIn(value, task, signature, includeFrozen);
+  if (settlement === null) return null;
   const logs = record(record(value)?.meta)?.logMessages;
   if (!Array.isArray(logs) || !logs.every((line) => typeof line === "string")) return null;
-  return settlementFactsFromLogs(logs as string[], task, worker, creator);
+  return settlementFactsFromLogs(logs as string[], task, settlement.worker, creator, settlement.operator, signature);
 }
 
 /**
@@ -166,6 +182,8 @@ export async function settlementFactsFromLogs(
   task: Address,
   worker: Address,
   creator: Address,
+  operator?: Address,
+  signature?: string,
 ): Promise<SettlementFacts | null> {
   const events = parseAgencCoordinationEvents(logs);
   for (const event of events) {
@@ -173,7 +191,12 @@ export async function settlementFactsFromLogs(
     const [paid] = await findTaskPda({ creator, taskId: event.data.taskId });
     if (paid !== task) continue;
     let shares = 0n;
+    let operatorPayment: SettlementFacts["operatorPayment"];
     for (const other of events) {
+      if (other.eventName === "OperatorFeePaid" && sameBytes(other.data.taskId, event.data.taskId))
+        operatorPayment = { address: other.data.operator, paid: other.data.amount, forfeited: 0n, sellerNet: event.data.amount };
+      if (other.eventName === "MarketplaceFeeForfeited" && other.data.role === 0 && sameBytes(other.data.taskId, event.data.taskId))
+        operatorPayment = { address: other.data.payee, paid: 0n, forfeited: other.data.amount, sellerNet: event.data.amount };
       if (
         (other.eventName === "OperatorFeePaid" || other.eventName === "ReferrerFeePaid") &&
         sameBytes(other.data.taskId, event.data.taskId)
@@ -181,9 +204,29 @@ export async function settlementFactsFromLogs(
         shares += other.data.amount;
       }
     }
+    const priceLamports = event.data.amount + event.data.protocolFee + shares;
+    // At one basis point or more, only a price below 10,000 can round to zero.
+    // A shortened log could omit a later fee event. It cannot prove a zero leg.
+    const unpaid = !operatorPayment && operator && priceLamports < 10_000n &&
+      !logs.includes("Log truncated") && /^Program [1-9A-HJ-NP-Za-km-z]+ success$/u.test(logs.at(-1) ?? "");
+    const updates = events.filter(e => e.eventName === "ReputationChanged" && e.data.reason === 0);
+    let reputation: SettlementFacts["reputation"];
+    // A transaction may settle multiple tasks for the same worker. Attribute
+    // a change only when both the paid task and the reputation event are unique.
+    if (!logs.includes("Log truncated") && events.filter(e => e.eventName === "RewardDistributed" && e.data.recipient === worker).length === 1) {
+      const matches = [];
+      for (const update of updates) {
+        if (update.eventName === "ReputationChanged" && (await findAgentPda({ agentId: Uint8Array.from(update.data.agentId) }))[0] === worker)
+          matches.push({ before: update.data.oldReputation, after: update.data.newReputation });
+      }
+      if (matches.length === 1) reputation = { ...matches[0]!, ...(signature && { signature }) };
+    }
     return {
       worker,
-      priceLamports: event.data.amount + event.data.protocolFee + shares,
+      ...(reputation && { reputation }),
+      ...(unpaid && { unpaidOperator: { address: operator, sellerNet: event.data.amount } }),
+      ...(operatorPayment && { operatorPayment }),
+      priceLamports,
       feeLamports: event.data.protocolFee,
       listing: null,
     };
@@ -225,7 +268,7 @@ export const SETTLEMENT_HISTORY_LIMIT = 20;
 export interface SettlementHistoryRpc {
   getSignaturesForAddress(
     address: Address,
-    config: { limit: number; commitment: "confirmed" },
+    config: { limit: number; commitment: "confirmed"; before?: Signature },
   ): { send(): Promise<readonly { signature?: unknown; err?: unknown }[]> };
   getTransaction(
     signature: string,
@@ -244,7 +287,7 @@ export async function readSettlementFacts(
   rpc: SettlementHistoryRpc,
   task: Address,
   creator: Address,
-  options: { listing?: boolean; limit?: number } = {},
+  options: { listing?: boolean; limit?: number; includeFrozen?: boolean } = {},
 ): Promise<SettlementFacts | null> {
   const limit = options.limit ?? SETTLEMENT_HISTORY_LIMIT;
   const history = await rpc.getSignaturesForAddress(task, { limit, commitment: "confirmed" }).send();
@@ -259,7 +302,7 @@ export async function readSettlementFacts(
       })
       .send();
     if (facts === null) {
-      facts = await settlementFactsIn(transaction, task, entry.signature, creator);
+      facts = await settlementFactsIn(transaction, task, entry.signature, creator, options.includeFrozen);
       // Newest first: what was read before the settlement came after it.
       if (facts !== null && options.listing !== true) return facts;
       continue;

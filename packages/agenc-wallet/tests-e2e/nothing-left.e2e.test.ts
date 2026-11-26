@@ -1,3 +1,5 @@
+import { approvedPost } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // Taking money back, or sending it all out, leaves nothing of the person's
 // behind where it can never be used. A wallet that is not empty must keep the
 // network's minimum, so "all" keeps it only while a job or earning may still
@@ -33,7 +35,7 @@ async function agentWith(current: World, cents: number) {
   const agent = await current.wallet.createAgent("My assistant");
   await current.wallet.setPolicy(agent.id, {
     askAboveCents: 1_000,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: REVIEW_ALLOWANCE,
   });
   await current.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;
@@ -47,13 +49,14 @@ describe("taking everything back", () => {
     const held = await world.balance(agent.address);
     const mainBefore = await world.balance(wallet.mainAddress);
 
-    const back = await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
+    const back = (await wallet.overview()).agents.find(entry => entry.id === agent.id)!;
     expect(back.balance.lamports).toBe("0");
     expect(await world.balance(agent.address)).toBe(0n);
     // Everything came back but the transfer's own fee.
     expect((await world.balance(wallet.mainAddress)) - mainBefore).toBe(held - FEE);
     // Nothing is left to take back, and the agent can be given money again.
-    await expect(wallet.reclaimFromAgent(agent.id, "all")).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
+    await expect(wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).rejects.toMatchObject({ code: "NOT_ENOUGH_MONEY" });
     expect((await wallet.fundAgent(agent.id, { usdCents: 100 })).balance.usdCents).toBe(100);
   });
 
@@ -64,7 +67,7 @@ describe("taking everything back", () => {
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
     expect(job.status).toBe("waiting");
 
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     // The network's minimum, the room for fees the job was set up with, and
     // (revision 9) what a first cancel or turn-down spends on the wallet's
     // marketplace record, so the job can still be cancelled or turned down.
@@ -76,11 +79,11 @@ describe("taking everything back", () => {
     // So the job still finishes: delivered, paid, and its deposits back.
     await sandbox.workOnce();
     expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
-    expect((await wallet.approveJob(job.id, undefined, true)).status).toBe("paid");
+    expect((await confirmPayout(wallet, job.id)).status).toBe("paid");
     // Once it is tidied, nothing needs the agent's money any more.
     world.clock.now += 2 * 60 * 60_000;
     await wallet.tick();
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     expect(await world.balance(agent.address)).toBe(0n);
   });
 
@@ -88,17 +91,17 @@ describe("taking everything back", () => {
     world = await startWorld({ earn: EARN });
     const { wallet } = world;
     const agent = await agentWith(world, 300);
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     // Once it is registered and watching for jobs, nothing else moves its money.
     await eventually(async () => {
       const earn = (await wallet.overview()).agents[0]!.earn;
       return earn.state === "watching" && earn.setAside.lamports !== "0";
     }, 30_000);
-    await wallet.reclaimFromAgent(agent.id, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "reclaim", agentId: agent.id, amount: "all" })).id);
     expect(await world.balance(agent.address)).toBe(
       await world.sandbox.chain.getMinimumBalanceForRentExemption(0),
     );
-    await wallet.setEarn(agent.id, false, 10);
+    await setEarnWithApproval(wallet, agent.id, false, 10);
   });
 
   it("sends everything out of the balance when nothing needs it", async () => {
@@ -107,7 +110,7 @@ describe("taking everything back", () => {
     const before = await world.balance(wallet.mainAddress);
     const outside = await world.balance(OUTSIDE);
 
-    await wallet.withdraw(OUTSIDE, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "withdraw", to: OUTSIDE, amount: "all" })).id);
     expect(await world.balance(wallet.mainAddress)).toBe(0n);
     expect((await world.balance(OUTSIDE)) - outside).toBe(before - FEE);
     expect((await wallet.overview()).main.balance.lamports).toBe("0");
@@ -116,13 +119,13 @@ describe("taking everything back", () => {
   it("keeps what a request posted from the balance still needs, so it can be cancelled", async () => {
     world = await startWorld();
     const { wallet } = world;
-    const posted = await wallet.postFromBalance({
+    const posted = await approvedPost(wallet, {
       request: "Write a haiku about a lighthouse.",
       reward: { usdCents: 5 },
     });
     expect(posted.status).toBe("waiting");
 
-    await wallet.withdraw(OUTSIDE, "all");
+    await wallet.confirmTransfer((await wallet.quoteTransfer({ kind: "withdraw", to: OUTSIDE, amount: "all" })).id);
     // Revision 9: the first cancel starts the wallet's marketplace record,
     // so that is kept too.
     expect(await world.balance(wallet.mainAddress)).toBe(

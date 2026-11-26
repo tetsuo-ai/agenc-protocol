@@ -1,3 +1,4 @@
+import { isBriefTerms, type BriefTerms } from "./job-brief.js";
 // Persistent worker state under `stateDir` (default is an RPC+wallet-namespaced
 // child of `~/.local/state/agenc-worker`): agent identity, the in-flight WAL,
 // and the submission ledger. State is private (0700 directory / 0600 file),
@@ -71,8 +72,23 @@ export type SubmissionIntent = {
   transactionSignature?: string;
 };
 
+/** Display evidence from the verified job spec. Never interpreted as instructions. */
+export type JobEvidence = { request: string; acceptance: string[]; terms?: BriefTerms; marketplaceDeadline?: number };
+
+/** A durable authorization ledger. Unknown spend consumes the reservation. */
+export type ModelBudget = { totalCents: number; remainingCents: number; correctionCents?: number; revisionRound?: number };
+
 /** A claim/execution/submission transaction that still needs reconciliation. */
 export type OpenClaim = {
+  /** An owner release was sent or may have been sent. Hold work until reconciled. */
+  releaseRequestedAt?: string;
+  ownerDecision?: true;
+  chosenAttempt?: { signature: string; lastValidBlockHeight: string; cleanup?: true; delivery?: SubmissionIntent };
+  /** A selected claim holds the room output for owner approval. */
+  chosen?: true;
+  jobEvidence?: JobEvidence;
+  jobEvidenceRef?: string;
+  modelBudget?: ModelBudget;
   /** Task PDA (base58). */
   task: string;
   /** ISO timestamp at which claiming this task began. */
@@ -81,6 +97,7 @@ export type OpenClaim = {
   phase: "claiming" | "claimed" | "executed" | "uploading" | "submitting";
   /** Ambiguous claim transaction signature, when the SDK surfaced one. */
   claimTransactionSignature?: string;
+  claimLastValidBlockHeight?: string;
   /** Rejected submission_count already acknowledged as request_changes. */
   revisionSubmissionCount?: number;
   /** Required exactly for `executed` and `uploading`. */
@@ -128,6 +145,7 @@ export type OpenClaim = {
  * expires or the task ends; `claimReleased` says when its deposit is back.
  */
 export type FailedJob = {
+  chosen?: boolean;
   /** Task PDA (base58). */
   task: string;
   /** ISO timestamp at which claiming the task began. */
@@ -138,7 +156,7 @@ export type FailedJob = {
    * "attempts": every allowed attempt failed. "expired": the time to deliver
    * ran out first. "cancelled": the task ended before anything was delivered.
    */
-  cause: "attempts" | "expired" | "cancelled";
+  cause: "attempts" | "expired" | "cancelled" | "released";
   /** Why, in the worker's words (redacted, one line). */
   reason: string;
   /** Attempts that failed. */
@@ -161,6 +179,12 @@ export type WorkerPause = {
 
 /** One submitted result awaiting (or past) settlement. */
 export type SubmissionRecord = {
+  chosen?: true;
+  jobEvidence?: JobEvidence;
+  jobEvidenceRef?: string;
+  modelBudget?: ModelBudget;
+  /** Durable outbox flag. Cleared only after the settlement consumer returns. */
+  settlementEventPending?: boolean;
   /** Task PDA (base58). */
   task: string;
   /** Submission transaction signature, or null when recovered from chain. */
@@ -380,6 +404,46 @@ function submissionIntent(value: unknown, label: string): SubmissionIntent {
   };
 }
 
+function jobEvidence(value: unknown, label: string): JobEvidence {
+  const parsed = record(value, label);
+  exactKeys(parsed, label, ["request", "acceptance"], ["terms", "marketplaceDeadline"]);
+  if (!Array.isArray(parsed.acceptance) || !parsed.acceptance.every((item) => typeof item === "string")) {
+    fail(`${label}.acceptance must be an array of strings`);
+  }
+  const evidence: JobEvidence = { request: string(parsed.request, `${label}.request`), acceptance: parsed.acceptance as string[] };
+  if (parsed.terms !== undefined) {
+    if (!isBriefTerms(parsed.terms)) fail(`${label}.terms is invalid`);
+    evidence.terms = parsed.terms;
+  }
+  if (parsed.marketplaceDeadline !== undefined) {
+    if (typeof parsed.marketplaceDeadline !== "number" || !Number.isSafeInteger(parsed.marketplaceDeadline)) fail(`${label}.marketplaceDeadline is invalid`);
+    evidence.marketplaceDeadline = parsed.marketplaceDeadline;
+  }
+  if (Buffer.byteLength(JSON.stringify(evidence), "utf8") > 128 * 1024) fail(`${label} is too large`);
+  return evidence;
+}
+
+function evidenceAndBudget(parsed: Record<string, unknown>, label: string) {
+  let modelBudget: ModelBudget | undefined;
+  if (parsed.modelBudget !== undefined) {
+    const budget = record(parsed.modelBudget, `${label}.modelBudget`);
+    exactKeys(budget, `${label}.modelBudget`, ["totalCents", "remainingCents"], ["revisionRound", "correctionCents"]);
+    const totalCents = count(budget.totalCents, `${label}.modelBudget.totalCents`, 0);
+    const remainingCents = count(budget.remainingCents, `${label}.modelBudget.remainingCents`, 0);
+    if (remainingCents > totalCents) fail(`${label}.modelBudget exceeds its total`);
+    const round = budget.revisionRound === undefined ? undefined : count(budget.revisionRound, `${label}.modelBudget.revisionRound`, 0);
+    if (round !== undefined && round > 2) fail(`${label}.modelBudget has an invalid revision round`);
+    const correctionCents = budget.correctionCents === undefined ? 0 : count(budget.correctionCents, label + ".correctionCents", 0);
+    if (correctionCents + remainingCents > totalCents) fail(label + ".modelBudget exceeds its total");
+    modelBudget = { totalCents, remainingCents, ...(correctionCents && { correctionCents }), ...(round !== undefined && { revisionRound: round }) };
+  }
+  return {
+    ...(parsed.jobEvidence !== undefined ? { jobEvidence: jobEvidence(parsed.jobEvidence, `${label}.jobEvidence`) } : {}),
+    ...(parsed.jobEvidenceRef !== undefined ? { jobEvidenceRef: hash(parsed.jobEvidenceRef, `${label}.jobEvidenceRef`) } : {}),
+    ...(modelBudget !== undefined ? { modelBudget } : {}),
+  };
+}
+
 function openClaim(value: unknown, label: string): OpenClaim {
   const parsed = record(value, label);
   exactKeys(
@@ -387,7 +451,13 @@ function openClaim(value: unknown, label: string): OpenClaim {
     label,
     ["task", "claimedAt", "phase"],
     [
-      "claimTransactionSignature",
+      "releaseRequestedAt",
+      "ownerDecision", "chosenAttempt",
+      "chosen",
+      "jobEvidence",
+      "jobEvidenceRef",
+      "modelBudget",
+      "claimTransactionSignature", "claimLastValidBlockHeight",
       "revisionSubmissionCount",
       "execution",
       "submission",
@@ -402,6 +472,14 @@ function openClaim(value: unknown, label: string): OpenClaim {
       "lastFailure",
     ],
   );
+  let chosenAttempt: OpenClaim["chosenAttempt"];
+  if (parsed.chosenAttempt !== undefined) {
+    const attempt = record(parsed.chosenAttempt, label);
+    exactKeys(attempt, label, ["signature", "lastValidBlockHeight"], ["delivery", "cleanup"]);
+    chosenAttempt = { signature: nonempty(attempt.signature, label), lastValidBlockHeight: decimal(attempt.lastValidBlockHeight, label),
+      ...(attempt.cleanup !== undefined && { cleanup: onlyTrue(attempt.cleanup, label) }),
+      ...(attempt.delivery !== undefined && { delivery: submissionIntent(attempt.delivery, label) }) };
+  }
   const phase = parsed.phase;
   if (
     phase !== "claiming" &&
@@ -444,7 +522,12 @@ function openClaim(value: unknown, label: string): OpenClaim {
   return {
     task: taskAddress(parsed.task, `${label}.task`),
     claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
+    ...(chosenAttempt && { chosenAttempt }),
+    ...(parsed.ownerDecision !== undefined ? { ownerDecision: onlyTrue(parsed.ownerDecision, label) } : {}),
+    ...(parsed.releaseRequestedAt !== undefined ? { releaseRequestedAt: iso(parsed.releaseRequestedAt, `${label}.releaseRequestedAt`) } : {}),
+    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, `${label}.chosen`) } : {}),
     phase,
+    ...(parsed.claimLastValidBlockHeight !== undefined && { claimLastValidBlockHeight: decimal(parsed.claimLastValidBlockHeight, label) }),
     ...(claimTransactionSignature !== undefined
       ? { claimTransactionSignature }
       : {}),
@@ -454,6 +537,7 @@ function openClaim(value: unknown, label: string): OpenClaim {
     ...(execution !== undefined ? { execution } : {}),
     ...(submission !== undefined ? { submission } : {}),
     ...jobLabels(parsed, label),
+    ...evidenceAndBudget(parsed, label),
     ...(parsed.failures !== undefined
       ? { failures: count(parsed.failures, `${label}.failures`, 1) }
       : {}),
@@ -502,21 +586,29 @@ function reasonLine(value: unknown, label: string): string {
   return parsed;
 }
 
+/** An older worker did not record who could release an exhausted claim. */
+export function pendingOwnerClaim(state: WorkerState): FailedJob | undefined {
+  if (state.openClaim) return undefined;
+  return state.failedJobs.find(job => job.chosen && !job.claimReleased &&
+    !state.submissions.some(submission => submission.task === job.task));
+}
+
 function failedJob(value: unknown, label: string): FailedJob {
   const parsed = record(value, label);
   exactKeys(
     parsed,
     label,
     ["task", "claimedAt", "failedAt", "cause", "reason", "attempts", "claimReleased"],
-    ["rewardAmount", "title", "listing"],
+    ["rewardAmount", "title", "listing", "chosen"],
   );
   const cause = parsed.cause;
-  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled") {
+  if (cause !== "attempts" && cause !== "expired" && cause !== "cancelled" && cause !== "released") {
     fail(`${label}.cause is unsupported`);
   }
   if (typeof parsed.claimReleased !== "boolean") {
     fail(`${label}.claimReleased must be boolean`);
   }
+  if (parsed.chosen !== undefined && typeof parsed.chosen !== "boolean") fail(`${label}.chosen must be boolean`);
   return {
     task: taskAddress(parsed.task, `${label}.task`),
     claimedAt: iso(parsed.claimedAt, `${label}.claimedAt`),
@@ -529,6 +621,7 @@ function failedJob(value: unknown, label: string): FailedJob {
       : {}),
     ...jobLabels(parsed, label),
     claimReleased: parsed.claimReleased,
+    chosen: parsed.chosen ?? !parsed.claimReleased,
   };
 }
 
@@ -557,6 +650,11 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       "settled",
     ],
     [
+      "chosen",
+      "jobEvidence",
+      "jobEvidenceRef",
+      "modelBudget",
+      "settlementEventPending",
       "outcome",
       "terminalEvidence",
       "earnedLamports",
@@ -574,6 +672,10 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
   }
   if (typeof parsed.settled !== "boolean")
     fail(`${label}.settled must be boolean`);
+  if (parsed.settlementEventPending !== undefined && typeof parsed.settlementEventPending !== "boolean") {
+    fail(`${label}.settlementEventPending must be boolean`);
+  }
+  if (parsed.settlementEventPending && !parsed.settled) fail(`${label} pending events require settlement`);
   const outcome = parsed.outcome;
   if (
     outcome !== undefined &&
@@ -631,6 +733,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
   }
   return {
     task: taskAddress(parsed.task, `${label}.task`),
+    ...(parsed.chosen !== undefined ? { chosen: onlyTrue(parsed.chosen, `${label}.chosen`) } : {}),
     submissionSignature:
       parsed.submissionSignature === null
         ? null
@@ -640,6 +743,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
     rewardAmount: decimal(parsed.rewardAmount, `${label}.rewardAmount`),
     submittedAt: iso(parsed.submittedAt, `${label}.submittedAt`),
     settled: parsed.settled,
+    ...(parsed.settlementEventPending !== undefined ? { settlementEventPending: parsed.settlementEventPending as boolean } : {}),
     ...(outcome !== undefined ? { outcome } : {}),
     ...(parsed.terminalEvidence !== undefined
       ? {
@@ -657,6 +761,7 @@ function submissionRecord(value: unknown, label: string): SubmissionRecord {
       ? { settledAt: iso(parsed.settledAt, `${label}.settledAt`) }
       : {}),
     ...jobLabels(parsed, label),
+    ...evidenceAndBudget(parsed, label),
   };
 }
 
@@ -816,14 +921,14 @@ export function pruneSettledSubmissions(
   let settledToRemove = Math.max(
     0,
     state.submissions.reduce(
-      (count, submission) => count + (submission.settled ? 1 : 0),
+      (count, submission) => count + (submission.settled && !submission.settlementEventPending ? 1 : 0),
       0,
     ) - retention,
   );
   if (settledToRemove === 0) return 0;
   const originalLength = state.submissions.length;
   state.submissions = state.submissions.filter((submission) => {
-    if (!submission.settled || settledToRemove === 0) return true;
+    if (!submission.settled || submission.settlementEventPending || settledToRemove === 0) return true;
     settledToRemove -= 1;
     return false;
   });
@@ -1013,9 +1118,70 @@ function fsyncDirectory(stateDir: string): void {
   }
 }
 
+/** Read full evidence on demand, without inflating the hot journal on load. */
+export function readJobEvidence(
+  stateDir: string,
+  entry: { jobEvidence?: JobEvidence; jobEvidenceRef?: string },
+): JobEvidence | undefined {
+  if (entry.jobEvidence !== undefined) return entry.jobEvidence;
+  if (entry.jobEvidenceRef === undefined) return undefined;
+  const ref = hash(entry.jobEvidenceRef, "jobEvidenceRef");
+  const directoryFd = openPrivateStateDirectory(stateDir, { create: false, missingOk: false });
+  if (directoryFd === null) throw new WorkerStateError("worker evidence directory vanished");
+  let fd: number | undefined;
+  try {
+    const file = stateLeafPath(stateDir, directoryFd, `evidence-${ref}.json`);
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const metadata = fstatSync(fd);
+    assertPrivateStateFile(metadata, file);
+    if (metadata.size > 128 * 1024) fail("job evidence is too large");
+    const raw = readFileSync(fd);
+    if (createHash("sha256").update(raw).digest("hex") !== ref) fail("job evidence hash mismatch");
+    return jobEvidence(JSON.parse(raw.toString("utf8")), "jobEvidence");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    closeSync(directoryFd);
+  }
+}
+
+/** Archive before referencing it. A crash can leave an orphan, never a dangling reference. */
+function archiveJobEvidence(stateDir: string, state: WorkerState): void {
+  const entries = [...state.submissions, ...(state.openClaim === null ? [] : [state.openClaim])];
+  if (!entries.some((entry) => entry.jobEvidence !== undefined)) return;
+  const directoryFd = openPrivateStateDirectory(stateDir, { create: true, missingOk: false });
+  if (directoryFd === null) throw new WorkerStateError("worker evidence directory vanished");
+  try {
+    for (const entry of entries) {
+      if (entry.jobEvidence === undefined) continue;
+      const raw = JSON.stringify(entry.jobEvidence);
+      const ref = createHash("sha256").update(raw).digest("hex");
+      const target = stateLeafPath(stateDir, directoryFd, `evidence-${ref}.json`);
+      const tmp = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+      let fd: number | undefined;
+      try {
+        fd = openSync(tmp, "wx", 0o600);
+        writeFileSync(fd, raw);
+        fsyncSync(fd);
+        closeSync(fd);
+        fd = undefined;
+        renameSync(tmp, target);
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+        try { unlinkSync(tmp); } catch { /* Already renamed. */ }
+      }
+      entry.jobEvidenceRef = ref;
+      delete entry.jobEvidence;
+    }
+    fsyncSync(directoryFd);
+  } finally {
+    closeSync(directoryFd);
+  }
+}
+
 /** Persist validated state atomically and durably. */
 export function saveState(stateDir: string, state: WorkerState): void {
   const validated = currentState(state);
+  archiveJobEvidence(stateDir, validated);
   pruneSettledSubmissions(validated);
   pruneFailedJobs(validated);
   // The root fields for given-up jobs stay off the file at their defaults.

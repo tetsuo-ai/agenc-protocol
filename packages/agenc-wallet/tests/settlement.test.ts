@@ -21,6 +21,7 @@ import {
   OPERATOR_FEE_PAID_EVENT_DISCRIMINATOR,
   REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR,
   SERVICE_LISTING_HIRED_EVENT_DISCRIMINATOR,
+  TASK_COMPLETED_EVENT_DISCRIMINATOR,
   getAcceptTaskResultInstructionDataEncoder,
   getAutoAcceptTaskResultInstructionDataEncoder,
   getCloseTaskInstructionDataEncoder,
@@ -35,6 +36,8 @@ import {
   type SentInstruction,
   type SettlementHistoryRpc,
 } from "../src/settlement.js";
+
+import { readSettledDelivery, settledDeliveryFromLogs } from "../src/delivery-history.js";
 
 const PROGRAM = AGENC_COORDINATION_PROGRAM_ADDRESS;
 const at = (seed: number): Address => getAddressDecoder().decode(new Uint8Array(32).fill(seed));
@@ -99,8 +102,8 @@ function answer(
 
 describe("a settlement's instruction", () => {
   it("names the job and the agent an approval, a late approval or a job without review paid", () => {
-    for (const instruction of [accept(), autoAccept(), complete()]) {
-      expect(settlementOf(instruction)).toEqual({ task: TASK, worker: WORKER });
+    for (const [instruction, operator] of [[accept(), at(111)], [autoAccept(), at(111)], [complete(), at(115)]] as const) {
+      expect(settlementOf(instruction)).toEqual({ task: TASK, worker: WORKER, operator });
     }
   });
 
@@ -242,10 +245,25 @@ describe("what a settlement paid (revision 9)", () => {
     );
     expect(await settlementFactsIn(paidAnswer(logs), PAID_TASK, "settled", BUYER)).toEqual({
       worker: WORKER,
+      operatorPayment: { address: at(6), paid: 50_000n, forfeited: 0n, sellerNet: 1_850_000n },
       priceLamports: 2_000_000n,
       feeLamports: 100_000n,
       listing: null,
     });
+  });
+
+  it("reads a zero operator leg only with a named settlement account and complete logs", async () => {
+    const reward = eventLine(REWARD_DISTRIBUTED_EVENT_DISCRIMINATOR, rewardPayload(TASK_ID, WORKER, 8550n, 450n));
+    const logs = byProgram(reward);
+    const facts = (lines: string[]) => settlementFactsIn(paidAnswer(lines), PAID_TASK, "settled", BUYER);
+    expect((await facts(logs))?.unpaidOperator).toEqual({ address: at(111), sellerNet: 8550n });
+    expect((await facts([...byProgram(), ...logs.slice(0, -1)]))?.unpaidOperator).toBeUndefined();
+    expect((await facts([...logs, "Log truncated"]))?.unpaidOperator).toBeUndefined();
+    const instruction = accept(PAID_TASK);
+    const absent = { ...instruction, accounts: instruction.accounts.map((a, i) => i === 11 ? PROGRAM : a) };
+    const tx = answer([asSent(absent)]) as { meta: Record<string, unknown> };
+    tx.meta.logMessages = logs;
+    expect((await settlementFactsIn(tx, PAID_TASK, "settled", BUYER))?.unpaidOperator).toBeUndefined();
   });
 
   it("counts nothing another program logged, nor an event of another job or another agent", async () => {
@@ -295,5 +313,45 @@ describe("what a settlement paid (revision 9)", () => {
       listing: LISTING,
     });
     expect(fetched).toEqual(["tidied", "settled", "hired"]);
+  });
+});
+
+
+describe("delivery recovery after automatic payment", () => {
+  const proofHash = new Uint8Array(32).fill(7);
+  const resultData = new Uint8Array(64).fill(8);
+  const completed = (taskId = TASK_ID, worker = WORKER) => eventLine(TASK_COMPLETED_EVENT_DISCRIMINATOR,
+    Uint8Array.from(getStructEncoder([
+      ["taskId", fixEncoderSize(getBytesEncoder(), 32)], ["worker", getAddressEncoder()],
+      ["proofHash", fixEncoderSize(getBytesEncoder(), 32)], ["resultData", fixEncoderSize(getBytesEncoder(), 64)],
+      ["rewardPaid", getU64Encoder()], ["timestamp", getI64Encoder()],
+    ]).encode({ taskId, worker, proofHash, resultData, rewardPaid: 1900000n, timestamp: 1n })),
+  );
+
+  it("recovers a commitment from the matching successful settlement transaction", async () => {
+    const rpc: SettlementHistoryRpc = {
+      getSignaturesForAddress: () => ({ send: async () => [{ signature: "settled", err: null }] }),
+      getTransaction: () => ({ send: async () => paidAnswer(byProgram(completed())) }),
+    };
+    expect(await readSettledDelivery(rpc, PAID_TASK, BUYER)).toEqual({
+      worker: WORKER, proofHashHex: Buffer.from(proofHash).toString("hex"), resultData,
+    });
+    rpc.getTransaction = () => ({ send: async () => paidAnswer(byProgram(completed()), "different") });
+    expect(await readSettledDelivery(rpc, PAID_TASK, BUYER)).toBeNull();
+  });
+
+  it("rejects another program, task, buyer, worker or failed transaction", async () => {
+    const foreign = [`Program ${at(7)} invoke [1]`, completed(), `Program ${at(7)} success`];
+    expect(await settledDeliveryFromLogs(foreign, PAID_TASK, BUYER, WORKER)).toBeNull();
+    expect(await settledDeliveryFromLogs(byProgram(completed(new Uint8Array(32).fill(30))), PAID_TASK, BUYER, WORKER)).toBeNull();
+    expect(await settledDeliveryFromLogs(byProgram(completed()), PAID_TASK, at(9), WORKER)).toBeNull();
+    expect(await settledDeliveryFromLogs(byProgram(completed(TASK_ID, at(9))), PAID_TASK, BUYER, WORKER)).toBeNull();
+    const failed = paidAnswer(byProgram(completed())) as { meta: Record<string, unknown> };
+    failed.meta.err = { InstructionError: [0, "Custom"] };
+    const rpc: SettlementHistoryRpc = {
+      getSignaturesForAddress: () => ({ send: async () => [{ signature: "settled", err: null }] }),
+      getTransaction: () => ({ send: async () => failed }),
+    };
+    expect(await readSettledDelivery(rpc, PAID_TASK, BUYER)).toBeNull();
   });
 });

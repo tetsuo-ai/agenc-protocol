@@ -1,3 +1,4 @@
+import { confirmPayout, REVIEW_ALLOWANCE, setEarnWithApproval, setOfferWithApproval } from "./harness.js";
 // An agent can offer several services, as the marketplace allows: each is
 // its own listing, hired and paid under its own name, and taken off offer on
 // its own. They are only on offer while the agent can do the work.
@@ -26,7 +27,7 @@ const WORKS = "process.stdout.write('Here is the finished work.')";
 const FAILS = "process.exit(3)";
 const LINES = { name: "Line Writer", summary: "One friendly line about anything you name.", price: { usdCents: 30 } };
 const HAIKU = { name: "Haiku Smith", summary: "A haiku about anything you name.", price: { usdCents: 40 } };
-const NO_REFILL = { enabled: false, topUpToCents: 0, perDayCents: 0 };
+const NO_REFILL = { enabled: false, topUpToCents: 0, perDayCents: 10_000 };
 const ACTIVE = 0;
 const PAUSED = 1;
 
@@ -60,10 +61,10 @@ describe("several services for one agent", () => {
     const worker = await wallet.createAgent("Worker");
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
-    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
-    const both = await wallet.setOffer(worker.id, HAIKU);
+    await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: REVIEW_ALLOWANCE });
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
+    const both = await setOfferWithApproval(wallet, worker.id, HAIKU);
     expect(both.earn.offers.map((offer) => offer.name)).toEqual(["Line Writer", "Haiku Smith"]);
     expect(new Set(both.earn.offers.map((offer) => offer.id)).size).toBe(2);
 
@@ -87,7 +88,7 @@ describe("several services for one agent", () => {
     const second = await wallet.hire({ agentId: buyer.id, listing: haiku.listing!, request: "A haiku about rain." });
     for (const { job } of [first, second]) {
       await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered", 60_000);
-      await wallet.approveJob(job.id, undefined, true);
+      await confirmPayout(wallet, job.id);
     }
     const paid = await eventually(async () => {
       const view = await agentView(world!, worker.id);
@@ -108,8 +109,8 @@ describe("several services for one agent", () => {
     const buyer = await wallet.createAgent("Buyer");
     await wallet.fundAgent(buyer.id, { usdCents: 500 });
     await wallet.setPolicy(buyer.id, { askAboveCents: 100, refill: NO_REFILL });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const lines = live.earn.offers[0]!;
     const { job } = await wallet.hire({ agentId: buyer.id, listing: lines.listing!, request: "A line about tea." });
@@ -120,7 +121,7 @@ describe("several services for one agent", () => {
     // The same job as a hire through a listing that is none of the agent's
     // services (an older kind of hire record names it): its title is the
     // buyer's own words, so it carries no listing.
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     const file = path.join(dataDir, "earn", worker.id, "state.json");
     const state = JSON.parse(readFileSync(file, "utf8")) as { submissions: Array<{ task: string; listing?: string; title?: string }> };
     const record = state.submissions.find((entry) => entry.task === own!.task)!;
@@ -136,15 +137,15 @@ describe("several services for one agent", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
-    await wallet.setOffer(worker.id, HAIKU);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
+    await setOfferWithApproval(wallet, worker.id, HAIKU);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const [lines, haiku] = live.earn.offers as [OfferView, OfferView];
 
     // With two on offer, which one has to be said.
     await expect(wallet.setOffer(worker.id, null)).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    const one = await wallet.setOffer(worker.id, null, lines.id);
+    const one = await setOfferWithApproval(wallet, worker.id, null, lines.id);
     expect(one.earn.offers.map((offer) => [offer.name, offer.wanted, offer.status])).toEqual([
       ["Line Writer", false, "paused"],
       ["Haiku Smith", true, "live"],
@@ -153,7 +154,7 @@ describe("several services for one agent", () => {
     expect(Number((await readListing(sandbox.chain, haiku.listing as Address))!.state)).toBe(ACTIVE);
 
     // A service is changed by its own id, and its name stays.
-    const cheaper = await wallet.setOffer(worker.id, { ...HAIKU, price: { usdCents: 35 } }, haiku.id);
+    const cheaper = await setOfferWithApproval(wallet, worker.id, { ...HAIKU, price: { usdCents: 35 } }, haiku.id);
     expect(cheaper.earn.offers.map((offer) => offer.id)).toEqual([lines.id, haiku.id]);
     await expect(
       wallet.setOffer(worker.id, { ...HAIKU, name: "Haiku Master" }, haiku.id),
@@ -163,7 +164,7 @@ describe("several services for one agent", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     // Offering one again by its name brings back the same listing.
-    await wallet.setOffer(worker.id, LINES);
+    await setOfferWithApproval(wallet, worker.id, LINES);
     const back = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     expect(back.earn.offers.map((offer) => offer.listing)).toEqual([lines.listing, haiku.listing]);
   }, 120_000);
@@ -172,9 +173,9 @@ describe("several services for one agent", () => {
     world = await startWorld({ earn: earning(WORKS) });
     const { wallet, sandbox } = world;
     const worker = await wallet.createAgent("Worker");
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
-    await wallet.setOffer(worker.id, HAIKU);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
+    await setOfferWithApproval(wallet, worker.id, HAIKU);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
     const states = async (): Promise<number[]> =>
       Promise.all(
@@ -183,19 +184,20 @@ describe("several services for one agent", () => {
     const fee = sandbox.chain.transferFeeLamports;
 
     const before = await world.balance(worker.address);
-    await wallet.setEarn(worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, false);
     await servicesReach(world, worker.id, (offer) => offer.status === "paused");
     expect(await states()).toEqual([PAUSED, PAUSED]);
     const off = await world.balance(worker.address);
     expect(off).toBe(before - fee);
 
     const main = await world.balance(wallet.mainAddress);
-    await wallet.setEarn(worker.id, true, 10);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
     await servicesReach(world, worker.id, (offer) => offer.status === "live");
     expect(await states()).toEqual([ACTIVE, ACTIVE]);
-    expect(await world.balance(worker.address)).toBe(off - fee);
-    // Already on the marketplace, the agent needed no more money to take jobs again.
-    expect(await world.balance(wallet.mainAddress)).toBe(main);
+    const funded = main - await world.balance(wallet.mainAddress);
+    // Resuming still pays just one state-change fee. Any approved reserve
+    // top-up is internal to the wallet and pays its own transfer fee.
+    expect(off - await world.balance(worker.address) + funded).toBe(fee + (funded > 0n ? fee : 0n));
   }, 120_000);
 
   it("are kept to ten for one agent", async () => {
@@ -204,13 +206,13 @@ describe("several services for one agent", () => {
     const worker = await wallet.createAgent("Worker");
     // Earning is off, so nothing goes to the marketplace yet.
     for (let index = 1; index <= 10; index += 1) {
-      await wallet.setOffer(worker.id, { ...LINES, name: `Service ${index}` });
+      await setOfferWithApproval(wallet, worker.id, { ...LINES, name: `Service ${index}` });
     }
     await expect(
       wallet.setOffer(worker.id, { ...LINES, name: "Service 11" }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     // Changing one of the ten is still fine.
-    const changed = await wallet.setOffer(worker.id, { ...LINES, name: "Service 3", price: { usdCents: 31 } });
+    const changed = await setOfferWithApproval(wallet, worker.id, { ...LINES, name: "Service 3", price: { usdCents: 31 } });
     expect(changed.earn.offers).toHaveLength(10);
     expect(changed.earn.offers[2]!.price.usdCents).toBe(31);
   }, 60_000);
@@ -218,8 +220,8 @@ describe("several services for one agent", () => {
   it("carry on from a journal written when an agent had one service", async () => {
     world = await startWorld({ earn: earning(WORKS) });
     const created = await world.wallet.createAgent("Worker");
-    await world.wallet.setEarn(created.id, true, 10);
-    await world.wallet.setOffer(created.id, LINES);
+    await setEarnWithApproval(world.wallet, created.id, true, 10);
+    await setOfferWithApproval(world.wallet, created.id, LINES);
     const live = await servicesReach(world, created.id, (offer) => offer.status === "live");
     const listing = live.earn.offers[0]!.listing;
     await world.wallet.close();
@@ -238,7 +240,7 @@ describe("several services for one agent", () => {
     expect(back.earn.offers).toHaveLength(1);
     expect(back.earn.offers[0]).toMatchObject({ name: "Line Writer", listing, id: legacy.listingIdHex });
     // And a second one can be added next to it.
-    const two = await world.wallet.setOffer(created.id, HAIKU);
+    const two = await setOfferWithApproval(world.wallet, created.id, HAIKU);
     expect(two.earn.offers.map((offer) => offer.name)).toEqual(["Line Writer", "Haiku Smith"]);
   }, 120_000);
 
@@ -247,9 +249,9 @@ describe("several services for one agent", () => {
     const { wallet, sandbox } = world;
     const worker = await wallet.createAgent("Worker");
     await wallet.fundAgent(worker.id, { usdCents: 1_000 });
-    await wallet.setEarn(worker.id, true, 10);
-    await wallet.setOffer(worker.id, LINES);
-    await wallet.setOffer(worker.id, HAIKU);
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    await setOfferWithApproval(wallet, worker.id, LINES);
+    await setOfferWithApproval(wallet, worker.id, HAIKU);
     const live = await servicesReach(world, worker.id, (offer) => offer.status === "live");
 
     for (const title of ["One", "Two", "Three"]) {
@@ -264,8 +266,8 @@ describe("several services for one agent", () => {
       expect(Number((await readListing(sandbox.chain, offer.listing as Address))!.state)).toBe(PAUSED);
     }
 
-    await wallet.setEarn(worker.id, false);
-    await wallet.setEarn(worker.id, true);
+    await setEarnWithApproval(wallet, worker.id, false);
+    await setEarnWithApproval(wallet, worker.id, true);
     await servicesReach(world, worker.id, (offer) => offer.status === "live");
     for (const offer of live.earn.offers) {
       expect(Number((await readListing(sandbox.chain, offer.listing as Address))!.state)).toBe(ACTIVE);

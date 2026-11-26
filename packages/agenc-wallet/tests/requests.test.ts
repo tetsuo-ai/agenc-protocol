@@ -114,9 +114,11 @@ describe("a request in Jobs", () => {
   it("is a request, has no service, and cannot be rated", () => {
     const paid = jobView(request({ phase: "done", outcome: "paid" }), { ...context, ratingCostLamports: 2_880_360n });
     expect(paid).toMatchObject({ kind: "request", listing: null, provider: null, canRate: false, ratingCost: null });
-    // Before anyone takes it, it can be cancelled, by the person or by the agent that posted it.
+    // Before anyone takes it, it can be cancelled, by the person or by the agent that paid for it.
     expect(jobView(request(), context).canRefund).toBe(true);
-    expect(jobView(request(), { ...context, isOwner: false }).canRefund).toBe(true);
+    expect(jobView(request({ payer: "agent" }), { ...context, isOwner: false }).canRefund).toBe(true);
+    // A request the main balance paid is the person's to cancel, not the agent's.
+    expect(jobView(request(), { ...context, isOwner: false }).canRefund).toBe(false);
     // A delivery is the person's to turn down, not the agent's.
     const delivered = request({ chainStatus: "pending_validation", providerAgent: "Agent1111111111111111111111111111111111111" });
     expect(jobView(delivered, context)).toMatchObject({ canApprove: true, canRefund: true });

@@ -150,8 +150,8 @@ describe("the catalog", () => {
           items: [
             LIVE_ITEM,
             { ...LIVE_ITEM, pda: "not an address" },
-            { ...LIVE_ITEM, priceMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
-            { ...LIVE_ITEM, state: 1 },
+            { ...LIVE_ITEM, pda: TASK, priceMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" },
+            { ...LIVE_ITEM, pda: PROVIDER, state: 1 },
           ],
         });
       },
@@ -163,6 +163,7 @@ describe("the catalog", () => {
     expect(rows).toEqual([
       {
         listing: LISTING,
+        listingVersion: "8",
         providerAgent: PROVIDER,
         name: "Managed Repo Repair",
         category: null,
@@ -178,10 +179,44 @@ describe("the catalog", () => {
         ratingCount: 2,
         jobsDone: 1,
         deliverySecs: 86_400,
+        maxOpenJobs: 4, operator: null, operatorFeeBps: 0,
         specHashHex: LIVE_ITEM.specHash,
       },
     ]);
     expect(hosts.asked).toEqual([LIVE_ITEM.specUri]);
+  });
+
+  it("loads the whole catalog once, even when two searches cross the former 300-row cutoff", async () => {
+    const items = Array.from({ length: 315 }, (_, index) => {
+      const bytes = new Uint8Array(32);
+      new DataView(bytes.buffer).setUint32(0, index + 1);
+      return { ...LIVE_ITEM, pda: getAddressDecoder().decode(bytes), specHash: "", specUri: "" };
+    });
+    const pages: number[] = [];
+    const services = createHostedServices({ fetchImpl: fakeFetch({
+      "GET https://agenc.ag/api/listings": ({ url }) => {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        return json({ items: items.slice((page - 1) * 100, page * 100), total: items.length });
+      },
+    }).fetch });
+    const [first, second] = await Promise.all([services.listServices(), services.listServices()]);
+    expect(first.map((row) => row.listing)).toEqual(items.map((row) => row.pda));
+    expect(second).toEqual(first);
+    expect(pages).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+  });
+
+  it("rejects a repeated page and retries without caching a partial list", async () => {
+    let repeats = true;
+    const services = createHostedServices({ fetchImpl: fakeFetch({
+      "GET https://agenc.ag/api/listings": ({ url }) => json({
+        total: 2,
+        items: [{ ...LIVE_ITEM, specUri: "", pda: repeats || url.searchParams.get("page") === "1" ? LISTING : TASK, specHash: "" }],
+      }),
+    }).fetch });
+    await expect(services.listServices()).rejects.toMatchObject({ code: "NETWORK" });
+    repeats = false;
+    expect((await services.listServices()).map((row) => row.listing)).toEqual([LISTING, TASK]);
   });
 
   it("says so plainly when the catalog is down", async () => {
@@ -375,7 +410,7 @@ describe("the catalog", () => {
     expect(rows.map((row) => row.details)).toEqual(["ready", "ready"]);
   });
 
-  it("shows a provider's exact repeat once, and never merges two providers", async () => {
+  it("keeps each listing ID even when the provider, price and description match", async () => {
     const { specHash, bytes } = await describedAt(REPAIR_PAYLOAD);
     const addressOf = (fill: number) => getAddressDecoder().decode(new Uint8Array(32).fill(fill));
     const untried = { ...LIVE_ITEM, specHash, pda: addressOf(11), provenance: { settledHireCount: 0 }, ratingCount: 0 };
@@ -388,10 +423,33 @@ describe("the catalog", () => {
       publicFetcher: hosts.fetcher,
     });
     const rows = await services.listServices();
-    expect(rows.map((row) => row.listing)).toEqual([addressOf(12), addressOf(13), addressOf(14)]);
+    const targeted = await services.listServices({ listing: untried.pda });
+    expect(targeted.find((row) => row.listing === untried.pda)?.details).toBe("ready");
+    expect(rows.map((row) => row.listing)).toEqual([addressOf(11), addressOf(12), addressOf(13), addressOf(14)]);
   });
 
-  it("uses words the list itself carries only when the description gives none", async () => {
+  it("keeps listings on later legacy catalog pages when the fee or capacity is missing", async () => {
+    const pages: number[] = [];
+    const addressOf = (n: number) => getAddressDecoder().decode(new Uint8Array(32).fill(n));
+    const services = createHostedServices({
+      fetchImpl: fakeFetch({ "GET https://agenc.ag/api/listings": ({ url }) => {
+        const page = Number(url.searchParams.get("page"));
+        pages.push(page);
+        const items = Array.from({ length: page === 1 ? 100 : 2 }, (_, i) => ({
+          ...LIVE_ITEM, pda: addressOf((page - 1) * 100 + i + 1),
+          maxOpenJobs: undefined, operatorFeeBps: undefined, operator: undefined,
+        }));
+        return json({ total: 102, items });
+      } }).fetch,
+      publicFetcher: fakeHosts({}).fetcher,
+    });
+    const rows = await services.listServices();
+    expect(rows).toHaveLength(102);
+    expect(rows.slice(100).map((row) => row.listing)).toEqual([addressOf(101), addressOf(102)]);
+    expect(pages).toEqual([1, 2, 1, 2]); // Discovery verifies the complete ordered snapshot.
+  });
+
+  it("suppresses the index summary until the current description is verified", async () => {
     const listed = {
       ...LIVE_ITEM,
       category: "research",
@@ -404,7 +462,7 @@ describe("the catalog", () => {
     expect((await offline.listServices())[0]).toMatchObject({
       details: "unavailable",
       category: "research",
-      summary: "A summary the list carried.",
+      summary: null,
       description: null,
     });
 
@@ -601,6 +659,27 @@ describe("publishing", () => {
         payload: spec,
       },
     ]);
+  });
+
+  it("verifies the approved brief even if the publisher returns a self-consistent hash", async () => {
+    const job = {
+      title: "Proofread", request: "Read my draft.", acceptance: ["Mark every typo."],
+      terms: { deadline: 1_800_000_000, reviewWindowSecs: 41, eligibility: null, listingDurationSecs: 3600 },
+      listing: LISTING as Address, signer: await generateKeyPairSigner(),
+    };
+    const host = (route: Route) =>
+      createHostedServices({ fetchImpl: fakeFetch({ "POST https://agenc.ag/api/jobspecs": route }).fetch });
+    const original = await host(specStore()).publishJobSpec(job);
+    expect(original.spec.deliverables).toEqual([expect.stringContaining("41 seconds")]);
+    for (const change of [
+      { acceptance: ["Other checks."] }, { instructions: "Different work." }, { details: "Another brief." },
+      { acceptanceCriteria: [] }, { shortDescription: "Something else." }, { deliverables: [] },
+    ]) {
+      const payload = { ...original.spec, ...change };
+      const payloadSha256 = (await jobSpecHash(payload)).hex;
+      const publisher = host(() => json({ uri: original.uri, payload, payloadSha256 }));
+      await expect(publisher.publishJobSpec(job)).rejects.toMatchObject({ code: "NOT_AVAILABLE" });
+    }
   });
 
   it("believes nothing the publisher says that it cannot re-derive", async () => {
@@ -1048,7 +1127,7 @@ describe("the jobs a provider finished", () => {
           ...SETTLED,
           pda: getAddressDecoder().decode(new Uint8Array(32).fill(page * 101 + index + 1)),
         }));
-        return json({ page, pageSize: 100, total: 120, items });
+        return json({ slot: 1000, page, pageSize: 100, total: 120, items });
       },
     });
     const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0, now: () => now });
@@ -1101,4 +1180,13 @@ describe("the jobs a provider finished", () => {
     const services = createHostedServices({ fetchImpl: fetch, finishedGapMs: 0 });
     await expect(services.finishedJobs!(PROVIDER as Address)).rejects.toMatchObject({ code: "NETWORK" });
   });
+});
+
+it("verifies independent public dispute evidence at the submitted HTTPS address", async () => {
+  const bytes = Buffer.from("Independent receipt");
+  const uri = "https://evidence.example/seller-receipt";
+  const services = createHostedServices({ publicFetcher: async address => { expect(address).toBe(uri); return bytes; } });
+  expect(await services.fetchReviewEvidence!(uri, sha256Hex(bytes))).toEqual(bytes);
+  expect(await services.fetchReviewEvidence!(uri, "a".repeat(64))).toBeNull();
+  expect(await services.fetchReviewEvidence!("file:///untrusted", sha256Hex(bytes))).toBeNull();
 });

@@ -17,6 +17,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
+  writeFileSync,
   constants,
   mkdtempSync,
   mkdirSync,
@@ -47,6 +48,14 @@ export const DEFAULT_MAX_EXECUTOR_PROMPT_BYTES =
 const BASE_ENV_ALLOWLIST = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"] as const;
 
 /** Thrown when the executor fails (non-zero exit, signal, timeout, overflow). */
+/**
+ * The executor's exit when the job cannot run on this seller's setup at all
+ * (sysexits' EX_CONFIG): the seller's AI model refused its key, so every
+ * other try would fail the same way and use up the job's model budget. The
+ * worker gives such a job up at once and gives the claim back where it can.
+ */
+export const SELLER_SETUP_EXIT = 78;
+
 export class ExecutorError extends Error {
   override name = "ExecutorError";
   constructor(
@@ -280,8 +289,9 @@ function killExecutor(child: ReturnType<typeof spawn>): void {
 export async function runExecutor(options: {
   /** Argv template (element `"{prompt}"` is replaced; see buildExecutorArgv). */
   argv: readonly string[];
-  /** The untrusted prompt (job-spec content + task description). */
-  prompt: string;
+  reviewInputs?: readonly import("./review-artifact.js").ReviewInputFile[];
+  /** Untrusted job data. Omit for a host readiness probe with exact argv. */
+  prompt?: string;
   /** Wall-clock budget in ms. */
   timeoutMs: number;
   /** stdout byte cap (default 10 MiB). */
@@ -317,8 +327,8 @@ export async function runExecutor(options: {
   }
   const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES;
   const maxStderrBytes = options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES;
-  assertExecutorPromptFits(prompt);
-  const [command, ...args] = buildExecutorArgv(argv, prompt);
+  if (prompt !== undefined) assertExecutorPromptFits(prompt);
+  const [command, ...args] = prompt === undefined ? [...argv] : buildExecutorArgv(argv, prompt);
   const resolvedCommand = executablePath(command!);
   if (resolvedCommand === null) throw missingExecutable(command!);
   const unsafe = options.unsafeInheritProcessContext === true;
@@ -331,6 +341,19 @@ export async function runExecutor(options: {
     }
   }
 
+  if (scratchDir && options.reviewInputs?.length) {
+    try {
+      const directory = path.join(scratchDir, "inputs");
+      mkdirSync(directory, { mode: 0o700 });
+      for (const file of options.reviewInputs) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(file.name) || file.name.includes("..")) throw new Error("Invalid input name.");
+        writeFileSync(path.join(directory, file.name), file.bytes, { mode: 0o400, flag: "wx" });
+      }
+    } catch (error) {
+      rmSync(scratchDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
   return new Promise<ExecutorResult>((resolve, reject) => {
     let cleaned = false;
     const cleanup = () => {
@@ -347,7 +370,7 @@ export async function runExecutor(options: {
         ? {}
         : {
             cwd: scratchDir!,
-            env: isolatedEnvironment(scratchDir!, options.envAllowlist ?? []),
+            env: { ...isolatedEnvironment(scratchDir!, options.envAllowlist ?? []), AGENC_JOB_REVIEW_INPUTS: options.reviewInputs?.length ? "1" : "0" },
             detached: process.platform !== "win32",
           }),
     });

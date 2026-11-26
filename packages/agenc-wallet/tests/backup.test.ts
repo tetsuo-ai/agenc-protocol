@@ -1,3 +1,6 @@
+import { ExchangeJournal, JobExchange, digest, stagePrivateInputs, approvedOutputs } from "../src/private-inputs.js";
+import { address } from "@solana/kit";
+import { enrollClaimBudget, spendClaimRound } from "../../agenc-worker/src/revision-budget.js";
 // A backup: every key and the journal in one password-locked file, and a
 // restore that never deletes the wallet it replaces.
 import { randomBytes } from "node:crypto";
@@ -53,6 +56,51 @@ async function backupOf(folder: Awaited<ReturnType<typeof walletFolder>>, now = 
 }
 
 describe("a wallet backup", () => {
+  it("restores a pre-revision backup without reopening a charged unfinished model round", async () => {
+    const folder = await walletFolder();
+    const root = path.join(folder.dataDir, "model-spend");
+    const wallet = address(folder.addresses.main!);
+    const claim = address(folder.addresses["agent:a1"]!);
+    enrollClaimBudget(root, wallet, claim);
+    const { text } = await backupOf(folder);
+    spendClaimRound(root, wallet, claim, 1);
+    for (const dataDir of [folder.dataDir, mkdtempSync(path.join(tmpdir(), "agenc-restored-spend-"))]) {
+      await restoreBackup({ dataDir, unlockSecret: folder.secret, text, password: PASSWORD, network: "mainnet", now: 2 });
+      expect(() => spendClaimRound(path.join(dataDir, "model-spend"), wallet, claim, 1)).toThrow(/exhausted or unknown/);
+    }
+    expect(() => spendClaimRound(root, wallet, claim, 2)).not.toThrow();
+  });
+
+  it("restores both parties' original job keys and a maximum private input set in a fresh profile", async () => {
+    const folder = await walletFolder();
+    const { vault, dataDir } = folder;
+    const buyer = await vault.signer("main"), worker = await vault.signer("agent:a1");
+    const parties = { task: buyer.address, claim: worker.address, worker: worker.address, buyer: buyer.address,
+      authority: worker.address, claimedAt: "123", generation: "1", room: "a".repeat(64) };
+    const open = async (dir: string, signer: typeof buyer) => new JobExchange(await ExchangeJournal.open(dir, signer), signer, async () => parties);
+    const [b, w] = await Promise.all([open(dataDir, buyer), open(dataDir, worker)]);
+    const [bk, wk] = await Promise.all([b.announceKey(), w.announceKey()]);
+    const files = Array.from({ length: 8 }, (_, i) => {
+      const bytes = randomBytes(262144);
+      return { name: i + ".csv", bytes: bytes.length, base64: bytes.toString("base64"), sha256: digest(bytes) };
+    });
+    const terms = { requiredFiles: ["report.csv"], allowTextOnly: false };
+    const req = stagePrivateInputs(b.journal, files, worker.address, "Room model", terms);
+    await b.grant(req, parties, wk);
+    const sealed = await b.inputs(req);
+    const archive = await backupOf(folder);
+    const other = mkdtempSync(path.join(tmpdir(), "exchange-restore-"));
+    const secret = randomBytes(32);
+    await restoreBackup({ dataDir: other, unlockSecret: secret, text: archive.text, password: PASSWORD, network: "mainnet", now: 2 });
+    const restored = KeyVault.open({ file: path.join(other, "vault.json"), secret });
+    const rb = await open(other, await restored.signer("main")), rw = await open(other, await restored.signer("agent:a1"));
+    expect((await rb.announceKey()).payload).toBe(bk.payload);
+    expect((await rw.announceKey()).payload).toBe(wk.payload);
+    expect(approvedOutputs(rb.journal, req)).toEqual(terms);
+    expect((await rw.receiveBundle(await rb.inputs(req), "inputs", req.commitment)).files).toEqual(files);
+    expect((await rb.inputs(req)).signature).toBe(sealed.signature);
+  });
+
   it("says what it is without the password and holds no key in the clear", async () => {
     const folder = await walletFolder();
     const { text, header } = await backupOf(folder);
@@ -100,9 +148,13 @@ describe("a wallet backup", () => {
       expect(vault.address(id)).toBe(folder.addresses[id]);
       expect((await vault.signer(id)).address).toBe(folder.addresses[id]);
     }
-    // The journal comes back as it was, with one note added: this backup covers it.
+    // The journal comes back as it was, with this backup noted as covering it, and each agent's
+    // own spending held for a day from the restore: the ledger is as old as the backup.
+    const original = JSON.parse(readFileSync(path.join(folder.dataDir, "state.json"), "utf8")) as { agents: Record<string, object> };
     expect(JSON.parse(readFileSync(path.join(elsewhere, "state.json"), "utf8"))).toEqual({
-      ...(JSON.parse(readFileSync(path.join(folder.dataDir, "state.json"), "utf8")) as object),
+      ...original,
+      agents: Object.fromEntries(Object.entries(original.agents).map(([id, agent]) =>
+        [id, { ...agent, allowanceUnknownUntil: 1_800_000_100_000 + 86_400_000 }])),
       backup: { at: 1_800_000_000_000, keyIds: ["main", "agent:a1", "agent:a2"] },
     });
     expect(readFileSync(path.join(elsewhere, "earn", "a1", "state.json"), "utf8")).toBe(

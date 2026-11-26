@@ -1,12 +1,17 @@
 // `@tetsuo-ai/agenc-wallet/client`: talk to a running wallet service.
 // No keys, no chain code, no dependencies beyond node:net.
+export { WALLET_CAPABILITIES } from "./types.js";
 export type {
   ActivityKind,
   ActivityView,
   AgentPolicy,
   AgentView,
   ApprovalView,
+  ContestAction,
+  ContestEntry,
+  ContestQuote,
   EarnState,
+  EarnFundingQuote,
   EarnView,
   JobResult,
   JobStatus,

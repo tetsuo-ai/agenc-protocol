@@ -489,7 +489,7 @@ describe("remembering descriptions", () => {
     const cache = openDetailsCache({ file });
     cache.set(HASH, DETAILS);
     await cache.flush();
-    expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(1);
+    expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(2);
     expect(openDetailsCache({ file }).get(HASH)).toEqual(DETAILS);
   });
 
@@ -498,7 +498,7 @@ describe("remembering descriptions", () => {
     writeFileSync(
       file,
       JSON.stringify({
-        version: 1,
+        version: 2,
         entries: {
           [HASH]: { details: { ...DETAILS, description: "d".repeat(9_000), tags: ["Not A Tag"] }, seenAt: 1 },
           "not-a-hash": { details: DETAILS, seenAt: 1 },

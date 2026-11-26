@@ -39,7 +39,8 @@ import {
   getRecordTaskModerationInstructionDataDecoder,
   getTaskModerationSize,
 } from "@tetsuo-ai/marketplace-sdk";
-import { BASE_FEE_LAMPORTS, SYSTEM_PROGRAM_ADDRESS, type Chain } from "./chain.js";
+import { BASE_FEE_LAMPORTS } from "./network-fee.js";
+import { SYSTEM_PROGRAM_ADDRESS, type Chain } from "./chain.js";
 import { WalletError } from "./errors.js";
 import type { ApprovalPayment } from "./services.js";
 

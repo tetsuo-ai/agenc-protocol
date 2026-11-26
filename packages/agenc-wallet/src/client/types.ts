@@ -1,3 +1,4 @@
+import { DISCOVERY_CAPABILITY, type ServiceState } from "./discovery.js";
 // The wire contract between the wallet service and anything that talks to it
 // (a desktop panel, an agent host, a CLI). Everything here is plain JSON:
 // lamport amounts travel as decimal strings, times as unix milliseconds.
@@ -15,6 +16,8 @@ export type Lamports = string;
  * SOL price is available; show the SOL figure then.
  */
 export interface Money {
+  /** Exact dollars at the saved quote rate when the amount includes a fraction of a cent. */
+  quotedUsd?: string;
   lamports: Lamports;
   usdCents: number | null;
 }
@@ -38,7 +41,38 @@ export interface AgentPolicy {
   };
 }
 
-export type EarnState = "off" | "starting" | "watching" | "working" | "error";
+/** "finishing" takes no new jobs while an existing job still needs the agent. */
+export type EarnState = "off" | "starting" | "watching" | "working" | "finishing" | "error";
+
+/** Readonly upper bound for enabling earning and preparing the agent's offers. */
+export interface EarnFundingQuote {
+  capacity?: { open: number; proposed: number; pausing: boolean };
+  /** Supports consuming this quote together with its exact action. */
+  confirmAction?: boolean;
+  /** Additional main balance needed, leaving its network reserve intact. */
+  shortfall?: Money;
+  sellerTerms?: import("./seller-terms.js").SellerTerms;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
+  quoteId: string;
+  agentId: string;
+  expiresAt: number;
+  /** Fixed SOL price to use in earn.offer when the input was in dollars. */
+  offerPrice: Money | null;
+  registration: Money;
+  listings: Money;
+  checks: Money;
+  workingReserve: Money;
+  networkReserve: Money;
+  agentBalance: Money;
+  /** Total required in the agent wallet, including money already there. */
+  requiredBalance: Money;
+  fromMain: Money;
+  transferFee: Money;
+  /** fromMain + transferFee. This is the most approval can move. */
+  totalFromMain: Money;
+  dailyRemaining: Money;
+  requiresApproval: boolean;
+}
 
 /**
  * Where a service the agent offers stands.
@@ -50,6 +84,10 @@ export type OfferStatus = "getting_ready" | "being_checked" | "live" | "paused" 
 
 /** A service this agent offers for others to hire. */
 export interface OfferView {
+  /** Null for an unset period. Older wallet services omit this field. */
+  deliverySecs?: number | null;
+  terms?: import("./seller-terms.js").SellerTerms;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
   /** Names this service in `earn.offer`; it stays the same for as long as the service is kept. */
   id: string;
   /** The listing address once it exists. */
@@ -69,6 +107,9 @@ export interface OfferView {
 }
 
 export interface EarnView {
+  /** Present only when the host offers an isolated room for chosen jobs. */
+  chooseOpenJobs?: boolean;
+  heldChosenJob?: boolean;
   /** The person switched earning on for this agent. */
   enabled: boolean;
   state: EarnState;
@@ -123,6 +164,13 @@ export interface EarnView {
    * still refuse then.
    */
   retire: { refusal: string | null } | null;
+  /**
+   * Present while a live service of this agent cannot take a hire because the
+   * agent's own money is short: the service, the exact amount to add and one
+   * plain sentence. Gone once the money is there; the worker then takes the
+   * job by itself, without switching Earns off and on.
+   */
+  needsMoney?: { service: string; amount: Money; text: string } | null;
 }
 
 export interface AgentView {
@@ -138,6 +186,13 @@ export interface AgentView {
    * asks the person every time. Set with `agents.setBudget`.
    */
   budgetCents: number;
+  /**
+   * Set after a restore from a backup: until this time (ms) the agent cannot
+   * spend on its own, because what it spent since the backup is not known.
+   */
+  allowanceUnknownUntil?: number;
+  /** One plain sentence for the person while `allowanceUnknownUntil` applies. */
+  allowanceUnknownText?: string;
   /** The agent's own wallet address. Its balance IS the agent's allowance. */
   address: string;
   /** What the agent can still spend. */
@@ -160,7 +215,22 @@ export interface AgentView {
   createdAt: number;
 }
 
+/** Capabilities advertised by this service on every overview. */
+export const WALLET_CAPABILITIES = Object.freeze(["earn-finishing", "job-terms", "job-spend-quotes", "contests", DISCOVERY_CAPABILITY, "chosen-work", "delivery-review-v4"] as const);
+
 export interface WalletOverview {
+  /**
+   * Supported service contracts, present on every overview. Currently:
+   * - "earn-finishing": `earn.set({ enabled: false })` replies as soon as
+   *   the agent takes no new job. While its job is still in progress,
+   *   `earn.state` is "finishing", never "off".
+   * - "contests": contest posting, entry review and quoted prize release.
+   * - "job-spend-quotes": durable call outcomes, paged approvals and all-in daily limits.
+   * - "job-terms": panel quotes and approvals bind the payer, costs and brief.
+   * - "chosen-work": a verified picker and per-action owner quotes with itemized transfers.
+   * Clients may ignore this field and any capability they do not recognize.
+   */
+  capabilities: string[];
   network: WalletNetwork;
   /**
    * The main balance. Money is added here and handed out to agents. `spent`
@@ -208,6 +278,16 @@ export interface WalletOverview {
 
 /** A service someone offers on the marketplace. */
 export interface ServiceView {
+  maxPriceCents?: number;
+  specHashHex?: string;
+  listingVersion?: string;
+  maxOpenJobs?: number;
+  operatorFeeBps?: number;
+  operator?: string | null;
+  proceeds?: import("./seller-terms.js").SellerProceeds;
+  state?: ServiceState;
+  /** Canonical listing page for a service on the public marketplace. */
+  listingUrl?: string;
   /** The listing address. Pass it back to hire. */
   listing: string;
   name: string;
@@ -297,7 +377,9 @@ export interface ProviderView {
   disputesLost: number | null;
   /** What it keeps on deposit with the marketplace to be allowed to take jobs. Null when not known. */
   deposit: Money | null;
-  /** Its other services on offer now. */
+  /** Count across the catalog. Filter by provider to page through all of them. */
+  otherServiceCount?: number;
+  /** A preview of its other services on offer now. */
   otherServices: { listing: string; name: string }[];
 }
 
@@ -334,7 +416,9 @@ export type JobStatus =
 export interface JobResult {
   /** The delivered text, when it could be fetched and is text. */
   text: string | null;
-  /** Where the delivery lives, when the provider published a link. */
+  /** True when text is a preview. Read jobs.delivery for the complete text. */
+  textTruncated?: boolean;
+  /** Original artifact link. Hosts should show it even when text is present. */
   uri: string | null;
   /** sha-256 of the delivery, as recorded with the job. */
   hash: string | null;
@@ -348,6 +432,22 @@ export interface JobResult {
 }
 
 export interface JobView {
+  parties?: import("./business.js").JobParties;
+  contestEntries?: ContestEntry[];
+  contestNext?: string | null;
+  contestClaims?: { claim: string; workerAuthority: string }[];
+  contestCleanup?: boolean;
+  contestCancel?: boolean;
+  contestReceipt?: ContestReceipt;
+  contestQuote?: ContestQuote;
+  contestReleaseOpen?: boolean;
+  /** Deadline observed on the marketplace after funding, in Unix seconds. */
+  marketplaceDeadline?: number;
+  /** When the hire or request landed on the marketplace, after the approval, in milliseconds. */
+  hiredAt?: number;
+  terms?: JobTerms;
+  /** List evidence was shortened or omitted. Use jobs.get/jobs.delivery for details. */
+  previewTruncated?: boolean;
   id: string;
   /** "buying": this agent is paying. "working": this agent is doing the job. */
   role: "buying" | "working";
@@ -363,6 +463,8 @@ export interface JobView {
   title: string;
   /** What was asked for. */
   request: string;
+  /** The buyer's criteria for accepting the work. */
+  acceptance: string[];
   price: Money;
   status: JobStatus;
   /** One plain sentence describing `status`. */
@@ -414,6 +516,7 @@ export interface JobView {
    * done for them. False while the marketplace has the agent suspended.
    */
   canDispute: boolean;
+  approvalInMarket?: boolean;
   canApprove: boolean;
   canAskChanges: boolean;
   canRefund: boolean;
@@ -434,12 +537,98 @@ export interface JobView {
    * Null once that record exists, or when not known.
    */
   firstRecordCost: Money | null;
+  operatorPayment?: { address: string; paid: Money; forfeited: Money; sellerNet: Money };
   receiptUrl: string | null;
   error: string | null;
 }
 
-/** A hire, or a request an agent wants to post, waiting for a person to say yes. */
+/** A submitted contest entry, retained after its marketplace records close. */
+export interface ContestEntry {
+  id: string;
+  worker: string;
+  recipient: string;
+  hash: string;
+  dataHex: string;
+  files?: DeliveryFile[];
+  textTruncated?: boolean;
+  submittedAt: number;
+  status: "submitted" | "rejected" | "winner" | "released" | "closed";
+  text: string | null;
+  uri: string | null;
+  reason?: string;
+  settlement?: { signature: string; prize?: string; fee?: string; changes?: { address: string; lamports: string }[] };
+}
+
+export type ContestAction = "winner" | "reject" | "release" | "cancel" | "reclaim" | "cleanup";
+export interface ContestTransfer {
+  label: string;
+  recipient: string;
+  amount: Money;
+}
+export interface ContestReceipt {
+  quoteId: string;
+  action: ContestAction;
+  entryId: string;
+  signature: string;
+  transfers: ContestTransfer[];
+  proof?: string;
+  reason?: string;
+  networkFee?: Money;
+  recordCost?: Money;
+}
+
+export interface ContestQuote {
+  id: string;
+  stateHash?: string;
+  chainExpiry?: number;
+  rate?: number;
+  proof?: string;
+  transfers?: ContestTransfer[];
+  allowanceExceeded?: boolean;
+  overageMicrocents?: string;
+  claimGeneration: string;
+  entryId: string;
+  action: ContestAction;
+  reason: string;
+  recipient: string;
+  payer: string;
+  treasury: string;
+  gross: Money;
+  grossLimit: Money;
+  feeLimit: Money;
+  prize: Money;
+  marketFee: Money;
+  entryRefund: Money;
+  networkFee: Money;
+  recordCost: Money;
+  expiresAt: number;
+}
+
+export interface JobTerms {
+  hire?: import("./hire-quote.js").HirePayoutQuote;
+  contest?: { maxEntries: number; entryDepositLamports: string; releaseAt: number };
+  /** Exact delivery deadline in Unix seconds. For a hire this is part of its signed brief. */
+  deadline: number;
+  reviewWindowSecs: number;
+  eligibility: { minReputation: number; requiredCapabilities: string } | null;
+  /** A hire's on-chain clock runs from the landing block. */
+  listingDurationSecs: number | null;
+}
+
 export interface ApprovalView {
+  contestOverBudget?: boolean;
+  contestOverage?: string;
+  contestCosts?: { entryDeposit: Money; entryRent: Money; firstWorkerRecord: Money; registrationRent: Money; registrationStake: Money };
+  networkFees?: Money;
+  retainedRent?: Money;
+  cancellationRent?: Money;
+  /** Maximum marketplace share at settlement, included in the price. */
+  marketFee?: { bps: number; amount: Money };
+  refundableDeposit?: Money;
+  total?: Money;
+  terms?: JobTerms;
+  acceptance?: string[];
+  maxPriceCents?: number;
   id: string;
   jobId: string;
   agentId: string;
@@ -495,6 +684,7 @@ export type WalletErrorCode =
   | "BAD_REQUEST"
   | "NOT_ALLOWED"
   | "NOT_ENOUGH_MONEY"
+  | "APPROVAL_REQUIRED"
   | "PRICE_CHANGED"
   | "NOT_AVAILABLE"
   | "NEEDS_APPROVAL"
@@ -513,4 +703,66 @@ export interface WalletErrorShape {
    * needed). Absent when the service does not say.
    */
   retryable?: boolean;
+}
+
+export type WorkAction = "claim" | "submit" | "release";
+
+export interface WorkerJobView {
+  /** An expired claim uses the release action to request an owner-approved cleanup. */
+  cleanup?: boolean;
+  ownerDecision?: boolean;
+  cleanupRecipient?: string | null;
+  brief: string;
+  direct: boolean;
+  selectionDeadline: number | null;
+  buyer: string;
+  worker: string;
+  treasury: string;
+  futureRent: Money;
+  task: string;
+  title: string;
+  request: string;
+  criteria: string[];
+  reward: Money;
+  payout: Money;
+  deposit: Money;
+  deadline: number;
+  reviewSeconds: number;
+  rent: Money;
+  recordRent: Money;
+  feeReserve: Money;
+  modelBudgetCents: number | null;
+  networkFee: Money;
+  contest: boolean;
+  /** Null while the landing time can change who gets the deposit. */
+  depositReturns: boolean | null;
+  releaseBy: number | null;
+  releaseWindow: {
+    phase: "early" | "paused" | "late";
+    pauseAt: number;
+    resumeAt: number;
+    lateRecipient: string;
+    notice: string;
+  } | null;
+  expiresAt: number | null;
+  resultHash: string | null;
+  resultBytes: number | null;
+  preview: string | null;
+  canSubmit: boolean;
+  canRelease: boolean;
+}
+
+export interface WorkerQuote {
+  flows: { label: string; from: string; to: string; amount: Money }[];
+  balances: { account: string; net: Money }[];
+  /** For an early release, flows and balances above apply through releaseBy.
+   * This alternative applies when landing later changes the recipient. */
+  afterWindow?: { flows: WorkerQuote["flows"]; balances: WorkerQuote["balances"] };
+  id: string;
+  agentId: string;
+  action: WorkAction;
+  job: WorkerJobView;
+  expiresAt: number;
+  charge: Money;
+  dailyRemaining: Money;
 }

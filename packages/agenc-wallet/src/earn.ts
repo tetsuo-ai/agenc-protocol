@@ -1,3 +1,4 @@
+import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // "Take jobs while idle": run the stock marketplace worker loop for an agent,
 // signing with that agent's own wallet.
 //
@@ -9,10 +10,17 @@
 // What can go wrong is bounded twice: the agent's wallet holds only what the
 // person gave it, and the executor is whatever the host configured (for the
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
+import { deliveryFileProblem } from "./client/delivery-files.js";
+import { reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
+import { recordServiceBudget } from "./service-budget.js";
+import { readServiceRehearsal } from "./service-rehearsal.js";
+import { validServicePin, type SellerTerms } from "./client/seller-terms.js";
+import { serviceEconomics } from "./service-economics.js";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Address, KeyPairSigner } from "@solana/kit";
-import { findAgentPda, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
+import { findAgentPda, values, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
   acquireStateLock,
   AGENT_STATS_ACCOUNT_SIZE,
@@ -22,25 +30,37 @@ import {
   DEFAULT_ENDPOINT,
   hexToBytes,
   loadState,
+  saveState,
+  pendingOwnerClaim,
+  readJobEvidence,
   readClaimAccountRentMinimums,
   readMinAgentStake,
   registrationFundingRequirement,
+  resumeOpenClaim,
   runUp,
+  runExecutor,
   runUpkeep,
   type ExecutorMode,
+  type UpkeepMemory,
   type WorkerAgent,
+  type WorkerDispatch,
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
-import { describeError } from "./errors.js";
+import { outputAgreementFromSpec } from "./client/job-exchange.js";
+import { WalletError, describeError } from "./errors.js";
 import { readAgent } from "./market.js";
 import { prepareOutbox, publishingOutbox } from "./outbox.js";
 import type { MarketServices } from "./services.js";
 
 /** The program the worker hands each job to. */
 export interface EarnExecutor {
+  /** Keep part of a new job’s original model allowance for its two revisions. */
+  reserveRevisionBudget?: boolean;
+  /** The trusted host selected the isolated guest adapter for this argv. */
+  isolatedJobRoom?: boolean;
   /**
    * Command and arguments; one element must be exactly "{prompt}". Wherever
    * these appear they are replaced:
@@ -53,9 +73,8 @@ export interface EarnExecutor {
    *   network cannot keep files: the delivery is then text only.
    * - "{files}": what a file's sha-256 is added to, to make its address in
    *   the delivery store. Empty with "{outbox}".
-   * - "{pay}": the least a job this agent takes pays, in US cents, so the
-   *   command can keep what it spends on a job under what the job earns.
-   *   Empty when the going rate is not known.
+   * - "{pay}": this job's reward in whole US cents, rounded down. A missing
+   *   or invalid rate stops the job before claiming or running the command.
    */
   argv: string[];
   /**
@@ -68,17 +87,33 @@ export interface EarnExecutor {
   envAllowlist: string[];
   /** Wall-clock limit for one job. */
   timeoutMs: number;
+  /** Host self-test, run without buyer data before every claim. Exit 0 means ready. */
+  readiness?: { argv: string[]; timeoutMs?: number };
 }
 
 export interface EarnOptions {
+  /** Host-owned exchange and supplier grant resolved independently for each seller. */
+  roomWork?: (agentId: string) => WorkerContext["roomWork"];
+  /** The host selected its isolated open-job room under the operator switch. */
+  chosenRoomEnabled?: () => boolean;
+  watchChosenRoom?: (revoke: () => void) => () => void;
   /** Null when this host cannot run jobs (earning is then unavailable). */
   executor: EarnExecutor | null;
+  /**
+   * A different way of running jobs for named agents, such as the one seller
+   * the owner paired with a remote room. Every other agent keeps `executor`.
+   */
+  agentExecutors?: Readonly<Record<string, EarnExecutor>>;
   /**
    * Never take a job that pays more than this. A reward far above the going
    * rate is how a hostile job baits a worker; null disables the check.
    */
   maxRewardLamports?: bigint | null;
   pollIntervalMs?: number;
+  maxIdlePollIntervalMs?: number;
+  /** In-process equivalent of executor.readiness. Throw when the job room is unavailable. */
+  runReviewRoom?: typeof runExecutor;
+  checkExecutionReady?: (input: { agentId: string; signal?: AbortSignal }) => Promise<void>;
   /** Endpoint recorded with the agent's registration. */
   endpoint?: string;
   /**
@@ -92,7 +127,7 @@ export interface EarnOptions {
    * service. The stock watcher reports a job once. A hire of the agent's own
    * service that could not be taken at that moment (its wallet was short
    * while another job's deposits were out, the network hiccuped) would never
-   * be looked at again, and nobody else can take it. Default one minute.
+   * be looked at again, and nobody else can take it. Default fifteen minutes.
    */
   serviceRefreshMs?: number;
   /** Attempts a failing job gets before it is given up (worker default 3). */
@@ -104,12 +139,19 @@ export interface EarnOptions {
 }
 
 export interface EarnAgent {
+  chooseOpenJobs?: () => boolean;
+  admitsListing?: (listing: Address) => boolean;
+  capabilities?: bigint;
+  currentCapabilities?: () => Promise<bigint>;
+  specialistTerms?: (required: bigint) => Partial<SellerTerms> | undefined;
   agentId: string;
   signer: KeyPairSigner;
   /** Skip jobs that pay less than this. */
   minRewardLamports: bigint;
-  /** The same floor in US cents, or null when the going rate is not known. */
-  minPayCents?: number | null;
+  /** Fresh dollars per SOL. Required before a job can be claimed or executed. */
+  solUsd?: () => Promise<number | null>;
+  /** Leave the worker free for existing service hires while reopening listings. */
+  reconcileBeforeOpenJobs?: boolean;
   /** Hires it owes, by task, with what each pays: taken whatever the floor. */
   owed?: ReadonlyMap<string, bigint>;
 }
@@ -117,7 +159,7 @@ export interface EarnAgent {
 /** Why the worker gave a job up, as its ledger records it. */
 export interface EarnFailure {
   /** "attempts": it kept failing. "expired": time ran out. "cancelled": the job ended first. */
-  cause: "attempts" | "expired" | "cancelled";
+  cause: "attempts" | "expired" | "cancelled" | "released";
   /** The worker's own words (a technical line, not for a person). */
   reason: string;
   attempts: number;
@@ -129,8 +171,15 @@ export interface EarnedJob {
   rewardLamports: bigint;
   state: "working" | "delivered" | "paid" | "not_paid" | "failed";
   earnedLamports: bigint | null;
+  modelUsage?: ServiceUsage | null;
   at: number;
   resultHashHex: string | null;
+  resultUri: string | null;
+  request: string;
+  acceptance: string[];
+  terms?: BriefTerms;
+  marketplaceDeadline?: number;
+  createdAt: number;
   settlementSignature: string | null;
   /** What the job is called in its job spec: the buyer's words. */
   title: string | null;
@@ -146,16 +195,44 @@ export type EarnNotice =
   | { type: "failed"; task: string; failure: EarnFailure };
 
 const DEFAULT_MAX_REWARD_LAMPORTS = 1_000_000_000n;
+/** Never advertise more than this worker can accept. */
+export function maximumOfferPrice(options: EarnOptions): bigint {
+  const configured = options.maxRewardLamports;
+  return configured != null && configured < DEFAULT_MAX_REWARD_LAMPORTS
+    ? configured : DEFAULT_MAX_REWARD_LAMPORTS;
+}
+
+/** A zero/empty budget is unsafe for hosts that interpret it as unlimited. */
+export function jobPayCents(reward: bigint, rate: number | null): number {
+  const cents = rate === null ? NaN : Math.floor(Number(reward) * rate / 10_000_000);
+  if (rate === null || !Number.isFinite(rate) || rate <= 0 || !Number.isSafeInteger(cents) || cents <= 0) {
+    throw new Error("A current dollar price is needed to set this job's spending limit.");
+  }
+  return cents;
+}
 const RESTART_DELAY_MS = 20_000;
-const DEFAULT_SERVICE_REFRESH_MS = 60_000;
+export const DEFAULT_SERVICE_REFRESH_MS = 15 * 60_000;
+export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
+export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
+  capabilityRevision?: number;
+  dispatch?: WorkerDispatch | null;
+  read?: WorkerDispatch | undefined;
+  recoveryOnly: boolean;
+  discovering: boolean;
+  firstDiscovery: Promise<void>;
+  finishStartup: () => void;
+  awaitingListings: boolean;
+  checkReady?: (signal?: AbortSignal) => Promise<void>;
   controller: AbortController;
   done: Promise<void>;
   state: EarnState;
   lastError: string | null;
   /** Set while the worker takes no new job after several failed in a row. */
   paused: string | null;
+  /** The last job it could not fund: what its wallet must hold to take it. Cleared once a job starts. */
+  fundingShort?: { task: string; requiredLamports: bigint; at: number } | null;
 }
 
 export class EarnHost {
@@ -167,6 +244,7 @@ export class EarnHost {
   readonly #notify: (agentId: string, notice: EarnNotice) => void;
   readonly #serves: (agentId: string) => boolean;
   readonly #ownAddresses: () => Address[];
+  readonly #privateProcessing: (agentId: string, task: Address) => Promise<string | null>;
   readonly #running = new Map<string, Running>();
   /**
    * Aborted when the wallet closes. A job program in progress is then killed
@@ -188,6 +266,8 @@ export class EarnHost {
     serves?: (agentId: string) => boolean;
     /** Every address of this wallet, for {@link EarnOptions.ownJobsOnly}. */
     ownAddresses?: () => Address[];
+    /** The processing the buyer approved in this job's verified private inputs, or null. */
+    privateProcessing?: (agentId: string, task: Address) => Promise<string | null>;
   }) {
     this.#chain = deps.chain;
     this.#services = deps.services;
@@ -197,11 +277,25 @@ export class EarnHost {
     this.#notify = deps.notify;
     this.#serves = deps.serves ?? (() => false);
     this.#ownAddresses = deps.ownAddresses ?? (() => []);
+    this.#privateProcessing = deps.privateProcessing ?? (async () => null);
   }
 
   /** Whether this host can run jobs at all. */
   get available(): boolean {
-    return this.#options.executor !== null;
+    return this.#options.executor !== null || Object.keys(this.#options.agentExecutors ?? {}).length > 0;
+  }
+
+  /** How this agent's jobs run: its own executor when the host named one, else the shared one. */
+  executorFor(agentId: string): EarnExecutor | null {
+    const own = this.#options.agentExecutors;
+    return own !== undefined && Object.hasOwn(own, agentId) ? own[agentId]! : this.#options.executor;
+  }
+
+  /** Whether this agent's verified isolated room can receive B's private file handoff. */
+  supportsPrivateInputs(agentId: string): boolean {
+    const executor = this.executorFor(agentId);
+    return executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+      this.#options.roomWork?.(agentId) !== undefined;
   }
 
   /** Whether only jobs from this wallet's own addresses are taken. */
@@ -213,11 +307,59 @@ export class EarnHost {
     return path.join(this.#dataDir, agentId);
   }
 
+  /** A first contest uses the same registration as the worker and its retirement flow. */
+  contestRegistrationId(agentId: string, proposedId: string, reserve = false): string {
+    const dir = this.stateDir(agentId);
+    const state = loadState(dir);
+    if (state.agentIdHex !== null) return state.agentIdHex;
+    if (reserve) saveState(dir, { ...state, agentIdHex: proposedId });
+    return proposedId;
+  }
+
+  capabilitiesChanged(agentId: string): void {
+    const running = this.#running.get(agentId);
+    if (running) running.capabilityRevision = (running.capabilityRevision ?? 0) + 1;
+  }
+
   state(agentId: string): { state: EarnState; lastError: string | null } {
     const running = this.#running.get(agentId);
     return running === undefined
       ? { state: "off", lastError: null }
       : { state: running.state, lastError: running.lastError };
+  }
+
+  /** The job this agent could not fund, with what its wallet must hold to take it, or null. */
+  fundingShort(agentId: string): { task: string; requiredLamports: bigint; at: number } | null {
+    return this.#running.get(agentId)?.fundingShort ?? null;
+  }
+
+  /** Whether one of these agents could not fund this task the last time it tried it. */
+  cannotFund(agentIds: readonly string[], task: string): boolean {
+    return agentIds.some((agentId) => this.#running.get(agentId)?.fundingShort?.task === task);
+  }
+
+  /** Whether one of these agents took the task, gave it up and gave its claim back. */
+  gaveBack(agentIds: readonly string[], task: string): boolean {
+    return agentIds.some((agentId) => {
+      try {
+        return loadState(this.stateDir(agentId)).failedJobs.some((job) => job.task === task && job.claimReleased);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /** Include a claim awaiting upload/submission recovery, even after its loop ends. */
+  hasUnfinishedJob(agentId: string): boolean {
+    if (this.#running.get(agentId)?.state === "working") return true;
+    try {
+      const state = loadState(this.stateDir(agentId));
+      return state.openClaim !== null || state.failedJobs.some((job) => !job.claimReleased);
+    } catch (error) {
+      this.#log(`earn ${agentId}: reading unfinished work: ${describeError(error)}`);
+      // An unreadable journal cannot establish that all work is finished.
+      return true;
+    }
   }
 
   /**
@@ -246,11 +388,15 @@ export class EarnHost {
    * deposit (10% of its price); the worker checks that job's exact amount
    * right before it claims.
    */
-  async jobReserve(): Promise<bigint> {
+  async jobReserve(priceLamports?: bigint): Promise<bigint> {
     return claimFundingRequirement(
       await readClaimAccountRentMinimums((space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),
       ),
+      {
+        ...(priceLamports === undefined ? {} : { depositLamports: values.claimDepositLamports(priceLamports) }),
+        recordRentLamports: await this.#chain.getMinimumBalanceForRentExemption(AGENT_STATS_ACCOUNT_SIZE),
+      },
     );
   }
 
@@ -307,9 +453,8 @@ export class EarnHost {
    * work: record what was paid since its loop last ran, have a delivery whose
    * buyer let the review time pass paid, and give back the hold on a job it
    * gave up once that job's time is over. Its loop must not be running: this
-   * is for an agent that takes no jobs (earning switched off), before it
-   * stops for good. Failures are logged; the chain stays the judge of what
-   * is still open.
+   * also runs during wallet housekeeping while earning is switched off.
+   * Failures are logged; the chain stays the judge of what is still open.
    */
   async tidyUp(agent: EarnAgent): Promise<void> {
     if (this.#running.has(agent.agentId)) return;
@@ -341,6 +486,15 @@ export class EarnHost {
     }
   }
 
+  #jobEvidence(agentId: string, entry: Parameters<typeof readJobEvidence>[1]) {
+    try {
+      return readJobEvidence(this.stateDir(agentId), entry);
+    } catch (error) {
+      this.#log(`earn evidence: ${String(error)}`);
+      return undefined;
+    }
+  }
+
   /** The jobs this agent has taken, newest first. */
   jobs(agentId: string): EarnedJob[] {
     let state: ReturnType<typeof loadState>;
@@ -352,6 +506,7 @@ export class EarnHost {
     const jobs: EarnedJob[] = [];
     if (state.openClaim !== null) {
       const claim = state.openClaim;
+      const evidence = this.#jobEvidence(agentId, claim);
       const reward = claim.execution?.rewardAmount ?? claim.submission?.rewardAmount;
       jobs.push({
         task: claim.task,
@@ -360,6 +515,12 @@ export class EarnHost {
         earnedLamports: null,
         at: Date.parse(claim.claimedAt) || 0,
         resultHashHex: null,
+        resultUri: null,
+        request: evidence?.request ?? "",
+        acceptance: evidence?.acceptance ?? [],
+        ...(evidence?.terms && { terms: evidence.terms }),
+        ...(evidence?.marketplaceDeadline !== undefined && { marketplaceDeadline: evidence.marketplaceDeadline }),
+        createdAt: Date.parse(claim.claimedAt) || 0,
         settlementSignature: null,
         title: claim.title ?? null,
         listing: claim.listing ?? null,
@@ -367,6 +528,7 @@ export class EarnHost {
       });
     }
     for (const record of state.submissions) {
+      const evidence = this.#jobEvidence(agentId, record);
       const earned =
         record.earnedLamports === undefined || record.earnedLamports === null
           ? null
@@ -374,10 +536,21 @@ export class EarnHost {
       jobs.push({
         task: record.task,
         rewardLamports: BigInt(record.rewardAmount),
-        state: !record.settled ? "delivered" : record.outcome === "accepted" ? "paid" : "not_paid",
+        state: !record.settled
+          ? "delivered"
+          : record.outcome === "accepted" || (record.outcome === "closed" && earned !== null && earned > 0n)
+            ? "paid"
+            : "not_paid",
         earnedLamports: earned,
+        modelUsage: serviceUsage(this.stateDir(agentId), record.task),
         at: Date.parse(record.settledAt ?? record.submittedAt) || 0,
         resultHashHex: record.resultHashHex,
+        resultUri: record.resultUri,
+        request: evidence?.request ?? "",
+        acceptance: evidence?.acceptance ?? [],
+        ...(evidence?.terms && { terms: evidence.terms }),
+        ...(evidence?.marketplaceDeadline !== undefined && { marketplaceDeadline: evidence.marketplaceDeadline }),
+        createdAt: Date.parse(record.submittedAt) || 0,
         settlementSignature: record.settlementSignature ?? null,
         title: record.title ?? null,
         listing: record.listing ?? null,
@@ -392,6 +565,10 @@ export class EarnHost {
         earnedLamports: null,
         at: Date.parse(job.failedAt) || 0,
         resultHashHex: null,
+        resultUri: null,
+        request: "",
+        acceptance: [],
+        createdAt: Date.parse(job.claimedAt) || 0,
         settlementSignature: null,
         title: job.title ?? null,
         listing: job.listing ?? null,
@@ -428,12 +605,108 @@ export class EarnHost {
     }
   }
 
-  /** Start (or keep) the loop for one agent. */
-  start(agent: EarnAgent): void {
-    const executor = this.#options.executor;
-    if (executor === null || this.#running.has(agent.agentId)) return;
+  get chosenRoom(): boolean {
+    return this.#options.chosenRoomEnabled?.() === true && !this.ownJobsOnly &&
+      this.#options.executor?.mode === "sandboxed" &&
+      !!(this.#options.executor.readiness || this.#options.checkExecutionReady);
+  }
+
+  hasChosenClaim(agentId: string): boolean {
+    try {
+      const state = loadState(this.stateDir(agentId));
+      return state.openClaim?.chosen === true || !!pendingOwnerClaim(state);
+    }
+    catch (error) {
+      this.#log(`earn ${agentId}: reading chosen work: ${describeError(error)}`);
+      return false;
+    }
+  }
+
+  workerLane(agentId: string, heldOnly = false, readonly = false): WorkerDispatch {
+    const running = this.#running.get(agentId);
+    const dispatch = readonly ? running?.read : running?.dispatch;
+    if (!dispatch || (heldOnly ? !this.hasChosenClaim(agentId) : !this.chosenRoom || !this.canTakeJobs(agentId))) {
+      throw new WalletError("NOT_AVAILABLE", "Turn on Take jobs from other agents and Earns with a ready job room.");
+    }
+    return dispatch;
+  }
+
+  // A stopped or replacement wallet may have no executor at all. An owner
+  // decision still uses the same claim journal lock and can never start a room.
+  activeHeldLane(agentId: string, readonly: boolean): WorkerDispatch | undefined {
+    const entry = this.#running.get(agentId);
+    const dispatch = readonly ? entry?.read : entry?.dispatch;
+    return dispatch && !entry?.controller.signal.aborted ? dispatch : undefined;
+  }
+
+  heldLane(agentId: string, signer: () => Promise<KeyPairSigner>, readonly: boolean): WorkerDispatch {
+    const active = this.activeHeldLane(agentId, readonly);
+    if (active) return active;
+    return async work => {
+      // Startup and shutdown can both hold the journal before a dispatch is available.
+      const running = this.#running.get(agentId);
+      if (running) {
+        if (!running.controller.signal.aborted) await running.firstDiscovery;
+        const dispatch = this.activeHeldLane(agentId, readonly);
+        if (dispatch) return dispatch(work);
+        if (running.controller.signal.aborted) await running.done;
+        else if (this.#running.get(agentId) === running)
+          throw new WalletError("NOT_AVAILABLE", "The worker is changing state. Try again.");
+      }
+      const stateDir = this.stateDir(agentId);
+      const key = await signer();
+      const prior = loadState(stateDir);
+      const reconcile = !!(prior.openClaim?.chosenAttempt || prior.openClaim?.releaseRequestedAt || pendingOwnerClaim(prior));
+      const unlock = readonly && !reconcile ? () => {} : acquireStateLock(stateDir);
+      try {
+        const state = loadState(stateDir);
+        if ((!state.openClaim?.chosen && !pendingOwnerClaim(state)) || !state.agentIdHex) throw new Error("There is no chosen claim.");
+        const agentIdBytes = hexToBytes(state.agentIdHex);
+        const [agentPda] = await findAgentPda({ agentId: agentIdBytes });
+        const agent = { agentId, signer: key, minRewardLamports: 0n };
+        const ctx: WorkerContext = { ...this.#chainContext(agent, stateDir), config: this.#config(agent, []), log: () => {} };
+        const registered = { agentId: agentIdBytes, agentPda, registered: true, justRegistered: false };
+        if (reconcile) await resumeOpenClaim(ctx, registered);
+        return await work(ctx, registered, this.#shutdown.signal);
+      } finally { unlock(); }
+    };
+  }
+
+  canTakeJobs(agentId: string): boolean {
+    const entry = this.#running.get(agentId);
+    return entry?.discovering === true && !entry.controller.signal.aborted && entry.paused === null;
+  }
+
+  listingsReconciled(agentId: string): void {
+    const entry = this.#running.get(agentId);
+    if (entry?.discovering) entry.awaitingListings = false;
+  }
+
+  async checkListingReady(agentId: string, signal?: AbortSignal): Promise<void> {
+    const entry = this.#running.get(agentId);
+    if (!entry?.checkReady || !this.canTakeJobs(agentId)) throw new Error("Worker discovery is unavailable");
+    await entry.checkReady(signal ? AbortSignal.any([signal, entry.controller.signal]) : entry.controller.signal);
+  }
+
+  /** Whether this agent is only draining persisted work. */
+  isRecovering(agentId: string): boolean {
+    return this.#running.get(agentId)?.recoveryOnly === true;
+  }
+
+  /** Start (or keep) one loop. Recovery never enters the discovery path. */
+  start(agent: EarnAgent, recoveryOnly = false): Promise<void> {
+    const executor = this.executorFor(agent.agentId);
+    if (this.#shutdown.signal.aborted || (!recoveryOnly && executor === null)) return Promise.resolve();
+    const running = this.#running.get(agent.agentId);
+    if (running) return running.firstDiscovery;
+    let finishStartup!: () => void;
+    const firstDiscovery = new Promise<void>((resolve) => { finishStartup = resolve; });
     const controller = new AbortController();
     const entry: Running = {
+      recoveryOnly,
+      discovering: false,
+      firstDiscovery, finishStartup,
+      awaitingListings: agent.reconcileBeforeOpenJobs === true,
       controller,
       done: Promise.resolve(),
       state: "starting",
@@ -450,11 +723,17 @@ export class EarnHost {
       entry.lastError = pausedText(entry.paused);
     }
     this.#running.set(agent.agentId, entry);
-    entry.done = this.#loop(agent, executor, entry).finally(() => {
+    entry.done = this.#loop(agent, executor ?? {
+      argv: [], mode: "sandboxed", envAllowlist: [], timeoutMs: 60_000,
+    }, entry).catch((error) => {
+      this.#log(`earn ${agent.agentId}: ${describeError(error)}`);
+    }).finally(() => {
+      entry.finishStartup();
       if (this.#running.get(agent.agentId) === entry) this.#running.delete(agent.agentId);
       this.#notify(agent.agentId, { type: "state" });
     });
     this.#notify(agent.agentId, { type: "state" });
+    return firstDiscovery;
   }
 
   async stop(agentId: string): Promise<void> {
@@ -479,13 +758,11 @@ export class EarnHost {
     const fileLinkPrefix = uploader === null ? null : this.#services.fileLinkPrefix;
     const outboxDir = path.join(stateDir, "outbox");
     if (fileLinkPrefix !== null) prepareOutbox(outboxDir);
-    const pay = agent.minPayCents ?? null;
     const fill = (part: string): string =>
       part
         .replaceAll("{agent}", agent.agentId)
         .replaceAll("{outbox}", fileLinkPrefix === null ? "" : outboxDir)
-        .replaceAll("{files}", fileLinkPrefix ?? "")
-        .replaceAll("{pay}", pay === null ? "" : String(Math.max(0, Math.trunc(pay))));
+        .replaceAll("{files}", fileLinkPrefix ?? "");
     const setState = (wanted: EarnState, wantedError: string | null = null): void => {
       // A stopped agent stays shown as stopped, whatever the loop does.
       const state: EarnState = entry.paused !== null ? "error" : wanted;
@@ -498,11 +775,39 @@ export class EarnHost {
 
     const log = (event: WorkerLogEvent): void => {
       switch (event.event) {
+        case "watch.started":
+          if (!entry.discovering) {
+            entry.discovering = true;
+            setState("watching");
+            entry.finishStartup();
+          }
+          break;
         case "task.claimed":
         case "task.resuming-open-claim":
         case "task.resuming-executed-result":
         case "task.resuming-submission":
+          if (entry.fundingShort) {
+            entry.fundingShort = null;
+            this.#notify(agent.agentId, { type: "state" });
+          }
           setState("working");
+          break;
+        case "task.funding-short": {
+          // Nothing was claimed. The worker tries this job again on its own
+          // once the money is there; Market says what is missing meanwhile.
+          const required = typeof event.requiredLamports === "string" && /^\d+$/.test(event.requiredLamports) ? BigInt(event.requiredLamports) : null;
+          if (required === null || typeof event.task !== "string") break;
+          const before = entry.fundingShort;
+          entry.fundingShort = { task: event.task, requiredLamports: required, at: Date.now() };
+          if (before?.task !== event.task || before.requiredLamports !== required) {
+            this.#log(`earn ${agent.agentId}: cannot fund ${event.task}: ${String(event.reason ?? "").slice(0, 300)}`);
+            this.#notify(agent.agentId, { type: "state" });
+          }
+          break;
+        }
+        case "task.execution-not-ready":
+          this.#log(`earn ${agent.agentId}: job room not ready: ${String(event.reason ?? "")}`);
+          setState("error", "The job room is not ready. No job was taken.");
           break;
         case "task.execution-failed":
         case "task.claim-failed":
@@ -522,7 +827,7 @@ export class EarnHost {
           const cause = event.cause;
           if (
             typeof event.task === "string" &&
-            (cause === "attempts" || cause === "expired" || cause === "cancelled")
+            (cause === "attempts" || cause === "expired" || cause === "cancelled" || cause === "released")
           ) {
             this.#notify(agent.agentId, {
               type: "failed",
@@ -550,6 +855,7 @@ export class EarnHost {
           break;
         case "task.processing-error":
         case "task.job-spec-rejected":
+        case "task.service-spec-rejected":
         case "task.prompt-rejected":
           // A job it could not take. Said once, so the log explains a hire
           // that sat unstarted.
@@ -561,8 +867,124 @@ export class EarnHost {
       this.#workerEvent(agent.agentId, event);
     };
 
+    const checkReady = async (signal?: AbortSignal): Promise<void> => {
+      if (this.#options.checkExecutionReady !== undefined) {
+        await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
+      } else if (executor.readiness !== undefined) {
+        await runExecutor({
+          argv: executor.readiness.argv.map(fill),
+          timeoutMs: executor.readiness.timeoutMs ?? 30_000,
+          envAllowlist: executor.envAllowlist,
+          maxStdoutBytes: 64 * 1024,
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } else if (executor.mode === "sandboxed") {
+        throw new Error("The host must configure a job room readiness self-test before taking jobs.");
+      }
+    };
+    entry.checkReady = checkReady;
+
+    const termsFor = (metadata?: Uint8Array | null): Partial<SellerTerms> => {
+      if (!metadata) return {};
+      const terms = JSON.parse(Buffer.from(metadata).toString("utf8")).custom?.listingMetadata?.fulfilment;
+      if (terms === undefined) return {};
+      if (!terms || typeof terms !== "object" || (terms.servicePin !== undefined && !validServicePin(terms.servicePin)))
+        throw new Error("The hired service has invalid fulfilment terms.");
+      return terms;
+    };
+    const roomWork = executor.isolatedJobRoom && executor.mode === "sandboxed" ? this.#options.roomWork?.(agent.agentId) : undefined;
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      ...(roomWork && { roomWork }),
+      ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
+      ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
+      onWorkerReady: (dispatch, read) => { entry.dispatch = dispatch; entry.read = read; },
+      ...(!entry.recoveryOnly && !this.ownJobsOnly && executor.mode === "sandboxed" &&
+        this.#options.chosenRoomEnabled && (executor.readiness || this.#options.checkExecutionReady) ? {
+        withChosenRoom: async (work) => {
+          const stop = new AbortController();
+          const revoke = () => stop.abort(new Error("Taking jobs from other agents is off."));
+          const current = AbortSignal.any([stop.signal, signal, this.#shutdown.signal]);
+          const unwatch = this.#options.watchChosenRoom?.(revoke);
+          const check = () => { if (!this.chosenRoom) revoke(); };
+          const timer = setInterval(check, 25);
+          try {
+            check();
+            current.throwIfAborted();
+            return await work(current);
+          } finally { clearInterval(timer); unwatch?.(); }
+        },
+        checkChosenRoom: async (scope?: AbortSignal) => {
+          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          signal.throwIfAborted();
+          await checkReady(scope ?? signal);
+          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          signal.throwIfAborted();
+        },
+      } : {}),
+      acceptServiceHiresBelowMinReward: true,
+      ...(executor.isolatedJobRoom && executor.mode === "sandboxed" && { reviewRoom: { fileProblem: deliveryFileProblem, execute: this.#options.runReviewRoom ?? runExecutor } }),
+      modelSpendDir: path.resolve(this.#dataDir, "..", "model-spend"),
+      reserveRevisionBudget: executor.reserveRevisionBudget === true,
+      modelBudgetForTask: async (task, _address, metadata) => {
+        const rate = await agent.solUsd?.() ?? null;
+        const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);
+        if (!terms) return jobPayCents(task.rewardAmount, rate);
+        return serviceEconomics({
+          priceLamports: task.rewardAmount, usdPerSol: rate, marketFeeBps: task.protocolFeeBps,
+          operatorFeeBps: task.operatorFeeBps, referrerFeeBps: task.referrerFeeBps,
+          ...(terms.minimumMarginCents !== undefined && { minimumMarginCents: terms.minimumMarginCents }),
+          ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
+        }).modelBudgetCents;
+      },
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents) => {
+        // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
+        const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
+        const ownRequest = this.#ownAddresses().includes(task.creator);
+        const room = executor.isolatedJobRoom === true && executor.mode === "sandboxed";
+        if (!ownRequest && (listing || metadata || this.ownJobsOnly) && !room)
+          throw new Error("This buyer's hire requires the isolated job room.");
+        const pin = (metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.servicePin;
+        if (pin && (!room || !executor.argv.includes("{requestSource}")))
+          throw new Error("This service requires the rehearsed room.");
+        const paired = executor.argv[2] === "peer-job";
+        if (paired) {
+          if (!room || !pin || executor.readiness?.argv[2] !== "peer-ready")
+            throw new Error("The paired room cannot serve this job.");
+          if (reservedCents === undefined)
+            await runExecutor({ argv: [...executor.readiness.argv.map(fill), pin.digest], timeoutMs: executor.readiness.timeoutMs ?? 30000,
+              envAllowlist: executor.envAllowlist, signal });
+        }
+        const bundleDir = pin && !paired ? readServiceRehearsal(stateDir, pin) : null;
+        if (pin && bundleDir && reservedCents === undefined) {
+          const argv = executor.readiness?.argv;
+          if (!argv || argv[2] !== "self-test" || !argv[0] || !argv[1] || !argv[3])
+            throw new Error("This service needs image verification before claim.");
+          await runExecutor({ argv: [argv[0], argv[1], "verify-service", argv[3], bundleDir, JSON.stringify(pin)],
+            timeoutMs: 30000, envAllowlist: executor.envAllowlist, signal });
+        }
+        const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
+        const receipt = reservedCents ? reserveServiceRun(stateDir, address, reservedCents) : null;
+        // The job view names the whole job's limit, the figure the claim quote gave (rt5 A 6).
+        if (receipt && budgetTotalCents) recordServiceBudget(stateDir, address, budgetTotalCents);
+        // D's paired peer gets the verified request, usage reservation and the buyer-approved processing (or null).
+        const privateProcessing = paired ? await this.#privateProcessing(agent.agentId, address).catch(() => null) : undefined;
+        return executor.argv.flatMap(part => {
+          if (part === "{requestSource}") {
+            const source = ownRequest ? "own" : "external";
+            // The agreed outputs alone also need the scope, so a public post without a reservation still enforces them.
+            return room && (receipt || bundleDir || (paired && pin) || outputs) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
+              ...(paired && { privateProcessing: privateProcessing ?? null }), ...(outputs && { outputs }) })] : [source];
+          }
+          if (part === "{task}") return [address];
+          if (part === "{servicePin}") {
+            if (!pin) throw new Error("The paired service requires a verified service pin.");
+            return [pin.digest];
+          }
+          if (part === "{jobExpires}") return [task.deadline.toString()];
+          return [fill(part).replaceAll("{pay}", String(pay))];
+        });
+      },
       ...(agent.owed !== undefined && agent.owed.size > 0 ? { owedTasks: agent.owed } : {}),
       config: {
         ...this.#config(agent, executor.argv.map(fill)),
@@ -572,16 +994,26 @@ export class EarnHost {
         executorTimeoutMs: executor.timeoutMs,
       },
       log,
+      checkExecutionReady: async ({ listing, signal }) => {
+        if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
+        await checkReady(signal);
+      },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
         : {}),
       ...(this.#services.resolveAgencUri !== undefined
         ? { resolveAgencUri: this.#services.resolveAgencUri }
         : {}),
+      ...(this.#services.fileLinkPrefix ? { readReviewArtifact: (hash: string) => this.#services.fetchFile(hash) } : {}),
       ...(this.#services.taskThreadTransport !== undefined
         ? { taskThreadTransport: this.#services.taskThreadTransport }
         : {}),
     };
+
+    if (entry.recoveryOnly) {
+      await this.#drain(agent, ctx, entry);
+      return;
+    }
 
     const refreshMs = this.#options.serviceRefreshMs ?? DEFAULT_SERVICE_REFRESH_MS;
     while (!signal.aborted) {
@@ -592,9 +1024,13 @@ export class EarnHost {
       const endRun = (): void => run.abort();
       signal.addEventListener("abort", endRun, { once: true });
       const startedAt = Date.now();
+      const revision = entry.capabilityRevision;
+      const choosing = agent.chooseOpenJobs?.();
+      if (agent.currentCapabilities) ctx.config.capabilities = await agent.currentCapabilities();
       const refresh = setInterval(
         () => {
           // An own-jobs loop also starts afresh, to learn of agents added since.
+          if (choosing !== agent.chooseOpenJobs?.() || (revision !== entry.capabilityRevision && !this.hasUnfinishedJob(agent.agentId))) run.abort();
           const due = this.#serves(agent.agentId) || this.ownJobsOnly;
           if (due && Date.now() - startedAt >= refreshMs) run.abort();
         },
@@ -625,6 +1061,8 @@ export class EarnHost {
         }
       } catch (error) {
         if (signal.aborted) break;
+        entry.discovering = false;
+        entry.finishStartup();
         this.#log(`earn ${agent.agentId}: stopped (${describeError(error)})`);
         setState("error", earnFailureText(error));
         await new Promise<void>((resolve) => {
@@ -646,15 +1084,57 @@ export class EarnHost {
     }
   }
 
+  /** Only persisted work: no registration, discovery or new claims. */
+  async #drain(agent: EarnAgent, ctx: WorkerContext, entry: Running): Promise<void> {
+    const release = acquireStateLock(ctx.stateDir);
+    const signal = entry.controller.signal;
+    try {
+      const agentIdHex = loadState(ctx.stateDir).agentIdHex;
+      if (agentIdHex === null) return;
+      const agentId = hexToBytes(agentIdHex);
+      const [agentPda] = await findAgentPda({ agentId });
+      const worker: WorkerAgent = { agentId, agentPda, registered: true, justRegistered: false };
+      let queue: Promise<unknown> = Promise.resolve();
+      const serial = <T>(work: () => Promise<T>) => {
+        const result = queue.then(work);
+        queue = result.catch(() => {});
+        return result;
+      };
+      entry.read = async read => { signal.throwIfAborted(); return read(ctx, worker, signal); };
+      entry.dispatch = work => serial(() => { signal.throwIfAborted(); return work(ctx, worker, signal); });
+      entry.finishStartup();
+      const upkeepMemory: UpkeepMemory = new Map();
+      while (!signal.aborted) {
+        try {
+          await serial(async () => {
+            await checkSettlements(ctx, worker);
+            await resumeOpenClaim(ctx, worker);
+            await runUpkeep(ctx, worker, upkeepMemory);
+            await checkSettlements(ctx, worker);
+          });
+        } catch (error) {
+          this.#log(`earn ${agent.agentId}: recovering: ${describeError(error)}`);
+        }
+        const state = loadState(ctx.stateDir);
+        if (state.openClaim === null && state.failedJobs.every((job) => job.claimReleased)) return;
+        await delay(ctx.config.pollIntervalMs, undefined, { signal }).catch(() => undefined);
+      }
+      entry.dispatch = null;
+      await queue;
+    } finally {
+      release();
+    }
+  }
+
   /** The worker settings every run for this agent shares. */
   #config(agent: EarnAgent, argv: string[]): WorkerContext["config"] {
-    const executor = this.#options.executor;
+    const executor = this.executorFor(agent.agentId);
     const maxReward =
       this.#options.maxRewardLamports === undefined
         ? DEFAULT_MAX_REWARD_LAMPORTS
         : this.#options.maxRewardLamports;
     return {
-      capabilities: 1n,
+      capabilities: agent.capabilities ?? 1n,
       minRewardLamports: agent.minRewardLamports,
       maxRewardLamports: maxReward,
       allowUnboundedReward: maxReward === null,
@@ -666,7 +1146,10 @@ export class EarnHost {
       allowAnyCreator: true,
       endpoint: this.#options.endpoint ?? DEFAULT_ENDPOINT,
       executorTimeoutMs: executor?.timeoutMs ?? 60_000,
-      pollIntervalMs: this.#options.pollIntervalMs ?? 15_000,
+      pollIntervalMs: this.#options.pollIntervalMs ?? DEFAULT_EARN_POLL_INTERVAL_MS,
+      maxIdlePollIntervalMs: this.#options.maxIdlePollIntervalMs ??
+        Math.max(this.#options.pollIntervalMs ?? DEFAULT_EARN_POLL_INTERVAL_MS,
+          this.#options.pollIntervalMs === undefined ? DEFAULT_EARN_IDLE_POLL_INTERVAL_MS : this.#options.pollIntervalMs),
       ...(this.#options.maxJobAttempts !== undefined
         ? { maxJobAttempts: this.#options.maxJobAttempts }
         : {}),
@@ -688,6 +1171,8 @@ export class EarnHost {
       readAccount: (account: Address) => this.#chain.readAccount(account),
       readAccountInfo: this.#chain.readAccountInfo,
       stateDir,
+      ...(this.#chain.simulateWork && { simulateWork: (ix, guards) => this.#chain.simulateWork!(agent.signer.address, ix, guards) }),
+      ...(this.#chain.workOutcome && { chosenOutcome: receipt => this.#chain.workOutcome!(receipt) }),
       getBalance: (account) => this.#chain.getBalance(account),
       getMinimumBalanceForRentExemption: (space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),
@@ -716,7 +1201,7 @@ export class EarnHost {
       case "settlement.observed": {
         const earned =
           typeof event.earnedLamports === "string" ? BigInt(event.earnedLamports) : 0n;
-        if (event.outcome === "accepted" && earned > 0n && typeof event.task === "string") {
+        if ((event.outcome === "accepted" || event.outcome === "closed") && earned > 0n && typeof event.task === "string") {
           this.#notify(agentId, {
             type: "paid",
             task: event.task,

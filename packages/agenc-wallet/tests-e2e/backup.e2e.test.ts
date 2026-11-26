@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { restoreBackup } from "../src/backup.js";
 import type { Chain } from "../src/chain.js";
 import { AgencWallet } from "../src/wallet.js";
-import { startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 let restored: AgencWallet | null = null;
@@ -75,7 +75,8 @@ describe("backing the wallet up", () => {
     world = await startWorld({ chain: asLocalnet });
     const { wallet, sandbox, listing } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setBudget(agent.id, 200);
+    await wallet.setBudget(agent.id, 300);
+    await wallet.setPolicy(agent.id, { askAboveCents: 200, refill: REVIEW_ALLOWANCE });
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku about backups." });
     await sandbox.workOnce();
     expect((await wallet.getJob(job.id, true)).status).toBe("delivered");
@@ -112,7 +113,7 @@ describe("backing the wallet up", () => {
     // wallet can pay for it: its keys work.
     const waiting = await restored.getJob(job.id, true);
     expect(waiting.status).toBe("delivered");
-    const paid = await restored.approveJob(job.id, undefined, true);
+    const paid = await confirmPayout(restored, job.id);
     expect(paid.status).toBe("paid");
   });
 });

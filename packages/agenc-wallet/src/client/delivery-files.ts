@@ -90,6 +90,25 @@ export function isPictureType(type: string): boolean {
   return type === "image/png" || type === "image/jpeg" || type === "image/gif" || type === "image/webp";
 }
 
+/** The kinds of file a job's agreed outputs may name, as a refusal says them. */
+export const AGREED_OUTPUT_KINDS = ".png, .webp, .pdf, .zip, .txt, .md, .csv, .json";
+
+/**
+ * Why a file name may not be an agreed output of a job, or null when it may. The one rule for both ends: the buyer's
+ * wallet refuses such a name before any quote, and a seller's wallet does not take a job that names one.
+ *
+ * An agreed output must arrive under exactly its name, so it has to be a kind a delivery carries
+ * (`deliveryFileType`), and a picture has to be named the way a job room hands pictures out: the room saves every
+ * picture again, as PNG or as WebP, with the kind in lower case. A `photo.jpg` or `Chart.PNG` would never come out
+ * under that name, and the seller who took the job could never deliver it.
+ */
+export function agreedOutputProblem(name: string): string | null {
+  const type = deliveryFileType(name);
+  if (type === null) return "a delivery cannot carry that kind of file";
+  if (isPictureType(type) && !/\.(png|webp)$/.test(name)) return "a picture is delivered as .png or .webp";
+  return null;
+}
+
 /**
  * Why a file may not go with a delivery, or null when it may: an allowed name
  * and kind, not empty, not over the store's limit, and really that kind.

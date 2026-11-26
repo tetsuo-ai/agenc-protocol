@@ -1,3 +1,10 @@
+import type { MoneyMethods } from "./money-operations.js";
+import type { ListingMethods } from "./listing-methods.js";
+import type { BusinessMethods } from "./business.js";
+import type { ChildHireMethods } from "./child-hire.js";
+import type { ExchangeMethods } from "./exchange-methods.js";
+import type { ConnectionMethods } from "./connections.js";
+import type { DiscoveryQuery, DiscoveryPage } from "./discovery.js";
 // The request/response table of the wallet service. One entry per method;
 // the server and the client are both typed from it, so they cannot drift.
 import type { DeliveryFile } from "./delivery-files.js";
@@ -8,16 +15,49 @@ import type {
   ApprovalView,
   JobStatus,
   JobView,
+  JobResult,
   Money,
-  ServiceView,
   WalletOverview,
 } from "./types.js";
 
 /** An amount a caller names either in US cents or in lamports. */
 export type AmountInput = { usdCents: number } | { lamports: string };
 
-export interface WalletMethods {
-  /** Balances, agents and counts: everything the panel's first screen needs. */
+/** The program accepts listing deadlines up to one year. */
+export const MAX_LISTING_DELIVERY_SECS = 31_536_000;
+
+export interface SellerOfferInput {
+  /** Enable Earns with this offer under the same owner quote. */
+  enableEarns?: true;
+  /** Identifies the room setup shown with the quote. */
+  setupId?: string;
+  name: string;
+  summary: string;
+  price: AmountInput;
+  terms?: Partial<import("./seller-terms.js").SellerTerms>;
+  deliverySecs?: number;
+}
+
+export type ServiceOfferInput = SellerOfferInput;
+
+export interface WalletMethods extends ConnectionMethods, MoneyMethods, ListingMethods, BusinessMethods, ChildHireMethods, ExchangeMethods {
+  "work.list": {
+    params: { agentId: string; offset?: number; task?: string };
+    result: { eligibility?:{task:string;code:string;message:string;retryable:boolean}; jobs: import("./types.js").WorkerJobView[]; next: number | null; held: import("./types.js").WorkerJobView | null };
+  };
+  "work.quote": {
+    params: { agentId: string; task: string; action: import("./types.js").WorkAction };
+    result: import("./types.js").WorkerQuote;
+  };
+  "work.pending": { params: Record<string, never>; result: import("./types.js").WorkerQuote[] };
+  "work.decide": { params: { id: string; approve: boolean }; result: { approved: boolean } };
+  "work.choose": { params: { agentId: string; manual: boolean }; result: { manual: boolean } };
+  /**
+   * Balances, agents, counts and service `capabilities` on every response.
+   * "earn-finishing" means disabling earning replies once the agent takes
+   * no new job; an in-progress job stays "finishing", never "off".
+   * Clients may ignore capabilities they do not recognize.
+   */
   overview: { params: Record<string, never>; result: WalletOverview };
 
   /**
@@ -57,26 +97,29 @@ export interface WalletMethods {
    */
   "agents.retire": { params: { agentId: string }; result: AgentView };
 
-  "market.find": {
-    /** `limit` is at most 50 a page; `offset` skips that many of the best matches. */
-    params: { query?: string; maxPriceCents?: number; limit?: number; offset?: number };
-    /**
-     * `total` is how many services match in all, of which `services` is one
-     * page. `networkFee` is what every job costs on top of its price and is
-     * not returned, even when the job is cancelled.
-     */
-    result: { services: ServiceView[]; total: number; networkFee: Money };
-  };
+  "market.find": { params: DiscoveryQuery; result: DiscoveryPage };
   "market.hire": {
     params: {
+      childPolicyDigest?:string;
+      listingAgreement?: import("./listing-exchange.js").ListingAgreement;
       agentId: string;
       listing: string;
       /** What the buyer wants done, in plain words. */
       request: string;
+      privateCommitment?:string;
+      /** Required file names and whether a text-only delivery is accepted. Default: text allowed, no required files. */
+      outputs?: import("./job-exchange.js").OutputAgreement;
       /** Refuse if the service costs more than this. */
       maxPriceCents?: number;
+      expectedPriceLamports?: string;
+      expectedSpecHash?: string;
+      /** Existing panel guard when the explicit buyer ceiling is higher than the displayed-price limit. */
+      displayedLimitCents?: number;
       /** Checks the delivery must pass, written for the provider to read. */
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       /** Makes a retried call return the same job instead of hiring twice. */
       idempotencyKey?: string;
     };
@@ -92,37 +135,72 @@ export interface WalletMethods {
    */
   "market.post": {
     params: {
+      contestEntries?: number;
       agentId: string;
       /** What is wanted, in plain words, written for whoever takes it. */
       request: string;
+      privateCommitment?:string;
+      /** Required file names and whether a text-only delivery is accepted. Default: text allowed, no required files. */
+      outputs?: import("./job-exchange.js").OutputAgreement;
       /** What whoever does it is paid. */
       reward: AmountInput;
       /** Days to deliver in, 1 to 30. Default 7. Nobody can take it after that. */
       deadlineDays?: number;
+      minReputation?: number;
+      /** Nonzero unsigned 64-bit mask, encoded as decimal text. */
+      requiredCapabilities?: string;
       /** Checks the delivery must pass. */
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       /** Makes a retried call return the same job instead of posting twice. */
       idempotencyKey?: string;
     };
     result: { job: JobView; approval: ApprovalView | null };
   };
   /**
-   * The person posts a request from the main balance. Owner only: asking is
-   * the yes, so nothing waits for approval. `overview.postCost` says what it
-   * costs on top of the reward.
+   * Legacy owner method. Direct creation is refused. Use wallet.quotePost and confirm its ID.
    */
   "wallet.post": {
     params: {
+      contestEntries?: number;
       request: string;
+      privateCommitment?:string;
+      /** Required file names and whether a text-only delivery is accepted. Default: text allowed, no required files. */
+      outputs?: import("./job-exchange.js").OutputAgreement;
       reward: AmountInput;
       deadlineDays?: number;
+      minReputation?: number;
+      /** Nonzero unsigned 64-bit mask, encoded as decimal text. */
+      requiredCapabilities?: string;
       acceptance?: string[];
+      /** Exact delivery deadline, in Unix seconds. */
+      deadline?: number;
+      reviewWindowSecs?: number;
       idempotencyKey?: string;
     };
     result: { job: JobView };
   };
 
-  "approvals.list": { params: Record<string, never>; result: { approvals: ApprovalView[] } };
+  /** Agent route that an older wallet cannot mistake for a single-worker post. */
+  "market.postContest": {
+    params: WalletMethods["market.post"]["params"] & { contestEntries: number };
+    result: WalletMethods["market.post"]["result"];
+  };
+  /** Owner previews. These always wait for a separate approvals.decide. */
+  "wallet.quoteHire": WalletMethods["market.hire"];
+  "wallet.quotePost": { params: WalletMethods["wallet.post"]["params"]; result: WalletMethods["market.post"]["result"] };
+
+  "jobs.callOutcome": { params: { agentId: string; kind: "hire" | "request"; key: string }; result: WalletMethods["market.hire"]["result"] & {receipt?: Record<string, unknown> | null} };
+  "approvals.page": {
+    params: { after?: string };
+    result: { entries: { id: string; jobId: string }[]; next: string | null };
+  };
+  "approvals.get": { params: { approvalId: string }; result: { approval: ApprovalView; status: "pending" | "approved" | "expired" | "declined" } };
+  "approvals.outcome": { params: { approvalId: string }; result: { job: JobView; status: "pending" | "approved" | "expired" | "declined"; approval?: ApprovalView } };
+  "approvals.refresh": { params: { approvalId: string }; result: { approval: ApprovalView } };
+  "approvals.list": { params: { after?: string }; result: { approvals: ApprovalView[]; next?: string | null } };
   "approvals.decide": {
     params: { approvalId: string; approve: boolean };
     result: { job: JobView };
@@ -134,10 +212,29 @@ export interface WalletMethods {
   };
 
   "jobs.list": {
-    params: { role?: "buying" | "working"; agentId?: string; limit?: number };
+    params: { role?: "buying" | "working"; agentId?: string; limit?: number; before?: string };
     result: { jobs: JobView[] };
   };
+  "jobs.contestPage": {
+    params: { jobId: string; after?: string }; result: { entries: import("./types.js").ContestEntry[]; next: string | null };
+  };
+  "jobs.contestReceipts": {
+    params: { jobId: string; after?: string }; result: { receipts: import("./types.js").ContestReceipt[]; next: string | null };
+  };
+  "jobs.contestQuote": {
+    params: { jobId: string; quoteId: string }; result: { quote: import("./types.js").ContestQuote };
+  };
+  "jobs.quoteContest": {
+    params: { jobId: string; entryId: string; action: import("./types.js").ContestAction; reason?: string };
+    result: { job: JobView };
+  };
+  "jobs.decideContest": {
+    params: { jobId: string; quoteId: string; approve: boolean };
+    result: { job: JobView };
+  };
   "jobs.get": { params: { jobId: string }; result: { job: JobView } };
+  /** Complete verified delivery, including text beyond the list preview. */
+  "jobs.delivery": { params: { jobId: string; entryId?: string }; result: { result: JobResult } };
   /**
    * One file of a job's delivery, fetched from the delivery store by its
    * fingerprint and checked against it. Owner only: a file's bytes are for a
@@ -154,7 +251,16 @@ export interface WalletMethods {
   };
   /** Accept the delivery and pay the provider. */
   "jobs.approve": {
-    params: { jobId: string; rating?: number };
+    params: { jobId: string; rating?: number; ratingQuoteId?: string; quoteId?: string };
+    result: { job: JobView };
+  };
+  "jobs.reviewRecord": { params: { jobId: string; termsOnly?: boolean; before?: string }; result: import("./reviews.js").ReviewRecord };
+  "jobs.draftReview": {
+    params: { jobId: string; action: import("./reviews.js").ReviewAction; note: string; attachments?: import("./reviews.js").ReviewAttachment[] };
+    result: { draft: import("./reviews.js").ReviewDraft };
+  };
+  "jobs.confirmReview": {
+    params: { jobId: string; review: import("./reviews.js").ReviewConfirmation };
     result: { job: JobView };
   };
   "jobs.askChanges": {
@@ -168,16 +274,26 @@ export interface WalletMethods {
    * agents made, posting the bond (`JobView.turnDown.bond`). Never an agent's call.
    */
   "jobs.dispute": { params: { jobId: string }; result: { job: JobView } };
-  "jobs.rate": { params: { jobId: string; score: number }; result: { job: JobView } };
+  "jobs.rate": { params: { jobId: string; score: number; ratingQuoteId?: string }; result: { job: JobView } };
 
   "activity.list": {
     params: { limit?: number };
     result: { activity: ActivityView[] };
   };
 
-  /** Switch "take jobs while idle" on or off for one agent. */
+  /** Switch taking jobs on or off. Off replies while an existing job is still finishing. */
   "earn.set": {
-    params: { agentId: string; enabled: boolean; minPayCents?: number };
+    params: { agentId: string; enabled: boolean; minPayCents?: number; fundingQuoteId?: string };
+    result: AgentView;
+  };
+  /** Quote before enabling earning, offering, changing words/price, or funding upkeep. */
+  "earn.quote": {
+    params: { agentId: string; offerId?: string; minPayCents?: number; offer?: SellerOfferInput };
+    result: import("./types.js").EarnFundingQuote;
+  };
+  /** Owner only. Explicitly approve the quoted transfer to this agent, once. */
+  "earn.approveFunding": {
+    params: { quoteId: string };
     result: AgentView;
   };
   /**
@@ -192,7 +308,8 @@ export interface WalletMethods {
     params: {
       agentId: string;
       offerId?: string;
-      offer: { name: string; summary: string; price: AmountInput } | null;
+      offer: SellerOfferInput | null;
+      fundingQuoteId?: string;
     };
     result: AgentView;
   };
@@ -205,7 +322,7 @@ export interface WalletMethods {
    * replaces the wallet, so the host does it with the service stopped.
    */
   "backup.export": {
-    params: { password: string; file: string };
+    params: { password: string; file: string; businessSnapshot?: string };
     result: { createdAt: number; agents: number; main: string };
   };
   /**
@@ -235,15 +352,24 @@ export type MethodResult<M extends WalletMethod> = WalletMethods[M]["result"];
  * wallets, change its own rules, approve its own request, or withdraw.
  */
 export const AGENT_METHODS: readonly WalletMethod[] = [
+  "agents.self", "jobs.inbox", "jobs.dismiss", "listings.inquiries", "listings.message", "jobs.ratingQuote", "earn.operation", "jobs.readDeliveryChunk", "jobs.exchange", "jobs.acknowledgeDeliveryChunk",
+  "work.list",
+  "work.quote",
   "market.find",
   "market.hire",
   "market.post",
+  "market.postContest",
   "approvals.wait",
+  "jobs.callOutcome",
   "jobs.list",
+  "jobs.contestPage", "jobs.contestReceipts", "jobs.contestQuote",
+  "jobs.quoteContest",
   "jobs.get",
+  "jobs.delivery",
   "jobs.wait",
   "jobs.approve",
-  "jobs.askChanges",
+  "jobs.reviewRecord",
+  "jobs.draftReview",
   "jobs.refund",
   "jobs.rate",
 ];

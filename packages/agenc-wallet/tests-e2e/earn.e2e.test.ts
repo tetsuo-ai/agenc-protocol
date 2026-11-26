@@ -1,7 +1,9 @@
+import { approvedPost } from "./harness.js";
+import { confirmDecision, REVIEW_ALLOWANCE, setEarnWithApproval } from "./harness.js";
 // "Take jobs while idle": the stock worker loop runs for an agent, signs with
 // the agent's own wallet, delivers a public job, and the pay shows up.
 import { values } from "@tetsuo-ai/marketplace-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CENT, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
@@ -11,6 +13,63 @@ afterEach(async () => {
 });
 
 describe("earning", () => {
+  it.each(["missing", "failed", "passing"])("checks the host probe before claiming (%s)", async (mode) => {
+    const claim = vi.fn();
+    world = await startWorld({
+      hostReady: false,
+      earn: {
+        executor: {
+          argv: [process.execPath, "-e", "process.stdout.write('done')", "{prompt}"],
+          mode: "sandboxed", envAllowlist: [], timeoutMs: 30_000,
+          ...(mode === "missing" ? {} : { readiness: {
+            // A probe receives exactly its argv. Buyer text is never appended.
+            argv: [process.execPath, "-e", mode === "passing" ? "process.exit(process.argv.length === 1 ? 0 : 9)" : "process.exit(3)"],
+            timeoutMs: 1_000,
+          } }),
+        },
+        pollIntervalMs: 100,
+      },
+      chain: (base) => ({ ...base, clientFor: (signer) => {
+        const client = base.clientFor(signer);
+        return new Proxy(client, { get(target, key) {
+          if (key === "claimTaskWithJobSpec") return (...args: Parameters<typeof client.claimTaskWithJobSpec>) => {
+            claim(); return target.claimTaskWithJobSpec(...args);
+          };
+          return Reflect.get(target, key);
+        } });
+      } }),
+    });
+    const agent = await world.wallet.createAgent("Seller");
+    await setEarnWithApproval(world.wallet, agent.id, true, 10);
+    await world.sandbox.postOpenJob({ title: "Job", instructions: "Untrusted buyer words", rewardLamports: 50n * CENT });
+    if (mode === "passing") {
+      await eventually(async () => world!.sandbox.deliveries.size === 1);
+      expect(claim).toHaveBeenCalledOnce();
+    } else {
+      await eventually(async () => (await world!.wallet.overview()).agents[0]!.earn.state === "error");
+      expect(claim).not.toHaveBeenCalled();
+      expect(world.sandbox.deliveries.size).toBe(0);
+    }
+  }, 30_000);
+
+  it("derives the request source from the task creator even when the worker takes anyone's jobs", async () => {
+    world = await startWorld({
+      // All transport is the local SVM. Exercise the wallet's real-money source selection.
+      chain: base => ({ ...base, network: "mainnet" }),
+      earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write(process.argv[1])", "{requestSource}", "{prompt}"],
+        mode: "sandboxed", envAllowlist: [], timeoutMs: 5000 }, pollIntervalMs: 100 },
+    });
+    const { wallet, sandbox } = world;
+    const worker = await wallet.createAgent("Seller");
+    await setEarnWithApproval(wallet, worker.id, true, 10);
+    const other = await sandbox.postOpenJob({ title: "External", instructions: "own", rewardLamports: 50n * CENT });
+    await eventually(() => other.delivered());
+    expect([...sandbox.deliveries.values()].map(bytes => Buffer.from(bytes).toString())).toContain("external");
+    await other.approve();
+    const own = await approvedPost(wallet, { request: "Use contact@example.org.", reward: { usdCents: 50 } });
+    await eventually(async () => (await wallet.getJob(own.id, true)).result?.text === "own");
+  }, 30000);
+
   it("is refused on a host that cannot run jobs", async () => {
     world = await startWorld();
     const agent = await world.wallet.createAgent("My assistant");
@@ -35,7 +94,7 @@ describe("earning", () => {
     const agent = await wallet.createAgent("My assistant");
     const mainBefore = await world.balance(wallet.mainAddress);
 
-    const switchedOn = await wallet.setEarn(agent.id, true, 10);
+    const switchedOn = await setEarnWithApproval(wallet, agent.id, true, 10);
     expect(switchedOn.earn.enabled).toBe(true);
     // Switching on set aside what registering on the marketplace needs.
     expect(mainBefore - (await world.balance(wallet.mainAddress))).toBeGreaterThan(10_000_000n);
@@ -67,7 +126,7 @@ describe("earning", () => {
     expect(paid.earn.setAside.lamports).toBe("10000000");
     expect((await wallet.listActivity()).map((entry) => entry.kind)).toContain("earned");
 
-    const off = await wallet.setEarn(agent.id, false);
+    const off = await setEarnWithApproval(wallet, agent.id, false);
     expect(off.earn.enabled).toBe(false);
     expect(off.earn.state).toBe("off");
   }, 90_000);
@@ -86,17 +145,17 @@ describe("earning", () => {
     });
     const { wallet } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     // The worker registers on its first pass.
     await eventually(async () => (await wallet.overview()).agents[0]!.earn.setAside.lamports === "10000000", 30_000);
-    await wallet.setEarn(agent.id, false);
+    await setEarnWithApproval(wallet, agent.id, false);
 
     // Its deposit is locked already; taking jobs again needs only what a job
     // needs. At most a little for fees moves from the balance, never another
     // deposit (before, it moved the deposit and the registration's rent again).
     const main = await world.balance(wallet.mainAddress);
     const seen = (await wallet.listActivity(500)).length;
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const moved = main - (await world.balance(wallet.mainAddress));
     expect(moved).toBeLessThan(100_000n);
     const since = (await wallet.listActivity(500)).slice(0, -seen || undefined).map((entry) => entry.text);
@@ -117,7 +176,7 @@ describe("earning", () => {
     });
     const { wallet, sandbox, clock } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -182,7 +241,8 @@ describe("earning", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await wallet.setPolicy(agent.id, { askAboveCents: 100, refill: REVIEW_ALLOWANCE });
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     const open = await sandbox.postOpenJob({
       title: "Write a line",
       instructions: "Write one friendly line.",
@@ -202,16 +262,14 @@ describe("earning", () => {
     // The agent's wallet holds what it needs to work, not a bond: the person
     // is told what to add, and nothing changes.
     // In the person's money (play money: $1.00 is 0.01 SOL), never in SOL.
-    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({
+    await expect(confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.")).rejects.toMatchObject({
       code: "NOT_ENOUGH_MONEY",
-      message: expect.stringMatching(
-        /^Disputing this turn-down needs \$[0-9.]+: the bond of \$1\.00, a deposit of \$[0-9.]+ that comes back, and network fees\. Add at least \$[0-9.]+ and try again\. Nothing changed\.$/,
-      ),
+      message: expect.stringMatching(/^This decision needs \$.*Add at least \$/),
     });
     await wallet.fundAgent(agent.id, { usdCents: 200 });
 
     const before = await world.balance(agent.address as never);
-    const disputed = await wallet.disputeTurnDown(held.id, true);
+    const disputed = await confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.");
     expect(disputed.turnDown?.disputed).toBe(true);
     expect(disputed.canDispute).toBe(false);
     expect(disputed.statusText).toMatch(/You disputed the buyer's turn-down/);
@@ -220,7 +278,7 @@ describe("earning", () => {
     expect(before - (await world.balance(agent.address as never))).toBe(
       values.MIN_DISPUTE_BOND_LAMPORTS + bondRent + 5_000n,
     );
-    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    await expect(confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.")).rejects.toMatchObject({ code: "NOT_ALLOWED" });
 
     await sandbox.ruleOnTurnedDown({ task: open.task, payProvider: true });
     await wallet.tick();
@@ -253,7 +311,7 @@ describe("earning", () => {
     });
     const { wallet, sandbox } = world;
     const agent = await wallet.createAgent("My assistant");
-    await wallet.setEarn(agent.id, true, 10);
+    await setEarnWithApproval(wallet, agent.id, true, 10);
     await wallet.fundAgent(agent.id, { usdCents: 200 });
     const open = await sandbox.postOpenJob({
       title: "Write a line",
@@ -276,9 +334,9 @@ describe("earning", () => {
     expect(held.canDispute).toBe(false);
     expect(held.statusText).toMatch(/The marketplace has suspended your agent, and a suspended agent cannot dispute\./);
     const before = await world.balance(agent.address as never);
-    await expect(wallet.disputeTurnDown(held.id, true)).rejects.toMatchObject({
+    await expect(confirmDecision(wallet, held.id, "dispute", "The heading appears on the first line.")).rejects.toMatchObject({
       code: "NOT_ALLOWED",
-      message: expect.stringMatching(/suspended this agent, and a suspended agent cannot dispute a turn-down\. Nothing changed\./),
+      message: expect.stringMatching(/unavailable/),
     });
     // Refused before anything was signed: not even a fee.
     expect(await world.balance(agent.address as never)).toBe(before);

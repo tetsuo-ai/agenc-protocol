@@ -1,0 +1,42 @@
+{
+  "parties": {
+    "task": "FfBFbXu499k8CCRGadW37Ff5cRHKnyGAv6yNActh7PCx",
+    "claim": "8edyfU5erhAiSd1WEToWw2osj18MP2aqkud5fBaBjLbY",
+    "worker": "6xH2cyzxgVoek8D6wPKMZjN44mo9qSETxuAhJBpjJfdi",
+    "buyer": "D6i9nSn6nZAjnvSCkaUrNUhQe3GpK6h4sJ5hB6v75k2q",
+    "authority": "6xH2cyzxgVoek8D6wPKMZjN44mo9qSETxuAhJBpjJfdi",
+    "room": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "claimedAt": "123"
+  },
+  "pointer": "agenc.private-output.v1:e5fc0612da3cb839ee329331db447462ac842beaf0a32a8fa2077239edaacc94",
+  "key": {
+    "privateKey": {
+      "key_ops": [
+        "deriveBits"
+      ],
+      "ext": true,
+      "kty": "EC",
+      "x": "aVBcGYT5cd6LsZKsu6ALu7JTufYPlQRL91PYn98TrAE",
+      "y": "itaX-NNm01q0wya7Gul6sz5r8LxWyW_kvmCYxJ8koSs",
+      "crv": "P-256",
+      "d": "-UfYQVsx6_e0Rw3VIw1V8kOPwwgk5fFlGj7ysYt-MyY"
+    },
+    "publicKey": "BGlQXBmE+XHei7GSrLugC7uyU7n2D5UES/dT2J/fE6wBitaX+NNm01q0wya7Gul6sz5r8LxWyW/kvmCYxJ8koSs="
+  },
+  "packet": {
+    "header": {
+      "task": "FfBFbXu499k8CCRGadW37Ff5cRHKnyGAv6yNActh7PCx",
+      "claim": "8edyfU5erhAiSd1WEToWw2osj18MP2aqkud5fBaBjLbY",
+      "worker": "6xH2cyzxgVoek8D6wPKMZjN44mo9qSETxuAhJBpjJfdi",
+      "buyer": "D6i9nSn6nZAjnvSCkaUrNUhQe3GpK6h4sJ5hB6v75k2q",
+      "authority": "6xH2cyzxgVoek8D6wPKMZjN44mo9qSETxuAhJBpjJfdi",
+      "room": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "claimedAt": "123",
+      "purpose": "output",
+      "sender": "6xH2cyzxgVoek8D6wPKMZjN44mo9qSETxuAhJBpjJfdi",
+      "id": "c263491fcca47e8333e44798b74d5856"
+    },
+    "payload": "[\"BAe/he/RiZ+5o/mr5UCWXCsnRSNwpRaRJaaw5YALhYG5tP/Q7FPAFp2SBoXdPbJDT9RbqEUJAU6xXLZ6YisYE8g=\",\"ywazmtmPhFUd4HqTdbbT56YXzn2CAbvZZaLVDFYgyf+SmOyv0Nlu9Q==\",\"XV8WGpVpRrB2CJzZ\",\"7fFriQnpFlwGN5mTF7A7FAlqsUlasJtx4BxKwdWLgTEd8Hs9pxBiWixKjipRdk52UfcNyiKRbs/Fn/TO1GXxfGBR4mX1HkmMoHK/YZOXPwMgoPG8/vNdXG+hItNeDw40/ZxNbxrcqOs7UbzOWrEdCug0t2bWzX8Ul0ZOZ4BedkIixwlc4jfRKy91/61sdTVt\"]",
+    "signature": "c3uovXOIQiToZmDJQ80wVDLnrD+j93YCI/crUBVOingSfhCWrCOZo4zanYm0JN53bj0HQYiVyZW2ZJ91GM+hDw=="
+  }
+}

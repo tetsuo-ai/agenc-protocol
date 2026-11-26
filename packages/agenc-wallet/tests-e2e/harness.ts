@@ -4,17 +4,49 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Address } from "@solana/kit";
+import { getCompiledTransactionMessageDecoder, isOffCurveAddress, type Address } from "@solana/kit";
+import { lighthouse } from "@tetsuo-ai/marketplace-sdk";
+import { expect } from "vitest";
 import { APPROVAL_FEE_LAMPORTS, approvalCost } from "../src/approval.js";
 import type { Chain } from "../src/chain.js";
 import type { EarnOptions } from "../src/earn.js";
-import { startSandbox, type HouseService, type Sandbox } from "../src/sandbox.js";
+import { startSandbox, type HouseService, type Sandbox, type StartSandboxOptions } from "../src/sandbox.js";
 import type { MarketServices } from "../src/services.js";
 import { AgencWallet, type WalletConfig } from "../src/wallet.js";
+import { runExecutor } from "@tetsuo-ai/agenc-worker";
+
+/** A local stand-in for the host's verified isolated room: it admits the
+ * verified terms and runs the configured executor for every turn. */
+export function privateRoomDouble(): NonNullable<EarnOptions["roomWork"]> {
+  return () => ({
+    admit: async () => {},
+    open: async () => ({ state: "ready" as const, execute: async (input: Parameters<typeof runExecutor>[0]) =>
+      ({ state: "delivered" as const, stdout: (await runExecutor(input)).stdout }) }),
+  });
+}
 
 /** Play money: one cent is exactly this many lamports in the sandbox. */
 export const CENT = 100_000n;
 export const SOL = 1_000_000_000n;
+
+/** Simulate the owner reviewing and approving any above-budget startup funding. */
+export async function setEarnWithApproval(wallet: AgencWallet, agentId: string, enabled: boolean, minPayCents?: number) {
+  if (enabled) {
+    const quote = await wallet.quoteEarn(agentId);
+    if (quote.requiresApproval) await wallet.approveEarnFunding(quote.quoteId);
+  }
+  return wallet.setEarn(agentId, enabled, minPayCents);
+}
+
+/** Simulate the owner approving the complete offer quote before saving the service. */
+export async function setOfferWithApproval(wallet: AgencWallet, ...args: Parameters<AgencWallet["setOffer"]>) {
+  const [agentId, offer, offerId] = args;
+  if (offer !== null) {
+    const quote = await wallet.quoteEarn(agentId, offer, offerId);
+    if (quote.requiresApproval) await wallet.approveEarnFunding(quote.quoteId);
+  }
+  return wallet.setOffer(...args);
+}
 
 export const HAIKU: HouseService = {
   name: "Haiku Writer",
@@ -39,18 +71,42 @@ export interface World {
 
 export async function startWorld(options: {
   mainLamports?: bigint;
+  transport?: StartSandboxOptions["transport"];
   earn?: EarnOptions;
-  chain?: (chain: Chain) => Chain;
+  /** Disable the fixture host self-test to exercise the configured probe. */
+  hostReady?: boolean;
+  chain?: (chain: Chain, sandbox: Sandbox) => Chain;
   /** Stand between the wallet and the marketplace's services (a faulty or dishonest one). */
   services?: (services: MarketServices, sandbox: Sandbox) => MarketServices;
   config?: Partial<WalletConfig>;
 } = {}): Promise<World> {
-  const sandbox = await startSandbox({ followWallClock: false });
+  const sandbox: Sandbox = await startSandbox({ followWallClock: false, transport: base => {
+    const decorated = options.transport?.(base) ?? base;
+    return { ...decorated, async sendAndConfirm(tx) {
+      const msg = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+      if (msg.version === 0) for (const ix of msg.instructions) {
+        if (msg.staticAccounts[ix.programAddressIndex] !== lighthouse.LIGHTHOUSE) continue;
+        expect.soft(ix.accountIndices).toHaveLength(1);
+        for (const index of ix.accountIndices ?? []) {
+          const key = msg.staticAccounts[index]!;
+          expect.soft(index).toBeGreaterThanOrEqual(msg.header.numSignerAccounts);
+          expect.soft(key).not.toBe(msg.staticAccounts[0]);
+          // Absent PDAs are loaded by the runtime as empty system accounts.
+          const account = sandbox.market.svm.getAccount(key);
+          const sysvar = account.exists && account.programAddress === "Sysvar1111111111111111111111111111111111111";
+          const program = account.exists && account.executable;
+          expect.soft(sysvar || program || isOffCurveAddress(key), `Wallet address passed to Lighthouse: ${key}`).toBe(true);
+          expect.soft(account.exists ? account.programAddress : "11111111111111111111111111111111").not.toBe(lighthouse.LIGHTHOUSE);
+        }
+      }
+      return decorated.sendAndConfirm(tx);
+    } };
+  } });
   const listing = await sandbox.addService(HAIKU);
   const dataDir = mkdtempSync(path.join(tmpdir(), "agenc-wallet-e2e-"));
   const secret = randomBytes(32);
   const clock = { now: 1_800_000_000_000 };
-  const chain = options.chain ? options.chain(sandbox.chain) : sandbox.chain;
+  const chain = options.chain ? options.chain(sandbox.chain, sandbox) : sandbox.chain;
   const config: WalletConfig = {
     dataDir,
     unlockSecret: secret,
@@ -58,7 +114,7 @@ export async function startWorld(options: {
     services: options.services ? options.services(sandbox.services, sandbox) : sandbox.services,
     prices: sandbox.prices,
     now: () => clock.now,
-    ...(options.earn ? { earn: options.earn } : {}),
+    ...(options.earn ? { earn: { ...(options.hostReady === false ? {} : { checkExecutionReady: async () => {} }), ...options.earn } } : {}),
     ...options.config,
   };
   const wallet = await AgencWallet.open(config);
@@ -103,4 +159,23 @@ export async function eventually<T>(
     if (Date.now() > deadline) throw new Error("condition was not met in time");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+export async function approvedPost(wallet: AgencWallet, params: Parameters<AgencWallet["quotePost"]>[0]) {
+  const { job, approval } = await wallet.quotePost(params);
+  if (approval) return wallet.decideApproval(approval.id, true);
+  return job;
+}
+
+export const REVIEW_ALLOWANCE = { enabled: true, topUpToCents: 0, perDayCents: 1000 };
+
+export async function confirmPayout(wallet: AgencWallet, jobId: string, rating?: number) {
+  const { quote } = await wallet.reviewRecord(jobId, undefined, { termsOnly: true });
+  const stars = rating === undefined || (await wallet.getJob(jobId, true)).kind !== "hire" ? undefined : await wallet.quoteRating(jobId, rating, true);
+  return wallet.approveJob(jobId, rating, true, undefined, quote!.id, stars?.id);
+}
+
+export async function confirmDecision(wallet: AgencWallet, jobId: string, action: "change" | "reject" | "dispute",
+  note = "The delivered work is missing the requested heading.") {
+  return wallet.confirmReview(jobId, await wallet.draftReview(jobId, action, note), true);
 }

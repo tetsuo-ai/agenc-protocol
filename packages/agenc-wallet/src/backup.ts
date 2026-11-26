@@ -1,3 +1,8 @@
+import { holdRestoredAllowances, markRestoredJobs } from "./job-money.js";
+import { ARCHIVE_FILE } from "./money-archive.js";
+import { BUSINESS_FILE, pauseRestoredBusiness, restoredBusiness, verifyPortableBusiness } from "./business-backup.js";
+import type { PortableBusiness } from "./client/business.js";
+import type { WalletState } from "./store.js";
 // A backup of the wallet: every key and the journal, in one file the person
 // keeps somewhere safe, locked with a password they choose.
 //
@@ -35,7 +40,6 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import path from "node:path";
 import { WalletError } from "./errors.js";
@@ -49,8 +53,10 @@ export const MIN_BACKUP_PASSWORD = 8;
 
 const SCRYPT = { N: 32_768, r: 8, p: 1, maxmem: 96 * 1024 * 1024 } as const;
 /** Largest backup file accepted for reading. */
-const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
-/** Largest single file carried in a backup. Anything bigger is left out. */
+const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
+const BACKUP_LIMIT_TEXT = "128 MiB";
+const BACKUP_TOO_LARGE_TEXT = `That file is not an AgenC backup. It is larger than the ${BACKUP_LIMIT_TEXT} limit.`;
+/** Existing size bound for the state and work ledgers. Encrypted exchange records use the aggregate archive limit. */
 const MAX_CARRIED_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_CARRIED_FILES = 4_000;
 const MAIN_KEY = "main";
@@ -76,6 +82,7 @@ interface BackupFile extends BackupHeader {
 }
 
 interface BackupContent {
+  business?: PortableBusiness;
   /** key id -> base64 of the 64-byte keypair. */
   keys: Record<string, string>;
   /** path below the wallet folder (forward slashes) -> base64 of the file. */
@@ -113,8 +120,11 @@ function assertPassword(password: unknown): asserts password is string {
 /** The journal and the work ledgers: everything but the keys and the lock. */
 function carriedFiles(dataDir: string): Record<string, string> {
   const files: Record<string, string> = {};
-  let count = 0;
+  let count = 0, total = 0;
   const take = (relative: string): void => {
+    // Device-local service directories contain passing rehearsal receipts.
+    // PortableBusiness carries the immutable source files separately.
+    if (relative.split("/")[2] === "service-bundles") return;
     const absolute = path.join(dataDir, relative);
     let info;
     try {
@@ -127,7 +137,21 @@ function carriedFiles(dataDir: string): Record<string, string> {
       for (const name of readdirSync(absolute).sort()) take(path.posix.join(relative, name));
       return;
     }
-    if (!info.isFile() || info.size > MAX_CARRIED_FILE_BYTES) return;
+    const record = relative === ARCHIVE_FILE || relative === "state.json";
+    if (!info.isFile()) {
+      if (record) throw new WalletError("INTERNAL", `The wallet records exceed the ${BACKUP_LIMIT_TEXT} backup limit.`);
+      return;
+    }
+    if (record) {
+      if (info.size > MAX_BACKUP_BYTES) throw new WalletError("INTERNAL", `The wallet records exceed the ${BACKUP_LIMIT_TEXT} backup limit.`);
+    } else if (relative.startsWith("job-exchange/")) {
+      if (!isExchangeRecord(relative)) return;
+    } else if (info.size > MAX_BACKUP_BYTES || (info.size > MAX_CARRIED_FILE_BYTES && !relative.endsWith("state.json"))) {
+      throw new WalletError("BAD_REQUEST", `A wallet file exceeds the ${BACKUP_LIMIT_TEXT} backup size limit.`);
+    }
+    total += info.size;
+    // Allow for two base64 encodings, JSON, and the vault keys before allocating.
+    if (total > MAX_BACKUP_BYTES / 2) throw new WalletError("NOT_AVAILABLE", `This wallet is too large for one backup. The limit is ${BACKUP_LIMIT_TEXT}.`);
     count += 1;
     if (count > MAX_CARRIED_FILES) {
       throw new WalletError("INTERNAL", "This wallet has too many files to back up in one go.");
@@ -135,7 +159,11 @@ function carriedFiles(dataDir: string): Record<string, string> {
     files[relative] = readFileSync(absolute).toString("base64");
   };
   take("state.json");
+  take(ARCHIVE_FILE);
+  if (files["state.json"] && !files[ARCHIVE_FILE] && JSON.parse(Buffer.from(files["state.json"], "base64").toString()).moneyArchiveId)
+    throw new WalletError("INTERNAL", "The wallet receipt archive is missing.");
   take("earn");
+  take("job-exchange");
   return files;
 }
 
@@ -146,6 +174,7 @@ function carriedFiles(dataDir: string): Record<string, string> {
 export async function createBackup(input: {
   dataDir: string;
   vault: KeyVault;
+  business?: PortableBusiness;
   password: string;
   network: string;
   agents: number;
@@ -175,7 +204,8 @@ export async function createBackup(input: {
       secrets.push(secret);
       keys[id] = Buffer.from(secret).toString("base64");
     }
-    const content: BackupContent = { keys, files: carriedFiles(input.dataDir) };
+    const business = input.business ?? restoredBusiness(input.dataDir);
+    const content: BackupContent = { keys, files: carriedFiles(input.dataDir), ...(business && { business: verifyPortableBusiness(business) }) };
     plain = Buffer.from(JSON.stringify(content), "utf8");
 
     const kdf: BackupFile["kdf"] = {
@@ -197,7 +227,9 @@ export async function createBackup(input: {
         nonce: nonce.toString("base64"),
         sealed: sealed.toString("base64"),
       };
-      return { text: `${JSON.stringify(file)}\n`, header };
+      const text = `${JSON.stringify(file)}\n`;
+      if (Buffer.byteLength(text) > MAX_BACKUP_BYTES) throw new WalletError("NOT_AVAILABLE", `This wallet is too large for one backup. The limit is ${BACKUP_LIMIT_TEXT}.`);
+      return { text, header };
     } finally {
       key.fill(0);
     }
@@ -245,7 +277,7 @@ export function writeBackupFile(file: string, text: string): void {
   }
   try {
     try {
-      writeSync(fd, text);
+      writeFileSync(fd, text);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -275,7 +307,7 @@ export function readBackupFile(file: string): string {
     throw new WalletError("NOT_FOUND", "That backup file could not be read.");
   }
   if (size > MAX_BACKUP_BYTES) {
-    throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
+    throw new WalletError("BAD_REQUEST", BACKUP_TOO_LARGE_TEXT);
   }
   try {
     return readFileSync(file, "utf8");
@@ -302,6 +334,7 @@ function parseBackup(text: unknown): BackupFile {
   const notABackup = (): never => {
     throw new WalletError("BAD_REQUEST", "That file is not an AgenC backup.");
   };
+  if (typeof text === "string" && text.length > MAX_BACKUP_BYTES) throw new WalletError("BAD_REQUEST", BACKUP_TOO_LARGE_TEXT);
   if (typeof text !== "string" || text.length === 0 || text.length > MAX_BACKUP_BYTES) notABackup();
   let value: unknown;
   try {
@@ -386,12 +419,17 @@ function openBackup(text: string, password: string): { header: BackupHeader; con
     ) {
       throw new Error("shape");
     }
+    if (content.business !== undefined) verifyPortableBusiness(content.business);
     return { header, content };
   } catch {
     throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
   } finally {
     plain.fill(0);
   }
+}
+
+function isExchangeRecord(relative: string) {
+  return /^job-exchange\/[1-9A-HJ-NP-Za-km-z]{32,44}\/[a-f0-9]{64}$/.test(relative);
 }
 
 /** A carried path is safe to write when it stays inside the wallet folder. */
@@ -401,7 +439,7 @@ function safeRelative(relative: string): string | null {
   }
   const parts = relative.split("/");
   if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return null;
-  if (relative !== "state.json" && parts[0] !== "earn") return null;
+  if (relative !== "state.json" && relative !== ARCHIVE_FILE && parts[0] !== "earn" && !isExchangeRecord(relative)) return null;
   return parts.join(path.sep);
 }
 
@@ -434,6 +472,8 @@ export async function restoreBackup(input: {
     if (safe === null || typeof body !== "string") {
       throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
     }
+    // Old archives could include the rehearsal cache in the worker tree.
+    if (relative.split("/")[2] === "service-bundles") continue;
     let bytes = Buffer.from(body, "base64");
     if (safe === "state.json") {
       // The records were sealed a moment before the backup was noted in them.
@@ -441,7 +481,18 @@ export async function restoreBackup(input: {
       // otherwise a wallet just restored would ask to be backed up.
       try {
         const state = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+        if (state.moneyArchiveId && !Object.hasOwn(content.files, ARCHIVE_FILE))
+          throw new Error("Missing wallet receipt archive");
         state.backup = { at: header.createdAt, keyIds: ids };
+        const hasWork = Object.entries(content.files).some(([name, raw]) => {
+          if (!/^earn\/[^/]+\/state\.json$/.test(name)) return false;
+          const ledger = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
+          return !!ledger.openClaim || ledger.submissions?.some((entry: {settled: boolean}) => !entry.settled);
+        });
+        pauseRestoredBusiness(state as unknown as WalletState, content.business, input.now, hasWork);
+        // The ledger of what each agent spent today is as old as the backup.
+        holdRestoredAllowances(state as unknown as WalletState, input.now);
+        markRestoredJobs(state as unknown as WalletState);
         bytes = Buffer.from(JSON.stringify(state), "utf8");
       } catch {
         throw new WalletError("BAD_REQUEST", "That backup is damaged and cannot be restored.");
@@ -450,12 +501,14 @@ export async function restoreBackup(input: {
     writes.push({ file: path.join(input.dataDir, safe), bytes });
   }
 
+  if (!Object.hasOwn(content.files, "state.json")) throw new WalletError("BAD_REQUEST", "The backup is missing its wallet records.");
+  if (content.business) writes.push({file: path.join(input.dataDir, BUSINESS_FILE), bytes: Buffer.from(JSON.stringify(content.business))});
   mkdirSync(input.dataDir, { recursive: true, mode: 0o700 });
   const release = acquireServiceLock(input.dataDir);
   try {
     // Move the wallet that is here out of the way. Nothing is deleted.
     let replaced: string | null = null;
-    const present = ["vault.json", "state.json", "earn"].filter((name) =>
+    const present = ["vault.json", "state.json", ARCHIVE_FILE, "earn", "job-exchange", BUSINESS_FILE, "connection-grants.json", "business-rehearsals.json", "peers"].filter((name) =>
       existsSync(path.join(input.dataDir, name)),
     );
     if (present.length > 0) {
@@ -464,7 +517,17 @@ export async function restoreBackup(input: {
         `replaced-${new Date(input.now).toISOString().replace(/[:.]/g, "-")}`,
       );
       mkdirSync(replaced, { recursive: false, mode: 0o700 });
-      for (const name of present) renameSync(path.join(input.dataDir, name), path.join(replaced, name));
+      const moved: string[] = [];
+      try {
+        for (const name of present) {
+          renameSync(path.join(input.dataDir, name), path.join(replaced, name));
+          moved.push(name);
+        }
+      } catch (error) {
+        for (const name of moved.reverse()) renameSync(path.join(replaced, name), path.join(input.dataDir, name));
+        rmSync(replaced, { recursive: true, force: true });
+        throw error;
+      }
     }
 
     try {
@@ -488,7 +551,7 @@ export async function restoreBackup(input: {
     } catch (error) {
       // Half a restore is worse than none: take out what was just written
       // and put the wallet that was here back exactly as it was.
-      for (const name of ["vault.json", "state.json", "earn"]) {
+      for (const name of ["vault.json", "state.json", ARCHIVE_FILE, "earn", "job-exchange", BUSINESS_FILE, "connection-grants.json", "business-rehearsals.json", "peers"]) {
         rmSync(path.join(input.dataDir, name), { recursive: true, force: true });
       }
       if (replaced !== null) {

@@ -1,3 +1,6 @@
+import { ExchangeRelay } from "./exchange-relay.js";
+import { briefDeliverable as jobDeliverable, parseJobBrief } from "@tetsuo-ai/agenc-worker";
+import type { JobTerms } from "./client/types.js";
 // Everything the wallet needs from OUTSIDE the chain, behind one interface:
 // the catalog of services, moderation attestations, job-spec hosting and
 // delivery storage. The hosted implementation talks to the public AgenC
@@ -7,20 +10,16 @@
 // (the wallet then waits or refunds); they cannot move funds, and every hash
 // they return is re-checked here against what the chain recorded.
 import { createHash } from "node:crypto";
-import { address, type Address, type KeyPairSigner } from "@solana/kit";
+import type { Address, KeyPairSigner } from "@solana/kit";
 import { createPublicUriFetcher, type UriFetcher } from "@tetsuo-ai/agenc-worker";
 import { taskThread, values } from "@tetsuo-ai/marketplace-sdk";
+import { usesScopedRequests } from "./transport-scope.js";
 import { WalletError } from "./errors.js";
-import {
-  NO_DETAILS,
-  listingDetails,
-  openDetailsCache,
-  summarize,
-  verifiedListingPayload,
-  withoutLeadingName,
-  type DetailsCache,
-  type ListingDetails,
-} from "./listing-details.js";
+import type { DetailsCache } from "./listing-details.js";
+import { hostedDiscovery } from "./hosted-discovery.js";
+import { requestJson, record, safeAddress, tidyText } from "./hosted-http.js";
+import type { ServiceState } from "./client/discovery.js";
+export { tidyText } from "./hosted-http.js";
 
 /**
  * How much of what a provider published about a service is known. "ready":
@@ -32,7 +31,15 @@ export type DetailsState = "ready" | "loading" | "unavailable";
 
 /** One service as a catalog source reports it (chain-shaped, not display). */
 export interface CatalogRow {
+  fulfilment?: import("./listing-details.js").FulfilmentTerms;
+  listingVersion?: string;
+  maxOpenJobs?: number;
+  operatorFeeBps?: number;
+  operator?: string | null;
   listing: Address;
+  state?: ServiceState;
+  /** The provider profile is waiting for sibling listings on a cold ID lookup. */
+  recordPending?: boolean;
   providerAgent: Address;
   name: string;
   category: string | null;
@@ -93,6 +100,7 @@ export interface PublishListingInput {
 }
 
 export interface PublishJobInput {
+  terms?: JobTerms;
   /** The name of the service being hired, or a posted request's own short title. */
   title: string;
   /** What the buyer wants done, in their words. */
@@ -136,8 +144,12 @@ export interface ResultUploader {
 }
 
 export interface MarketServices {
-  /** Services a buyer can hire right now. */
-  listServices(): Promise<CatalogRow[]>;
+  readonly exchangeRelay?: ExchangeRelay;
+  /**
+   * Hireable offers. For discovery, keep all listing IDs until the caller has filtered
+   * them, but only read descriptions that can match the supplied constraints.
+   */
+  listServices(filters?: { listing?: string; provider?: string; state?: ServiceState; maxLamports?: bigint }): Promise<CatalogRow[]>;
   /**
    * The jobs a provider agent finished, by their task addresses, as the
    * marketplace's own record lists them. Only the attribution is taken from
@@ -204,6 +216,7 @@ export interface MarketServices {
    * from an address a delivery names.
    */
   fetchFile(sha256Hex: string): Promise<Uint8Array | null>;
+  fetchReviewEvidence?(uri: string, hash: string): Promise<Uint8Array | null>;
   /** Resolver for `agenc://` job-spec addresses the earn side may meet. */
   resolveAgencUri?: UriFetcher;
   /**
@@ -212,9 +225,22 @@ export interface MarketServices {
    * when the network has no message host, and asking for changes is then
    * unavailable.
    */
-  postChangeRequest?(envelope: taskThread.TaskThreadEnvelope): Promise<void>;
+  postChangeRequest?(envelope: taskThread.TaskThreadEnvelope, signer: KeyPairSigner): Promise<void>;
   /** The message host the earn side reads change requests from. */
   taskThreadTransport?: ReturnType<typeof taskThread.createContentTransport>;
+}
+
+/** Check the public read path before committing a fingerprint or referencing a file. */
+export async function publishReviewBytes(services: MarketServices, signer: KeyPairSigner, bytes: Uint8Array): Promise<string> {
+  const uploader = services.resultUploader(signer);
+  if (!uploader) throw new WalletError("NOT_AVAILABLE", "This network has nowhere to publish evidence.");
+  const hash = sha256Hex(bytes);
+  const response = await uploader.fetch(uploader.url, { method: "POST", body: Uint8Array.from(bytes) });
+  const published = response.ok ? await services.fetchFile(hash) : null;
+  if (!published || sha256Hex(published) !== hash) {
+    throw new WalletError("NETWORK", "The published evidence could not be read back. Try again.");
+  }
+  return hash;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -247,100 +273,6 @@ export function digestFromPointer(pointer: string): string | null {
   return null;
 }
 
-interface JsonResponse {
-  status: number;
-  body: unknown;
-}
-
-/** A bounded, redirect-refusing JSON request to a first-party endpoint. */
-async function requestJson(
-  fetchImpl: typeof fetch,
-  url: string,
-  init: {
-    method: "GET" | "POST";
-    body?: unknown;
-    /** JSON that was already serialised, sent byte for byte (a signed upload). */
-    bytes?: Uint8Array;
-    headers?: Record<string, string>;
-  },
-  limits: { timeoutMs: number; maxBytes: number },
-): Promise<JsonResponse> {
-  const payload =
-    init.bytes !== undefined
-      ? (init.bytes as unknown as NonNullable<RequestInit["body"]>)
-      : init.body !== undefined
-        ? JSON.stringify(init.body)
-        : undefined;
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      method: init.method,
-      redirect: "error",
-      headers: {
-        accept: "application/json",
-        ...(payload !== undefined ? { "content-type": "application/json" } : {}),
-        ...init.headers,
-      },
-      ...(payload !== undefined ? { body: payload } : {}),
-      signal: AbortSignal.timeout(limits.timeoutMs),
-    });
-  } catch (error) {
-    throw new WalletError("NETWORK", "The marketplace could not be reached. Try again in a moment.", {
-      cause: error,
-    });
-  }
-  const reader = response.body?.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  if (reader) {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > limits.maxBytes) {
-        await reader.cancel();
-        throw new WalletError("NETWORK", "The marketplace sent an answer that was too large.");
-      }
-      chunks.push(value);
-    }
-  }
-  let body: unknown = null;
-  if (total > 0) {
-    try {
-      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    } catch {
-      body = null;
-    }
-  }
-  return { status: response.status, body };
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function safeAddress(value: unknown): Address | null {
-  if (typeof value !== "string") return null;
-  try {
-    return address(value);
-  } catch {
-    return null;
-  }
-}
-
-function safeBigInt(value: unknown): bigint | null {
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  const text = String(value);
-  if (!/^(?:0|[1-9][0-9]{0,19})$/.test(text)) return null;
-  return BigInt(text);
-}
-
-function finite(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 /** The largest transaction the network carries, in bytes. */
 const MAX_TRANSACTION_BYTES = 1232;
 
@@ -370,14 +302,6 @@ function parsePayment(data: Record<string, unknown>): ApprovalPayment | null {
     "NETWORK",
     "The marketplace's safety check sent back something that cannot be trusted. Nothing was paid.",
   );
-}
-
-/** Clip untrusted display text to one tidy line. */
-export function tidyText(value: unknown, max: number): string | null {
-  if (typeof value !== "string") return null;
-  const collapsed = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-  if (collapsed.length === 0) return null;
-  return collapsed.length > max ? `${collapsed.slice(0, max - 1).trimEnd()}…` : collapsed;
 }
 
 export interface HostedServicesOptions {
@@ -415,6 +339,8 @@ export interface HostedServicesOptions {
    * read before it is handed back without them. Default 2.5 seconds.
    */
   detailsWaitMs?: number;
+  /** Total time one catalog scan may occupy a request. */
+  catalogTimeoutMs?: number;
   /** Least time between two reads of a provider's finished jobs. Default 1.2 seconds. */
   finishedGapMs?: number;
   now?: () => number;
@@ -423,102 +349,18 @@ export interface HostedServicesOptions {
 export const DEFAULT_SITE_URL = "https://agenc.ag";
 export const DEFAULT_ATTEST_URL = "https://attest.agenc.ag";
 
-const CATALOG_TTL_MS = 60_000;
 const INFO_TTL_MS = 10 * 60_000;
-const MAX_CATALOG_PAGES = 3;
-/** How long a provider's list of finished jobs is kept before it is read again. */
-const FINISHED_TTL_MS = 10 * 60_000;
-/** A provider's finished jobs are read in pages of this many, at most this many pages. */
-const FINISHED_PAGE = 100;
-const MAX_FINISHED_PAGES = 5;
-/**
- * The marketplace's read routes refuse a client that asks too often, so the
- * lists of finished jobs are read one at a time, this far apart.
- */
-const DEFAULT_FINISHED_GAP_MS = 1_200;
 const MAX_RESULT_BYTES = 256 * 1024;
-/** A description that could not be read is tried again after this long. */
-const DETAILS_RETRY_MS = 10 * 60_000;
-/** Descriptions are read from their providers' hosts this many at a time. */
-const DETAILS_AT_ONCE = 6;
-const DEFAULT_DETAILS_WAIT_MS = 2_500;
 
-/** A service as the marketplace's list gives it: no words yet, only where they are. */
-interface ListedService {
-  base: Pick<
-    CatalogRow,
-    | "listing"
-    | "providerAgent"
-    | "name"
-    | "priceLamports"
-    | "rating"
-    | "ratingCount"
-    | "jobsDone"
-    | "deliverySecs"
-  >;
-  /** Words the list itself carried, used when the description gives none. */
-  listedCategory: string | null;
-  listedSummary: string | null;
-  /** The hash the listing committed its description to. */
-  specHashHex: string | null;
-  /** Where that description is published, when it is a public https address. */
-  specUri: string | null;
-}
-
-/** The finished jobs of one provider, as last read. */
-interface FinishedList {
-  at: number;
-  tasks: string[];
-}
-
-function describedRow(
-  entry: ListedService,
-  details: ListingDetails,
-  state: DetailsState,
-): CatalogRow {
-  return {
-    ...entry.base,
-    specHashHex: entry.specHashHex,
-    category: details.category ?? entry.listedCategory,
-    summary: summarize(entry.base.name, details.description) ?? entry.listedSummary,
-    description:
-      details.description === null ? null : withoutLeadingName(entry.base.name, details.description),
-    tags: details.tags,
-    inputs: details.inputs,
-    outputs: details.outputs,
-    terms: details.terms,
-    details: state,
-  };
-}
-
-/**
- * Drop a provider's exact repeats: the same agent offering the same
- * description at the same price more than once is one offer to a buyer. The
- * one with the most finished jobs stays. Services from different providers
- * are never merged, however alike they look.
- */
-function withoutRepeats(listed: readonly ListedService[]): ListedService[] {
-  const best = new Map<string, ListedService>();
-  const order: string[] = [];
-  listed.forEach((entry, index) => {
-    const key =
-      entry.specHashHex === null
-        ? `single ${index}`
-        : `${entry.base.providerAgent} ${entry.specHashHex} ${entry.base.priceLamports}`;
-    const kept = best.get(key);
-    if (kept === undefined) {
-      best.set(key, entry);
-      order.push(key);
-      return;
-    }
-    if (
-      entry.base.jobsDone > kept.base.jobsDone ||
-      (entry.base.jobsDone === kept.base.jobsDone && entry.base.ratingCount > kept.base.ratingCount)
-    ) {
-      best.set(key, entry);
-    }
+/** Only the same listing ID is a repeat. Shared metadata does not imply shared terms. */
+export function distinctOffers<T>(entries: readonly T[], rowOf: (entry: T) => CatalogRow): T[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    const id = rowOf(entry).listing;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
   });
-  return order.map((key) => best.get(key) as ListedService);
 }
 
 function trimBase(url: string, label: string): string {
@@ -563,71 +405,7 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
   const publicFetcher =
     options.publicFetcher ?? createPublicUriFetcher({ maxBytes: MAX_RESULT_BYTES });
 
-  const detailsCache = options.detailsCache ?? openDetailsCache({ now });
-  const detailsWaitMs = Math.max(0, options.detailsWaitMs ?? DEFAULT_DETAILS_WAIT_MS);
-  const finishedGapMs = Math.max(0, options.finishedGapMs ?? DEFAULT_FINISHED_GAP_MS);
-  const finished = new Map<string, FinishedList>();
-  /** The last read of finished jobs, which the next one waits for. */
-  let finishedTurn: Promise<unknown> = Promise.resolve();
-  /** When the marketplace was last asked for a list of finished jobs (the real clock). */
-  let finishedAskedAt = Number.NEGATIVE_INFINITY;
-
-  let catalog: { at: number; listed: ListedService[] } | null = null;
   let info: { at: number; moderator: Address } | null = null;
-  /** When a description last failed to load, by hash and address. */
-  const detailsFailedAt = new Map<string, number>();
-  /** Descriptions being read right now, by hash and address. */
-  const detailsInFlight = new Map<string, Promise<void>>();
-  let detailsRunning = 0;
-  const detailsWaiting: Array<() => void> = [];
-
-  /**
-   * Read one service's description from where its listing says it is and keep
-   * it only if it is the text the listing committed to. The address is the
-   * provider's own, so it is fetched like any other untrusted address: public
-   * hosts only, bounded size, bounded time.
-   */
-  async function loadDetails(specHashHex: string, uri: string): Promise<void> {
-    if (detailsRunning >= DETAILS_AT_ONCE) {
-      await new Promise<void>((resolve) => detailsWaiting.push(resolve));
-    }
-    detailsRunning += 1;
-    const key = `${specHashHex} ${uri}`;
-    try {
-      const payload = await verifiedListingPayload(await publicFetcher(uri), specHashHex);
-      if (payload === null) {
-        detailsFailedAt.set(key, now());
-      } else {
-        detailsCache.set(specHashHex, listingDetails(payload));
-        detailsFailedAt.delete(key);
-      }
-    } catch {
-      detailsFailedAt.set(key, now());
-    } finally {
-      detailsRunning -= 1;
-      detailsWaiting.shift()?.();
-    }
-  }
-
-  /** A listed service with whatever is known of its description, starting to read it when nothing is. */
-  function describe(entry: ListedService): CatalogRow {
-    const { specHashHex, specUri } = entry;
-    const known = specHashHex === null ? undefined : detailsCache.get(specHashHex);
-    if (known !== undefined) return describedRow(entry, known, "ready");
-    if (specHashHex === null || specUri === null) return describedRow(entry, NO_DETAILS, "unavailable");
-    const key = `${specHashHex} ${specUri}`;
-    const failed = detailsFailedAt.get(key);
-    if (failed !== undefined && now() - failed < DETAILS_RETRY_MS) {
-      return describedRow(entry, NO_DETAILS, "unavailable");
-    }
-    if (!detailsInFlight.has(key)) {
-      detailsInFlight.set(
-        key,
-        loadDetails(specHashHex, specUri).finally(() => detailsInFlight.delete(key)),
-      );
-    }
-    return describedRow(entry, NO_DETAILS, "loading");
-  }
 
   /**
    * Hand the marketplace a document to publish, signed by `signer`. It
@@ -719,144 +497,22 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
     return info;
   }
 
-  function parseRow(value: unknown): ListedService | null {
-    const item = record(value);
-    if (item === null) return null;
-    const listing = safeAddress(item.pda);
-    const providerAgent = safeAddress(item.providerAgent);
-    const price = safeBigInt(item.priceLamports);
-    const name = tidyText(item.name, 64);
-    if (listing === null || providerAgent === null || price === null || name === null) return null;
-    if (item.priceMint !== null && item.priceMint !== undefined) return null;
-    if (item.state !== 0) return null;
-    const provenance = record(item.provenance);
-    const ratingCount = finite(provenance?.rawRatingCount) ?? finite(item.ratingCount) ?? 0;
-    const average =
-      finite(provenance?.weightedRatingAverage) ?? finite(provenance?.rawRatingAverage);
-    const rating =
-      ratingCount > 0 && average !== null && average >= 1 && average <= 5 ? average : null;
-    const settled = finite(provenance?.settledHireCount);
-    const deadline = finite(item.defaultDeadlineSecs);
-    const specHash = typeof item.specHash === "string" ? item.specHash.toLowerCase() : "";
-    const specUri = typeof item.specUri === "string" ? item.specUri.trim() : "";
-    return {
-      base: {
-        listing,
-        providerAgent,
-        name,
-        priceLamports: price,
-        rating,
-        ratingCount: Math.max(0, Math.trunc(ratingCount)),
-        jobsDone: Math.max(0, Math.trunc(settled ?? 0)),
-        deliverySecs: deadline !== null && deadline > 0 ? Math.trunc(deadline) : null,
+  const discovery = hostedDiscovery(options, (path, timeoutMs) =>
+    requestJson(fetchImpl, siteUrl + path, { method: "GET" }, { timeoutMs, maxBytes: 2 * 1024 * 1024 }), publicFetcher);
+  return usesScopedRequests<MarketServices>({
+    ...discovery,
+    exchangeRelay: new ExchangeRelay(new URL(siteUrl).origin, fetchImpl),
+    ...(artifactBaseUrl !== null && artifactUploadUrl !== null ? {
+      async postChangeRequest(this: MarketServices, envelope: taskThread.TaskThreadEnvelope, signer: KeyPairSigner) {
+        const data = new TextEncoder().encode(taskThread.canonicalEnvelopeJson(taskThread.assertTaskThreadEnvelope(envelope)));
+        await publishReviewBytes(this, signer, data);
       },
-      // The list does not carry these today. They are kept as a fallback for
-      // a list that does, and never override what the description itself says.
-      listedCategory: tidyText(item.category, 40),
-      listedSummary: tidyText(item.summary ?? item.description, 280),
-      specHashHex: HEX64.test(specHash) ? specHash : null,
-      specUri: /^https:\/\/[^\s]{1,500}$/.test(specUri) ? specUri : null,
-    };
-  }
-
-  /** Read one provider's finished jobs from the marketplace's list of tasks, every page of it. */
-  async function readFinished(provider: Address): Promise<string[]> {
-    const tasks: string[] = [];
-    for (let page = 1; page <= MAX_FINISHED_PAGES; page += 1) {
-      // The first page is asked for without a page number: the route sends
-      // "page=1" elsewhere, and a redirect is never followed.
-      const { status, body } = await requestJson(
-        fetchImpl,
-        `${siteUrl}/api/tasks?provider=${provider}&pageSize=${FINISHED_PAGE}${page > 1 ? `&page=${page}` : ""}`,
-        { method: "GET" },
-        { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
-      );
-      const data = record(body);
-      if (status !== 200 || data === null || !Array.isArray(data.items)) {
-        throw new WalletError("NETWORK", "The marketplace's record of finished jobs could not be read right now.");
-      }
-      for (const value of data.items) {
-        const item = record(value);
-        const task = safeAddress(item?.pda);
-        // Only a job this provider did and that was paid out. The chain says the rest.
-        if (task === null || item?.status !== "settled" || item.providerAgent !== provider) continue;
-        tasks.push(task);
-      }
-      const total = finite(data.total) ?? 0;
-      if (data.items.length === 0 || page * FINISHED_PAGE >= total) break;
-    }
-    return tasks;
-  }
-
-  return {
-    async finishedJobs(provider) {
-      const fresh = (list: FinishedList | undefined): list is FinishedList =>
-        list !== undefined && now() - list.at < FINISHED_TTL_MS;
-      const known = finished.get(provider);
-      if (fresh(known)) return known.tasks;
-      // One read at a time, and never two closer together than the gap.
-      const turn = finishedTurn
-        .catch(() => undefined)
-        .then(async () => {
-          const again = finished.get(provider);
-          if (fresh(again)) return again.tasks;
-          const wait = finishedAskedAt + finishedGapMs - Date.now();
-          if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, wait));
-          finishedAskedAt = Date.now();
-          const tasks = await readFinished(provider);
-          finished.set(provider, { at: now(), tasks });
-          return tasks;
-        });
-      finishedTurn = turn;
-      return turn;
+    } : {}),
+    async fetchReviewEvidence(uri, hash) {
+      if (!uri.startsWith("https://")) return null;
+      const bytes = await publicFetcher(uri);
+      return sha256Hex(bytes) === hash ? bytes : null;
     },
-
-    async listServices() {
-      if (catalog === null || now() - catalog.at >= CATALOG_TTL_MS) {
-        const found: ListedService[] = [];
-        for (let page = 1; page <= MAX_CATALOG_PAGES; page += 1) {
-          const { status, body } = await requestJson(
-            fetchImpl,
-            `${siteUrl}/api/listings?hireable=1&page=${page}&pageSize=100`,
-            { method: "GET" },
-            { timeoutMs: 30_000, maxBytes: 2 * 1024 * 1024 },
-          );
-          const data = record(body);
-          if (status !== 200 || data === null || !Array.isArray(data.items)) {
-            throw new WalletError(
-              "NETWORK",
-              "The list of services could not be loaded. Try again in a moment.",
-            );
-          }
-          for (const item of data.items) {
-            const row = parseRow(item);
-            if (row !== null) found.push(row);
-          }
-          const total = finite(data.total) ?? 0;
-          if (data.items.length === 0 || page * 100 >= total) break;
-        }
-        catalog = { at: now(), listed: withoutRepeats(found) };
-      }
-      const listed = catalog.listed;
-      let rows = listed.map(describe);
-      if (detailsWaitMs > 0 && rows.some((row) => row.details === "loading")) {
-        // Most descriptions are small files that arrive at once. Wait a moment
-        // for them, then hand the list back with whatever has come in: the
-        // rest keep loading and are there the next time the list is read.
-        let timer: NodeJS.Timeout | undefined;
-        await Promise.race([
-          Promise.allSettled([...detailsInFlight.values()]),
-          new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, detailsWaitMs);
-            timer.unref();
-          }),
-        ]);
-        clearTimeout(timer);
-        rows = listed.map(describe);
-      }
-      return rows;
-    },
-
     async trustedModerators() {
       return [(await attestorInfo()).moderator];
     },
@@ -927,10 +583,23 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
           summary: input.request,
           ...(input.request.length > JOB_SUMMARY_MAX ? { details: input.request } : {}),
           ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
-          deliverables: [JOB_DELIVERABLE],
+          deliverables: [jobDeliverable(input.terms)],
         },
         "The marketplace would not publish this request.",
       );
+      if (input.terms) {
+        const spec = published.payload;
+        let brief;
+        try { brief = parseJobBrief(spec); }
+        catch (cause) { throw new WalletError("NOT_AVAILABLE", "The published brief conflicts with the quote.", { cause }); }
+        const description = brief.request;
+        if (spec.title !== jobTitle(input) || description !== input.request ||
+            spec.shortDescription !== input.request.slice(0, JOB_SUMMARY_MAX) ||
+            JSON.stringify(brief.acceptance) !== JSON.stringify(input.acceptance) ||
+            JSON.stringify(spec.deliverables) !== JSON.stringify([jobDeliverable(input.terms)])) {
+          throw new WalletError("NOT_AVAILABLE", "The published brief differs from the quote. Request a new quote.");
+        }
+      }
       return { spec: published.payload, hashHex: published.hashHex, uri: published.uri };
     },
 
@@ -1108,12 +777,9 @@ export function createHostedServices(options: HostedServicesOptions = {}): Marke
       };
       return { url: artifactUploadUrl, fetch: upload };
     },
-  };
+  });
 }
 
-/** What every job asks the provider to hand in. */
-const JOB_DELIVERABLE =
-  "Put the complete result in your submission. The buyer reads exactly what you submit.";
 /** The marketplace keeps this much of a request as its summary; the rest goes in the details. */
 const JOB_SUMMARY_MAX = 240;
 
@@ -1129,6 +795,7 @@ function jobTitle(input: { title: string; listing: Address | null }): string {
  * and the marketplace's own shape is used instead.
  */
 export function buildJobSpec(input: {
+  terms?: JobTerms;
   title: string;
   request: string;
   acceptance: readonly string[];
@@ -1140,7 +807,7 @@ export function buildJobSpec(input: {
     title: jobTitle(input),
     instructions: input.request,
     ...(input.acceptance.length > 0 ? { acceptance: [...input.acceptance] } : {}),
-    deliverable: JOB_DELIVERABLE,
+    deliverable: jobDeliverable(input.terms),
     ...(input.listing !== null ? { sourceListing: input.listing } : {}),
   };
 }
@@ -1155,13 +822,19 @@ export function buildListingSpec(input: {
   name: string;
   summary: string;
   category: string;
+  tags?: string[];
+  inputs?: string[];
+  outputs?: string[];
 }): Record<string, unknown> {
   return {
     category: input.category,
+    ...(input.tags?.length && { tags: input.tags }),
     custom: {
       listingMetadata: {
         displayName: input.name,
         longDescription: input.summary,
+        ...(input.inputs?.length && { buyerInputs: input.inputs }),
+        ...(input.outputs?.length && { deliverables: input.outputs }),
       },
     },
   };

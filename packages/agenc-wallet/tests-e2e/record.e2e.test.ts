@@ -2,10 +2,11 @@
 // who offers it, and what buyers really paid it, read from the chain and
 // weighed by the fee each job paid.
 import { afterEach, describe, expect, it } from "vitest";
-import type { Address } from "@solana/kit";
+import { createHostedServices } from "../src/services.js";
+import { getAddressDecoder, type Address } from "@solana/kit";
 import { readMarketRecord } from "../src/records.js";
 import { NO_FIRST_PARTY } from "../src/trust.js";
-import { CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, CENT, HAIKU, eventually, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -26,7 +27,7 @@ async function spender(world: World, cents: number) {
   const agent = await world.wallet.createAgent("Buyer");
   await world.wallet.setPolicy(agent.id, {
     askAboveCents: cents,
-    refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+    refill: { ...REVIEW_ALLOWANCE, perDayCents: cents },
   });
   await world.wallet.fundAgent(agent.id, { usdCents: cents });
   return agent;
@@ -36,12 +37,36 @@ async function spender(world: World, cents: number) {
 async function paidJob(world: World, agentId: string, listing: Address, score?: number): Promise<string> {
   const { job } = await world.wallet.hire({ agentId, listing, request: "Something small, please." });
   expect(await world.sandbox.workOnce()).toBeGreaterThanOrEqual(1);
-  const paid = await world.wallet.approveJob(job.id, score, true);
+  const paid = await confirmPayout(world.wallet, job.id, score);
   expect(paid.status).toBe("paid");
   return job.id;
 }
 
 describe("a service's record", () => {
+  it("credits an unrated hire only to its source listing across state filters", async () => {
+    const sibling = getAddressDecoder().decode(new Uint8Array(32).fill(115));
+    world = await startWorld({ services: (local) => {
+      const hosted = createHostedServices({ fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        expect(url.pathname).toBe("/api/listings");
+        const [row] = await local.listServices();
+        const active = { pda: row!.listing, state: 0, providerAgent: row!.providerAgent, specHash: row!.specHashHex,
+          name: row!.name, priceLamports: row!.priceLamports.toString() };
+        const items = url.searchParams.has("hireable") ? [active] : [active, { ...active, state: 1, pda: sibling }];
+        return Response.json({ total: items.length, items });
+      } });
+      return { ...local, listServices: filters => filters?.listing ? local.listServices(filters) : hosted.listServices(filters) };
+    } });
+    const { wallet, listing } = world;
+    const agent = await spender(world, 300);
+    await paidJob(world, agent.id, listing);
+    expect((await wallet.find({ state: "active", minPaidJobs: 1 })).services).toMatchObject([{ listing, jobsDone: 1 }]);
+    expect((await wallet.find({ state: "paused", minPaidJobs: 1 })).services).toEqual([]);
+    expect((await wallet.find({ state: "paused" })).services).toMatchObject([
+      { listing: sibling, jobsDone: 0, offeredBy: { jobsDone: 1 } },
+    ]);
+  });
+
   it("shows who offers it and what buyers really paid it", async () => {
     world = await startWorld();
     const { wallet, listing } = world;
@@ -77,7 +102,7 @@ describe("a service's record", () => {
     // Tidying closes the job's link to its service on the chain: the record keeps it.
     await wallet.tick();
 
-    const [after] = (await wallet.find({ query: "haiku" })).services;
+    const [after] = (await wallet.find({ query: "haiku", minPaidJobs: 1 })).services;
     expect(after).toMatchObject({
       record: "ready",
       rating: 5,
@@ -109,8 +134,24 @@ describe("a service's record", () => {
     expect(after.offeredBy).toMatchObject({ turnedDown: 1, disputesLost: 0 });
   });
 
-  it("keeps a paid job nobody rated after the job is tidied", async () => {
-    world = await startWorld();
+  it("finds a compacted unrated job on the 501st history row for the paid-jobs filter", async () => {
+    let lastPage = 0;
+    world = await startWorld({ services: (local) => {
+      const hosted = createHostedServices({ finishedGapMs: 0, fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        const provider = url.searchParams.get("provider") as Address;
+        const page = Number(url.searchParams.get("page") ?? 1);
+        lastPage = Math.max(page, lastPage);
+        const jobs = await local.finishedJobs!(provider);
+        const items = page === 6 ? jobs : Array.from({ length: 100 }, (_, i) => {
+          const bytes = new Uint8Array(32);
+          new DataView(bytes.buffer).setUint32(0, page * 100 + i + 1);
+          return getAddressDecoder().decode(bytes);
+        });
+        return Response.json({ slot: 42, total: 500 + jobs.length, page, items: items.map((pda) => ({ pda, providerAgent: provider, status: "settled" })) });
+      } });
+      return { ...local, finishedJobs: hosted.finishedJobs! };
+    } });
     const { wallet, sandbox, listing, clock } = world;
     const agent = await spender(world, 300);
     await paidJob(world, agent.id, listing);
@@ -127,7 +168,8 @@ describe("a service's record", () => {
     const compacted = await sandbox.chain.readAccountInfo(task as Address);
     expect(compacted?.data.length).toBe(56);
 
-    const [after] = (await wallet.find({ query: "haiku" })).services;
+    const [after] = (await wallet.find({ query: "haiku", minPaidJobs: 1 })).services;
+    expect(lastPage).toBe(6);
     expect(after).toMatchObject({
       record: "ready",
       rating: null,
@@ -154,6 +196,9 @@ describe("a service's record", () => {
 
     const listed = (await wallet.find({})).services;
     expect(listed.map((service) => service.name)).toEqual(["Northlight", "Haiku Writer"]);
+    expect(await wallet.find({ minPaidJobs: 2, minRating: 4 })).toMatchObject({ total: 1, services: [{ listing: names }] });
+    expect(await wallet.find({ minRating: 4.5, maxPriceCents: 20 })).toMatchObject({ total: 1, services: [{ listing: haiku }] });
+    expect(await wallet.find({ minRating: 5, minPaidJobs: 2 })).toEqual({ total: 0, services: [] });
     const [northlight, poem] = listed;
     // What the person reads next to each: the stars with how many there are,
     // and what was paid by how many buyers.

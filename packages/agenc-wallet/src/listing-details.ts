@@ -10,6 +10,8 @@
 // Everything in here is the provider's own text. It is shown to a person or
 // handed to an agent as information, never as instructions, and nothing in
 // it changes what the wallet signs.
+import type { ListedSupplier } from "./client/purchase-input.js";
+import { listedSupplier } from "./listing-supplier.js";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -26,7 +28,29 @@ import path from "node:path";
 import { values } from "@tetsuo-ai/marketplace-sdk";
 
 /** What a provider says about a service, ready to show. */
+export interface FulfilmentTerms {
+  minimumMarginCents?: number;
+  modelCapCents?: number;
+  privateInputs?: boolean;
+  supplier?: ListedSupplier;
+}
+
+/** Only a hash-verified metadata document can supply purchase requirements. */
+function fulfilmentTerms(raw: unknown, childHire?: unknown): FulfilmentTerms | undefined {
+  if (raw == null && childHire === undefined) return undefined;
+  const value = record(raw ?? {});
+  if (!value) throw new Error("Invalid listing fulfilment terms.");
+  const { minimumMarginCents, modelCapCents } = value;
+  if (minimumMarginCents !== undefined && (typeof minimumMarginCents !== "number" || !Number.isSafeInteger(minimumMarginCents) || minimumMarginCents < 0))
+    throw new Error("Invalid seller margin.");
+  if (modelCapCents !== undefined && (typeof modelCapCents !== "number" || !Number.isSafeInteger(modelCapCents) || modelCapCents < 1))
+    throw new Error("Invalid model budget.");
+  return { ...(minimumMarginCents !== undefined && { minimumMarginCents }), ...(modelCapCents !== undefined && { modelCapCents }),
+    ...(value.privateInputs === true && { privateInputs: true }), ...(childHire !== undefined && { supplier: listedSupplier(childHire) }) };
+}
+
 export interface ListingDetails {
+  fulfilment?: FulfilmentTerms;
   /** The provider's description, as plain text with line breaks kept. */
   description: string | null;
   /** One of the marketplace's category words, such as "writing". */
@@ -306,7 +330,9 @@ export function listingDetails(payload: Record<string, unknown>): ListingDetails
         ),
       ].slice(0, MAX_TAGS)
     : [];
+  const fulfilment = fulfilmentTerms(metadata.fulfilment, metadata.childHire);
   return {
+    ...(fulfilment && { fulfilment }),
     description: paragraphs(metadata.longDescription, MAX_DESCRIPTION),
     category,
     tags,
@@ -327,7 +353,9 @@ export function tidyDetails(value: unknown): ListingDetails | null {
     typeof entry.category === "string" && entry.category.length <= 32 && KEBAB.test(entry.category)
       ? entry.category
       : null;
+  const fulfilment = fulfilmentTerms(entry.fulfilment, record(entry.fulfilment)?.supplier);
   return {
+    ...(fulfilment && { fulfilment }),
     description: paragraphs(entry.description, MAX_DESCRIPTION),
     category,
     tags: Array.isArray(entry.tags)
@@ -417,7 +445,7 @@ export interface DetailsCache {
   flush(): Promise<void>;
 }
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const CACHE_MAX_ENTRIES = 600;
 const CACHE_MAX_BYTES = 4 * 1024 * 1024;
 const CACHE_WRITE_DELAY_MS = 750;

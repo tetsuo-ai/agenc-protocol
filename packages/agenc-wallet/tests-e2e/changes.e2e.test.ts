@@ -1,7 +1,7 @@
 // Asking for changes: the note's hash goes on-chain, the provider reads the
 // note and delivers again, and the buyer then approves.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startWorld, type World } from "./harness.js";
+import { confirmPayout, confirmDecision, REVIEW_ALLOWANCE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -11,13 +11,13 @@ afterEach(async () => {
 });
 
 describe("asking for changes", () => {
-  it("sends a delivery back and gets a second one", async () => {
+  it("sends a delivery back and keeps its note away from the practice host executor", async () => {
     world = await startWorld();
     const { wallet, sandbox, listing } = world;
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: REVIEW_ALLOWANCE,
     });
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
@@ -26,7 +26,8 @@ describe("asking for changes", () => {
     expect(delivered.status).toBe("delivered");
     expect(delivered.canAskChanges).toBe(true);
 
-    const sentBack = await wallet.askChanges(job.id, "Make it about the sea.", false, agent.id);
+    await expect(wallet.askChanges(job.id, "Make it about the sea.", false, agent.id)).rejects.toMatchObject({ code: "NOT_ALLOWED" });
+    const sentBack = await confirmDecision(wallet, job.id, "change", "Make it about the sea.");
     expect(sentBack.status).toBe("changes_requested");
     expect(sentBack.canApprove).toBe(false);
 
@@ -38,9 +39,8 @@ describe("asking for changes", () => {
     await sandbox.workOnce();
     vi.useRealTimers();
     const again = await wallet.getJob(job.id, false, agent.id);
-    expect(again.status).toBe("delivered");
-    expect(again.result?.verified).toBe(true);
-    expect((await wallet.approveJob(job.id, undefined, false, agent.id)).status).toBe("paid");
+    expect(again.status).toBe("changes_requested");
+    expect(again.canApprove).toBe(false);
   });
 
   it("is not offered where the note could never reach the provider", async () => {
@@ -53,7 +53,7 @@ describe("asking for changes", () => {
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: REVIEW_ALLOWANCE,
     });
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });
@@ -68,9 +68,9 @@ describe("asking for changes", () => {
     }
     expect((await wallet.listJobs({ role: "buying" }, true))[0]!.canAskChanges).toBe(false);
     await expect(wallet.askChanges(job.id, "Make it about the sea.", true)).rejects.toMatchObject({
-      code: "NOT_AVAILABLE",
+      code: "APPROVAL_REQUIRED",
     });
     // Nothing was sent back: the delivery is still there to approve.
-    expect((await wallet.approveJob(job.id, undefined, true)).status).toBe("paid");
+    expect((await confirmPayout(wallet, job.id)).status).toBe("paid");
   });
 });

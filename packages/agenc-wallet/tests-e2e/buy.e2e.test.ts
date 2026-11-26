@@ -1,8 +1,11 @@
 // The buying side, end to end against the real program: an agent hires a
 // service from its own allowance, a house provider delivers, the delivery is
 // approved, rated and tidied. Money is checked at every step.
+import { address } from "@solana/kit";
+import { findClaimPda, findTaskSubmissionPda } from "@tetsuo-ai/marketplace-sdk";
+import { readAgent, readListing, readProtocolConfig } from "../src/market.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
+import { confirmPayout, REVIEW_ALLOWANCE, CENT, CHECK_FEE, MARKER_SPACE, startWorld, type World } from "./harness.js";
 
 let world: World | null = null;
 afterEach(async () => {
@@ -17,7 +20,7 @@ describe("buying from an allowance", () => {
     const agent = await wallet.createAgent("My assistant");
     await wallet.setPolicy(agent.id, {
       askAboveCents: 100,
-      refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+      refill: REVIEW_ALLOWANCE,
     });
     await wallet.fundAgent(agent.id, { usdCents: 300 });
     const funded = await world.balance(agent.address);
@@ -47,14 +50,27 @@ describe("buying from an allowance", () => {
     expect(delivered.result?.text).toContain("A haiku about a lighthouse.");
     expect(delivered.canApprove).toBe(true);
 
-    const paid = await wallet.approveJob(job.id, 5, true);
+    const { providerAgent } = (await readListing(sandbox.chain, listing))!;
+    const { authority } = (await readAgent(sandbox.chain, providerAgent))!;
+    const { treasury } = await readProtocolConfig(sandbox.chain);
+    const [claim] = await findClaimPda({ task: address(job.task!), bidder: providerAgent });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    const sellerBefore = await world.balance(authority);
+    const deposits = await world.balance(claim) + await world.balance(submission);
+    const treasuryBefore = await world.balance(treasury);
+    const split = job.terms!.hire!;
+    const paid = await confirmPayout(wallet, job.id, 5);
+    expect(await world.balance(authority) - sellerBefore - deposits).toBe(BigInt(split.minimumSellerNet.lamports));
+    expect(await world.balance(treasury) - treasuryBefore).toBe(BigInt(split.maximumMarketplaceFee.lamports));
     expect(paid.status).toBe("paid");
     expect(paid.rating).toBe(5);
 
     await wallet.tick();
     const overview = await wallet.overview();
     const view = overview.agents[0]!;
-    expect(view.spent.lamports).toBe((20n * CENT).toString());
+    // The price and the five stars' debit (rt5 A 2: the stars count as spending on the job).
+    const starsNote = (await wallet.listActivity()).find(entry => entry.jobId === job.id && entry.text.startsWith("Paid for the stars on"));
+    expect(view.spent.lamports).toBe((20n * CENT + BigInt(starsNote!.amount!.lamports)).toString());
     expect(view.held.lamports).toBe("0");
     const final = await world.balance(agent.address);
     // Everything the buyer paid, to the lamport: the price, the marker its
@@ -106,7 +122,7 @@ describe("buying from an allowance", () => {
       const agent = await wallet.createAgent("My assistant");
       await wallet.setPolicy(agent.id, {
         askAboveCents: 100,
-        refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+        refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
       });
       await wallet.fundAgent(agent.id, { usdCents: 300 });
       const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A logo." });
@@ -145,7 +161,7 @@ describe("buying from an allowance", () => {
       const agent = await wallet.createAgent("My assistant");
       await wallet.setPolicy(agent.id, {
         askAboveCents: 100,
-        refill: { enabled: false, topUpToCents: 0, perDayCents: 0 },
+        refill: { enabled: false, topUpToCents: 0, perDayCents: 10000 },
       });
       await wallet.fundAgent(agent.id, { usdCents: 300 });
       const { job } = await wallet.hire({ agentId: agent.id, listing, request: "A haiku." });

@@ -36,3 +36,4 @@ export {
   type TaskThread,
   type PostTaskMessageResult,
 } from "./client.js";
+export * from "./private-exchange.js";
