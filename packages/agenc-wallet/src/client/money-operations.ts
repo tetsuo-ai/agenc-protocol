@@ -21,7 +21,7 @@ export interface HistoryCursor { account: string; signature: string }
 export interface HistoryQuery { account?: string; jobId?: string; before?: HistoryCursor; limit?: number }
 
 export interface HistoryRow extends AccountChange {
-  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "other";
+  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "service setup" | "other";
   jobId?: string;
 }
 

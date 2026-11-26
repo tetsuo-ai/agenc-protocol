@@ -59,6 +59,12 @@ export function classifyChange(state: WalletState, change: AccountChange, own: R
       effect === "accept" || effect === "settle" ? "settlement" : effect === "hire" ? "job funding" :
       effect === "approval" ? "job check" : effect === "rate" ? "rating" : "job update" };
   }
+  // A service's own sends (rt8-b: offer setup read "Other change"): its listing, its changes, its safety check.
+  for (const agent of Object.values(state.agents)) {
+    for (const offer of agent.earn.offers ?? []) {
+      if (Object.values(offer.signatures ?? {}).includes(change.signature)) return { ...change, kind: "service setup" };
+    }
+  }
   if (change.externalSender && !own.has(change.externalSender)) return { ...change, kind: "deposit" };
   if (change.externalSender)
     return { ...change, kind: "transfer" };
