@@ -148,11 +148,20 @@ async function inspect(ctx: WorkerContext, agent: WorkerAgent, task: Address) {
   }
 }
 
-// One listing per worker for five minutes. `offset` is a position in it, never a
-// handle: a page read after a wallet restart, or from a position a chat chose
-// itself, lists again instead of failing (rt15-a: "Refresh the jobs list for a new page.").
-type Listing = { addresses: Address[]; agent: Address; dir: string; created: number };
-const listings = new Map<string, Listing>();
+// Each listing is kept by a generation, and `next` names it: generation * 2^20 + index.
+// An offset 0 call opens a new generation and leaves the older ones alone, so a chat's
+// page 2 never reads a list Market or another chat made since (review 0.1.17 money 8,
+// MAJOR 1). A listing lives 5 minutes after its last read. A position whose listing is
+// gone (expired, a wallet restart, another worker's, or one a chat made up) lists again
+// from the start and says `relisted`, so the chat drops what it had. A new listing is
+// never read at an old index.
+type Listing = { key: string; addresses: Address[]; used: number };
+const listings = new Map<number, Listing>();
+const PAGE_SPAN = 2 ** 20;
+const LISTING_TTL_MS = 300000;
+const LISTINGS_PER_WORKER = 4;
+const LISTINGS_MAX = 128;
+let generation = 0;
 
 /** Jobs left out of a page only because the agent's own money cannot pay to take them. */
 export type ShortOfMoneyJobs = { jobs: number; neededLamports: string };
@@ -164,20 +173,29 @@ export async function browseOpenWork(ctx: WorkerContext, agent: WorkerAgent, off
       ...("shortLamports" in exact && { shortOfMoney: { jobs: 1, neededLamports: exact.shortLamports!.toString() } }) };
   }
   const now = Date.now();
-  for (const [key, entry] of listings) if (entry.created < now - 300000) listings.delete(key);
+  for (const [gen, entry] of listings) if (entry.used < now - LISTING_TTL_MS) listings.delete(gen);
   const key = `${ctx.stateDir}\n${agent.agentPda}`;
-  let page = offset ? listings.get(key) : undefined;
+  const gen = Math.floor(offset / PAGE_SPAN);
+  const kept = offset ? listings.get(gen) : undefined;
+  let page = kept?.key === key ? kept : undefined;
+  const start = page ? offset % PAGE_SPAN : 0;
+  const relisted = offset !== 0 && !page;
+  let current = gen;
   if (!page) {
     const rows = await listDirectClaimableTasks(ctx.gpa, { capabilities: ctx.config.capabilities,
       nowUnixTimestamp: BigInt(await ctx.clusterTime!()), deadlineSafetySeconds: 0n });
     rows.sort((a, b) => a.account.rewardAmount === b.account.rewardAmount ? a.address.localeCompare(b.address, "en")
       : a.account.rewardAmount > b.account.rewardAmount ? -1 : 1);
-    page = { addresses: rows.map(r => r.address), dir: ctx.stateDir, agent: agent.agentPda, created: now };
-    if (listings.size >= 128) listings.delete(listings.keys().next().value!);
-    listings.set(key, page);
+    page = { key, addresses: rows.slice(0, PAGE_SPAN - 1).map(r => r.address), used: now };
+    current = ++generation;
+    const own = [...listings].filter(([, entry]) => entry.key === key);
+    for (const [old] of own.slice(0, Math.max(0, own.length - LISTINGS_PER_WORKER + 1))) listings.delete(old);
+    if (listings.size >= LISTINGS_MAX) listings.delete(listings.keys().next().value!);
+    listings.set(current, page);
   }
+  page.used = now;
   const jobs: OpenWork[] = [];
-  let index = Math.min(offset, page.addresses.length);
+  let index = Math.min(start, page.addresses.length);
   let shortJobs = 0;
   let needed: bigint | null = null;
   // Leave room in the wallet's 1 MiB frame for prices and the response envelope.
@@ -200,7 +218,8 @@ export async function browseOpenWork(ctx: WorkerContext, agent: WorkerAgent, off
     }
   }
   const shortOfMoney: ShortOfMoneyJobs | undefined = needed === null ? undefined : { jobs: shortJobs, neededLamports: needed.toString() };
-  return { jobs, next: index >= page.addresses.length ? null : index, ...(shortOfMoney && { shortOfMoney }) };
+  return { jobs, next: index >= page.addresses.length ? null : current * PAGE_SPAN + index,
+    ...(relisted && { relisted: true as const }), ...(shortOfMoney && { shortOfMoney }) };
 }
 
 export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signal: AbortSignal, task: Address,

@@ -5958,6 +5958,8 @@ export class AgencWallet {
       // Jobs left out only because this agent's own money cannot pay to take them (rt15-a): how many, and the least it needs.
       const short = "shortOfMoney" in page ? page.shortOfMoney : undefined;
       return { ...("eligibility" in page && page.eligibility && { eligibility: page.eligibility }),
+        // The page's listing was gone, so this is page 1 of a new one (review 0.1.17 money 8, MAJOR 1).
+        ...("relisted" in page && page.relisted && { relisted: true as const }),
         ...(short && { shortOfMoney: { jobs: short.jobs, needs: money(short.neededLamports, rate), add: amountWords(rate).add(BigInt(short.neededLamports)) } }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoom && this.#agentRecord(agentId).earn.enabled } : null };
     });
   }

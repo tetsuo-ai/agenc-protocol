@@ -822,11 +822,15 @@ it("says how many jobs the agent's own money cannot take and the least it needs,
   expect(after.jobs.length).toBeGreaterThanOrEqual(1);
 }, 60000);
 
-it("reads a page from any position, also one the wallet never handed out or no longer remembers", async () => {
+it("reads a position the wallet never handed out or no longer remembers as page 1 of a new listing", async () => {
   const { wallet, id, first, task } = await setup();
   const all = (await wallet.openWork(id)).jobs.map(job => job.task);
   expect([...all].sort()).toEqual([first, task].sort());
-  // A chat that reads `offset` as a position, or a page after a wallet restart, lists from there.
-  expect((await wallet.openWork(id, 1)).jobs.map(job => job.task)).toEqual([all[1]]);
-  expect(await wallet.openWork(id, 10)).toMatchObject({ jobs: [], next: null });
+  // A chat that reads `offset` as a position, or a page after a wallet restart, lists again from the
+  // start and is told so; a new listing is never read at an old index (review 0.1.17 money 8, MAJOR 1).
+  for (const offset of [1, 10]) {
+    const page = await wallet.openWork(id, offset);
+    expect(page).toMatchObject({ relisted: true, next: null });
+    expect(page.jobs.map(job => job.task)).toEqual(all);
+  }
 }, 60000);
