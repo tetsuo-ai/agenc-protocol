@@ -50,3 +50,9 @@ it("names a dispute's bond and deposit, from the wallet's record or from the rec
   const row = classifyChange(state, { signature: "sig-dispute", account: "acct", delta: "-12190440", payerFee: "5000", failed: false, at: 1, externalSender: null }, new Set());
   expect(row).toMatchObject({ kind: "dispute", jobId: "job-1" });
 });
+
+it("names a turn-down a turn-down, not a job update (rt16-b 5)", () => {
+  const state = { moneyOperations: {}, agents: {}, jobs: { j1: { id: "j1", signatures: { reject: "sigReject", changes: "sigChanges" } } } } as unknown as WalletState;
+  expect(classifyChange(state, change("sigReject"), new Set())).toMatchObject({ kind: "turn-down", jobId: "j1" });
+  expect(classifyChange(state, change("sigChanges"), new Set()).kind).toBe("job update");
+});

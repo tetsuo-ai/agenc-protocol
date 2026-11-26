@@ -39,3 +39,31 @@ export async function hireMovedLamports(chain: Pick<Chain, "accountChange">, pay
 export function turnDownNoteText(title: string, ownSeller: string | null): string {
   return `You turned down ${title}. ${ownSeller ?? "The provider"} can dispute it within 72 hours.`;
 }
+
+declare module "./store.js" {
+  /** What came back to the payer with the payment itself (rt16-b bug 3), so the tidy's line can say "the rest". */
+  interface JobRecord { paymentBackLamports?: string }
+}
+
+/**
+ * What came back to the payer in a payment's own transaction (rt16-b bug 3, rt15): part of the
+ * deposits returns with the payment, and Lately had no line for it. Read once, from that
+ * transaction's receipt, net of its network fee, as the history row shows it. Null when nothing
+ * came back or the read fails: no line is better than a wrong amount.
+ */
+export async function paymentBackLamports(chain: Pick<Chain, "accountChange">, payer: Address,
+  signature: string): Promise<bigint | null> {
+  const change = await chain.accountChange?.(payer, signature).catch(() => null);
+  if (!change || change.failed) return null;
+  const delta = BigInt(change.delta);
+  return delta > 0n ? delta : null;
+}
+
+export function paymentBackNoteText(title: string): string {
+  return `Part of the deposits from ${title} came back with the payment.`;
+}
+
+/** The tidy's line, once part of the deposits came back with the payment: it names the rest. */
+export function tidiedNoteText(title: string, paymentBack: string | undefined): string {
+  return paymentBack ? `Collected the rest of the deposits from ${title}.` : `Collected the deposits from ${title}.`;
+}

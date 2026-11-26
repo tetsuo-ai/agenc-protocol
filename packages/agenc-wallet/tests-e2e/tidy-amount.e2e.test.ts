@@ -28,11 +28,12 @@ it("names each tidy's own deposits when two jobs of one payer are tidied in the 
     // No stars: a paid hire stays open an hour so it can be rated, so neither is tidied yet.
     await confirmPayout(wallet, id);
   }
+  // rt16-b bug 3: the deposits that came back with each payment have their own line; the tidy's lines are the rest.
   const before = await w.balance(agent.address);
-  expect((await wallet.listActivity()).filter(entry => entry.kind === "tidied")).toEqual([]);
+  expect((await wallet.listActivity()).filter(entry => entry.kind === "tidied" && entry.text.startsWith("Collected"))).toEqual([]);
   w.clock.now += 61 * 60_000;
   await wallet.tick();
-  const lines = (await wallet.listActivity()).filter(entry => entry.kind === "tidied");
+  const lines = (await wallet.listActivity()).filter(entry => entry.kind === "tidied" && entry.text.startsWith("Collected"));
   expect(lines.map(line => line.jobId).sort()).toEqual([...jobs].sort());
   const moved = await w.balance(agent.address) - before;
   expect(moved > 0n).toBe(true);

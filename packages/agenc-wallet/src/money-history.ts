@@ -59,7 +59,9 @@ export function classifyChange(state: WalletState, change: AccountChange, own: R
     if (effect) return { ...change, jobId: job.id, kind: effect === "close" ? "rent" :
       effect === "cancel" || (effect === "settle" && job.outcome === "refunded") ? "refund" :
       effect === "accept" || effect === "settle" ? "settlement" : effect === "hire" ? "job funding" :
-      effect === "approval" ? "job check" : effect === "rate" ? "rating" : "job update" };
+      effect === "approval" ? "job check" : effect === "rate" ? "rating" :
+      // rt16-b 5: a turn-down read "Job update", the words of a hire's other job updates.
+      effect === "reject" ? "turn-down" : "job update" };
   }
   // What the wallet sent itself (rt11): a funding to an agent, a worker's claim, delivery or release.
   const sent = sentKind(state, change.signature);
