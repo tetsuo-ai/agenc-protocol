@@ -1272,7 +1272,7 @@ export async function sendDisputeTurnDown(
   providerAgent: Address,
   words: AmountWords = SOL_AMOUNT_WORDS,
   evidence?: { hash: Uint8Array; uri: string },
-): Promise<{ signature: string; bondLamports: bigint }> {
+): Promise<{ signature: string; bondLamports: bigint; depositLamports: bigint }> {
   await chain.assertSigningRevision?.();
   const account = await readTask(chain, task);
   if (account === null) throw new WalletError("NOT_FOUND", "That job no longer exists.");
@@ -1316,7 +1316,7 @@ export async function sendDisputeTurnDown(
       evidenceUri: evidence?.uri ?? "",
     }),
   ], { maxRetries: 0 });
-  return { signature: result.signature, bondLamports: turnDown.bondLamports };
+  return { signature: result.signature, bondLamports: turnDown.bondLamports, depositLamports: bondRent };
 }
 
 /**

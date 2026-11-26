@@ -41,6 +41,7 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { recordSent } from "./sent-records.js";
+import { disputeMovedLamports, disputeNoteText, hireMovedLamports, turnDownNoteText } from "./money-words.js";
 import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
 import { recordListingCreation, recordSellerDecision, sellerReceipt } from "./seller-operation.js";
 import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
@@ -1915,7 +1916,8 @@ export class AgencWallet {
         this.#store.update(draft => {
           if (result.recorded) return;
           const kind = quote.kind === "fund" ? "allowance" : quote.kind === "reclaim" ? "returned" : "withdrawn";
-          const text = quote.kind === "fund" ? `Gave ${agent!.name} an allowance.` : quote.kind === "reclaim" ?
+          // rt14-a: a one-off move is not the daily allowance; say it as history says it.
+          const text = quote.kind === "fund" ? `Moved money to ${agent!.name}.` : quote.kind === "reclaim" ?
             `Took money back from ${agent!.name}.` : "Sent money out of your balance.";
           this.#note(draft, { kind, text, lamports: amount, agentId: agent?.id ?? null, signature: result.receipt.signature });
           (draft.moneyOperations ??= {})[id] = { ...result, recorded: true };
@@ -3656,7 +3658,7 @@ export class AgencWallet {
           text: request
             ? `${agent?.name ?? "You"} posted a request: ${entry.title}.`
             : `${agent?.name ?? "An agent"} hired ${entry.title}.`,
-          lamports: BigInt(entry.priceLamports),
+          lamports: hireMovedLamports(entry),
           agentId: agent === undefined ? null : entry.agentId,
           jobId: entry.id,
           signature: entry.signatures.hire ?? null,
@@ -5577,6 +5579,7 @@ export class AgencWallet {
           }
           case "reject": {
             const { signature } = await sendRejectAndFreeze(this.#chain, payer, task, provider, reason.hash, await this.#amountWords(), quote, BigInt(quote.rejectionRent.lamports));
+            const ownSeller = await this.#ownAgentNameAt(provider);
             this.#forgetRecordCost(job);
             const frozen = await this.#readFreezeBack(task, provider);
             this.#patchJob(jobId, (entry, state) => {
@@ -5586,15 +5589,19 @@ export class AgencWallet {
               entry.reviewDeadlineAt = frozen ? frozen.rulingUntil ?? frozen.disputeUntil : null;
               const record = turnDownRecord(frozen);
               if (record) entry.turnDown = record;
-              this.#note(state, { kind: "note", text: `You turned down ${entry.title}. The provider can dispute it within 72 hours.`,
+              this.#note(state, { kind: "note", text: turnDownNoteText(entry.title, ownSeller),
                 lamports: BigInt(quote.rejectionTotal.lamports), agentId: entry.agentId || null, jobId, signature });
             });
             break;
           }
           case "dispute": {
             const sent = await sendDisputeTurnDown(this.#chain, payer, task, provider, await this.#amountWords(), reason);
-            this.#store.update(state => this.#note(state, { kind: "note", text: "The seller disputed the turn-down.",
-              lamports: sent.bondLamports, agentId: job.agentId, jobId, signature: sent.signature }));
+            // rt14-a bug 3: name the person's own agent and what left it, the bond with its deposit.
+            this.#store.update(state => {
+              this.#note(state, { kind: "note", text: disputeNoteText(state.agents[job.agentId]?.name),
+                lamports: disputeMovedLamports(quote, sent), agentId: job.agentId, jobId, signature: sent.signature });
+              recordSent(state, sent.signature, { kind: "dispute", agentId: job.agentId, jobId, at: this.#now() });
+            });
             break;
           }
         }
@@ -5609,6 +5616,14 @@ export class AgencWallet {
     this.#emit({ type: "activity" });
     this.#emit({ type: "overview" });
     return this.getJob(jobId, true);
+  }
+
+  /** The name of the person's own agent registered at this marketplace address, or null for someone else's. */
+  async #ownAgentNameAt(providerAgent: Address): Promise<string | null> {
+    for (const agent of Object.values(this.#store.state.agents)) {
+      if (await this.#earn.marketplaceAgent(agent.id).catch(() => null) === providerAgent) return agent.name;
+    }
+    return null;
   }
 
   async #publishDecision(job: JobRecord, payer: KeyPairSigner, review: ReviewConfirmation, parentHash: string | null) {
