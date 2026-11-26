@@ -24,7 +24,8 @@ export interface HistoryQuery { account?: string; jobId?: string; before?: Histo
 
 export interface HistoryRow extends AccountChange {
   kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "service setup" | "other"
-    | "registration" | "job claim" | "job delivery" | "job release" | "dispute";
+    | "registration" | "job claim" | "job delivery" | "job release" | "dispute"
+    | "turn-down";
   jobId?: string;
 }
 

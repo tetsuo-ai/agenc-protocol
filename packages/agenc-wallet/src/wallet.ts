@@ -42,6 +42,7 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // wallet on marketplace jobs, each of which is escrowed and refundable.
 import { recordSent } from "./sent-records.js";
 import { disputeMovedLamports, disputeNoteText, hireMovedLamports, turnDownNoteText } from "./money-words.js";
+import { paymentBackLamports, paymentBackNoteText, tidiedNoteText } from "./money-words.js";
 import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
 import { recordListingCreation, recordSellerDecision, sellerReceipt } from "./seller-operation.js";
 import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
@@ -3936,6 +3937,23 @@ export class AgencWallet {
     this.#sellerSeesPaid(this.#store.state.jobs[jobId]?.task ?? null);
   }
 
+  /**
+   * rt16-b bug 3: part of the deposits comes back to the payer in the payment's own transaction.
+   * Its own Lately line names it, so Lately adds up to what the balance did. One read, once.
+   */
+  async #notePaymentBack(jobId: string, payer: Address, signature: string): Promise<void> {
+    if (this.#store.state.jobs[jobId]?.paymentBackLamports) return;
+    const back = await paymentBackLamports(this.#chain, payer, signature);
+    if (back === null) return;
+    this.#patchJob(jobId, (entry, draft) => {
+      if (entry.paymentBackLamports) return;
+      entry.paymentBackLamports = back.toString();
+      this.#note(draft, { kind: "tidied", text: paymentBackNoteText(entry.title), lamports: back,
+        agentId: entry.agentId === "" ? null : entry.agentId, jobId: entry.id, signature });
+    });
+    this.#emit({ type: "activity" });
+  }
+
   /** active: mirror the chain, refund a job nobody takes, fetch a delivery. */
   async #stepTrack(job: JobRecord, observed = false): Promise<void> {
     const task = job.task as Address;
@@ -4105,6 +4123,7 @@ export class AgencWallet {
           });
           if (settled.paidProvider) {
             this.#recordPaid(job.id, settled.signature);
+            await this.#notePaymentBack(job.id, payer.address, settled.signature);
           } else {
             const disputed = seen.turnDown.rulingUntil !== null;
             this.#recordRefund(
@@ -4546,7 +4565,7 @@ export class AgencWallet {
         entry.signatures.close = signature;
         this.#note(draft, {
           kind: "tidied",
-          text: `Collected the deposits from ${entry.title}.`,
+          text: tidiedNoteText(entry.title, entry.paymentBackLamports),
           ...(tidiedBack !== null && { lamports: tidiedBack }),
           agentId: entry.agentId === "" ? null : entry.agentId,
           jobId: entry.id,
@@ -5257,6 +5276,7 @@ export class AgencWallet {
         if (stars) this.#store.update(s => { (s.requestedRatings ??= {})[jobId] = { quoteId: stars.id }; });
         const signature = await sendApproval(this.#chain, payer, job.task as Address, provider, quote);
         this.#recordPaid(jobId, signature);
+        await this.#notePaymentBack(jobId, payer.address, signature);
         this.#records.invalidate();
       }, isOwner).catch(cause => { throw this.#reviewError(jobId, quote.id, "approve", cause); });
     });
