@@ -16,12 +16,15 @@ export interface RatingQuote {
 export interface AccountChange {
   signature: string; account: string; delta: string; payerFee: string; at: number | null;
   externalSender: string | null; failed: boolean;
+  /** The marketplace step this account's own receipt took, when it paid for one. */
+  step?: "registration" | "job claim" | "job delivery" | "job release";
 }
 export interface HistoryCursor { account: string; signature: string }
 export interface HistoryQuery { account?: string; jobId?: string; before?: HistoryCursor; limit?: number }
 
 export interface HistoryRow extends AccountChange {
-  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "service setup" | "other";
+  kind: "deposit" | "fee" | "refund" | "rent" | "transfer" | "settlement" | "job funding" | "job check" | "job update" | "rating" | "stake return" | "service setup" | "other"
+    | "registration" | "job claim" | "job delivery" | "job release";
   jobId?: string;
 }
 

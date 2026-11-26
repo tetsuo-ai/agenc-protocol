@@ -39,6 +39,7 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 // An agent can never name a destination, an amount to send, or a transaction.
 // The worst a compromised agent can do is spend the allowance in its own
 // wallet on marketplace jobs, each of which is escrowed and refundable.
+import { recordSent } from "./sent-records.js";
 import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
 import { recordListingCreation, recordSellerDecision, sellerReceipt } from "./seller-operation.js";
 import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
@@ -1632,6 +1633,7 @@ export class AgencWallet {
       }
       if (!landed || !operation) return;
       if (operation.kind === "funding") {
+        recordSent(draft, signature, { kind: "funding", agentId, at: this.#now() });
         if (operation.charge) this.#reserveCharge(agent, operation.charge, signature);
         this.#note(draft, { kind: "allowance", agentId, signature, text: operation.text, lamports: BigInt(operation.lamports) });
         // Replaying an old receipt must not overwrite a newer balance observation.
@@ -6127,6 +6129,7 @@ export class AgencWallet {
           saveWorkerState(ctx.stateDir, state);
         }
         const micros = (amount * BigInt(Math.ceil(rate! * 1_000_000)) + 9_999_999n) / 10_000_000n;
+        this.#store.update(draft => recordSent(draft, receipt.signature, { kind: action, agentId, jobId: task, at: this.#now() }));
         this.#store.update(draft => this.#reserveCharge(draft.agents[agentId]!, {
           id, lamports: charge.lamports, usdCents: Number(micros) / 1_000_000, ts: this.#now(),
           signature: receipt.signature, work: { lastValidBlockHeight: receipt.lastValidBlockHeight, fee: job.networkFee.lamports, rate: rate! },
