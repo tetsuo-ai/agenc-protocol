@@ -1637,7 +1637,9 @@ export class AgencWallet {
       if (operation.kind === "funding") {
         recordSent(draft, signature, { kind: "funding", agentId, at: this.#now() });
         if (operation.charge) this.#reserveCharge(agent, operation.charge, signature);
-        this.#note(draft, { kind: "allowance", agentId, signature, text: operation.text, lamports: BigInt(operation.lamports) });
+        // rt15-c: what left the main balance, its transfer fee included, as the setup card counts it.
+        const fee = BigInt(operation.fee ?? this.#chain.transferFeeLamports);
+        this.#note(draft, { kind: "allowance", agentId, signature, text: operation.text, lamports: BigInt(operation.lamports) + fee });
         // Replaying an old receipt must not overwrite a newer balance observation.
         if (completed || draft.lastMainLamports === operation.priorObservation) {
           draft.lastMainLamports = (BigInt(operation.mainBalance) - BigInt(operation.lamports)).toString();
@@ -1728,7 +1730,7 @@ export class AgencWallet {
         if (!funding.decision) this.#store.update((draft) => this.#reserveCharge(draft.agents[agent.id]!, reserved));
       }
       const operation: ListingOperation = {
-        kind: "funding", lamports: lamports.toString(), mainBalance: mainBalance.toString(),
+        kind: "funding", lamports: lamports.toString(), fee: this.#chain.transferFeeLamports.toString(), mainBalance: mainBalance.toString(),
         priorObservation: this.#store.state.lastMainLamports, text,
         ...(reservation && { charge: reservation }),
         ...(funding?.decision && { decision: funding.decision }),
@@ -1919,7 +1921,9 @@ export class AgencWallet {
           // rt14-a: a one-off move is not the daily allowance; say it as history says it.
           const text = quote.kind === "fund" ? `Moved money to ${agent!.name}.` : quote.kind === "reclaim" ?
             `Took money back from ${agent!.name}.` : "Sent money out of your balance.";
-          this.#note(draft, { kind, text, lamports: amount, agentId: agent?.id ?? null, signature: result.receipt.signature });
+          // What left your balance, its network fee included, as the card's maximum debit counts it. A take-back names what arrived.
+          const moved = quote.kind === "reclaim" ? amount : amount + BigInt(quote.fee.lamports);
+          this.#note(draft, { kind, text, lamports: moved, agentId: agent?.id ?? null, signature: result.receipt.signature });
           (draft.moneyOperations ??= {})[id] = { ...result, recorded: true };
           if (draft.lastMainLamports !== null) draft.lastMainLamports = String(quote.kind === "reclaim"
             ? BigInt(draft.lastMainLamports) + amount : BigInt(quote.retained.lamports));
@@ -5951,7 +5955,10 @@ export class AgencWallet {
       const held = await heldWork(ctx, agent);
       const page = held || existing ? { jobs: [], next: null, eligibility: target ? workEligibility(target, "held") : undefined } : await browseOpenWork(ctx, agent, offset, target);
       const view = (job: OpenWork | HeldWork) => workerJob(job, rate, this.#chain.transferFeeLamports);
-      return { ...("eligibility" in page && page.eligibility && { eligibility: page.eligibility }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoom && this.#agentRecord(agentId).earn.enabled } : null };
+      // Jobs left out only because this agent's own money cannot pay to take them (rt15-a): how many, and the least it needs.
+      const short = "shortOfMoney" in page ? page.shortOfMoney : undefined;
+      return { ...("eligibility" in page && page.eligibility && { eligibility: page.eligibility }),
+        ...(short && { shortOfMoney: { jobs: short.jobs, needs: money(short.neededLamports, rate), add: amountWords(rate).add(BigInt(short.neededLamports)) } }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoom && this.#agentRecord(agentId).earn.enabled } : null };
     });
   }
 

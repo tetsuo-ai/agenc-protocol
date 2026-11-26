@@ -799,3 +799,34 @@ it("pays exactly the late quote when nothing changed, with the landing clock ass
   const claim = quote.flows.find(row => row.label === "Claim deposit returned or paid")!.from;
   expect(guards).toEqual(["SysvarC1ock11111111111111111111111111111111", claim, claim, lighthouse.RENT, task]);
 });
+
+// Owner real test 15 (rt15-a bug 1): with $0.09 the agent's list came back empty and said nothing;
+// with $1.50 both jobs showed. The log had "work.list: Error: Refresh the jobs list for a new page." twice.
+it("says how many jobs the agent's own money cannot take and the least it needs, then lists them once it has it", async () => {
+  const { wallet, id, task } = await setup();
+  const back = await wallet.quoteTransfer({ kind: "reclaim", agentId: id, amount: "all" });
+  await wallet.confirmTransfer(back.id);
+  const short = await wallet.openWork(id);
+  expect(short.jobs).toEqual([]);
+  expect(short.shortOfMoney).toMatchObject({ jobs: 2 });
+  const needs = BigInt(short.shortOfMoney!.needs.lamports);
+  expect(needs).toBeGreaterThan(0n);
+  expect(short.shortOfMoney!.add).toMatch(/^\$\d+\.\d\d$/);
+  const exact = await wallet.openWork(id, 0, task);
+  expect(exact.eligibility).toMatchObject({ code: "funds" });
+  expect(exact.shortOfMoney).toMatchObject({ jobs: 1 });
+  // Exactly the least it needs is enough for one job.
+  const give = await wallet.quoteTransfer({ kind: "fund", agentId: id, amount: { lamports: String(needs) } });
+  await wallet.confirmTransfer(give.id);
+  const after = await wallet.openWork(id);
+  expect(after.jobs.length).toBeGreaterThanOrEqual(1);
+}, 60000);
+
+it("reads a page from any position, also one the wallet never handed out or no longer remembers", async () => {
+  const { wallet, id, first, task } = await setup();
+  const all = (await wallet.openWork(id)).jobs.map(job => job.task);
+  expect([...all].sort()).toEqual([first, task].sort());
+  // A chat that reads `offset` as a position, or a page after a wallet restart, lists from there.
+  expect((await wallet.openWork(id, 1)).jobs.map(job => job.task)).toEqual([all[1]]);
+  expect(await wallet.openWork(id, 10)).toMatchObject({ jobs: [], next: null });
+}, 60000);
