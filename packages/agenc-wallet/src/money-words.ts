@@ -1,4 +1,5 @@
-import type { JobRecord } from "./store.js";
+import type { Address } from "@solana/kit";
+import type { Chain } from "./chain.js";
 
 /**
  * Lately's words for money the person's own agents move (rt14-a bug 3): name
@@ -16,10 +17,22 @@ export function disputeMovedLamports(quote: { disputeTotal?: { lamports: string 
   return sent.bondLamports + (sent.depositLamports ?? 0n);
 }
 
-/** A hire or request moves its price with the deposits and rent its card showed; older journals kept only the price. */
-export function hireMovedLamports(entry: Pick<JobRecord, "priceLamports" | "approvedCosts">): bigint {
-  const total = entry.approvedCosts?.total;
-  return total !== undefined && BigInt(total) > 0n ? BigInt(total) : BigInt(entry.priceLamports);
+/**
+ * What a hire or request moved from its payer (review 0.1.17 money 2, MAJOR 1): the payer's net
+ * change in each of its own transactions (create and fund, the safety check, the job spec), read
+ * from the chain. Its card's deposits total has no price or reward, so it is no stand-in. Null when
+ * a read fails or a step's signature is unknown: no amount is better than a wrong one.
+ */
+export async function hireMovedLamports(chain: Pick<Chain, "accountChange">, payer: Address,
+  signatures: readonly (string | undefined)[]): Promise<bigint | null> {
+  if (!chain.accountChange || signatures.some(s => s === undefined)) return null;
+  let moved = 0n;
+  for (const signature of new Set(signatures as string[])) {
+    const change = await chain.accountChange(payer, signature).catch(() => null);
+    if (!change) return null;
+    moved -= BigInt(change.delta);
+  }
+  return moved > 0n ? moved : null;
 }
 
 /** A turn-down of the person's own agent's work names that agent, not "the provider". */
