@@ -4503,13 +4503,15 @@ export class AgencWallet {
     let tidiedBack: bigint | null = null;
     const tidy = async (): Promise<string | null> => {
       const confirmedTidy = childForJob(this.#store.state, job)?.purchaseSends?.find(a => a.step === "tidy" && a.outcome === "landed");
-      // What came back, for the activity line (rt10: "Collected the deposits" named no amount).
-      const before = confirmedTidy ? null : await this.#chain.getBalance(payer.address).catch(() => null);
       const sent = confirmedTidy?.signature ?? await withPurchaseStep(this.#store, this.#chain, job, "tidy", this.#chain.transferFeeLamports,
         () => sendTidy(this.#chain, payer, job.task as Address, this.#provider(job)));
-      if (before !== null && sent !== null) {
-        const after = await this.#chain.getBalance(payer.address).catch(() => null);
-        if (after !== null && after > before) tidiedBack = after - before;
+      // What came back, for the activity line (rt10: "Collected the deposits" named no amount), read from
+      // this tidy's own transaction: housekeeping tidies jobs of one payer in parallel, so the payer's
+      // balance before and after can include another job's tidy or hold.
+      if (!confirmedTidy && sent !== null) {
+        const change = await this.#chain.accountChange?.(payer.address, sent).catch(() => null);
+        const delta = change && !change.failed ? BigInt(change.delta) : 0n;
+        if (delta > 0n) tidiedBack = delta;
       }
       this.#store.update((draft) => {
         const entry = draft.jobs[job.id];
@@ -5473,6 +5475,9 @@ export class AgencWallet {
           `This decision needs ${words.cost(cost)}, and the wallet must keep ${words.cost(floor)} after it. Add at least ${words.add(cost + floor - balance)}.`);
       }
       const rate = agentId === null ? null : await this.#freshRate().catch(() => null);
+      // Without a dollar price the charge cannot be counted against the agent's
+      // day, so refuse before signing, as contest decisions do.
+      if (agentId !== null && rate === null) throw new WalletError("NETWORK", "Dollar prices are unavailable. Try again in a minute.");
       const checkRoom = () => {
         const child = childForJob(this.#store.state, job);
         const held = child && agentId && childHolds(this.#agentRecord(agentId)).childHolds?.[job.id];
