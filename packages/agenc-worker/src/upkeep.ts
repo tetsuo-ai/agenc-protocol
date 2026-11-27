@@ -39,6 +39,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { sendClaimOperation } from "./claim-operation.js";
 import { chainDeadline, monotonicMs } from "./claim-admission.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import type { WorkerAgent, WorkerContext } from "./runtime.js";
@@ -321,8 +322,7 @@ export async function sendReleaseClaim(
 ): Promise<string> {
   const end = refundBefore === undefined ? undefined : await chainDeadline(()=>releaseClock(ctx),Number.MAX_SAFE_INTEGER,refundBefore);
   const check = () => { if (end !== undefined && monotonicMs() >= end) throw new Error("The claim refund window closed."); };
-  const { signature } = await ctx.client.send(
-    [
+  const instructions = [
       await facade.releaseClaim({
         task,
         worker: agent.agentPda,
@@ -331,10 +331,9 @@ export async function sendReleaseClaim(
         taskValidationConfig: await validationConfigOrNull(ctx, task),
       }),
       ...(refundBefore === undefined ? [] : [lighthouse.assertClockBefore(Number(refundBefore))]),
-    ],
-    { maxRetries: 0,...(end !== undefined && {assertAuthorized:check}) },
-  );
-  return signature;
+    ];
+  return sendClaimOperation(ctx, agent.agentPda, task, "release", "release",
+    options => ctx.client.send(instructions, options), check);
 }
 
 function markReleased(ctx: WorkerContext, task: Address): void {
@@ -430,7 +429,8 @@ export async function releaseOwnClaims(
       }
       treasury ??= await readTreasury(ctx);
       const instruction = await cleanupClaimInstruction(ctx, agent, task, decoded, treasury, ended);
-      const { signature } = await ctx.client.send([instruction], { maxRetries: 0 });
+      const signature = await sendClaimOperation(ctx, agent.agentPda, task, ended ? "reclaim" : "expire", ended ? "reclaim" : "expire",
+        options => ctx.client.send([instruction], options));
       markReleased(ctx, task);
       const how = ended ? "reclaimed" : "expired";
       released.push({ task, how });

@@ -2301,3 +2301,15 @@ describe("withReferrerDefault (P6.2 demand-side referral default)", () => {
     expect(Object.isFrozen(client.defaultReferrer)).toBe(true);
   });
 });
+
+it("records the exact wire and lifetime before a queued dispatch can fail", async () => {
+  const transport = fakeTransport();
+  const client = createMarketplaceClient({ transport, signer: await generateKeyPairSigner() });
+  let saved: SignedTransaction | undefined;
+  await expect(client.send([DUMMY_IX], { onSigned(tx) { saved = tx; },
+    assertAuthorized(phase) { if (phase === "send") throw new Error("Stopped in queue"); },
+  })).rejects.toMatchObject({signature: expect.any(String)});
+  expect(saved?.lifetimeConstraint.blockhash).toBeTruthy();
+  expect(saved && getSignatureFromTransaction(saved)).toBeTruthy();
+  expect(transport.sendCalls()).toBe(0);
+});

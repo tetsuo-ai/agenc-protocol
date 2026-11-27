@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { chainDeadline, deadlineFromChain, monotonicMs, claimSignatureJournal, ExecutorCapabilityError } from "./claim-admission.js";
+import { sendClaimOperation } from "./claim-operation.js";
 import { requiresExtraRoom } from "./public-job.js";
 import { parseJobBrief } from "./job-brief.js";
 // The worker runtime: ensureRegistered → find claim candidates (ONE at a time — the
@@ -1844,7 +1845,8 @@ async function submitPreparedResult(
       };
     }
     assertAuthorized?.();
-    const { signature } = await ctx.client.submitTaskResult(
+    const signature = await sendClaimOperation(ctx, agent.agentPda, task,
+      `submit-${broadcastingMarker.revisionSubmissionCount ?? 0}`, intent.resultHashHex, options => ctx.client.submitTaskResult(
       {
         task,
         worker: agent.agentPda,
@@ -1852,8 +1854,8 @@ async function submitPreparedResult(
         proofHash: hexToBytes(intent.resultHashHex),
         resultData: resultDataFromHashHex(intent.resultHashHex),
       },
-      { maxRetries: 0, ...(assertAuthorized && {assertAuthorized}) },
-    );
+      options,
+    ), assertAuthorized, intent.transactionSignature);
     const record = commitSubmission(ctx, task, intent, { signature });
     return { status: "submitted", task, record };
   } catch (error) {

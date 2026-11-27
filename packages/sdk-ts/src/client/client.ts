@@ -188,6 +188,8 @@ export type SendResult = TransportSendResult;
 export interface SendOptions {
   /** Host admission must still be valid at signing and before handing this transaction to transport. */
   assertAuthorized?: (boundary: "sign" | "send", signature?: string) => void;
+  /** Persist the exact signed bytes and blockhash lifetime before dispatch. */
+  onSigned?: (transaction: SignedTransaction) => void;
   /** Set to `false` to omit ALL compute-budget instructions for this call. */
   computeBudget?: false;
   /**
@@ -880,6 +882,7 @@ export function createMarketplaceClient(
         // Defense in depth at the transport seam. Signing must not be able to
         // turn a size-checked message into an oversized wire transaction.
         assertIsTransactionWithinSizeLimit(signedTransaction);
+        options?.onSigned?.(signedTransaction);
       } catch (error) {
         throw toAgencError(error);
       }

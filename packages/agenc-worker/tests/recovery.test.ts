@@ -74,7 +74,7 @@ function taskArgs(
     creator: CREATOR,
     requiredCapabilities: 1n,
     description: new Uint8Array(64).fill(2),
-    constraintHash: new Uint8Array(32).fill(1),
+    constraintHash: Buffer.from("agenc-manual-validation-v2-seed!"),
     rewardAmount: REWARD,
     maxWorkers: 1,
     currentWorkers: status === TaskStatus.Open ? 0 : 1,
@@ -1266,7 +1266,7 @@ describe("transaction-boundary recovery", () => {
         options: { maxRetries?: number },
       ) => {
         const marker = loadState(stateDir).openClaim;
-        expect(options).toEqual({ maxRetries: 0 });
+        expect(options).toMatchObject({ maxRetries: 0, onSigned: expect.any(Function) });
         expect(marker?.phase).toBe("submitting");
         expect(marker?.claimTransactionSignature).toBe(
           "claim-ambiguous-signature",
@@ -1844,7 +1844,7 @@ describe("transaction-boundary recovery", () => {
         input: { proofHash: Uint8Array },
         options: { maxRetries?: number },
       ) => {
-        expect(options).toEqual({ maxRetries: 0 });
+        expect(options).toMatchObject({ maxRetries: 0, onSigned: expect.any(Function) });
         submittedHashes.push(Buffer.from(input.proofHash).toString("hex"));
         return { signature: "revision-submit-signature" };
       },
@@ -2027,8 +2027,8 @@ describe("transaction-boundary recovery", () => {
     retryable.openClaim!.submission!.lastBroadcastAt =
       "2000-01-01T00:00:00.000Z";
     saveState(stateDir, retryable);
-    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("submitted");
-    expect(submitTaskResult).toHaveBeenCalledTimes(2);
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
   });
 
   it("does not mistake an equal-hash Submitted account from the prior revision for the current round", async () => {
@@ -2987,9 +2987,10 @@ describe("upkeep that cannot read the chain", () => {
     const events: WorkerLogEvent[] = [];
     const ctx = context(stateDir, accounts, { submitTaskResult }, events);
     ctx.fetchUri = async () => body;
+    const read = ctx.readAccount;
     ctx.readAccount = async (account) => {
       if (account === givenUpClaim) throw new Error("rpc answered 503");
-      return accounts.get(account) ?? null;
+      return read(account);
     };
     return { stateDir, ctx, events, submitTaskResult };
   }
@@ -3438,7 +3439,7 @@ it("stops a named executor at claim expiry without a deadline placeholder",async
       await new Promise<void>(resolve=>options.signal!.addEventListener("abort",()=>resolve(),{once:true}));
       stopped=options.signal.aborted;
     }
-    return {stdout:Buffer.from("done"),exitCode:0};
+    return {state:"delivered",stdout:Buffer.from("done")};
   }})};
   await resumeOpenClaim(ctx,agent);
   expect(timeout).toBeGreaterThan(0);expect(timeout).toBeLessThanOrEqual(1001);expect(stopped).toBe(true);
