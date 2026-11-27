@@ -77,8 +77,16 @@ export function spendClaimRound(root: string, wallet: Address, claim: Address, r
           prior.some(n => !Number.isSafeInteger(n) || n <= 0) || prior.reduce((a,b) => a+b, cents!) > budget)
         throw new Error("The claim has no further allowance.");
     }
-    writeFileSync(join(dir, String(round)), cents === undefined ? "" : String(cents), { flag:"wx", mode:0o600, flush:true });
-    if (cents !== undefined) writeFileSync(join(dir,round+".usage"),JSON.stringify({reservedCents:cents,costUsd:0}),{flag:"wx",mode:0o600,flush:true});
+    const reservation = join(dir,String(round));
+    if (existsSync(reservation)) throw new Error("This round already has a reservation.");
+    if (cents !== undefined) {
+      const zero = JSON.stringify({reservedCents:cents,costUsd:0});
+      const usage = reservation+".usage";
+      try { writeFileSync(usage,zero,{flag:"wx",mode:0o600,flush:true}); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || readFileSync(usage,"utf8") !== zero) throw error; }
+      syncDirectory(dir);
+    }
+    writeFileSync(reservation,cents === undefined ? "" : String(cents),{flag:"wx",mode:0o600,flush:true});
     syncDirectory(dir);
     return join(dir, String(round));
   } catch (cause) {
