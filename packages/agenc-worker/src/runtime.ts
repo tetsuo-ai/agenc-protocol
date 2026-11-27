@@ -2318,6 +2318,8 @@ export async function processCandidate(
   if (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)) {
     return { status: "skipped", task, reason: "listing-not-approved" };
   }
+  if (!chosen && !hireBinding.isHire && decodedTask.taskType === TaskType.Exclusive && decodedTask.constraintHash.every(byte=>byte===0))
+    return {status:"skipped",task,reason:"Automatic work requires buyer review."};
   if (!chosen && !hireBinding.isHire && ctx.chooseOpenJobs?.()) {
     return { status: "skipped", task, reason: "waiting-for-owner-choice" };
   }

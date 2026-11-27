@@ -74,7 +74,7 @@ function taskArgs(
     creator: CREATOR,
     requiredCapabilities: 1n,
     description: new Uint8Array(64).fill(2),
-    constraintHash: new Uint8Array(32),
+    constraintHash: new Uint8Array(32).fill(1),
     rewardAmount: REWARD,
     maxWorkers: 1,
     currentWorkers: status === TaskStatus.Open ? 0 : 1,
@@ -3442,4 +3442,15 @@ it("stops a named executor at claim expiry without a deadline placeholder",async
   }})};
   await resumeOpenClaim(ctx,agent);
   expect(timeout).toBeGreaterThan(0);expect(timeout).toBeLessThanOrEqual(1001);expect(stopped).toBe(true);
+});
+
+it("refuses automatic Exclusive Auto work before reading its spec or signing",async()=>{
+  const automatic = taskData(TaskStatus.Open, {constraintHash:new Uint8Array(32)});
+  const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()}, undefined, ctx => {
+    const read = ctx.readAccount;
+    ctx.readAccount = key => key === TASK ? Promise.resolve(automatic) : read(key);
+  });
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  expect(result.fetchUri).not.toHaveBeenCalled();
+  expect(result.outcome).toMatchObject({status:"skipped",reason:"Automatic work requires buyer review."});
 });
