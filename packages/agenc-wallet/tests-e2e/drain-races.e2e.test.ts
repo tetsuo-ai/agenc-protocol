@@ -130,13 +130,15 @@ it.each(["expired", "ambiguous"] as const)("reconciles a persisted %s claim whil
 
 it("keeps an in-flight claim visible and restarts one loop after repeated Off/On", async () => {
   const claim = gate();
-  let claims = 0;
+  let claims = 0, confirmed = 0;
   world = await startWorld({ earn: EARN, chain: (base) => ({ ...base, clientFor(signer) {
     const original = base.clientFor(signer);
     return Object.create(original, { claimTaskWithJobSpec: { value: async (...args: Parameters<typeof original.claimTaskWithJobSpec>) => {
       claims += 1;
       if (claims === 1) await claim.wait();
-      return original.claimTaskWithJobSpec(...args);
+      const result = await original.claimTaskWithJobSpec(...args);
+      confirmed++;
+      return result;
     } } }) as typeof original;
   } }) });
   const agent = await world.wallet.createAgent();
@@ -152,7 +154,8 @@ it("keeps an in-flight claim visible and restarts one loop after repeated Off/On
   await delivered(first.task);
   const second = await post("Second job");
   await delivered(second.task);
-  expect(claims).toBe(2);
+  expect(claims).toBe(3); // The unsigned attempt stopped when the owner switched earning off.
+  expect(confirmed).toBe(2);
   expect((await view(agent.id)).earn.enabled).toBe(true);
 }, 30000);
 

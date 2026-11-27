@@ -152,11 +152,14 @@ it("publishes an expiring seller heartbeat only after a room check and uses the 
   const sent: SignedListing<ListingHeartbeat>[] = [];
   let ready = true;
   let checks = 0;
+  let selected: "core" | "claude-code" = "core";
   world = await startWorld({ config: { listingRelay: async (_url, options) => {
     sent.push(JSON.parse(String(options?.body)));
     return Response.json({ ok: true });
   } }, earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write('ok')", "{prompt}"],
-    envAllowlist: [], mode: "sandboxed", timeoutMs: 3000 }, pollIntervalMs: 200,
+    envAllowlist: [], mode: "sandboxed", timeoutMs: 3000, isolatedJobRoom: true }, pollIntervalMs: 200,
+    liveRoomState: () => ({ agent: selected, generation: selected, ready: true, coreCommand: process.execPath }),
+    defaultExecutorGeneration: () => selected,
     checkExecutionReady: async () => { checks++; if (!ready) throw new Error("Room offline"); } } });
   const { wallet, clock } = world;
   const seller = await wallet.createAgent("Serving writer");
@@ -181,6 +184,10 @@ it("publishes an expiring seller heartbeat only after a room check and uses the 
   const enabled = await runOnce();
   expect(enabled.message).toMatchObject({ inquiries: true, roomChecked: clock.now, expires: clock.now + 120000, provider: seller.address });
   await verifyListingMessage(enabled, { listing, provider: seller.address, version: enabled.message.version }, clock.now);
+  selected = "claude-code";
+  await expect(wallet.postListingMessage(seller.id, enabled.message)).rejects.toThrow();
+  expect(sent).toHaveLength(2);
+  selected = "core";
   ready = false;
   const before = checks;
   const stop = wallet.startListingHeartbeats();

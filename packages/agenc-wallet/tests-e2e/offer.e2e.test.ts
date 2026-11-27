@@ -62,7 +62,7 @@ async function startOffering(): Promise<{ current: World; worker: AgentView }> {
 
 describe("offering a service", () => {
   it("admits one hire, waits past ten minutes, then runs the verified service and buyer request", async () => {
-    let ready = false;
+    let ready = true;
     let probes = 0;
     world = await startWorld({ earn: {
       ...EARN,
@@ -78,6 +78,8 @@ describe("offering a service", () => {
     await setOfferWithApproval(wallet, worker.id, LINE_WRITER);
     const live = await offerReaches(world, worker.id, "live");
     const listing = live.earn.offer!.listing as Address;
+    ready = false;
+    probes = 0;
     const { job } = await wallet.hire({ agentId: buyer.id, listing, request: "Your advertised service about tea." });
     await eventually(async () => probes > 0);
     expect((await readListing(sandbox.chain, listing))!.openJobs).toBe(1);
