@@ -43,7 +43,7 @@ import { parseJobBrief } from "@tetsuo-ai/agenc-worker";
 import { recordSent } from "./sent-records.js";
 import { disputeMovedLamports, disputeNoteText, hireMovedLamports, turnDownNoteText } from "./money-words.js";
 import { paymentBackLamports, paymentBackNoteText, tidiedNoteText } from "./money-words.js";
-import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge } from "./transport-scope.js";
+import { abortableTransport, fundedOfferId, inTransportScope, scopeAdapterRequests, listingRequest, transportSignal, withListingOperation, type ListingOperation, type AllowanceCharge, type PendingListingSend } from "./transport-scope.js";
 import { recordListingCreation, recordSellerDecision, sellerReceipt } from "./seller-operation.js";
 import { saveSellerOffer, type SellerEffect, type SellerDecision } from "./seller-decision.js";
 import { checkHireOperator, checkOperator } from "./payable-operator.js";
@@ -6270,7 +6270,7 @@ export class AgencWallet {
         check();
         return check;
       };
-      const sending = (receipt: { signature: string; lastValidBlockHeight: string }) => {
+      const sending = (receipt: PendingListingSend) => {
         check();
         if (sent) throw new Error("This quote already authorized a transaction.");
         sent = true;
@@ -6282,7 +6282,7 @@ export class AgencWallet {
             state.openClaim.claimTransactionSignature = receipt.signature;
             state.openClaim.claimLastValidBlockHeight = receipt.lastValidBlockHeight;
           } else {
-            state.openClaim.chosenAttempt = { ...receipt, ...(action === "release" && job.cleanup && { cleanup: true }), ...(delivery && { delivery }) };
+            state.openClaim.chosenAttempt = { signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight, ...(action === "release" && job.cleanup && { cleanup: true }), ...(delivery && { delivery }) };
           }
           saveWorkerState(ctx.stateDir, state);
         }
@@ -6290,7 +6290,7 @@ export class AgencWallet {
         this.#store.update(draft => recordSent(draft, receipt.signature, { kind: action, agentId, jobId: task, at: this.#now() }));
         this.#store.update(draft => this.#reserveCharge(draft.agents[agentId]!, {
           id, lamports: charge.lamports, usdCents: Number(micros) / 1_000_000, ts: this.#now(),
-          signature: receipt.signature, work: { lastValidBlockHeight: receipt.lastValidBlockHeight, fee: job.networkFee.lamports, rate: rate! },
+          signature: receipt.signature, work: { lastValidBlockHeight: receipt.lastValidBlockHeight, ...(receipt.signedTransaction && { signedTransaction: receipt.signedTransaction }), fee: job.networkFee.lamports, rate: rate! },
         }));
       };
       const checkReleaseTime = async () => { releaseQuoteLifetime(job, await this.#chain.clusterTime()); };
@@ -6320,19 +6320,28 @@ export class AgencWallet {
     if (!this.#chain.workOutcome) return;
     for (const charge of this.#agentRecord(agentId).refills) {
       if (!charge.work || !charge.signature) continue;
-      const { lastValidBlockHeight, fee, rate } = charge.work;
-      const outcome = await this.#chain.workOutcome({ signature: charge.signature, lastValidBlockHeight });
+      const { lastValidBlockHeight, signedTransaction, fee, rate } = charge.work;
+      const receipt = { signature: charge.signature, lastValidBlockHeight, ...(signedTransaction && {signedTransaction}) };
+      const outcome = await this.#chain.workOutcome(receipt);
       if (outcome === "pending") continue;
+      let measured: bigint | undefined;
+      if (outcome === "expired") {
+        const payer = this.#agentRecord(agentId).address as Address;
+        const debit = await this.#chain.reviewDebit?.(receipt.signature, payer).catch(() => null);
+        if (debit) measured = debit.debit > debit.fee ? debit.debit : debit.fee;
+        else if (await this.#chain.sendNeverLands?.(receipt).catch(() => false) !== true) continue;
+      }
       this.#store.update(draft => {
         const agent = draft.agents[agentId]!;
         const current = agent.refills.find(c => c.id === charge.id && c.signature === charge.signature);
         if (!current?.work) return;
         delete current.work;
         current.ts = this.#now();
-        if (outcome === "expired") agent.refills = agent.refills.filter(c => c !== current);
-        if (outcome === "failed") {
-          current.lamports = fee;
-          current.usdCents = Number((BigInt(fee) * BigInt(Math.ceil(rate * 1_000_000)) + 9_999_999n) / 10_000_000n) / 1_000_000;
+        if (outcome === "expired" && measured === undefined) agent.refills = agent.refills.filter(c => c !== current);
+        if (outcome === "failed" || measured !== undefined) {
+          const paid = measured ?? BigInt(fee);
+          current.lamports = paid.toString();
+          current.usdCents = Number((paid * BigInt(Math.ceil(rate * 1_000_000)) + 9_999_999n) / 10_000_000n) / 1_000_000;
         }
       });
     }

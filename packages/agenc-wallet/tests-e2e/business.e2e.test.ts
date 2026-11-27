@@ -220,7 +220,7 @@ it("restores a verified draft and assets, reconciles a pending signature and wai
     chain: (base) => ({
       ...base,
       network: "localnet",
-      workOutcome: async () => (pending ? "pending" : "expired"),
+      workOutcome: async () => (pending ? "pending" : "landed"),
     }),
     earn: {
       executor: {

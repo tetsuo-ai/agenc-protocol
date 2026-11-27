@@ -348,6 +348,7 @@ it("refunds a provably unused submission reservation and requires a new approval
   await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
   await eventually(async () => (await wallet.openWork(id)).held?.canSubmit);
   await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
+  world!.sandbox.market.expireBlockhash();
   const retry = await wallet.quoteWork(id, task, "submit");
   expect(retry.dailyRemaining).toEqual(original.dailyRemaining);
   expect(retry.id).not.toBe(original.id);
@@ -594,6 +595,7 @@ it("retains the signed claim reservation over restart until it proves unused", a
   world!.wallet = await world!.reopen();
   expect((await world!.wallet.openWork(id)).jobs).toEqual([]);
   pending = false;
+  world!.sandbox.market.expireBlockhash();
   await eventually(async () => !journal(id).openClaim);
   const retry = await world!.wallet.quoteWork(id, task, "claim");
   expect(retry.dailyRemaining).toEqual(quote.dailyRemaining);
@@ -910,4 +912,18 @@ it("withholds ordinary Earn funding when its quote expires in the send queue",as
   expect(queued).toBe(true);
   expect(dispatched).toBe(false);
   expect(await world.balance(seller.address)).toBe(balance);
+});
+
+it("keeps a landed claim's daily charge when RPC history omits its status",async()=>{
+  let limited=false;
+  const {wallet,id,task}=await setup(undefined,undefined,undefined,{
+    chain:base=>({...base,workOutcome:r=>limited?Promise.resolve("expired"):base.workOutcome!(r),
+      sendNeverLands:async()=>false, reviewDebit:async()=>null}),
+  });
+  const quoted=await wallet.quoteWork(id,task,"claim");
+  limited=true;
+  await wallet.decideWork(quoted.id,true);
+  await eventually(async()=>(await wallet.openWork(id)).held?.canSubmit);
+  const next=await wallet.quoteWork(id,task,"submit");
+  expect(BigInt(next.dailyRemaining.lamports)).toBeLessThan(BigInt(quoted.dailyRemaining.lamports));
 });
