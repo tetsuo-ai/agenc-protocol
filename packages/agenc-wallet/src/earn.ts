@@ -902,25 +902,35 @@ export class EarnHost {
           throw new Error("This job room is no longer selected.");
       };
     };
-    const checkReady = async (signal?: AbortSignal, admission: string[] = []): Promise<void> => {
+    const checkReady = async (signal?: AbortSignal, admission: string[] = []): Promise<number> => {
+      let minimum = 0;
       const current = guard();
       current();
       if (this.#options.checkExecutionReady !== undefined) {
         await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
       } else if (executor.readiness !== undefined) {
-        await runExecutor({
+        const report = await runExecutor({
           argv: [...executor.readiness.argv.map(fill), ...admission],
           timeoutMs: executor.readiness.timeoutMs ?? 30_000,
           envAllowlist: executor.envAllowlist,
           maxStdoutBytes: 64 * 1024,
           ...(signal === undefined ? {} : { signal }),
         });
+        if (admission.length && report.stdout.toString("utf8").trimStart().startsWith("{")) {
+          const floor: unknown = JSON.parse(report.stdout.toString("utf8")).minimumModelCents;
+          if (floor !== undefined) {
+            if (typeof floor !== "number" || !Number.isSafeInteger(floor) || floor <= 0)
+              throw new Error("The selected room returned an invalid model minimum.");
+            minimum = floor;
+          }
+        }
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }
       current();
+      return minimum;
     };
-    entry.checkReady = checkReady;
+    entry.checkReady = async signal => { await checkReady(signal); };
 
     const termsFor = (metadata?: Uint8Array | null): Partial<SellerTerms> => {
       if (!metadata) return {};
@@ -1050,9 +1060,9 @@ export class EarnHost {
           const source = this.#ownAddresses().includes(creator) ? "own" : "external";
           admission = ["admit", source, privateInputs ? "private" : terms?.servicePin ? "service" : "public"];
         }
-        await checkReady(signal, admission);
+        const minimumModelCents = await checkReady(signal, admission);
         current();
-        return current;
+        return minimumModelCents ? {current, minimumModelCents} : current;
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }

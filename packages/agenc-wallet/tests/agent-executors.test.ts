@@ -239,3 +239,20 @@ it("refreshes room availability and readiness while the same wallet is open", as
     await expect(ctx.checkExecutionReady({})).rejects.toThrow(/selected/);
   } finally { await earn.stopAll(); }
 });
+
+it("takes a model minimum only from the host room readiness report", async () => {
+  const folder = mkdtempSync(path.join(tmpdir(),"room-allowance-"));
+  folders.push(folder);
+  const program = path.join(folder,"room.cjs");
+  const {writeFileSync} = await import("node:fs");
+  writeFileSync(program, 'console.log(JSON.stringify({ok:true,minimumModelCents:78}));');
+  const earn = host({executor:{...local, mode:"sandboxed",isolatedJobRoom:true,
+    readiness:{argv:[process.execPath,program,"self-test","/assets",folder]}}});
+  void earn.start({agentId:"seller", signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const admission = await ctx.checkExecutionReady!({task:"test" as never,creator:"buyer" as never});
+    expect(admission).toMatchObject({minimumModelCents:78,current:expect.any(Function)});
+  } finally { await earn.stopAll(); }
+});

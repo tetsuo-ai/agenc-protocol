@@ -248,6 +248,7 @@ const agent: WorkerAgent = {
 async function attemptFreshClaimWithHireSnapshot(
   snapshot: AccountSnapshot,
   readiness?: WorkerContext["checkExecutionReady"],
+  budget?: number,
 ): Promise<{
   outcome: Awaited<ReturnType<typeof processCandidate>>;
   claimTaskWithJobSpec: ReturnType<typeof vi.fn>;
@@ -312,6 +313,7 @@ async function attemptFreshClaimWithHireSnapshot(
     return snapshot;
   };
   if (readiness !== undefined) ctx.checkExecutionReady = readiness;
+  if (budget !== undefined) { ctx.modelBudgetForTask = async () => budget; ctx.reserveRevisionBudget = true; }
   ctx.fetchUri = fetchUri;
   ctx.getBalance = getBalance;
   ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
@@ -2965,6 +2967,22 @@ describe("upkeep that cannot read the chain", () => {
     return { stateDir, ctx, events, submitTaskResult };
   }
 
+  it("retains the room admission returned to the continuous worker", async () => {
+    const {ctx} = await workerWithUpkeepDown();
+    const stop = new AbortController();
+    const selected = () => { throw new Error("The selected room changed."); };
+    ctx.checkExecutionReady = async () => selected;
+    let observed: unknown;
+    ctx.onWorkerReady = (_dispatch, read) => {
+      if (read) void read(async live => {
+        try { observed = await live.checkExecutionReady!({task:TASK}); }
+        finally { stop.abort(); }
+      });
+    };
+    await runUp(ctx,{signal:stop.signal});
+    expect(observed).toBe(selected);
+  });
+
   it("does not stop a tick: the rest of its work is done and the failure is logged", async () => {
     const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
     const result = await runTickOnce(ctx);
@@ -3133,6 +3151,14 @@ describe("selling preflight", () => {
     expect(ready.mock.calls[0]?.[0]).toMatchObject({ creator: CREATOR, privateInputs: false });
     expect(result.outcome.status).toBe("skipped");
     expect(check).toHaveBeenCalled();
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(result.stateDir).openClaim).toBeNull();
+  });
+
+  it("refuses a deposit when the first round cannot fund the selected room", async () => {
+    const admission = async () => ({current: () => {}, minimumModelCents:78});
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT, executable:false, data:new Uint8Array()}, admission, 80);
+    expect(result.outcome).toMatchObject({status:"skipped", reason:expect.stringContaining("allowance")});
     expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(loadState(result.stateDir).openClaim).toBeNull();
   });

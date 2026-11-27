@@ -289,7 +289,7 @@ export type WorkerContext = {
    * Receives no buyer text. Recovery and settlement remain available.
    */
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
-    privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint }) => Promise<void | (() => void)>;
+    privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint }) => Promise<void | (() => void) | {current: () => void; minimumModelCents: number}>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -2267,13 +2267,19 @@ export async function processCandidate(
   // landed claim, but cannot begin another lifecycle it cannot fund through
   // submission.
   let assertAdmission: (() => void) | undefined;
+  let minimumModelCents = 0;
   try {
     const guard = await ctx.checkExecutionReady?.({
       task, creator: decodedTask.creator, privateInputs, listingMetadata, requiredCapabilities: decodedTask.requiredCapabilities,
       ...(hireBinding.listing && { listing: hireBinding.listing }),
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     });
-    assertAdmission = guard || undefined;
+    if (guard && typeof guard === "object") {
+      if (typeof guard.current !== "function" || !Number.isSafeInteger(guard.minimumModelCents) || guard.minimumModelCents < 0)
+        throw new Error("The selected room returned an invalid model minimum.");
+      minimumModelCents = guard.minimumModelCents;
+      assertAdmission = guard.current;
+    } else { assertAdmission = guard || undefined; }
     if (ctx.signal?.aborted) throw new Error("Worker is stopping.");
   } catch (error) {
     const reason = formatDiagnosticError(error);
@@ -2311,6 +2317,11 @@ export async function processCandidate(
     throw new Error("This job has no valid model budget.");
   }
 
+  const modelBudget = budget === undefined ? undefined :
+    claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive);
+  if ((modelBudget?.remainingCents ?? 0) < minimumModelCents)
+    return {status:"skipped", task, reason:"The first round's allowance is below the selected room's minimum.", retryable:true};
+
   // Discovery can stop during either asynchronous funding check above.
   // Once the claim is sent, only ctx.signal may stop its execution.
   if (options.signal?.aborted || ctx.signal?.aborted) {
@@ -2345,7 +2356,7 @@ export async function processCandidate(
     claimedAt: claimStartedAt,
     phase: "claiming",
     ...(options.authorizeChosen ? { chosen: true } : {}),
-    ...(budget !== undefined ? { modelBudget: claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive) } : {}),
+    ...(modelBudget && { modelBudget }),
     ...labels,
   };
   if (budget !== undefined && ctx.modelSpendDir) {
@@ -3555,8 +3566,9 @@ async function runUpLocked(
       const signals = [signal, executionSignal].filter((item): item is AbortSignal => item !== undefined);
       const readinessSignal = AbortSignal.any(signals);
       readinessSignal.throwIfAborted();
-      await readiness?.({ ...job, signal: readinessSignal });
+      const admission = await readiness?.({ ...job, signal: readinessSignal });
       readinessSignal.throwIfAborted();
+      return admission;
     },
   };
   assertActiveWorkerConfig(ctx.config);
