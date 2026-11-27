@@ -128,8 +128,10 @@ export function openBackgroundWallet(options: {
    * the socket's folder cannot be checked; this turns it on elsewhere.
    */
   requireServerProof?: boolean;
+  /** Reconnect to an open, authenticated service. Never send the startup secret. */
+  reconnectOnly?: boolean;
 }): Promise<OpenedBackgroundWallet> {
-  const requireProof = options.requireServerProof ?? process.platform === "win32";
+  const requireProof = options.reconnectOnly || (options.requireServerProof ?? process.platform === "win32");
   try {
     assertPrivateSocket(options.socketPath);
   } catch (error) {
@@ -187,6 +189,10 @@ export function openBackgroundWallet(options: {
         }
       }
       if (message.state === "locked") {
+        if (options.reconnectOnly) {
+          finish(new UnlockRefused("The earlier wallet is locked."));
+          return;
+        }
         const startup = options.startup();
         sentOwnerToken = startup.ownerToken;
         send({ type: "unlock", startup });
