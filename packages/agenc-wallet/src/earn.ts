@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // "Take jobs while idle": run the stock marketplace worker loop for an agent,
 // signing with that agent's own wallet.
@@ -12,17 +13,18 @@ import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
 import { fundingShortLogLine } from "./earn-log-lines.js";
 import { deliveryFileProblem } from "./client/delivery-files.js";
-import { reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
+import { indexClaimUsage, reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
 import { recordServiceBudget } from "./service-budget.js";
 import { readServiceRehearsal } from "./service-rehearsal.js";
 import { validServicePin, type SellerTerms } from "./client/seller-terms.js";
 import { serviceEconomics } from "./service-economics.js";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Address, KeyPairSigner } from "@solana/kit";
 import { findAgentPda, values, type AgentRegistration } from "@tetsuo-ai/marketplace-sdk";
 import {
+  requireClaimExecutor,
   acquireStateLock,
   AGENT_STATS_ACCOUNT_SIZE,
   checkSettlements,
@@ -94,8 +96,8 @@ export interface EarnExecutor {
   readiness?: { argv: string[]; timeoutMs?: number };
 }
 
-// promptBytes already includes the JSON quotes. Every allowed first POST must contain this envelope.
-const MINIMUM_MESSAGE_BYTES = Buffer.byteLength(JSON.stringify({model:"claude-haiku-4-5-20251001",messages:[{role:"user",content:""}]})) - 2;
+// The host bounds the pinned CLI's first envelope, including its system text and Bash tool.
+export const MINIMUM_MESSAGE_BYTES = 18 * 1024;
 // The pinned Codex VM checks its first request against this allowance for instructions and tools.
 const CODEX_FIRST_REQUEST_OVERHEAD = 4096;
 export interface JobAdmission {
@@ -241,6 +243,7 @@ export const DEFAULT_EARN_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_EARN_IDLE_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface Running {
+  fileTransport?: boolean;
   capabilityRevision?: number;
   dispatch?: WorkerDispatch | null;
   read?: WorkerDispatch | undefined;
@@ -335,6 +338,7 @@ export class EarnHost {
 
   supportsService(agentId: string, needs: {privateInputs?: boolean; servicePin?: boolean}): boolean {
     const executor = this.executorFor(agentId);
+    if (needs.servicePin && ["job","peer-job"].includes(executor?.argv[2] ?? "") && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) return false;
     return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId)) &&
       (!needs.servicePin || !this.#connectedRoom(agentId));
   }
@@ -825,6 +829,7 @@ export class EarnHost {
     const uploader = this.#services.resultUploader(agent.signer);
     // Files can go with a delivery only where there is somewhere to keep them.
     const fileLinkPrefix = uploader === null ? null : this.#services.fileLinkPrefix;
+    entry.fileTransport = !!fileLinkPrefix;
     const outboxDir = path.join(stateDir, "outbox");
     if (fileLinkPrefix !== null) prepareOutbox(outboxDir);
     const fill = (part: string): string =>
@@ -937,6 +942,20 @@ export class EarnHost {
     };
 
     const generation = () => this.generationFor(agent.agentId);
+    const executorIdentity = () => {
+      if (executor.argv[2] === "peer-job") {
+        if (executor.argv[4]?.startsWith("pair:")) return executor.argv[4];
+        const profile = executor.argv[3];
+        if (profile && path.isAbsolute(profile)) {
+          const stat = statSync(profile, {bigint:true});
+          return ["peer-file",stat.dev,stat.ino,stat.ctimeNs].join(":");
+        }
+        return "peer:" + generation();
+      }
+      if (this.#usesClaude(agent.agentId)) return "claude-code";
+      if (executor.argv[2] === "job") return "core";
+      return "command:" + createHash("sha256").update(JSON.stringify(executor.argv)).digest("hex");
+    };
     const guard = () => {
       const selected = generation();
       return () => {
@@ -944,7 +963,7 @@ export class EarnHost {
           throw new Error("This job room is no longer selected.");
       };
     };
-    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission) => {
+    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false) => {
       const admission = requested && { ...requested, fileTransport: requested.fileTransport && !!fileLinkPrefix };
       const current = guard();
       current();
@@ -957,7 +976,7 @@ export class EarnHost {
         if (!admission) return;
         if (admission.deadlineMs !== undefined && monotonicMs() >= admission.deadlineMs) throw new Error("The claim deadline passed.");
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
-            (admission.servicePin && executor.argv[2] === "job")))
+            (admission.servicePin && ["job", "peer-job"].includes(executor.argv[2] ?? ""))))
           throw new ExecutorCapabilityError("This job needs file delivery.");
         const room = this.#connectedRoom(agent.agentId);
         if (!this.supportsService(agent.agentId,admission) || ((room || executor.argv[2] === "peer-job") && admission.reviewFiles))
@@ -968,7 +987,7 @@ export class EarnHost {
           throw new Error("The first round's allowance is below the selected room's minimum.");
         if (room?.agent === "claude-code" && admission.firstRoundCents !== undefined &&
           (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
-          throw new Error("The first model turn exceeds this job's allowance.");
+          throw Object.assign(new Error("The first model turn exceeds this job's allowance."), {name:"ExecutorBudgetError"});
         if (room?.agent === "codex-api" && admission.firstRoundCents !== undefined) {
           const wireBytes = admission.promptBytes + CODEX_FIRST_REQUEST_OVERHEAD;
           const inputTokens = Math.min(272_000, Math.ceil(wireBytes * 1.1) + 64);
@@ -977,6 +996,7 @@ export class EarnHost {
         }
       };
       check();
+      if (preview) return check;
       if (this.#options.checkExecutionReady !== undefined) {
         hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
@@ -1020,7 +1040,7 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
-      capabilityRefusals:new Map(),
+      executorIdentity, capabilityRefusals:new Map(), budgetRefusals:new Map(), revisionRefusals:new Map(),
       ...(roomWork && { roomWork }),
       admissionGeneration: () => String(generation() ?? "configured") + "/" + (entry.capabilityRevision ?? 0),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
@@ -1056,6 +1076,7 @@ export class EarnHost {
       acceptServiceHiresBelowMinReward: true,
       ...(executor.isolatedJobRoom && executor.mode === "sandboxed" && { reviewRoom: { fileProblem: deliveryFileProblem, execute: this.#options.runReviewRoom ?? runExecutor } }),
       modelSpendDir: path.resolve(this.#dataDir, "..", "model-spend"),
+      reserveAtLaunch: true,
       reserveRevisionBudget: executor.reserveRevisionBudget === true,
       modelBudgetForTask: async (task, _address, metadata) => {
         const rate = await agent.solUsd?.() ?? null;
@@ -1068,7 +1089,7 @@ export class EarnHost {
           ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
         }).modelBudgetCents;
       },
-      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires, claimRound) => {
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires, claimRound, beforeLaunch) => {
         // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
         const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
         const ownRequest = this.#ownAddresses().includes(task.creator);
@@ -1095,9 +1116,6 @@ export class EarnHost {
             timeoutMs: 30000, envAllowlist: executor.envAllowlist, signal });
         }
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
-        const receipt = reservedCents ? reserveServiceRun(stateDir, address, reservedCents) : null;
-        // The job view names the whole job's limit, the figure the claim quote gave (rt5 A 6).
-        if (receipt && budgetTotalCents) recordServiceBudget(stateDir, address, budgetTotalCents);
         // D's paired peer gets the verified request, usage reservation and the buyer-approved processing (or null).
         const privateProcessing = paired ? await this.#privateProcessing(agent.agentId, address).catch(() => null) : undefined;
         const deadline = executor.argv.includes("{jobDeadline}") ? await chainDeadline(() => this.#chain.clusterTime(),
@@ -1108,12 +1126,18 @@ export class EarnHost {
           legacyExpiry = ends.length ? ends.reduce((a, b) => a < b ? a : b)
             : BigInt(await this.#chain.clusterTime()) + BigInt(Math.floor(executor.timeoutMs / 1000));
         }
+        if (deadline !== undefined && monotonicMs() >= deadline) throw new Error("The claim expired.");
+        if (claimRound) requireClaimExecutor(path.dirname(claimRound),executorIdentity());
+        if (claimRound && (executor.argv[2] === "job" || executor.argv[2] === "peer-job")) indexClaimUsage(stateDir,address,claimRound);
+        beforeLaunch?.();
+        const receipt = reservedCents ? reserveServiceRun(stateDir,address,reservedCents) : null;
+        if (receipt && budgetTotalCents) recordServiceBudget(stateDir,address,budgetTotalCents);
         return executor.argv.flatMap(part => {
-          if (part === "{jobDeadline}") return ["mono:" + deadline];
+          if (part === "{jobDeadline}") return ["boot:" + deadline];
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
             // The agreed outputs alone also need the scope, so a public post without a reservation still enforces them.
-            return room && (receipt || bundleDir || (paired && pin) || outputs) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, ...(claimRound && {claimRound}), hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
+            return room && (receipt || bundleDir || (paired && pin) || outputs) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, ...(claimRound && {claimRound, executor:executorIdentity()}), hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
               ...(paired && { privateProcessing: privateProcessing ?? null }), ...(outputs && { outputs }) })] : [source];
           }
           if (part === "{task}") return [address];
@@ -1135,7 +1159,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles }) => {
+        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, preview }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         const outputs = acceptance && outputAgreementFromSpec({acceptance:[...acceptance]});
@@ -1144,7 +1168,7 @@ export class EarnHost {
           servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest}),reviewFiles:reviewFiles ?? 0,requiredFiles:outputs?.requiredFiles ?? [],
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
           ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
-        } : undefined);
+        } : undefined,preview);
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }

@@ -10,6 +10,11 @@ import type { WorkerQuote } from "../src/client/types.js";
 import { AGENT_METHODS } from "../src/client/protocol.js";
 import { CENT, eventually, setEarnWithApproval, startWorld, type World } from "./harness.js";
 
+const sleep = vi.hoisted(()=>({ms:0}));
+vi.mock("@tetsuo-ai/agenc-worker",async load=>{
+  const worker=await load<typeof import("@tetsuo-ai/agenc-worker")>();
+  return {...worker,monotonicMs:()=>worker.monotonicMs()+sleep.ms};
+});
 let world: World | undefined;
 afterEach(async () => { await world?.wallet.close(); world = undefined; });
 const executor = { argv: [process.execPath, "-e", "process.stdout.write('Room output')", "{prompt}"],
@@ -88,8 +93,9 @@ describe("chosen open work", () => {
     const { wallet, id, task } = await setup(ready);
     const quote = () => wallet.quoteWork(id, task, "claim");
     const stale = await quote();
-    world!.clock.now += 300001;
+    sleep.ms += 300001;
     await expect(wallet.decideWork(stale.id, true)).rejects.toThrow(/expired/);
+    sleep.ms = 0;
     ready.mockRejectedValueOnce(new Error("self-test failed"));
     await expect(wallet.decideWork((await quote()).id, true)).rejects.toThrow();
     expect((await wallet.openWork(id)).jobs).toHaveLength(2);
@@ -834,3 +840,24 @@ it("reads a position the wallet never handed out or no longer remembers as page 
     expect(page.jobs.map(job => job.task)).toEqual(all);
   }
 }, 60000);
+
+it("withholds a signed chosen submission if the quote expires in the transport queue",async()=>{
+  let hold=false, dispatched=false, queued=false;
+  const {wallet,id,task,sandbox}=await setup(undefined,undefined,undefined,{
+    transport:base=>({...base,async sendAndConfirm(tx,guard){
+      if(hold){queued=true;sleep.ms+=301000;guard?.();dispatched=true;}
+      return base.sendAndConfirm(tx,guard);
+    }})
+  });
+  try {
+    await completedRoom(id,task);
+    const quote=await wallet.quoteWork(id,task,"submit");
+    const before=await world!.balance(quote.job.worker);
+    const accountBefore=sandbox.market.svm.getAccount(address(task));
+    hold=true;
+    await expect(wallet.decideWork(quote.id,true)).rejects.toThrow();
+    expect(queued).toBe(true);expect(dispatched).toBe(false);
+    expect(await world!.balance(quote.job.worker)).toBe(before);
+    expect(sandbox.market.svm.getAccount(address(task))).toEqual(accountBefore);
+  } finally {sleep.ms=0;}
+});

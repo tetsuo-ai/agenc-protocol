@@ -45,6 +45,15 @@ import { loadState, saveState, type FailedJob } from "./state.js";
 
 const CLOCK_SYSVAR = address("SysvarC1ock11111111111111111111111111111111");
 
+/** A paid action requires a verified chain clock. */
+export async function claimChainTime(read: WorkerContext["readAccount"]): Promise<number> {
+  const data = await read(CLOCK_SYSVAR);
+  if (!data || data.byteLength < 40) throw new Error("The claim clock is unavailable.");
+  const seconds = Number(new DataView(data.buffer, data.byteOffset, data.byteLength).getBigInt64(32, true));
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("The claim clock is unavailable.");
+  return seconds;
+}
+
 /** The cluster's clock in unix seconds, as well as this worker can tell. */
 export async function clusterNowSeconds(ctx: WorkerContext): Promise<number> {
   if (ctx.clusterTime !== undefined) {

@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { chainDeadline, monotonicMs, claimSignatureJournal, ExecutorCapabilityError } from "./claim-admission.js";
 import { parseJobBrief } from "./job-brief.js";
 // The worker runtime: ensureRegistered → find claim candidates (ONE at a time — the
@@ -51,7 +53,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { claimBudget, budgetForRevision, enrollClaimBudget, spendClaimRound } from "./revision-budget.js";
+import { claimBudget, budgetForRevision, enrollClaimBudget, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -271,7 +273,9 @@ export type WorkerContext = {
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
   /** `acceptance` is the verified spec's criteria, including the wallet's agreed-outputs line. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint, claimRound?: string) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint, claimRound?: string, beforeLaunch?: () => void) => Promise<string[]>;
+  /** The wallet can validate the live claim clock before it commits the round. */
+  reserveAtLaunch?: boolean;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
   reserveRevisionBudget?: boolean;
   /** Only the isolated job-room adapter supplies its input validator. */
@@ -291,10 +295,13 @@ export type WorkerContext = {
    */
   chosenRoomCurrent?: () => boolean;
   admissionGeneration?: () => string;
+  executorIdentity?: () => string;
   capabilityRefusals?: Map<Address, string>;
+  revisionRefusals?: Map<Address,string>;
+  budgetRefusals?: Map<Address, {generation:string; unchanged:()=>Promise<boolean>}>;
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
-    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number }) => Promise<void | (() => void)>;
+    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -1796,6 +1803,20 @@ async function submitPreparedResult(
   saveState(ctx.stateDir, broadcastingState);
   const intent = broadcastingMarker.submission;
   try {
+    let assertAuthorized: (() => void) | undefined;
+    if (ctx.clusterTime || ctx.executorIdentity || ctx.config.executor.includes("{jobDeadline}")) {
+      const live = await readClaim(ctx,agent,task);
+      const terms = await readTask(ctx,task);
+      if (!ctx.clusterTime || !live || !terms) throw new Error("The claim clock is unavailable.");
+      const end = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,terms.deadline,live.expiresAt);
+      const generation = ctx.admissionGeneration?.();
+      const [account] = await findClaimPda({task,bidder:agent.agentPda});
+      assertAuthorized = () => {
+        // A completed delivery drains after the seller turns off new claims.
+        if (ctx.executorIdentity && ctx.modelSpendDir) requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+account),ctx.executorIdentity());
+        if (monotonicMs() >= end || ctx.admissionGeneration?.() !== generation) throw new Error("The claim admission changed.");
+      };
+    }
     const { signature } = await ctx.client.submitTaskResult(
       {
         task,
@@ -1804,7 +1825,7 @@ async function submitPreparedResult(
         proofHash: hexToBytes(intent.resultHashHex),
         resultData: resultDataFromHashHex(intent.resultHashHex),
       },
-      { maxRetries: 0 },
+      { maxRetries: 0, ...(assertAuthorized && {assertAuthorized}) },
     );
     const record = commitSubmission(ctx, task, intent, { signature });
     return { status: "submitted", task, record };
@@ -1934,6 +1955,10 @@ async function continueExecutedResult(
   return submitPreparedResult(ctx, agent, task, intent);
 }
 
+function revisionAdmission(ctx: WorkerContext, marker: NonNullable<ReturnType<typeof loadState>["openClaim"]>, hash?:string) {
+  return JSON.stringify([hash,marker.revisionSubmissionCount,marker.modelBudget,ctx.admissionGeneration?.(),ctx.executorIdentity?.()]);
+}
+
 /** Execute once, persist stdout immediately, then upload/submit from the WAL. */
 async function executeAndSubmit(
   ctx: WorkerContext,
@@ -1944,6 +1969,7 @@ async function executeAndSubmit(
   verified: VerifiedJobSpec,
   reviewInputs?: ReviewInputFile[],
   serviceMetadata?: Uint8Array | null,
+  revisionHash?: string,
 ): Promise<ProcessOutcome> {
   // Retain what the seller agreed to before running the work. This survives
   // submission, settlement, and removal of the public job-spec account.
@@ -1966,6 +1992,30 @@ async function executeAndSubmit(
         exitCode: null, signal: null, reason: "aborted",
       });
     }
+    const [claimAddress] = await findClaimPda({task, bidder:agent.agentPda});
+    const currentExecutor = ctx.executorIdentity?.();
+    let executionGuard: (() => void) | undefined;
+    if (currentExecutor && ctx.modelSpendDir) {
+      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs);
+      try {
+        checkPin();
+        const marker = evidenceState.openClaim;
+        const live = await readClaim(ctx,agent,task);
+        if (!live || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
+        const deadlineMs = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,live.expiresAt);
+        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,
+          requiredCapabilities:decodedTask.requiredCapabilities,acceptance:brief.acceptance,listingMetadata:serviceMetadata ?? null,
+          ...(binding.listing && {listing:binding.listing}),reviewFiles:reviewInputs?.length ?? 0,
+          ...(marker?.modelBudget?.remainingCents && {firstRoundCents:marker.modelBudget.remainingCents}),
+          promptBytes:Buffer.byteLength(JSON.stringify(prompt)),deadlineMs,...(ctx.signal && {signal:ctx.signal})});
+        executionGuard = () => { checkPin(); if (ready) ready(); if (monotonicMs() >= deadlineMs) throw new Error("The claim expired."); };
+      } catch (error) {
+        ctx.log({event:"task.execution-not-ready",task,reason:formatDiagnosticError(error)});
+        if (evidenceState.openClaim?.revisionSubmissionCount && error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name))
+          (ctx.revisionRefusals ??= new Map()).set(task,revisionAdmission(ctx,evidenceState.openClaim,revisionHash));
+        return {status:"held",task};
+      }
+    }
     const questions = await ctx.roomWork?.questions?.(binding);
     if (questions && await waitForRoomAnswer(ctx.stateDir, task, questions)) return { status: "held", task };
     const turn = await ctx.roomWork?.open(binding);
@@ -1976,12 +2026,23 @@ async function executeAndSubmit(
       if (!evidenceState.openClaim?.modelBudget || evidenceState.openClaim.modelBudget.remainingCents !== 0)
         throw new Error("There is no previously reserved room run to resume.");
       let until: number | undefined;
-      if (ctx.config.executor.includes("{jobDeadline}")) {
+      if (ctx.config.executor[2] === "job" || ctx.config.executor.includes("{jobDeadline}")) {
         const claim = await readClaim(ctx,agent,task);
         if (!claim || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
         until = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,claim.expiresAt);
       }
-      const result = await turn.resume(until,ctx.signal);
+      if (privateInputs && ctx.modelSpendDir && currentExecutor === "core") {
+        // Every supported legacy private room used Core. Restore only its saved run.
+        const dir = join(ctx.modelSpendDir,ctx.signer.address+"-"+claimAddress);
+        if (!existsSync(join(dir,"admission"))) {
+          enrollClaimBudget(ctx.modelSpendDir,ctx.signer.address,claimAddress);
+          pinClaim(dir,"core",0);
+        }
+      }
+      executionGuard?.();
+      const round = ctx.modelSpendDir && join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress,
+        String(evidenceState.openClaim.revisionSubmissionCount ?? 0));
+      const result = await turn.resume(until,ctx.signal,round);
       if (result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     } else {
@@ -1993,6 +2054,7 @@ async function executeAndSubmit(
         claimExpires = liveClaim.expiresAt;
       }
       let reservedCents: number | undefined;
+      let commitRound: (() => void) | undefined;
       /** The whole job's model budget, of which this run holds `reservedCents` (the rest waits for revisions). */
       let budgetTotalCents: number | undefined;
       if (ctx.modelBudgetForTask !== undefined) {
@@ -2003,20 +2065,27 @@ async function executeAndSubmit(
         reservedCents = marker.modelBudget?.remainingCents ?? 0;
         budgetTotalCents = marker.modelBudget?.totalCents;
         if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
-        if (ctx.modelSpendDir) {
-          const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
-          claimRound = spendClaimRound(ctx.modelSpendDir, ctx.signer.address, claim, marker.revisionSubmissionCount ?? 0);
-        }
-        marker.modelBudget = { ...marker.modelBudget!, remainingCents: 0 };
-        // Reserve before starting the host. Without an authenticated usage receipt,
-        // success, failure, timeout and interruption all consume the reservation.
-        saveState(ctx.stateDir, state);
+        const round = marker.revisionSubmissionCount ?? 0;
+        if (ctx.modelSpendDir) claimRound = join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress,String(round));
+        let committed = false;
+        commitRound = () => {
+          if (committed) return;
+          executionGuard?.();
+          ctx.signal?.throwIfAborted();
+          if (ctx.modelSpendDir) spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents);
+          marker.modelBudget = { ...marker.modelBudget!, remainingCents:0 };
+          saveState(ctx.stateDir,state);
+          committed = true;
+        };
       }
       const execute = reviewInputs === undefined ? runExecutor : ctx.reviewRoom?.execute;
       if (!execute) throw new Error("This revision needs an isolated job room.");
       const executeTurn = turn?.state === "ready" ? turn.execute : execute;
+      if (!ctx.reserveAtLaunch) commitRound?.();
+      const argv = ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires, claimRound, commitRound);
+      commitRound?.();
       const result = await executeTurn({
-        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires, claimRound),
+        argv,
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
         timeoutMs: ctx.config.executorTimeoutMs,
@@ -2118,14 +2187,21 @@ export async function processCandidate(
   options: {
     signal?: AbortSignal;
     inspect?: (facts: VerifiedCandidate) => void;
-    authorizeChosen?: (facts: VerifiedCandidate, budget: number | undefined) => Promise<void>;
+    authorizeChosen?: (facts: VerifiedCandidate, budget: number | undefined) => Promise<void | (() => void)>;
   } = {},
 ): Promise<ProcessOutcome> {
   const task = candidate.task;
   const generation = ctx.admissionGeneration?.() ?? "configured";
   const refused = ctx.capabilityRefusals ??= new Map();
+  const budgetRefusals = ctx.budgetRefusals ??= new Map();
+  const mode = options.authorizeChosen || options.inspect ? "/chosen" : "/automatic";
+  const past = budgetRefusals.get(task);
+  if (past?.generation === generation + mode && await past.unchanged())
+    return {status:"skipped", task, reason:"The first turn exceeds this job's allowance.",retryable:true};
   if (refused.get(task) === generation) return {status:"skipped",task,reason:"The selected room cannot fulfil these terms.",retryable:true};
-  const journal = claimSignatureJournal(ctx.modelSpendDir ?? ctx.stateDir, ctx.signer.address, task);
+  const [claimAddress] = await findClaimPda({task, bidder:agent.agentPda});
+  const journal = claimSignatureJournal(ctx.modelSpendDir ?? ctx.stateDir, ctx.signer.address, task, claimAddress);
+  const executor = ctx.executorIdentity?.();
   if (journal.exists() && !options.inspect && !options.authorizeChosen) return {status:"skipped",task,reason:"A previous signature needs reconciliation."};
   const state = loadState(ctx.stateDir);
   const verdict = passesLocalFilters(ctx, state, candidate);
@@ -2261,7 +2337,7 @@ export async function processCandidate(
     return { status: "skipped", task, reason: "waiting-for-owner-choice" };
   }
 
-  if (ctx.dryRun) {
+  if (ctx.dryRun && !options.inspect && !ctx.checkExecutionReady && !ctx.clusterTime) {
     try { await admitExchange(); } catch (error) { return {status:"skipped",task,reason:formatDiagnosticError(error)}; }
     ctx.log({
       event: "task.would-claim",
@@ -2285,12 +2361,13 @@ export async function processCandidate(
   let budget: number | undefined;
   try {
     budget = await ctx.modelBudgetForTask?.(decodedTask, task, listingMetadata);
-    if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0)) throw new Error("This job has no valid model budget.");
+    if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0))
+      throw Object.assign(new Error("This job has no valid model budget."),{name:"ExecutorBudgetError"});
     let firstRoundCents = budget === undefined ? undefined : claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive).remainingCents;
-    if (options.authorizeChosen && ctx.reviewRoom && ctx.modelSpendDir && firstRoundCents !== undefined && firstRoundCents >= 2)
+    if (chosen && ctx.reviewRoom && ctx.modelSpendDir && firstRoundCents !== undefined && firstRoundCents >= 2)
       firstRoundCents -= Math.max(1, Math.floor(firstRoundCents / 4));
     let deadlineMs: number | undefined;
-    if (ctx.config.executor.includes("{jobDeadline}")) {
+    if (ctx.clusterTime || ctx.config.executor.includes("{jobDeadline}")) {
       if (!ctx.clusterTime) throw new Error("The chain clock is unavailable.");
       let timeout = ctx.config.executorTimeoutMs;
       if (decodedTask.deadline === 0n) {
@@ -2305,6 +2382,7 @@ export async function processCandidate(
     }
     const guard = await ctx.checkExecutionReady?.({
       task, creator: decodedTask.creator, privateInputs, listingMetadata, requiredCapabilities: decodedTask.requiredCapabilities,
+      ...(ctx.dryRun && {preview:true}),
       acceptance: parseJobBrief(verifiedSpec).acceptance, promptBytes: Buffer.byteLength(JSON.stringify(prompt)),
       ...(firstRoundCents !== undefined && {firstRoundCents}), ...(deadlineMs !== undefined && {deadlineMs}),
       ...(hireBinding.listing && { listing: hireBinding.listing }),
@@ -2322,9 +2400,13 @@ export async function processCandidate(
       if (guard) guard();
     };
     await admitExchange();
+    if (ctx.dryRun) return {status:"dry-run",task};
     await ctx.executorForTask?.(decodedTask, task, undefined, hireBinding.listing, listingMetadata);
   } catch (error) {
-    if (error instanceof Error && error.name === "ExecutorCapabilityError") refused.set(task,generation);
+    if (error instanceof Error && error.name === "ExecutorBudgetError" && ctx.modelBudgetForTask) {
+      if (budgetRefusals.size >= 100) budgetRefusals.delete(budgetRefusals.keys().next().value!);
+      budgetRefusals.set(task,{generation:generation + mode, unchanged:async () => await ctx.modelBudgetForTask!(decodedTask,task,listingMetadata) === budget});
+    } else if (error instanceof Error && error.name === "ExecutorCapabilityError") refused.set(task,generation);
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.execution-not-ready", task, reason });
     return { status: "skipped", task, reason, retryable: true };
@@ -2354,7 +2436,11 @@ export async function processCandidate(
 
   if (options.authorizeChosen) {
     if (!ctx.checkExecutionReady || !ctx.checkChosenRoom || ctx.config.executorMode !== "sandboxed") throw new Error("The job room is unavailable.");
-    await options.authorizeChosen(facts, budget);
+    const quote = await options.authorizeChosen(facts, budget);
+    if (quote) {
+      const room = assertAdmission;
+      assertAdmission = () => { room(); quote(); };
+    }
   } else if (!hireBinding.isHire && ctx.chooseOpenJobs?.()) {
     return { status: "skipped", task, reason: "waiting-for-owner-choice" };
   }
@@ -2398,9 +2484,13 @@ export async function processCandidate(
     }
     assertAdmission();
     if (boundary === "sign" && !reservedSignature) {
-      journal.reserve(!!options.authorizeChosen);
+      journal.reserve();
       reservedSignature = true;
-      try { assertAdmission(); } catch (error) { journal.landed(); reservedSignature=false; throw error; }
+      let createdPin = false;
+      try {
+        if (executor && ctx.modelSpendDir) createdPin = pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget);
+        assertAdmission();
+      } catch (error) { journal.clearUnsigned(createdPin); reservedSignature=false; throw error; }
     }
   };
   try {
@@ -2428,7 +2518,10 @@ export async function processCandidate(
       ...labels,
     };
     saveState(ctx.stateDir, claimedState);
-    if (reservedSignature) journal.landed();
+    if (executor && ctx.modelSpendDir && !reservedSignature) {
+      pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget);
+    }
+    if (reservedSignature || ctx.modelSpendDir) journal.confirmed(signature);
     ctx.log({ event: "task.claimed", task, signature, parentTask, ...labels });
   } catch (error) {
     const reason = redactSensitiveText(
@@ -2452,6 +2545,7 @@ export async function processCandidate(
       if (claim !== null) {
         // The write landed but the transport threw before returning its
         // signature. Promote the WAL marker and continue exactly once.
+        if (reservedSignature) journal.confirmed(ambiguousSignature);
         const recoveredState = loadState(ctx.stateDir);
         recoveredState.openClaim = {
           task: task as string,
@@ -2891,6 +2985,10 @@ export async function resumeOpenClaim(
   }
 
   if (marker.phase === "claiming") {
+    if (ctx.modelSpendDir) {
+      const [account] = await findClaimPda({task,bidder:agent.agentPda});
+      claimSignatureJournal(ctx.modelSpendDir,ctx.signer.address,task,account).confirmed(marker.claimTransactionSignature);
+    }
     const claimedState = loadState(ctx.stateDir);
     claimedState.openClaim = { ...marker, phase: "claimed" };
     saveState(ctx.stateDir, claimedState);
@@ -2898,6 +2996,7 @@ export async function resumeOpenClaim(
   let changesRequest: taskThread.TaskThreadEnvelope | null = null;
   let reviewInputs: ReviewInputFile[] = [];
   if (revisionRound) {
+    if (ctx.revisionRefusals?.get(task) === revisionAdmission(ctx,marker,bytesToHex(new Uint8Array(submission!.account.rejectionHash)))) return {status:"held",task};
     if (!ctx.reviewRoom || ctx.config.executorMode === "unsafe") {
       const reason = "This revision needs an isolated job room.";
       ctx.log({ event: "task.revision-room-unavailable", task, reason });
@@ -2986,13 +3085,13 @@ export async function resumeOpenClaim(
     return ctx.withChosenRoom(async signal => {
       await ctx.checkChosenRoom!(signal);
       signal.throwIfAborted();
-      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined, listingMetadata);
+      return executeAndSubmit({ ...ctx, signal }, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined, listingMetadata, revisionRound ? bytesToHex(new Uint8Array(submission!.account.rejectionHash)) : undefined);
     }).catch(error => {
       ctx.log({ event: "task.execution-not-ready", task, reason: formatDiagnosticError(error) });
       return { status: "held" as const, task };
     });
   }
-  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined, listingMetadata);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt, verified, revisionRound ? reviewInputs : undefined, listingMetadata, revisionRound ? bytesToHex(new Uint8Array(submission!.account.rejectionHash)) : undefined);
 }
 
 /** One observed settlement (or terminal outcome) for a tracked submission. */

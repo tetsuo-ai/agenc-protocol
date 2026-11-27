@@ -6,7 +6,8 @@ import type { ReviewInputFile } from "./review-artifact.js";
 import { heldWork } from "./chosen.js";
 import { loadState, saveState } from "./state.js";
 import { readTaskAccount } from "./upkeep.js";
-import { spendClaimRound } from "./revision-budget.js";
+import { join } from "node:path";
+import { requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { correctionCutoff, correctionRunSeconds } from "./chosen-release.js";
 
 /** Run on the same serialized worker lane as submit/release. Charge a slice
@@ -50,11 +51,22 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     const timeoutMs = Math.floor(seconds * 1000);
     stop.throwIfAborted();
     if (admit) admit();
-    const claimRound = spendClaimRound(modelSpendDir, ctx.signer.address, held.claimAccount, -1);
-    delete budget.correctionCents;
-    saveState(ctx.stateDir, state);
+    if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address + "-" + held.claimAccount),ctx.executorIdentity());
+    const claimRound = join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount,"-1");
+    let reserved = false;
+    const reserve = () => {
+      if (reserved) return;
+      stop.throwIfAborted();
+      if (admit) admit();
+      if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount),ctx.executorIdentity());
+      spendClaimRound(modelSpendDir,ctx.signer.address,held.claimAccount,-1,cents);
+      delete budget.correctionCents;
+      saveState(ctx.stateDir,state);
+      reserved = true;
+    };
     const argv = await executorForTask(read.task, task, cents, undefined, undefined, marker.jobEvidence?.request, marker.jobEvidence?.acceptance,
-      budget.totalCents, BigInt(held.expiresAt), claimRound);
+      budget.totalCents, BigInt(held.expiresAt), claimRound, reserve);
+    reserve();
     const result = await reviewRoom.execute({ argv, reviewInputs, timeoutMs, signal: stop,
       envAllowlist: ctx.config.executorEnvAllowlist,
       prompt });

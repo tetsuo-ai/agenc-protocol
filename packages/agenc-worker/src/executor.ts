@@ -361,16 +361,17 @@ export async function runExecutor(options: {
       cleaned = true;
       rmSync(scratchDir, { recursive: true, force: true });
     };
+    const walletRoom = !unsafe && argv[2] === "job" && process.platform !== "win32";
     const child = spawn(resolvedCommand, args, {
       shell: false, // NEVER a shell — see the module invariants.
       // stderr is task-influenced too. Drain it through a hard cap instead of
       // inheriting it into an operator terminal or an unbounded service log.
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: walletRoom ? ["ignore", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
       ...(unsafe
         ? {}
         : {
             cwd: scratchDir!,
-            env: { ...isolatedEnvironment(scratchDir!, options.envAllowlist ?? []), AGENC_JOB_REVIEW_INPUTS: options.reviewInputs?.length ? "1" : "0" },
+            env: { ...isolatedEnvironment(scratchDir!, options.envAllowlist ?? []), ...(walletRoom && { AGENC_JOB_WALLET_PID: String(process.pid) }), AGENC_JOB_REVIEW_INPUTS: options.reviewInputs?.length ? "1" : "0" },
             detached: process.platform !== "win32",
           }),
     });
@@ -406,7 +407,7 @@ export async function runExecutor(options: {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout!.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
       if (stdoutBytes > maxStdoutBytes) {
         if (failure === null) {
@@ -421,7 +422,7 @@ export async function runExecutor(options: {
       chunks.push(chunk);
     });
 
-    child.stderr.on("data", (chunk: Buffer) => {
+    child.stderr!.on("data", (chunk: Buffer) => {
       stderrBytes += chunk.length;
       if (stderrBytes > maxStderrBytes) {
         if (failure === null) {
