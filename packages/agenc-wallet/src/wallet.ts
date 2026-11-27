@@ -19,7 +19,7 @@ import { startProviderHeartbeat, type ServingListing } from "./client/provider-h
 import { DEFAULT_EARN_IDLE_POLL_INTERVAL_MS } from "./earn.js";
 import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals, unresolvedChildDispatch } from "./business-backup.js";
 import { checkBusinessRoom, restoredSeller } from "./business-room.js";
-import { buildPrompt, correctChosenWork } from "@tetsuo-ai/agenc-worker";
+import { buildPrompt, correctChosenWork, decodeTaskDescription } from "@tetsuo-ai/agenc-worker";
 import { checkWorkFiles, correctionInputs, inspectWorkChunk, workFileSource } from "./work-inspection.js";
 import { readJobParties } from "./job-parties.js";
 import { projectInbox } from "./action-inbox.js";
@@ -238,9 +238,17 @@ function publishedOutputs(spec: Record<string, unknown>): OutputAgreement | unde
 
 function publicListingWork(spec:Record<string,unknown>) {
   const metadata = Buffer.from(JSON.stringify(spec));
-  const minimumHire = Buffer.from(JSON.stringify({acceptance:[outputAgreementCriterion(DEFAULT_OUTPUT_AGREEMENT)]}));
-  const prompt = buildPrompt("0".repeat(128),minimumHire,null,metadata);
-  return {promptBytes:Buffer.byteLength(JSON.stringify(prompt)),...publishedOutputs(spec)};
+  const outputs = publishedOutputs(spec) ?? DEFAULT_OUTPUT_AGREEMENT;
+  const listing = (spec.custom as {listingMetadata?:{displayName?:string}})?.listingMetadata;
+  const terms = {deadline:1_900_000_000, reviewWindowSecs:604800, eligibility:null, listingDurationSecs:31_536_000};
+  const hire = buildJobSpec({title:listing?.displayName ?? "",request:"x",acceptance:[outputAgreementCriterion(outputs)],
+    listing:"1".repeat(44) as Address,terms});
+  const published = {schemaVersion:1,kind:hire.kind,title:hire.title,shortDescription:"x",fullDescription:null,
+    acceptanceCriteria:hire.acceptance,deliverables:[hire.deliverable],constraints:null,attachments:[],
+    execution:{sandbox:"default"},custom:null,context:{}};
+  const commitment = decodeTaskDescription(new Uint8Array(64).fill(1));
+  const size = (job:object) => Buffer.byteLength(JSON.stringify(buildPrompt(commitment,Buffer.from(JSON.stringify(job)),null,metadata)));
+  return {promptBytes:Math.max(size(hire),size(published)),...outputs};
 }
 
 /** Why the wallet refuses a purchase's agreed outputs, in words for the person or the agent. */

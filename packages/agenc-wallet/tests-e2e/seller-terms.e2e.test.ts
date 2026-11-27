@@ -573,3 +573,12 @@ it("checks the connected room's first turn before quoting a listing",async()=>{
   await expect(quote(1)).rejects.toThrow(/allowance|start/);
   await expect(quote(10)).resolves.toBeDefined();
 });
+
+it("prices a canonical one-character hire with a 200-character description",async()=>{
+  world=await startWorld({config:{prices:fixedPrice(100)},earn:{...earn,executor:{...earn.executor,isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"claude-code",ready:true,coreCommand:null,generation:"choice"}),checkExecutionReady:async()=>{}}});
+  const seller=await world.wallet.createAgent();
+  const quote=(lamports:string)=>world.wallet.quoteEarn(seller.id,{...service,summary:"A".repeat(200),price:{lamports}});
+  await expect(quote("700000")).rejects.toThrow(/allowance|start/);
+  await expect(quote("2000000")).resolves.toBeDefined();
+});
