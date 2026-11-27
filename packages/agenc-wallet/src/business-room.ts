@@ -1,5 +1,6 @@
 import { runExecutor } from "@tetsuo-ai/agenc-worker";
-import type { EarnOptions } from "./earn.js";
+import { commandGeneration } from "./room-selection.js";
+import type { EarnExecutor, EarnOptions } from "./earn.js";
 import { WalletError } from "./errors.js";
 import type { WalletState } from "./store.js";
 
@@ -7,10 +8,15 @@ import type { WalletState } from "./store.js";
 export async function checkBusinessRoom(
   options: EarnOptions | undefined,
   agentId: string,
+  resolve: () => EarnExecutor | null = () => options?.agentExecutors?.[agentId] ?? options?.executor ?? null,
 ) {
+  const executor = resolve();
+  const generation = () => JSON.stringify([options?.agentExecutors?.[agentId] ? "" : options?.defaultExecutorGeneration?.(),
+    executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
+  const before = generation();
   if (
-    options?.executor?.mode !== "sandboxed" ||
-    options.chosenRoomEnabled?.() !== true
+    executor?.mode !== "sandboxed" ||
+    options?.chosenRoomEnabled?.() !== true
   )
     throw new WalletError(
       "NOT_AVAILABLE",
@@ -19,20 +25,20 @@ export async function checkBusinessRoom(
   if (options.checkExecutionReady)
     await options.checkExecutionReady({ agentId });
   else {
-    const { readiness, envAllowlist } = options.executor;
+    const { readiness, envAllowlist } = executor;
     if (!readiness)
       throw new WalletError(
         "NOT_AVAILABLE",
         "The room self-test is unavailable.",
       );
     await runExecutor({
-      argv: readiness.argv.map((arg) => arg.replaceAll("{agent}", agentId)),
+      argv: readiness.argv.map(arg => arg === "{roomCore}" ? options.liveRoomState?.().coreCommand ?? "room-agent" : arg.replaceAll("{agent}",agentId)),
       timeoutMs: readiness.timeoutMs ?? 30_000,
       envAllowlist,
       maxStdoutBytes: 65536,
     });
   }
-  if (!options.chosenRoomEnabled())
+  if (!options.chosenRoomEnabled() || resolve() !== executor || generation() !== before)
     throw new WalletError(
       "NOT_AVAILABLE",
       "Room permission changed during the check.",
