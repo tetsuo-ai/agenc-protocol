@@ -32,7 +32,8 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
       throw new Error("This result has no reserved correction pass.");
     const cents = budget.correctionCents;
     const reviewInputs = await inputs(Buffer.from(marker.execution.resultBytesBase64, "base64"));
-    const argv = await executorForTask(read.task, task, cents);
+    const argv = await executorForTask(read.task, task, cents, undefined, undefined, undefined, undefined,
+      budget.totalCents, BigInt(held.expiresAt));
     const now = await ctx.clusterTime!();
     // Stop early enough to submit, and before the early release pause, so the
     // owner can still deliver or give the claim back after the correction.

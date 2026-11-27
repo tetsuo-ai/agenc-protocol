@@ -3119,10 +3119,21 @@ describe("selling preflight", () => {
     const ready = vi.fn(async () => { throw new Error("KVM self-test failed"); });
     const result = await attemptFreshClaimWithHireSnapshot({ owner: PARENT, executable: false, data: new Uint8Array() }, ready);
     expect(ready).toHaveBeenCalledOnce();
-    expect(ready.mock.calls[0]).toEqual([{ task: TASK }]);
+    expect(ready.mock.calls[0]).toEqual([{ task: TASK, creator: CREATOR, privateInputs: false, listingMetadata: null, requiredCapabilities: 1n }]);
     expect(result.outcome).toMatchObject({ status: "skipped", retryable: true, reason: "KVM self-test failed" });
     expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(result.getBalance).not.toHaveBeenCalled();
+    expect(loadState(result.stateDir).openClaim).toBeNull();
+  });
+
+  it("rechecks the verified admission after funding and before the claim journal", async () => {
+    const check = vi.fn(() => { throw new Error("The selected room changed."); });
+    const ready = vi.fn(async (_input: Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0]) => check);
+    const result = await attemptFreshClaimWithHireSnapshot({ owner: PARENT, executable: false, data: new Uint8Array() }, ready);
+    expect(ready.mock.calls[0]?.[0]).toMatchObject({ creator: CREATOR, privateInputs: false });
+    expect(result.outcome.status).toBe("skipped");
+    expect(check).toHaveBeenCalled();
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(loadState(result.stateDir).openClaim).toBeNull();
   });
 
@@ -3172,7 +3183,10 @@ describe("durable whole-task model authorization", () => {
     ctx.modelBudgetForTask = price;
     const budgets: number[] = [];
     const totals: (number | undefined)[] = [];
-    ctx.executorForTask = async (_task, _address, reserved, _listing, _metadata, _request, _acceptance, total) => {
+    const expiries: (bigint | undefined)[] = [];
+    ctx.config.executor = [...ctx.config.executor, "{jobExpires}"];
+    ctx.executorForTask = async (_task, _address, reserved, _listing, _metadata, _request, _acceptance, total, expiry) => {
+      expiries.push(expiry);
       totals.push(total);
       // The host cannot begin until the reservation has reached durable storage.
       expect(loadState(stateDir).openClaim?.modelBudget).toEqual({ totalCents: 50, remainingCents: 0 });
@@ -3205,6 +3219,7 @@ describe("durable whole-task model authorization", () => {
     expect(budgets).toEqual(mode === "legacy" || mode === "exhausted" ? [] : [50]);
     // The run also hears the whole job's budget, which the seller's job view names (rt5 A 6).
     expect(totals).toEqual(mode === "legacy" || mode === "exhausted" ? [] : [50]);
+    expect(expiries).toEqual(mode === "legacy" || mode === "exhausted" ? [] : [4_000_000_000n]);
     expect(price).not.toHaveBeenCalled();
     expect(loadState(stateDir).openClaim).toBeNull();
     expect(loadState(stateDir).failedJobs).toHaveLength(1);

@@ -270,7 +270,7 @@ export type WorkerContext = {
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
   /** `acceptance` is the verified spec's criteria, including the wallet's agreed-outputs line. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint) => Promise<string[]>;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
   reserveRevisionBudget?: boolean;
   /** Only the isolated job-room adapter supplies its input validator. */
@@ -288,7 +288,8 @@ export type WorkerContext = {
    * before every fresh claim, before its WAL or transaction. Throw to defer.
    * Receives no buyer text. Recovery and settlement remain available.
    */
-  checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal }) => Promise<void>;
+  checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
+    privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint }) => Promise<void | (() => void)>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -1973,6 +1974,12 @@ async function executeAndSubmit(
       if (result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     } else {
+      let claimExpires: bigint | undefined;
+      if (ctx.executorForTask && ctx.config.executor.includes("{jobExpires}")) {
+        const liveClaim = await readClaim(ctx, agent, task);
+        if (!liveClaim) throw new Error("The wallet could not confirm this worker's claim expiry.");
+        claimExpires = liveClaim.expiresAt;
+      }
       let reservedCents: number | undefined;
       /** The whole job's model budget, of which this run holds `reservedCents` (the rest waits for revisions). */
       let budgetTotalCents: number | undefined;
@@ -1997,7 +2004,7 @@ async function executeAndSubmit(
       if (!execute) throw new Error("This revision needs an isolated job room.");
       const executeTurn = turn?.state === "ready" ? turn.execute : execute;
       const result = await executeTurn({
-        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents),
+        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires),
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
         timeoutMs: ctx.config.executorTimeoutMs,
@@ -2258,12 +2265,14 @@ export async function processCandidate(
   // A depleted recurring worker can still reconcile and submit an already
   // landed claim, but cannot begin another lifecycle it cannot fund through
   // submission.
+  let assertAdmission: (() => void) | undefined;
   try {
-    await ctx.checkExecutionReady?.({
-      task,
+    const guard = await ctx.checkExecutionReady?.({
+      task, creator: decodedTask.creator, privateInputs, listingMetadata, requiredCapabilities: decodedTask.requiredCapabilities,
       ...(hireBinding.listing && { listing: hireBinding.listing }),
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     });
+    assertAdmission = guard || undefined;
     if (ctx.signal?.aborted) throw new Error("Worker is stopping.");
   } catch (error) {
     const reason = formatDiagnosticError(error);
@@ -2319,6 +2328,8 @@ export async function processCandidate(
   if (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)) {
     return { status: "skipped", task, reason: "listing-not-approved" };
   }
+  try { assertAdmission?.(); }
+  catch { return { status: "skipped", task, reason: "The selected job room changed.", retryable: true }; }
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
   // reconciles the canonical claim PDA before considering another task.
@@ -2357,7 +2368,7 @@ export async function processCandidate(
           ? { legacyListing: hireBinding.legacyListing }
           : {}),
       },
-      { maxRetries: 0 },
+      { maxRetries: 0, ...(assertAdmission && { assertAuthorized: assertAdmission }) },
     );
     const claimedState = loadState(ctx.stateDir);
     claimedState.openClaim = {
