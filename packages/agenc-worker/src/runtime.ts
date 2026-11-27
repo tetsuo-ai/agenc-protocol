@@ -1423,7 +1423,7 @@ async function releaseWithinGraceIfUnfetchable(
     return false;
   }
   try {
-    const signature = await sendReleaseClaim(ctx, agent, task, decodedTask);
+    const signature = await sendReleaseClaim(ctx, agent, task, decodedTask,claim.claimedAt + BigInt(values.CLAIM_RELEASE_GRACE_SECS) + 1n);
     const state = loadState(ctx.stateDir);
     if (state.openClaim?.task === task) {
       giveUpJob(ctx, state, state.openClaim, {
@@ -1472,7 +1472,7 @@ async function giveUpForSellerSetup(
       const claim = await readClaim(ctx, agent, task);
       const now = claim === null ? 0 : await clusterNowSeconds(ctx);
       if (claim !== null && Number(claim.claimedAt) + Number(values.CLAIM_RELEASE_GRACE_SECS) - now >= RELEASE_LANDING_MARGIN_SECS) {
-        const signature = await sendReleaseClaim(ctx, agent, task, decodedTask);
+        const signature = await sendReleaseClaim(ctx, agent, task, decodedTask,claim.claimedAt + BigInt(values.CLAIM_RELEASE_GRACE_SECS) + 1n);
         released = true;
         ctx.log({ event: "claim.released", task, how: "released", signature, depositBack: true });
       }
