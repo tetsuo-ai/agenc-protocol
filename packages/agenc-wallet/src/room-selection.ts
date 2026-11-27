@@ -13,6 +13,7 @@ export interface FirstCallPrice {
   baseTicks: number;
   inputTicksPerByte: number;
   needsExpiry?: boolean;
+  tokenHold?: number;
 }
 
 export interface LiveRoom {
@@ -29,6 +30,7 @@ export interface LiveRoom {
 export interface RoomSelection {
   agent: string;
   firstCall?: FirstCallPrice;
+  validUntil?: number;
   identity?: string;
   ready: boolean;
   coreCommand: string | null;
@@ -141,6 +143,15 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ? room.acpPrices![profile] : undefined;
     const identity = agent === "acp" && firstCall && typeof version === "string" && /^[a-f0-9]{64}$/.test(version)
       ? "acp:" + profile + ":" + version : undefined;
+    let retryAt = 0;
+    let entitled = true;
+    if (identity) {
+      const marker = join(dirname(room.setting), ".paid-agent-entitlement." + profile + "." + version);
+      if (file(marker).regular) {
+        retryAt = Number(readFileSync(marker, "utf8"));
+        entitled = Number.isSafeInteger(retryAt) && Date.now() >= retryAt;
+      }
+    }
     const loginCurrent = !firstCall?.needsExpiry || (typeof validUntil === "number" && Number.isSafeInteger(validUntil) && Date.now() < validUntil);
     const agentFiles = (agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
     const epochPath = room.setting + ".epoch";
@@ -169,7 +180,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       } catch { managed = true; }
     }
     const ready =
-      !managed && keysStable && loginCurrent &&
+      !managed && keysStable && loginCurrent && entitled && (agent !== "acp" || (!!firstCall && Number.isSafeInteger(firstCall.tokenHold) && firstCall.tokenHold! > 0 && firstCall.tokenHold! <= 1000000)) &&
       (epoch === "legacy" || /^[0-9a-f-]{36}$/.test(epoch)) &&
       base.every((f) => f.regular) &&
       (agent === "core"
@@ -188,7 +199,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     const generation = JSON.stringify([
       epoch,
       keysEpoch,
-      loginCurrent,
+      loginCurrent, entitled, retryAt,
       managed,
       refusals,
       slot.id,
@@ -201,11 +212,11 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     ]);
     const refused = refusals.includes(".paid-agent-denied.unidentified") || refusals.includes(".paid-agent-refused." + version) || (typeof tag === "string" && /^[a-f0-9]{64}$/.test(tag) &&
       (refusals.includes(".paid-agent-denied." + tag) || refusals.some(n => n.startsWith(".paid-agent-claim." + tag + "."))));
-    return { agent, ready:ready && !refused && !file(join(dirname(room.setting),".paid-agent-clearing")).regular, coreCommand, generation, ...(identity && {identity}), ...(firstCall && {firstCall}) };
+    return { agent, ready:ready && !refused && !file(join(dirname(room.setting),".paid-agent-clearing")).regular, coreCommand, generation, ...(identity && {identity}), ...(firstCall && {firstCall}), ...(firstCall?.needsExpiry && typeof validUntil === "number" && {validUntil}) };
   };
 }
 
-export const ACP_ADMISSION = "room-acp-admission-v1";
+export const ACP_ADMISSION = "room-acp-admission-v2";
 
 export function admissionArgs(argv: readonly string[], selection?: RoomSelection): string[] {
   return argv[2] === "self-test" && selection?.agent === "acp" ? [ACP_ADMISSION] : [];

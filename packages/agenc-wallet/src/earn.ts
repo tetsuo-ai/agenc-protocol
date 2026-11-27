@@ -120,6 +120,7 @@ export interface JobAdmission {
   promptBytes: number;
   firstRoundCents?: number;
   laterRoundCents?: readonly number[];
+  loginThroughMs?: number;
   deadlineMs?: number;
 }
 
@@ -359,7 +360,7 @@ export class EarnHost {
     if (adapter === "acp") {
       const room = this.#options.liveRoomState?.();
       const price = room?.firstCall;
-      if (room?.agent !== "acp" || !room.identity || !price) return undefined;
+      if (room?.agent !== "acp" || !room.identity || !price || !Number.isSafeInteger(price.tokenHold) || price.tokenHold! <= 0 || price.tokenHold! > 1000000) return undefined;
       return {sampleFile:"answer.txt", canDeliver:(name:string)=>!agreedOutputProblem(name),
         firstTurnFits:(cents:number, bytes:number, calls=1)=>Number.isSafeInteger(cents) && cents >= 0 &&
           (price.baseTicks + price.inputTicksPerByte * bytes) * calls <= cents * 100_000_000};
@@ -1042,6 +1043,11 @@ export class EarnHost {
           try { readServiceRehearsal(stateDir,admission.verifiedPin,admission.requiredFiles); }
           catch { throw new ExecutorCapabilityError("The rehearsal cannot deliver the agreed files."); }
         }
+        if (connected === "acp" && admission.loginThroughMs !== undefined) {
+          const end = this.#options.liveRoomState?.().validUntil;
+          if (end === undefined || !Number.isSafeInteger(end) || end <= admission.loginThroughMs)
+            throw new ExecutorCapabilityError("The login expires before this job can finish.");
+        }
         if (connected && admission.firstRoundCents !== undefined) {
           const calls = admission.requiredFiles.length || !admission.allowTextOnly ? 2 : 1;
           const rounds = [admission.firstRoundCents,...(connected === "acp" ? admission.laterRoundCents ?? [] : [])];
@@ -1084,6 +1090,20 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
+      expiringExecutorLogin: () => this.connectedAgent(agent.agentId) === "acp" && this.#options.liveRoomState?.().firstCall?.needsExpiry === true,
+      chosenCorrectionFits: acceptance => {
+        if (this.connectedAgent(agent.agentId) !== "acp") return true;
+        const outputs = outputAgreementFromSpec({acceptance:[...acceptance]});
+        return !!outputs && outputs.allowTextOnly && !outputs.requiredFiles.length;
+      },
+      roundCapacity: acceptance => {
+        if (this.connectedAgent(agent.agentId) !== "acp") return undefined;
+        const outputs = outputAgreementFromSpec({acceptance:[...acceptance]});
+        const calls = outputs && outputs.allowTextOnly && !outputs.requiredFiles.length ? 1 : 2;
+        const hold = this.#options.liveRoomState?.().firstCall?.tokenHold;
+        if (!hold) throw new ExecutorCapabilityError("Update the job room before starting an ACP round.");
+        return {calls, tokens: hold + calls - 1};
+      },
       localExecutorReady: () => this.connectedAgent(agent.agentId) !== "acp" || this.#options.liveRoomState?.().ready === true,
       executorIdentity, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
       modelBudgetCeiling:(task,metadata)=>(metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
@@ -1211,7 +1231,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, laterRoundCents, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
+        acceptance, promptBytes, firstRoundCents, laterRoundCents, loginThroughMs, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         let outputs;
@@ -1225,7 +1245,7 @@ export class EarnHost {
           servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest,verifiedPin:terms.servicePin}),reviewFiles:Math.max(reviewFiles ?? 0,reviewAttachments ?? 0),requiredFiles:outputs?.requiredFiles ?? [],
           verifiedAgreement:!!outputs,revision:!!revision,extraRoomFeatures:!!extraRoomFeatures || !!listingTerms?.childHire || listingTerms?.fulfilment?.privateInputs === true || (requiredCapabilities ?? 1n)>1n,
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
-          ...(firstRoundCents !== undefined && {firstRoundCents}),...(laterRoundCents && {laterRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
+          ...(firstRoundCents !== undefined && {firstRoundCents}),...(laterRoundCents && {laterRoundCents}),...(loginThroughMs !== undefined && {loginThroughMs}),...(deadlineMs !== undefined && {deadlineMs}),
         } : undefined,preview);
       },
       ...(uploader !== null

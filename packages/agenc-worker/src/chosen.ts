@@ -1,7 +1,7 @@
 // The picker and the executor use the same verified spec, policy filters and claim instruction.
 import { unwrapOption, type Address } from "@solana/kit";
 import { join } from "node:path";
-import { correctionAllowance, requireClaimExecutor } from "./revision-budget.js";
+import { requireClaimExecutor } from "./revision-budget.js";
 import {
   lighthouse, facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
@@ -242,18 +242,6 @@ export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signa
     },
   }));
   if (result.status !== "held") throw new Error("The worker could not confirm the claim. Refresh the jobs list.");
-  // Leave the two buyer-requested revision slices intact. A crash before this
-  // write simply leaves this older claim without a pre-submission repair.
-  const state = loadState(ctx.stateDir);
-  const marker = state.openClaim;
-  const budget = marker?.modelBudget;
-  if (marker?.chosen && marker.task === task && marker.phase === "claimed" && ctx.reviewRoom && ctx.modelSpendDir &&
-      budget && budget.remainingCents >= 2) {
-    const heldBack = correctionAllowance(budget.remainingCents);
-    budget.remainingCents -= heldBack;
-    budget.correctionCents = heldBack;
-    saveState(ctx.stateDir, state);
-  }
 }
 
 type Terms = NonNullable<Awaited<ReturnType<typeof taskTerms>>>;

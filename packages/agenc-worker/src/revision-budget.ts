@@ -13,10 +13,12 @@ export function correctionAllowance(cents: number): number {
   return cents < 2 ? 0 : Math.max(1, Math.floor(cents / 4));
 }
 
-export function claimBudget(totalCents: number, reserve: boolean): ModelBudget {
+export function claimBudget(totalCents: number, reserve: boolean, correct = false): ModelBudget {
   const slice = reserve ? perRevision(totalCents) : 0;
-  return slice ? { totalCents, remainingCents: totalCents - 2 * slice, revisionRound: 0 }
-    : { totalCents, remainingCents: totalCents };
+  const initial = totalCents - 2 * slice;
+  const correctionCents = correct ? correctionAllowance(initial) : 0;
+  return { totalCents, remainingCents: initial - correctionCents, ...(slice > 0 && { revisionRound: 0 }),
+    ...(correctionCents > 0 && { correctionCents }) };
 }
 
 /** Only a newer confirmed submission count releases the next slice. Retries,
@@ -27,14 +29,14 @@ export function budgetForRevision(budget: ModelBudget | undefined, round: number
 }
 
 export function admissionRounds(total: number, reserveRevisions: boolean, reserveCorrection = false) {
-  const budget = claimBudget(total, reserveRevisions);
+  const budget = claimBudget(total, reserveRevisions, reserveCorrection);
   const laterRoundCents: number[] = [];
   if (budget.revisionRound === 0) {
     for (const round of [1, 2]) laterRoundCents.push(budgetForRevision(budget, round)!.remainingCents);
   }
-  const correction = reserveCorrection ? correctionAllowance(budget.remainingCents) : 0;
+  const correction = budget.correctionCents ?? 0;
   if (correction) laterRoundCents.push(correction);
-  return {firstRoundCents:budget.remainingCents - correction, laterRoundCents};
+  return {firstRoundCents:budget.remainingCents, laterRoundCents};
 }
 
 // The wallet keeps this directory outside its restorable worker ledger. A fresh
@@ -81,13 +83,29 @@ export function requireClaimExecutor(dir: string, executor: string, legacyPrivat
   throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
 }
 
-export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number, cents?: number): string {
+export interface RoundCapacity { calls: number; tokens: number; }
+
+export function requireRoundCapacity(dir: string, needed: RoundCapacity) {
+  let {calls, tokens} = needed;
+  if (![calls, tokens].every(n => Number.isSafeInteger(n) && n > 0) || existsSync(join(dir, ".agent-active")))
+    throw new Error("The previous room turn is active or its limits are unavailable.");
+  for (const name of readdirSync(dir).filter(name => /^(?:-1|[0-2])$/.test(name))) {
+    const used = JSON.parse(readFileSync(join(dir, name + ".counts"), "utf8"));
+    if (![used.calls, used.tokens].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error("Unknown model usage.");
+    calls += used.calls;
+    tokens += used.tokens;
+  }
+  if (calls > 64 || tokens > 1000000) throw Object.assign(new Error("The claim has insufficient calls or tokens for this round."), {name:"ExecutorBudgetError"});
+}
+
+export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number, cents?: number, needed?: RoundCapacity): string {
   const dir = join(root, wallet + "-" + claim);
   const lock = join(dir,".reserving");
   let held = false;
   try {
     writeFileSync(lock,"",{flag:"wx",mode:0o600,flush:true});
     held = true;
+    if (needed) requireRoundCapacity(dir, needed);
     if (existsSync(join(dir, "admission"))) {
       const {budget} = JSON.parse(readFileSync(join(dir, "admission"), "utf8"));
       const prior = readdirSync(dir).filter(n => /^(?:-1|[0-2])$/.test(n)).map(n => Number(readFileSync(join(dir,n), "utf8")));

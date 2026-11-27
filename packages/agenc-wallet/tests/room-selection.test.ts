@@ -114,7 +114,7 @@ it("tracks the selected ACP image and rejects a missing or unknown profile", () 
   const path = (n: string) => join(dir, n);
   const room = {setting:path("choice"), keyStore:path("keystore"), baseFiles:[path("base")],
     agentFiles:[path("claude")], coreCandidates:[], acpFiles:[path("acp")],
-    acpPrices:{grok:{baseTicks:60_000_000_000, inputTicksPerByte:0}, business:{baseTicks:1000,inputTicksPerByte:1,needsExpiry:true}}};
+    acpPrices:{grok:{baseTicks:60_000_000_000, inputTicksPerByte:0,tokenHold:500000}, business:{baseTicks:1000,inputTicksPerByte:1,needsExpiry:true,tokenHold:32000}}};
   const select = liveRoomSelection(room);
   try {
     writeFileSync(path("base"), "");
@@ -158,4 +158,36 @@ it("invalidates a ready room when machine settings arrive",async()=>{
     writeFileSync(join(dir,"config.d","rule.toml"),"test");
     expect(select().ready).toBe(false);
   } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+it("parks a known entitlement failure only for its profile, login version and refresh interval", () => {
+  const root=mkdtempSync(join(tmpdir(),"model-access-"));
+  const f=(n:string)=>join(root,n), version="a".repeat(64);
+  try {
+    writeFileSync(f("selection"),JSON.stringify({agent:"grok",version}));
+    writeFileSync(f("image"),"fixture");
+    const current=liveRoomSelection({setting:f("selection"),keyStore:f("keys"),baseFiles:[f("image")],agentFiles:[f("image")],
+      acpFiles:[f("image")],coreCandidates:[],acpPrices:{grok:{baseTicks:60000000000,inputTicksPerByte:0,tokenHold:500000}}});
+    const mark=f(".paid-agent-entitlement.grok."+version);
+    const old=current();
+    writeFileSync(mark,String(Date.now()+300000));
+    expect(current().ready).toBe(false);
+    expect(current().generation).not.toBe(old.generation);
+    writeFileSync(mark,String(Date.now()-1));
+    expect(current().ready).toBe(true);
+    writeFileSync(mark,String(Date.now()+300000));
+    writeFileSync(f("selection"),JSON.stringify({agent:"grok",version:"b".repeat(64)}));
+    expect(current().ready).toBe(true);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+it("parks an ACP image from a Desktop that supplied no pre-call token ceiling", () => {
+  const root=mkdtempSync(join(tmpdir(),"old-acp-room-")), f=(name:string)=>join(root,name);
+  try {
+    writeFileSync(f("image"),"fixture");
+    writeFileSync(f("selection"),JSON.stringify({agent:"grok",version:"a".repeat(64)}));
+    const select=liveRoomSelection({setting:f("selection"),keyStore:f("keys"),baseFiles:[f("image")],agentFiles:[f("image")],
+      acpFiles:[f("image")],coreCandidates:[],acpPrices:{grok:{baseTicks:60000000000,inputTicksPerByte:0}}});
+    expect(select().ready).toBe(false);
+  } finally {rmSync(root,{recursive:true,force:true});}
 });

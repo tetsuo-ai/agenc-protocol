@@ -54,7 +54,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { admissionRounds, claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { admissionRounds, claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, requireRoundCapacity, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -299,6 +299,9 @@ export type WorkerContext = {
   admissionGeneration?: () => string;
   executorIdentity?: () => string;
   localExecutorReady?: () => boolean;
+  expiringExecutorLogin?: () => boolean;
+  chosenCorrectionFits?: (acceptance: readonly string[]) => boolean;
+  roundCapacity?: (acceptance: readonly string[]) => {calls:number; tokens:number} | undefined;
   candidateHashes?: Map<Address,string>;
   refusals?: Map<string,{hash:string; snapshot?:string | undefined; generation:string; reason:string; expires?:number; retryAt?:number; unchanged:()=>boolean}>;
   /** Synchronous local revision. Checking a refused job must not fetch the price again. */
@@ -308,7 +311,7 @@ export type WorkerContext = {
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
     revision?: boolean; reviewAttachments?: number; extraRoomFeatures?: boolean;
-    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; laterRoundCents?: readonly number[]; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
+    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; laterRoundCents?: readonly number[]; loginThroughMs?: number; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -2016,6 +2019,10 @@ async function executeAndSubmit(
       try {
         checkPin();
         const marker = evidenceState.openClaim;
+        if (ctx.roundCapacity && (marker?.modelBudget?.remainingCents ?? 0) > 0) {
+          const capacity = ctx.roundCapacity(brief.acceptance);
+          if (capacity) requireRoundCapacity(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), capacity);
+        }
         const live = await readClaim(ctx,agent,task);
         if (!live || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
         const deadlineMs = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,live.expiresAt);
@@ -2089,7 +2096,7 @@ async function executeAndSubmit(
           if (committed) return;
           executionGuard?.();
           ctx.signal?.throwIfAborted();
-          if (ctx.modelSpendDir) spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents);
+          if (ctx.modelSpendDir) spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents,ctx.roundCapacity?.(brief.acceptance));
           marker.modelBudget = { ...marker.modelBudget!, remainingCents:0 };
           saveState(ctx.stateDir,state);
           committed = true;
@@ -2393,10 +2400,14 @@ export async function processCandidate(
   let budget: number | undefined;
   let expires: number | undefined;
   let priced = false;
+  const acceptance = parseJobBrief(verifiedSpec).acceptance;
+  const correct = !!(chosen && ctx.reviewRoom && ctx.modelSpendDir && ctx.chosenCorrectionFits?.(acceptance) !== false);
   try {
     const reserveRevisions = ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive;
-    const rounds = (total: number) => admissionRounds(total, reserveRevisions, !!(chosen && ctx.reviewRoom && ctx.modelSpendDir));
+    const rounds = (total: number) => admissionRounds(total, reserveRevisions, correct);
     let deadlineMs: number | undefined;
+    let loginThroughMs: number | undefined;
+    if (ctx.expiringExecutorLogin?.() && !ctx.clusterTime) throw new ExecutorCapabilityError("The login needs a verified chain clock.");
     if (ctx.clusterTime || ctx.config.executor.includes("{jobDeadline}")) {
       if (!ctx.clusterTime) throw new Error("The chain clock is unavailable.");
       let timeout = ctx.config.executorTimeoutMs;
@@ -2406,16 +2417,25 @@ export async function processCandidate(
         if (!data) throw new Error("The claim duration is unavailable.");
         const duration = getProtocolConfigDecoder().decode(data).maxClaimDuration;
         if (duration <= 0n) throw new Error("The claim duration is unavailable.");
-        timeout = Math.min(timeout,Number(duration)*1000);
+        timeout = Math.min(timeout, Number(duration) * 1000);
       }
       const start=monotonicMs(), chainNow=await ctx.clusterTime();
       deadlineMs=deadlineFromChain(start,chainNow,timeout,decodedTask.deadline);
+      if (ctx.expiringExecutorLogin?.()) {
+        // The chain may extend a reviewed claim while it awaits the buyer. A finite bearer cannot cover it.
+        if (reserveRevisions && !decodedTask.constraintHash.every(byte => byte === 0))
+          throw new ExecutorCapabilityError("This login cannot cover the buyer's revision window.");
+        if (decodedTask.deadline <= 0n) throw new ExecutorCapabilityError("This login needs a fixed job deadline.");
+        const end = Number(decodedTask.deadline);
+        loginThroughMs = Math.max(end * 1000, Date.now() + (end - chainNow) * 1000);
+        if (!Number.isSafeInteger(loginThroughMs)) throw new ExecutorCapabilityError("The job has no verified login window.");
+      }
       if (decodedTask.deadline > 0n) expires=start+1000*(Number(decodedTask.deadline)-chainNow)-999;
     }
     const requirements = {
       task, creator: decodedTask.creator, privateInputs, listingMetadata, requiredCapabilities: decodedTask.requiredCapabilities,
       extraRoomFeatures:requiresExtraRoom(decodedTask,verifiedSpec),
-      acceptance: parseJobBrief(verifiedSpec).acceptance, promptBytes: Buffer.byteLength(JSON.stringify(prompt)),
+      acceptance, ...(loginThroughMs !== undefined && {loginThroughMs}), promptBytes: Buffer.byteLength(JSON.stringify(prompt)),
       ...(deadlineMs !== undefined && {deadlineMs}),
       ...(hireBinding.listing && { listing: hireBinding.listing }),
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
@@ -2512,7 +2532,7 @@ export async function processCandidate(
     claimedAt: claimStartedAt,
     phase: "claiming",
     ...(options.authorizeChosen ? { chosen: true } : {}),
-    ...(budget !== undefined ? { modelBudget: claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive) } : {}),
+    ...(budget !== undefined ? { modelBudget: claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive, correct) } : {}),
     ...labels,
   };
   if (budget !== undefined && ctx.modelSpendDir) {
@@ -3854,6 +3874,7 @@ async function runUpLocked(
     // Use the read-source slot so a full RPC object cannot also enable the
     // SDK's independent signature/log polling loop behind this budget.
     indexer: ctx.gpa,
+    ...(ctx.localExecutorReady && {candidateEpoch: () => ctx.localExecutorReady!() ? (ctx.admissionGeneration?.() ?? "configured") : false as const}),
     onCandidateSnapshot(open,pins) {
       for (const task of deferred.keys()) if (!open.has(task)) deferred.delete(task);
       for (const key of ctx.refusals!.keys()) if (!open.has(key.split("/")[0] as Address)) ctx.refusals!.delete(key);

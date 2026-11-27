@@ -3461,3 +3461,19 @@ it.each(["between attempts","during admission"])("reconsiders a changed spec obs
   await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,jobSpecHash:digest.hex,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
   expect(result.claimTaskWithJobSpec).toHaveBeenCalledOnce();
 });
+
+it("holds a finite business login before a signature for a job with buyer revisions", async () => {
+  const now=1700000000;
+  const ready=vi.fn(async()=>{ throw new Error("Unexpected paid readiness"); });
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},ready,ctx=>{
+    ctx.expiringExecutorLogin=()=>true;
+    ctx.clusterTime=async()=>now;
+    ctx.reserveRevisionBudget=true;
+    const read=ctx.readAccount;
+    ctx.readAccount=async addr=>addr===TASK
+      ? taskData(TaskStatus.Open,{deadline:BigInt(now+600), constraintHash:new Uint8Array(32).fill(1)}) : read(addr);
+  });
+  expect(result.outcome).toMatchObject({status:"skipped",reason:expect.stringMatching(/revision window/)});
+  expect(ready).not.toHaveBeenCalled();
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+});

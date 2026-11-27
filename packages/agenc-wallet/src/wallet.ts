@@ -1,3 +1,4 @@
+import { fileCorrectionAllowed } from "./service-usage.js";
 import { publishTaskReview } from "./task-review-publication.js";
 import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/task-review.js";
 import type { HistoryQuery } from "./client/money-operations.js";
@@ -6026,7 +6027,7 @@ export class AgencWallet {
     if (!marker?.chosen || marker.task !== task || marker.execution?.resultHashHex !== hash)
       throw new WalletError("NOT_FOUND", "Review the current room result.");
     return inspectWorkChunk(Buffer.from(marker.execution.resultBytesBase64, "base64"), hash, part, offset,
-      marker.modelBudget?.correctionCents ?? 0, workFileSource(stateDir, sha => this.#services.fetchFile(sha)));
+      marker.modelBudget?.correctionCents ?? 0, workFileSource(stateDir, sha => this.#services.fetchFile(sha)), fileCorrectionAllowed(stateDir, task, this.#earn.connectedAgent(agentId)));
   }
 
   async correctWork(agentId: string, task: string, hash: string, note: string) {
@@ -6037,7 +6038,7 @@ export class AgencWallet {
       this.#emit({type: "overview"});
       const fetch = workFileSource(ctx.stateDir, sha => this.#services.fetchFile(sha));
       const result = await correctChosenWork(ctx, agent, signal, workAddress(task), hash, note,
-        body => correctionInputs(body, fetch), body => checkWorkFiles(body, fetch));
+        body => correctionInputs(body, fetch, fileCorrectionAllowed(ctx.stateDir, task, this.#earn.connectedAgent(agentId))), body => checkWorkFiles(body, fetch));
       this.#emit({type: "overview"});
       return result;
     });

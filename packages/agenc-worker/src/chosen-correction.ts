@@ -63,7 +63,7 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
       stop.throwIfAborted();
       if (admit) admit();
       if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount),ctx.executorIdentity());
-      spendClaimRound(modelSpendDir,ctx.signer.address,held.claimAccount,-1,cents);
+      spendClaimRound(modelSpendDir,ctx.signer.address,held.claimAccount,-1,cents,ctx.roundCapacity?.(marker.jobEvidence?.acceptance ?? []));
       delete budget.correctionCents;
       saveState(ctx.stateDir,state);
       reserved = true;

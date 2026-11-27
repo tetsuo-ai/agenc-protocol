@@ -82,9 +82,10 @@ function decode(body: Buffer) {
     );
   }
 }
-export async function correctionInputs(body: Buffer, fetch: FetchFile) {
+export async function correctionInputs(body: Buffer, fetch: FetchFile, filesAllowed = true) {
   const { text, files } = decode(body);
   if (!files.length) return [];
+  if (!filesAllowed) throw new WalletError("NOT_AVAILABLE", "This agent cannot correct a file delivery.");
   let previous = "previous-result.txt";
   while (files.some((f) => f.name.toLowerCase() === previous))
     previous = "p-" + previous;
@@ -109,6 +110,7 @@ export async function inspectWorkChunk(
   offset: number,
   correctionCents: number,
   fetch: FetchFile,
+  allowFileCorrection = true,
 ): Promise<WorkInspection> {
   if (hashOf(body) !== hash)
     throw new WalletError(
@@ -133,6 +135,6 @@ export async function inspectWorkChunk(
     base64: bytes.subarray(offset, end).toString("base64"),
     next: end < bytes.length ? end : null,
     files,
-    correctionCents,
+    correctionCents: files.length && !allowFileCorrection ? 0 : correctionCents,
   };
 }
