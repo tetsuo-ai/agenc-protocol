@@ -361,7 +361,7 @@ export async function runExecutor(options: {
       cleaned = true;
       rmSync(scratchDir, { recursive: true, force: true });
     };
-    const walletRoom = !unsafe && argv[2] === "job" && process.platform !== "win32";
+    const walletRoom = !unsafe && (argv[2] === "job" || argv[2] === "self-test") && process.platform !== "win32";
     const child = spawn(resolvedCommand, args, {
       shell: false, // NEVER a shell — see the module invariants.
       // stderr is task-influenced too. Drain it through a hard cap instead of
