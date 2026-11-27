@@ -893,3 +893,21 @@ it("keeps a verified file job out of the picker while file transport is off",asy
   expect(page.jobs).toHaveLength(0);
   expect(page.eligibility?.code).not.toBe("available");
 });
+
+it("withholds ordinary Earn funding when its quote expires in the send queue",async()=>{
+  let hold=false, dispatched=false, queued=false;
+  world=await startWorld({earn:{executor,checkExecutionReady:async()=>{}},
+    transport:base=>({...base,async sendAndConfirm(tx,guard){
+      if(hold){queued=true;world!.clock.now+=301000;guard?.();dispatched=true;}
+      return base.sendAndConfirm(tx,guard);
+    }})});
+  const seller=await world.wallet.createAgent("Practice seller");
+  const quote=await world.wallet.quoteEarn(seller.id);
+  expect(BigInt(quote.fromMain.lamports)).toBeGreaterThan(0n);
+  const balance=await world.balance(seller.address);
+  hold=true;
+  await expect(world.wallet.approveEarnFunding(quote.quoteId)).rejects.toThrow();
+  expect(queued).toBe(true);
+  expect(dispatched).toBe(false);
+  expect(await world.balance(seller.address)).toBe(balance);
+});

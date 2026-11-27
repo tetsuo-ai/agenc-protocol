@@ -633,7 +633,7 @@ export class AgencWallet {
   /** Agents being stopped earning for good right now. */
   readonly #retiring = new Set<string>();
   readonly #quotedContinuation = new AsyncLocalStorage<{ agentId: string; active: boolean }>();
-  readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; target: bigint; action: string; before: string; offers: OfferRecord[] }>();
+  readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; chainExpires: number; target: bigint; action: string; before: string; offers: OfferRecord[] }>();
   readonly #spendingJob = new AsyncLocalStorage<string>();
   readonly #workQuotes = new Map<string, { quote: WorkerQuote; terms: string; deadline: number; generation: string }>();
   /**
@@ -1744,8 +1744,9 @@ export class AgencWallet {
           usdCents: rate === null ? null :
             Number((charge * BigInt(Math.ceil(rate * 1_000_000)) + 9_999_999n) / 10_000_000n) / 1_000_000,
         };
+        funding.admitted?.();
+        if (!funding.approved) this.#store.update(draft => this.#reserveCharge(draft.agents[agent.id]!, reserved));
         reservation = reserved;
-        if (!funding.decision) this.#store.update((draft) => this.#reserveCharge(draft.agents[agent.id]!, reserved));
       }
       const operation: ListingOperation = {
         kind: "funding", lamports: lamports.toString(), fee: this.#chain.transferFeeLamports.toString(), mainBalance: mainBalance.toString(),
@@ -1762,6 +1763,7 @@ export class AgencWallet {
         const id = funding?.decision?.quoteId ?? reservation?.id ?? operationId();
         const receipt = await sendOperation({ chain: this.#chain, store: this.#store, signer, id,
           fingerprint: operationFingerprint([this.#chain.network, recipient, operation]), kind: "fund", recipient, amount: lamports,
+          ...(funding?.admitted && {checkExpiry:funding.admitted}),
           reserve: (draft, signed) => {
             if (operation.decision && this.#now() >= operation.decision.expiresAt) throw new WalletError("PRICE_CHANGED", "The funding quote expired.");
             if (operation.charge) this.#reserveCharge(draft.agents[agent.id]!, operation.charge);
@@ -1787,13 +1789,14 @@ export class AgencWallet {
   /** Exact owner transfer terms. Opening a quote only records an intention. */
   async quoteTransfer(request: TransferRequest): Promise<TransferQuote> {
     const intent = structuredClone(request);
+    const chainExpires = await this.#chain.clusterTime() + 120;
     const quote = await this.#transferTerms(intent, operationId(), this.#now() + 120_000);
     await this.#checkMoneyPending(quote.payer);
     this.#store.update(draft => {
       for (const [key, entry] of Object.entries(draft.transferQuotes ?? {})) {
         if (entry.quote.expiresAt <= this.#now() && !draft.moneyOperations?.[key]) delete draft.transferQuotes![key];
       }
-      (draft.transferQuotes ??= {})[quote.id] = { quote: structuredClone(quote), request: intent };
+      (draft.transferQuotes ??= {})[quote.id] = { quote: structuredClone(quote), request: intent, chainExpires };
     });
     return quote;
   }
@@ -1890,7 +1893,16 @@ export class AgencWallet {
     if (!saved) return null;
     const { receipt, allowance: _allowance, ...outcome } = saved;
     return { ...outcome, signature: receipt.signature, lastValidBlockHeight: receipt.lastValidBlockHeight,
-      ...(saved.state === "pending" && { canRetry: await canRetryOperation(this.#chain, saved) }) };
+      ...(saved.state === "pending" && { canRetry: await this.#mayRetryOperation(saved) }) };
+  }
+
+  async #mayRetryOperation(op: MoneyOperation) {
+    const entry = this.#store.state.transferQuotes?.[op.id] ?? this.#store.archive.operation(op.id)?.quotes.transfer;
+    if (entry) {
+      try { (await this.#quoteGuard(entry.quote.expiresAt, entry.chainExpires))(); }
+      catch { return false; }
+    }
+    return canRetryOperation(this.#chain, op);
   }
 
   async pendingTransfers() {
@@ -1900,9 +1912,20 @@ export class AgencWallet {
       const entry = state.transferQuotes?.[op.id];
       if (op.state !== "pending" || !entry || entry.quote.network !== this.#chain.network) continue;
       pending.push({ quote: structuredClone(entry.quote), outcome: { id: op.id, state: op.state, signature: op.receipt.signature,
-        canRetry: await canRetryOperation(this.#chain, op) } });
+        canRetry: await this.#mayRetryOperation(op) } });
     }
     return pending;
+  }
+
+  async #quoteGuard(expiresAt: number, chainExpires?: number) {
+    const start = monotonicMs();
+    const now = await this.#chain.clusterTime().catch(() => 0);
+    const end = now > 0 && Number.isSafeInteger(now) && chainExpires && Number.isSafeInteger(chainExpires)
+      ? start + (chainExpires - now) * 1000 - 999 : start;
+    return () => {
+      this.#checkQuoteExpiry(expiresAt);
+      if (monotonicMs() >= end) throw new WalletError("PRICE_CHANGED", "Review a new funding quote.");
+    };
   }
 
   #checkQuoteExpiry(expiresAt: number) {
@@ -1930,7 +1953,7 @@ export class AgencWallet {
       const to = toAddress(quote.recipient, "recipient");
       const amount = BigInt(quote.credit.lamports);
       const result = await sendOperation({ chain: this.#chain, store: this.#store, signer, id, kind: quote.kind,
-        checkExpiry: () => this.#checkQuoteExpiry(quote.expiresAt),
+        checkExpiry: await this.#quoteGuard(quote.expiresAt, entry.chainExpires),
         recipient: to, amount, fingerprint: operationFingerprint([quote]), instructions: [transferInstruction(signer, to, amount)] });
       if (result.state === "confirmed") {
         this.#store.update(draft => {
@@ -6116,14 +6139,13 @@ export class AgencWallet {
   /** The room download or changing the local room mode can restart the service. */
   async quoteManualWork(agentId: string) {
     this.#checkBusinessConsent();
-    const chainExpires = await this.#chain.clusterTime() + 300;
     const quote = await this.quoteEarn(agentId);
     const entry = this.#fundingQuotes.get(quote.quoteId)!;
     this.#store.update(draft => {
       const saved = draft.setupQuotes ??= {};
       for (const [key, old] of Object.entries(saved)) if (old.quote.expiresAt <= this.#now()) delete saved[key];
       if (Object.keys(saved).length >= 100) throw new WalletError("BUSY", "Too many worker setup requests are pending.");
-      saved[quote.quoteId] = { quote, chainExpires, action: "start-manual", before: entry.before, offers: entry.offers };
+      saved[quote.quoteId] = { quote, chainExpires: entry.chainExpires, action: "start-manual", before: entry.before, offers: entry.offers };
     });
     this.#fundingQuotes.delete(quote.quoteId);
     return quote;
@@ -6555,6 +6577,7 @@ export class AgencWallet {
       offers = [...offers.filter((offer) => offer.id !== previous?.id), next];
     }
     const admission = price !== null && quotedTerms ? await this.#serviceAdmission(agentId, price, quotedTerms, quotedSpec) : undefined;
+    const chainExpires = await this.#chain.clusterTime() + 300;
     const quote = await this.#earningQuote(agent, offers, input && offers.at(-1)?.id);
     if (admission) quote.serviceAdmission = admission;
     quote.confirmAction = true;
@@ -6580,12 +6603,12 @@ export class AgencWallet {
         const saved = state.setupQuotes ??= {};
         for (const [key, entry] of Object.entries(saved)) if (entry.quote.expiresAt <= this.#now()) delete saved[key];
         if (Object.keys(saved).length >= 100) delete saved[Object.keys(saved)[0]!];
-        saved[quote.quoteId] = { quote: structuredClone(quote), action, before: this.#sellerRevision(agent), offers: structuredClone(offers) };
+        saved[quote.quoteId] = { quote: structuredClone(quote), chainExpires, action, before: this.#sellerRevision(agent), offers: structuredClone(offers) };
       });
       return quote;
     }
     this.#fundingQuotes.set(quote.quoteId, {
-      quote: structuredClone(quote),
+      chainExpires, quote: structuredClone(quote),
       target: BigInt(quote.requiredBalance.lamports),
       action, before: this.#sellerRevision(agent), offers: structuredClone(offers),
     });
@@ -6744,11 +6767,14 @@ export class AgencWallet {
       // Persist manual selection after quote validation and before signing or starting discovery.
       if (confirm?.action === "start-manual") this.chooseWork(agent.id, true);
       // One decision: A needs the signing network for the receipt, C the funded amount for the setup record.
+      const expiry = await this.#quoteGuard(entry.quote.expiresAt, entry.chainExpires);
+      const admitted = () => { expiry(); confirm?.admitted?.(); };
+      admitted();
       const decision = confirm && { network: this.#chain.network, quoteId, action: confirm.action, effect: confirm.effect, fundedLamports: amount.toString(), expiresAt: entry.quote.expiresAt };
       if (amount > 0n) {
         await this.#withListingTransport(agent.id, this.#listingAbort.signal, () =>
           this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`,
-            { approved: true,...(confirm?.admitted && {admitted:confirm.admitted}), ...(decision && { exact: entry.quote, decision }) }));
+            { approved: true, admitted, ...(decision && { exact: entry.quote, decision }) }));
       } else if (decision) {
         confirm?.admitted?.();
         this.#store.update((draft) => recordSellerDecision(draft.agents[agent.id]!, decision, true));
@@ -6761,11 +6787,13 @@ export class AgencWallet {
 
   async #fundEarning(agent: AgentRecord, offer?: OfferRecord): Promise<void> {
     await this.#lock(`funding:${agent.id}`, async () => {
+      const chainExpires = await this.#chain.clusterTime() + 300;
       const quote = await this.#earningQuote(this.#agentRecord(agent.id));
       const amount = BigInt(quote.fromMain.lamports);
       if (amount > 0n && offer?.fundingConfirmed)
         throw new WalletError("APPROVAL_REQUIRED", "The action needs more funding. Review a new quote.");
-      if (amount > 0n) await this.#mainToAgent(agent, amount, `Set money aside so ${agent.name} can earn.`, {});
+      if (amount > 0n) await this.#mainToAgent(agent, amount, `Set money aside so ${agent.name} can earn.`,
+        { admitted: await this.#quoteGuard(quote.expiresAt,chainExpires) });
     });
   }
 
@@ -7378,8 +7406,8 @@ export class AgencWallet {
         }
         const pending = agent.earn.pendingListingSends ??= [];
         if (pending.some((entry) => entry.signature === receipt.signature)) return;
-        if (op?.kind === "funding" && op.decision) {
-          if (this.#now() >= op.decision.expiresAt) throw new WalletError("PRICE_CHANGED", "The funding quote expired before signing finished.");
+        if (op?.kind === "funding") {
+          if (op.decision && this.#now() >= op.decision.expiresAt) throw new WalletError("PRICE_CHANGED", "The funding quote expired before signing finished.");
           if (op.charge) this.#reserveCharge(agent, op.charge);
         }
         pending.push(receipt);

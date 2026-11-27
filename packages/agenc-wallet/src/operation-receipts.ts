@@ -16,7 +16,7 @@ export interface MoneyOperation {
   allowance?: { agentId: string; usdPerSol: number };
   receipt: PendingListingSend; amount: string; fee: string; recorded?: boolean; jobId?: string;
 }
-export interface TransferReservation { quote: TransferQuote; request: TransferRequest }
+export interface TransferReservation { quote: TransferQuote; request: TransferRequest; chainExpires?: number }
 export interface OperationState {
   purchaseBindings?: Record<string, string | { network: string; fingerprint: string }>;
   moneyOperations?: Record<string, MoneyOperation>;
@@ -122,7 +122,8 @@ export async function sendOperation(options: {
     if (prior.state !== "pending") return prior;
     const signed = savedTransaction(prior);
     if (signed && await chain.operationBlockhashValid?.(signed.lifetimeConstraint.blockhash)) {
-      const result = await transport.sendAndConfirm(signed).catch(() => null);
+      try { options.checkExpiry?.(); } catch { return prior; }
+      const result = await transport.sendAndConfirm(signed, options.checkExpiry).catch(() => null);
       if (result?.signature === prior.receipt.signature)
         settleOperation(store, id, "confirmed");
     }
@@ -150,7 +151,7 @@ export async function sendOperation(options: {
   // Even two intentional identical sends in the same block have distinct signatures.
   const memo = { programAddress: address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), data: Buffer.from("agenc.operation.v1 " + id) };
   try {
-    const result = await signedOperation.run(record, () => client.send([...options.instructions, memo], { maxRetries: 0 }));
+    const result = await signedOperation.run(record, () => client.send([...options.instructions, memo], { maxRetries: 0, ...(options.checkExpiry && {assertAuthorized:options.checkExpiry}) }));
     if (store.operation(id)?.receipt.signature !== result.signature) throw new WalletError("NETWORK", "The signature did not match.");
     settleOperation(store, id, "confirmed");
   } catch (error) {
