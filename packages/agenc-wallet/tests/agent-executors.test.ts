@@ -508,3 +508,22 @@ it("pins the resolved named program even when both rooms use the same adapter ID
   expect(second[0]).toBe(first[0]);
   expect(second[1]).not.toBe(first[1]);
 });
+
+it("checks the interpreter entry point after flags before admission and signing",async()=>{
+  const fs=await import("node:fs");
+  const dir=fs.mkdtempSync(path.join(tmpdir(),"entrypoint-"));folders.push(dir);
+  const script=path.join(dir,"work.js");
+  const earn=host({executor:null,agentExecutors:{seller:{...local,argv:[process.execPath,"--no-warnings",script,"room:{agent}","{prompt}"]}},
+    checkExecutionReady:async()=>{}});
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={task:"job" as never,creator:"buyer" as never};
+    await expect(ctx.checkExecutionReady!(job)).rejects.toThrow();
+    fs.writeFileSync(script,"void 0");
+    const check=await ctx.checkExecutionReady!(job);
+    fs.unlinkSync(script);
+    expect(()=>check && check()).toThrow();
+  } finally {await earn.stopAll();}
+});

@@ -130,3 +130,13 @@ it("invalidates a ready room when machine settings arrive",async()=>{
     expect(select().ready).toBe(false);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+it("resolves shell scripts after errexit and node scripts after a warning code", async()=>{
+  const {checkNamedProgram}=await import("../src/room-selection.js");
+  expect(()=>checkNamedProgram([process.execPath,"--disable-warning","DEP0018","/missing/worker.js"])).toThrow();
+  expect(()=>checkNamedProgram([process.execPath,"-c","/missing/worker.js"])).toThrow();
+  if (process.platform !== "win32") {
+    expect(()=>checkNamedProgram(["/bin/sh","-e","/missing/worker.sh"])).toThrow();
+    expect(()=>checkNamedProgram(["/bin/sh","-c","true"])).not.toThrow();
+  }
+});
