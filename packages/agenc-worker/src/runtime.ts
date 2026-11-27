@@ -2446,7 +2446,7 @@ export async function processCandidate(
   } catch (error) {
     const reason = formatDiagnosticError(error);
     if (error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name)) {
-      const current = () => ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) ?? "";
+      const current = () => error.name === "ExecutorBudgetError" ? ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) ?? "" : "";
       const allowance = current();
       refused.set(task+(chosen?"/chosen":"/automatic"),{hash:bytesToHex(new Uint8Array(verified.jobSpecHash)),snapshot:observedHash,generation,reason,
         ...(expires !== undefined && {expires}),unchanged:()=>current()===allowance});

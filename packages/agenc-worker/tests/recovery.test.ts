@@ -3389,3 +3389,15 @@ it.each(["between attempts","during admission"])("reconsiders a changed spec obs
   await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,jobSpecHash:digest.hex,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
   expect(result.claimTaskWithJobSpec).toHaveBeenCalledOnce();
 });
+
+it("keeps a capability refusal when only the SOL price changes",async()=>{
+  let rate=100;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{throw Object.assign(new Error("This room cannot read private inputs."),{name:"ExecutorCapabilityError"});},
+    ctx=>{ctx.allowanceGeneration=()=>String(rate);});
+  const reads=vi.spyOn(result.ctx,"readAccount");
+  rate=95;
+  await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
+  expect(reads).not.toHaveBeenCalled();
+  expect(result.fetchUri).toHaveBeenCalledOnce();
+});
