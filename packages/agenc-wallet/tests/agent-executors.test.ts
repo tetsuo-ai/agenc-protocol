@@ -359,6 +359,10 @@ it.each(["codex-api","codex-plan"] as const)("applies verified job requirements 
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
     const paid = {task:"test" as never, creator:"buyer" as never, firstRoundCents:1, promptBytes:20000};
     await expect(ctx.checkExecutionReady!(paid)).rejects.toThrow(/allowance/);
+    if (agent === "codex-api") {
+      await expect(ctx.checkExecutionReady!({...paid, promptBytes:11_000})).rejects.toThrow(/allowance/);
+      await expect(ctx.checkExecutionReady!({...paid, promptBytes:7_600})).resolves.toBeTypeOf("function");
+    }
     await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:100,reviewFiles:1})).rejects.toThrow(/tools/);
     expect(earn.supportsPrivateInputs("seller")).toBe(false);
     expect(earn.supportsService("seller",{servicePin:true})).toBe(false);

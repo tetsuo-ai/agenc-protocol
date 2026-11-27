@@ -96,6 +96,8 @@ export interface EarnExecutor {
 
 // promptBytes already includes the JSON quotes. Every allowed first POST must contain this envelope.
 const MINIMUM_MESSAGE_BYTES = Buffer.byteLength(JSON.stringify({model:"claude-haiku-4-5-20251001",messages:[{role:"user",content:""}]})) - 2;
+// The pinned Codex VM checks its first request against this allowance for instructions and tools.
+const CODEX_FIRST_REQUEST_OVERHEAD = 4096;
 export interface JobAdmission {
   source: "own" | "external";
   privateInputs: boolean;
@@ -967,10 +969,12 @@ export class EarnHost {
         if (room?.agent === "claude-code" && admission.firstRoundCents !== undefined &&
           (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
           throw new Error("The first model turn exceeds this job's allowance.");
-        // The API proxy reserves at least the serialized prompt and 16 output tokens.
-        if (room?.agent === "codex-api" && admission.firstRoundCents !== undefined &&
-            (admission.promptBytes + 64) * 30 + 16 * 180 > admission.firstRoundCents * 400_000)
-          throw new Error("The first model turn exceeds this job's allowance.");
+        if (room?.agent === "codex-api" && admission.firstRoundCents !== undefined) {
+          const wireBytes = admission.promptBytes + CODEX_FIRST_REQUEST_OVERHEAD;
+          const inputTokens = Math.min(272_000, Math.ceil(wireBytes * 1.1) + 64);
+          if (inputTokens * 30 + 16 * 180 > admission.firstRoundCents * 400_000)
+            throw new Error("The first model turn exceeds this job's allowance.");
+        }
       };
       check();
       if (this.#options.checkExecutionReady !== undefined) {
