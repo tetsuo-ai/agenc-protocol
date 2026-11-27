@@ -23,7 +23,7 @@ import { watch } from "node:fs";
  * @module cli
  */
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -100,6 +100,7 @@ interface Bootstrap {
   ownerToken: string;
   earn?: {
     executor: { argv: string[]; mode: string; isolatedJobRoom?: boolean; reserveRevisionBudget?: boolean; envAllowlist?: string[]; timeoutMs?: number; readiness?: { argv: string[]; timeoutMs?: number } } | null;
+    conditionalRoom?: { setting: string; executor: NonNullable<NonNullable<Bootstrap["earn"]>["executor"]> };
     maxRewardLamports?: string | null;
     /** Take jobs only from this wallet's own addresses. */
     ownJobsOnly?: boolean;
@@ -182,7 +183,12 @@ function readStdinLine(): Promise<string> {
 }
 
 function earnOptions(bootstrap: Bootstrap): EarnOptions {
-  const executor = bootstrap.earn?.executor ?? null;
+  const conditional = bootstrap.earn?.conditionalRoom;
+  if (conditional !== undefined && (bootstrap.earn?.executor != null || !conditional ||
+      typeof conditional.setting !== "string" || !path.isAbsolute(conditional.setting) ||
+      conditional.executor?.mode !== "sandboxed" || conditional.executor.isolatedJobRoom !== true ||
+      !conditional.executor.readiness)) throw new WalletError("BAD_REQUEST", "The selected room needs an isolated executor and a readiness check.");
+  const executor = conditional?.executor ?? bootstrap.earn?.executor ?? null;
   if (executor === null) return { executor: null };
   if (
     !Array.isArray(executor.argv) ||
@@ -219,6 +225,10 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
       timeoutMs: executor.timeoutMs ?? 15 * 60_000,
       ...(readiness === undefined ? {} : { readiness }),
     },
+    ...(conditional && { defaultExecutorEnabled: () => {
+      // Only the presence of the host setting matters. Its contents stay with the host.
+      try { return lstatSync(conditional.setting).isFile(); } catch { return false; }
+    } }),
     ...(maxReward === undefined
       ? {}
       : { maxRewardLamports: maxReward === null ? null : BigInt(maxReward) }),

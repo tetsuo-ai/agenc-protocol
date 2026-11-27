@@ -156,3 +156,25 @@ it("hands a local room the agreed outputs even without a reservation or a pinned
   const plain = await ctx.executorForTask(task, address, undefined, null, null, "Make the table.", ["Name the source."]);
   expect(plain.some(part => part.startsWith('{"'))).toBe(false);
 });
+
+it("refreshes room availability and readiness while the same wallet is open", async () => {
+  let selected = false;
+  const room: EarnExecutor = { ...local, mode: "sandboxed", isolatedJobRoom: true, readiness: { argv: ["/test/ready"] } };
+  const earn = host({ executor: room, defaultExecutorEnabled: () => selected, chosenRoomEnabled: () => true,
+    checkExecutionReady: async () => {}, pollIntervalMs: 10 });
+  expect(earn.available).toBe(false);
+  expect(earn.executorFor("agent_1")).toBeNull();
+  selected = true;
+  expect(earn.available).toBe(true);
+  expect(earn.chosenRoom).toBe(true);
+  expect(earn.executorFor("agent_1")).toBe(room);
+  void earn.start({ agentId: "seller", signer: { address: "fake" } as unknown as KeyPairSigner, minRewardLamports: 0n });
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as { checkExecutionReady(scope: object): Promise<void> };
+    selected = false;
+    expect(earn.available).toBe(false);
+    expect(earn.chosenRoom).toBe(false);
+    await expect(ctx.checkExecutionReady({})).rejects.toThrow(/selected/);
+  } finally { await earn.stopAll(); }
+});

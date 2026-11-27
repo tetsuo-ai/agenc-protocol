@@ -100,6 +100,8 @@ export interface EarnOptions {
   watchChosenRoom?: (revoke: () => void) => () => void;
   /** Null when this host cannot run jobs (earning is then unavailable). */
   executor: EarnExecutor | null;
+  /** The host can make its preconfigured room available while this wallet is open. */
+  defaultExecutorEnabled?: () => boolean;
   /**
    * A different way of running jobs for named agents, such as the one seller
    * the owner paired with a remote room. Every other agent keeps `executor`.
@@ -281,15 +283,19 @@ export class EarnHost {
     this.#privateProcessing = deps.privateProcessing ?? (async () => null);
   }
 
+  #defaultExecutor(): EarnExecutor | null {
+    return this.#options.defaultExecutorEnabled?.() === false ? null : this.#options.executor;
+  }
+
   /** Whether this host can run jobs at all. */
   get available(): boolean {
-    return this.#options.executor !== null || Object.keys(this.#options.agentExecutors ?? {}).length > 0;
+    return this.#defaultExecutor() !== null || Object.keys(this.#options.agentExecutors ?? {}).length > 0;
   }
 
   /** How this agent's jobs run: its own executor when the host named one, else the shared one. */
   executorFor(agentId: string): EarnExecutor | null {
     const own = this.#options.agentExecutors;
-    return own !== undefined && Object.hasOwn(own, agentId) ? own[agentId]! : this.#options.executor;
+    return own !== undefined && Object.hasOwn(own, agentId) ? own[agentId]! : this.#defaultExecutor();
   }
 
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
@@ -607,9 +613,10 @@ export class EarnHost {
   }
 
   get chosenRoom(): boolean {
+    const executor = this.#defaultExecutor();
     return this.#options.chosenRoomEnabled?.() === true && !this.ownJobsOnly &&
-      this.#options.executor?.mode === "sandboxed" &&
-      !!(this.#options.executor.readiness || this.#options.checkExecutionReady);
+      executor?.mode === "sandboxed" &&
+      !!(executor.readiness || this.#options.checkExecutionReady);
   }
 
   hasChosenClaim(agentId: string): boolean {
@@ -882,6 +889,7 @@ export class EarnHost {
     };
 
     const checkReady = async (signal?: AbortSignal): Promise<void> => {
+      if (this.executorFor(agent.agentId) !== executor) throw new Error("This job room is no longer selected.");
       if (this.#options.checkExecutionReady !== undefined) {
         await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
       } else if (executor.readiness !== undefined) {
