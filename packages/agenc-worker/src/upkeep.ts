@@ -55,6 +55,14 @@ export async function claimChainTime(read: WorkerContext["readAccount"]): Promis
   return seconds;
 }
 
+async function releaseClock(ctx:WorkerContext): Promise<number> {
+  try {
+    const now=await ctx.clusterTime?.();
+    if (typeof now === "number" && Number.isSafeInteger(now) && now > 0) return now;
+  } catch {}
+  return claimChainTime(ctx.readAccount);
+}
+
 /** The cluster's clock in unix seconds, as well as this worker can tell. */
 export async function clusterNowSeconds(ctx: WorkerContext): Promise<number> {
   if (ctx.clusterTime !== undefined) {
@@ -311,7 +319,7 @@ export async function sendReleaseClaim(
   decoded: Task,
   refundBefore?: bigint,
 ): Promise<string> {
-  const end = refundBefore === undefined ? undefined : await chainDeadline(ctx.clusterTime ?? (()=>claimChainTime(ctx.readAccount)),Number.MAX_SAFE_INTEGER,refundBefore);
+  const end = refundBefore === undefined ? undefined : await chainDeadline(()=>releaseClock(ctx),Number.MAX_SAFE_INTEGER,refundBefore);
   const check = () => { if (end !== undefined && monotonicMs() >= end) throw new Error("The claim refund window closed."); };
   const { signature } = await ctx.client.send(
     [
@@ -385,7 +393,7 @@ export async function releaseOwnClaims(
     if (job.chosen) continue; // Only the owner may spend to close this claim.
     const decoded = await readTask(ctx, task);
     if (decoded === null) continue;
-    now ??= await clusterNowSeconds(ctx);
+    try { now ??= await releaseClock(ctx); } catch { continue; }
     const ended =
       decoded.status === TaskStatus.Completed || decoded.status === TaskStatus.Cancelled;
     const live =

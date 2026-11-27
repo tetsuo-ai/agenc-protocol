@@ -594,3 +594,17 @@ it("guards an automatic refundable release through signing and landing",async()=
   const {lighthouse}=await import("@tetsuo-ai/marketplace-sdk");
   expect(instructions).toContainEqual(lighthouse.assertClockBefore(NOW+11));
 });
+
+it("keeps a deposit held when both verified release clocks are unavailable",async()=>{
+  const send=vi.fn(async()=>({signature:"local"}));
+  const w=await setup({send});givenUp(w.stateDir);
+  w.accounts.set(TASK,taskData(TaskStatus.InProgress));
+  w.accounts.set(w.claim,claimData(BigInt(NOW+7200),BigInt(NOW-3590)));
+  w.ctx.clusterTime=async()=>{throw new Error("offline");};
+  const fast=vi.spyOn(Date,"now").mockReturnValue((NOW+120)*1000);
+  try {
+    expect(await releaseOwnClaims(w.ctx,agent)).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+    expect(loadState(w.stateDir).failedJobs[0]?.claimReleased).not.toBe(true);
+  } finally {fast.mockRestore();}
+});
