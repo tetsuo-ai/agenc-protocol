@@ -6,7 +6,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 export interface LiveRoom {
   setting: string;
@@ -15,6 +15,7 @@ export interface LiveRoom {
   baseFiles: readonly string[];
   agentFiles: readonly string[];
   generationFiles?: readonly string[];
+  managedSettingsRoot?: string;
 }
 export interface RoomSelection {
   agent: "core" | "claude-code";
@@ -73,6 +74,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.baseFiles,
       ...room.agentFiles,
       ...(room.generationFiles ?? []),
+      ...(room.managedSettingsRoot ? [room.managedSettingsRoot] : []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
     !room.agentFiles.length
@@ -106,8 +108,21 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       agent !== "core" ||
       keysEpoch === "legacy" ||
       /^[0-9a-f-]{36}$/.test(keysEpoch);
+    let managed = false;
+    if (room.managedSettingsRoot) {
+      try {
+        const config = join(room.managedSettingsRoot,"config.toml");
+        const drop = join(room.managedSettingsRoot,"config.d");
+        const occupied = (path: string) => {
+          try { return lstatSync(path); }
+          catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw e; }
+        };
+        const directory = occupied(drop);
+        managed = !!occupied(config) || !!directory && (!directory.isDirectory() || readdirSync(drop).length > 0);
+      } catch { managed = true; }
+    }
     const ready =
-      keysStable &&
+      !managed && keysStable &&
       (epoch === "legacy" || /^[0-9a-f-]{36}$/.test(epoch)) &&
       base.every((f) => f.regular) &&
       (agent === "core"
@@ -116,11 +131,17 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
-        .filter((n) => /^\.paid-agent-(denied|refused)\./.test(n))
+        .filter((n) => {
+          if (/^\.paid-agent-(denied|refused)\./.test(n)) return true;
+          if (!/^\.paid-agent-claim\.[a-f0-9]{64}\.[a-f0-9]{64}$/.test(n)) return false;
+          const marker = readFileSync(join(dirname(room.setting),n),"utf8");
+          return !isAbsolute(marker) || file(marker).regular;
+        })
         .sort();
     const generation = JSON.stringify([
       epoch,
       keysEpoch,
+      managed,
       refusals,
       slot.id,
       file(room.keyStore).id,
