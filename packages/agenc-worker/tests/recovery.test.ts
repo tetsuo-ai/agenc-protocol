@@ -2969,6 +2969,25 @@ describe("upkeep that cannot read the chain", () => {
     return { stateDir, ctx, events, submitTaskResult };
   }
 
+  it("retains the room admission returned to the continuous worker", async () => {
+    const {ctx} = await workerWithUpkeepDown();
+    const stop = new AbortController();
+    const selected = () => { throw new Error("The selected room changed."); };
+    ctx.checkExecutionReady = async () => selected;
+    let changed = false;
+    ctx.onWorkerReady = (_dispatch, read) => {
+      if (read) void read(async live => {
+        try {
+          const guard = await live.checkExecutionReady!({task:TASK});
+          try { if (guard) guard(); } catch (e) { changed = (e as Error).message === "The selected room changed."; }
+        }
+        finally { stop.abort(); }
+      });
+    };
+    await runUp(ctx,{signal:stop.signal});
+    expect(changed).toBe(true);
+  });
+
   it("does not stop a tick: the rest of its work is done and the failure is logged", async () => {
     const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
     const result = await runTickOnce(ctx);
@@ -3191,6 +3210,20 @@ describe("selling preflight", () => {
     await processCandidate({...result.ctx},agent,{task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,
       requiredCapabilities:1n,parentTask:PARENT});
     expect(signatures).toBe(1);
+  });
+
+  it("checks the first round after revisions before spending a deposit", async () => {
+    const ready = vi.fn(async ({firstRoundCents}: Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0]) => {
+      if ((firstRoundCents ?? 0) < 78) throw new Error("The plan needs a larger first round.");
+    });
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT, executable:false, data:new Uint8Array()}, ready, ctx => {
+      ctx.reserveRevisionBudget = true;
+      ctx.modelBudgetForTask = async () => 80;
+    });
+    expect(ready.mock.calls[0]?.[0].firstRoundCents).toBeLessThan(78);
+    expect(result.outcome.status).toBe("skipped");
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(result.stateDir).openClaim).toBeNull();
   });
 
   it("only reaches the claim transaction after the self-test resolves", async () => {

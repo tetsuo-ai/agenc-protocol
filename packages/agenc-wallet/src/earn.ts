@@ -96,6 +96,8 @@ export interface EarnExecutor {
 
 // promptBytes already includes the JSON quotes. Every allowed first POST must contain this envelope.
 const MINIMUM_MESSAGE_BYTES = Buffer.byteLength(JSON.stringify({model:"claude-haiku-4-5-20251001",messages:[{role:"user",content:""}]})) - 2;
+// The pinned Codex VM checks its first request against this allowance for instructions and tools.
+const CODEX_FIRST_REQUEST_OVERHEAD = 4096;
 export interface JobAdmission {
   source: "own" | "external";
   privateInputs: boolean;
@@ -947,6 +949,7 @@ export class EarnHost {
       const current = guard();
       current();
       let hostCheck: void | (() => void);
+      let reportedMinimum = 0;
       const check = () => {
         signal?.throwIfAborted();
         current();
@@ -956,22 +959,33 @@ export class EarnHost {
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
             (admission.servicePin && executor.argv[2] === "job")))
           throw new ExecutorCapabilityError("This job needs file delivery.");
-        if (!this.supportsService(agent.agentId,admission) || ((this.#connectedRoom(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
+        const room = this.#connectedRoom(agent.agentId);
+        if (!this.supportsService(agent.agentId,admission) || ((room || executor.argv[2] === "peer-job") && admission.reviewFiles))
           throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
-        const selected = this.#connectedRoom(agent.agentId);
-        if (selected && admission.firstRoundCents !== undefined) {
-          const acp = selected.firstCall;
-          const affordable = selected.agent === "acp"
-            ? !!acp && acp.baseTicks + acp.inputTicksPerByte * admission.promptBytes <= admission.firstRoundCents * 100_000_000
-            : (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= admission.firstRoundCents * 200_000;
-          if (!affordable) throw new ExecutorCapabilityError("The first model turn exceeds this job's allowance.");
+        const floor = Math.max(reportedMinimum, room?.minimumModelCents ?? 0);
+        if ((admission.firstRoundCents !== undefined || admission.promptBytes > 0) &&
+            (admission.firstRoundCents ?? 0) < floor)
+          throw new Error("The first round's allowance is below the selected room's minimum.");
+        if (room?.agent === "acp" && admission.firstRoundCents !== undefined) {
+          const price = room.firstCall;
+          if (!price || price.baseTicks + price.inputTicksPerByte * admission.promptBytes > admission.firstRoundCents * 100_000_000)
+            throw new ExecutorCapabilityError("The first model turn exceeds this job's allowance.");
+        }
+        if (room?.agent === "claude-code" && admission.firstRoundCents !== undefined &&
+          (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
+          throw new ExecutorCapabilityError("The first model turn exceeds this job's allowance.");
+        if (room?.agent === "codex-api" && admission.firstRoundCents !== undefined) {
+          const wireBytes = admission.promptBytes + CODEX_FIRST_REQUEST_OVERHEAD;
+          const inputTokens = Math.min(272_000, Math.ceil(wireBytes * 1.1) + 64);
+          if (inputTokens * 30 + 16 * 180 > admission.firstRoundCents * 400_000)
+            throw new ExecutorCapabilityError("The first model turn exceeds this job's allowance.");
         }
       };
       check();
       if (this.#options.checkExecutionReady !== undefined) {
         hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
-        await runExecutor({
+        const report = await runExecutor({
           argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
             ["admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
             executor.readiness.argv[2] === "peer-ready" && admission?.serviceDigest ? [admission.serviceDigest] : [])],
@@ -980,6 +994,17 @@ export class EarnHost {
           maxStdoutBytes: 64 * 1024,
           ...(signal === undefined ? {} : { signal }),
         });
+        if (admission && executor.readiness.argv[2] === "self-test") {
+          const text = report.stdout.toString("utf8").trimStart();
+          if (text.startsWith("{")) {
+            const floor: unknown = JSON.parse(text).minimumModelCents;
+            if (floor !== undefined) {
+              if (typeof floor !== "number" || !Number.isSafeInteger(floor) || floor < 1)
+                throw new Error("The selected room returned an invalid model minimum.");
+              reportedMinimum = floor;
+            }
+          }
+        }
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }

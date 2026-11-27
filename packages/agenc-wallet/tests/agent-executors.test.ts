@@ -345,3 +345,43 @@ it("refuses an unfundable first ACP call before the seller can sign", async () =
     expect(earn.supportsPrivateInputs("seller")).toBe(false);
   } finally { await earn.stopAll(); }
 });
+
+it("takes a model minimum only from the host room readiness report", async () => {
+  const folder = mkdtempSync(path.join(tmpdir(),"room-allowance-"));
+  folders.push(folder);
+  const program = path.join(folder,"room.cjs");
+  const {writeFileSync} = await import("node:fs");
+  writeFileSync(program, 'console.log(JSON.stringify({ok:true,minimumModelCents:78}));');
+  const earn = host({executor:{...local, mode:"sandboxed",isolatedJobRoom:true,
+    readiness:{argv:[process.execPath,program,"self-test","/assets",folder]}}});
+  void earn.start({agentId:"seller", signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const paid = {task:"test" as never,creator:"buyer" as never,promptBytes:36};
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:77})).rejects.toThrow("allowance");
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:78})).resolves.toBeTypeOf("function");
+  } finally { await earn.stopAll(); }
+});
+
+it.each(["codex-api","codex-plan"] as const)("applies verified job requirements to %s before the host check", async agent => {
+  const probe = vi.fn(async () => {});
+  const earn = host({executor:{...local, mode:"sandboxed", isolatedJobRoom:true},
+    liveRoomState:()=>({agent,ready:true,coreCommand:null,generation:"selected",
+      ...(agent === "codex-plan" && {minimumModelCents:78})}), checkExecutionReady:probe});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const paid = {task:"test" as never, creator:"buyer" as never, firstRoundCents:1, promptBytes:20000};
+    await expect(ctx.checkExecutionReady!(paid)).rejects.toThrow(/allowance/);
+    if (agent === "codex-api") {
+      await expect(ctx.checkExecutionReady!({...paid, promptBytes:11_000})).rejects.toThrow(/allowance/);
+      await expect(ctx.checkExecutionReady!({...paid, promptBytes:7_600})).resolves.toBeTypeOf("function");
+    }
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:100,reviewFiles:1})).rejects.toThrow(/tools/);
+    expect(earn.supportsPrivateInputs("seller")).toBe(false);
+    expect(earn.supportsService("seller",{servicePin:true})).toBe(false);
+    await expect(ctx.checkExecutionReady!({...paid,firstRoundCents:100})).resolves.toBeTypeOf("function");
+  } finally { await earn.stopAll(); }
+});

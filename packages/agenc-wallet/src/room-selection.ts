@@ -22,11 +22,14 @@ export interface LiveRoom {
   agentFiles: readonly string[];
   acpFiles?: readonly string[];
   acpPrices?: Record<string, FirstCallPrice>;
+  codexFiles?: readonly string[];
+  codexPlanMinimumCents?: number;
   generationFiles?: readonly string[];
 }
 export interface RoomSelection {
-  agent: "core" | "claude-code" | "acp";
+  agent: "core" | "claude-code" | "acp" | "codex-plan" | "codex-api";
   firstCall?: FirstCallPrice;
+  minimumModelCents?: number;
   ready: boolean;
   coreCommand: string | null;
   generation: string;
@@ -82,13 +85,16 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.baseFiles,
       ...room.agentFiles,
       ...(room.acpFiles ?? []),
+      ...(room.codexFiles ?? []),
       ...(room.generationFiles ?? []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
     !room.agentFiles.length ||
     (!!room.acpPrices !== !!room.acpFiles?.length) ||
     Object.values(room.acpPrices ?? {}).some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
-      !Number.isSafeInteger(p.inputTicksPerByte) || p.inputTicksPerByte < 0)
+      !Number.isSafeInteger(p.inputTicksPerByte) || p.inputTicksPerByte < 0) ||
+    (room.codexPlanMinimumCents !== undefined &&
+      (!Number.isSafeInteger(room.codexPlanMinimumCents) || room.codexPlanMinimumCents < 1))
   )
     throw new Error("Invalid job room paths.");
   return () => {
@@ -108,7 +114,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     let profile: unknown = "claude-code";
     let validUntil: unknown;
     // Desktop owns this envelope. Only its public profile name enters the wallet.
-    if (slot.regular && room.acpPrices) {
+    if (slot.regular && (room.acpPrices || room.codexFiles)) {
       try {
         if (statSync(room.setting).size > 65536) throw new Error();
         const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
@@ -116,11 +122,12 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
         validUntil = envelope.validUntil;
       } catch { profile = null; }
     }
-    const agent = slot.id === "missing" ? "core" : profile === "claude-code" ? "claude-code" : "acp";
+    const agent = slot.id === "missing" ? "core" : profile === "claude-code" ? "claude-code" : profile === "codex-api" || profile === "codex-plan" ? profile : "acp";
     const firstCall = agent === "acp" && typeof profile === "string" && Object.hasOwn(room.acpPrices ?? {}, profile)
       ? room.acpPrices![profile] : undefined;
     const loginCurrent = !firstCall?.needsExpiry || (typeof validUntil === "number" && Number.isSafeInteger(validUntil) && Date.now() < validUntil);
-    const agentFiles = (agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
+    const codex = agent === "codex-api" || agent === "codex-plan";
+    const agentFiles = (codex ? room.codexFiles ?? [] : agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -139,7 +146,8 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
-        : slot.regular && (agent !== "acp" || !!firstCall) && agentFiles.every((f) => f.regular));
+        : slot.regular && (agent !== "acp" || !!firstCall) && agentFiles.length > 0 && agentFiles.every((f) => f.regular) &&
+          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
@@ -158,6 +166,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       agentFiles,
       room.generationFiles?.map(file),
     ]);
-    return { agent, ready, coreCommand, generation, ...(firstCall && {firstCall}) };
+    return { agent, ready, coreCommand, generation, ...(firstCall && {firstCall}),
+      ...(agent === "codex-plan" && room.codexPlanMinimumCents !== undefined && {minimumModelCents:room.codexPlanMinimumCents}) };
   };
 }
