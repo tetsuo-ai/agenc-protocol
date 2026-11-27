@@ -1976,3 +1976,22 @@ describe("idle discovery RPC budget", () => {
     expect(() => watchClaimableTasks({ rpc: makeGpaTransport([]), pollIntervalMs: 100, maxIdlePollIntervalMs: 99, onTask: () => {} })).toThrow(/maxIdlePollIntervalMs/);
   });
 });
+
+it("uses the existing sweep to announce changed spec hashes and remove closed tasks",async()=>{
+  const taskId=new Uint8Array(32).fill(57), [task]=await findTaskPda({creator:CREATOR_A,taskId});
+  const [pin]=await findTaskJobSpecPda({task});
+  const row={address:task,data:encodeTask({creator:CREATOR_A,taskId,requiredCapabilities:1n,rewardAmount:5_000_000n})};
+  const spec={address:pin,data:encodeTaskJobSpec(task,CREATOR_A)};
+  const rows=[row,spec], got:string[]=[];
+  let live=true;
+  const watch=watchClaimableTasks({indexer:makeGpaTransport(rows),pollIntervalMs:10,
+    onTask:job=>{got.push(job.jobSpecHash ?? "missing");},
+    onCandidateSnapshot:open=>{live=open.has(task);}});
+  try {
+    await vi.waitFor(()=>expect(got).toEqual(["ab".repeat(32)]));
+    spec.data=encodeTaskJobSpec(task,CREATOR_A,{hash:new Uint8Array(32).fill(0x23)});
+    await vi.waitFor(()=>expect(got).toEqual(["ab".repeat(32),"23".repeat(32)]));
+    rows.splice(0);
+    await vi.waitFor(()=>expect(live).toBe(false));
+  } finally {await watch.stop();}
+});

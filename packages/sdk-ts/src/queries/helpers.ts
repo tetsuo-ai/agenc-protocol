@@ -54,6 +54,7 @@ import {
   type GpaFilter,
   type ProgramAccountsSource,
 } from "./transport.js";
+import { bytesToHex } from "../values/hash.js";
 import { DISPUTE_SAFE_MAX_WORKERS } from "../values/protocol-limits.js";
 
 /** A decoded program account paired with its on-chain address. */
@@ -540,16 +541,21 @@ async function fetchTaskJobSpecsForPinValidation(
 export async function listPinnedJobSpecTasks(
   source: ProgramAccountsSource,
 ): Promise<Set<Address>> {
+  return new Set((await listPinnedJobSpecHashes(source)).keys());
+}
+
+/** Read the hash from the same scan that establishes pointer availability. */
+export async function listPinnedJobSpecHashes(source: ProgramAccountsSource): Promise<Map<Address,string>> {
   const specs = await fetchTaskJobSpecsForPinValidation(source, [
     discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR),
   ]);
-  const pinned = new Set<Address>();
+  const pinned = new Map<Address,string>();
   for (const account of specs) {
     if (
       isNonZeroHash(account.jobSpecHash) &&
       isNonBlankJobSpecUri(account.jobSpecUri)
     ) {
-      pinned.add(account.task);
+      pinned.set(account.task,bytesToHex(Uint8Array.from(account.jobSpecHash)));
     }
   }
   return pinned;
