@@ -1276,7 +1276,7 @@ export class EarnHost {
           // An own-jobs loop also starts afresh, to learn of agents added since.
           if (choosing !== agent.chooseOpenJobs?.() || (revision !== entry.capabilityRevision && !this.hasUnfinishedJob(agent.agentId))) run.abort();
           const due = this.#serves(agent.agentId) || this.ownJobsOnly;
-          if (due && Date.now() - startedAt >= refreshMs) run.abort();
+          if (due && Date.now() - startedAt >= refreshMs && !this.hasUnfinishedJob(agent.agentId)) run.abort();
         },
         Math.max(250, Math.min(refreshMs, 5_000)),
       );
