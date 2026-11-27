@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DEFAULT_OUTPUT_AGREEMENT, outputAgreementCriterion } from "./client/job-exchange.js";
 import { earnOptions, type Bootstrap } from "./earn-bootstrap.js";
 /**
  * `agenc-wallet <init|serve|status>` — run the wallet as a small local service.
@@ -268,6 +269,8 @@ async function openService(target: ServeTarget, bootstrap: Bootstrap): Promise<O
         offer = await practice.postOpenJob({
           title: "Write one friendly line",
           instructions: "Write one short, friendly sentence welcoming a new neighbour.",
+          brief: {instructions:"Write one short, friendly sentence welcoming a new neighbour.",
+            acceptance:[outputAgreementCriterion(DEFAULT_OUTPUT_AGREEMENT)]},
           rewardLamports: PRACTICE_OPEN_JOB_REWARD,
         });
       } else if (await offer.delivered()) {

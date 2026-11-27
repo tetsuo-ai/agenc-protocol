@@ -12,7 +12,7 @@ import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // person gave it, and the executor is whatever the host configured (for the
 // desktop app, AgenC Core in its OS sandbox in a throwaway folder).
 import { fundingShortLogLine } from "./earn-log-lines.js";
-import { deliveryFileProblem } from "./client/delivery-files.js";
+import { agreedOutputProblem, deliveryFileProblem } from "./client/delivery-files.js";
 import { indexClaimUsage, reserveServiceRun, serviceUsage, type ServiceUsage } from "./service-usage.js";
 import { recordServiceBudget } from "./service-budget.js";
 import { readServiceRehearsal } from "./service-rehearsal.js";
@@ -50,7 +50,7 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
-import { chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
+import { claimBudget, chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
 import { checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
@@ -64,6 +64,8 @@ import type { MarketServices } from "./services.js";
 export interface EarnExecutor {
   /** Keep part of a new job’s original model allowance for its two revisions. */
   reserveRevisionBudget?: boolean;
+  /** A named in-room model adapter. Paired scripted executors do not use this field. */
+  connectedAgent?:string;
   /** The trusted host selected the isolated guest adapter for this argv. */
   isolatedJobRoom?: boolean;
   /**
@@ -98,11 +100,19 @@ export interface EarnExecutor {
 
 // The host bounds the pinned CLI's first envelope, including its system text and Bash tool.
 export const MINIMUM_MESSAGE_BYTES = 18 * 1024;
+function firstTurnFits(cents:number, bytes:number):boolean {
+  return Number.isSafeInteger(cents) && (bytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= cents * 200_000;
+}
+type ListingNeeds = {promptBytes?:number; requiredFiles?:readonly string[]; allowTextOnly?:boolean; privateInputs?:boolean; servicePin?:boolean; serviceDigest?:string; modelCapCents?:number; extraRoomFeatures?:boolean};
 export interface JobAdmission {
   source: "own" | "external";
   privateInputs: boolean;
   servicePin: boolean;
   serviceDigest?: string;
+  verifiedPin?:NonNullable<SellerTerms["servicePin"]>;
+  revision?: boolean;
+  verifiedAgreement?: boolean;
+  extraRoomFeatures?: boolean;
   reviewFiles: number;
   requiredFiles: readonly string[];
   allowTextOnly: boolean;
@@ -113,6 +123,8 @@ export interface JobAdmission {
 }
 
 export interface EarnOptions {
+  /** Trusted capability and pricing checks for additional in-room model adapters. */
+  connectedPublicJobs?:Readonly<Record<string,{sampleFile?:string; canDeliver:(name:string)=>boolean; firstTurnFits:(cents:number,promptBytes:number)=>boolean}>>;
   liveRoomState?: () => RoomSelection;
   /** Host-owned exchange and supplier grant resolved independently for each seller. */
   roomWork?: (agentId: string) => WorkerContext["roomWork"];
@@ -331,21 +343,45 @@ export class EarnHost {
     return JSON.stringify([supplied,executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
   }
 
-  #usesClaude(agentId: string): boolean {
-    return !Object.hasOwn(this.#options.agentExecutors ?? {}, agentId) && this.#options.liveRoomState?.().agent === "claude-code";
+  connectedAgent(agentId: string): string | undefined {
+    const named = this.#options.agentExecutors;
+    if (named && Object.hasOwn(named,agentId)) return named[agentId]?.connectedAgent;
+    if (this.#defaultExecutor()?.connectedAgent) return this.#defaultExecutor()!.connectedAgent;
+    const selected = this.#options.liveRoomState?.().agent;
+    return selected && selected !== "core" ? selected : undefined;
   }
 
-  supportsService(agentId: string, needs: {privateInputs?: boolean; servicePin?: boolean}): boolean {
+  #publicJobs(adapter:string) {
+    const adapters = this.#options.connectedPublicJobs;
+    if (adapters && Object.hasOwn(adapters,adapter)) return adapters[adapter];
+    return adapter === "claude-code" ? {sampleFile:"answer.txt",canDeliver:()=>true,firstTurnFits} : undefined;
+  }
+
+  listingFirstRound(agentId: string, cents?: number): number | undefined {
+    return cents === undefined ? undefined : claimBudget(cents,this.executorFor(agentId)?.reserveRevisionBudget === true).remainingCents;
+  }
+
+  supportsService(agentId: string, needs: ListingNeeds): boolean {
     const executor = this.executorFor(agentId);
     if (needs.servicePin && ["job","peer-job"].includes(executor?.argv[2] ?? "") && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) return false;
-    return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId)) &&
-      (!needs.servicePin || !this.#usesClaude(agentId));
+    const connected = this.connectedAgent(agentId);
+    if (needs.servicePin && needs.privateInputs) return false;
+    if (connected) {
+      const policy = this.#publicJobs(connected);
+      if (!policy || !executor?.isolatedJobRoom || executor.mode !== "sandboxed" || needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || executor?.argv[2] === "peer-job" ||
+          (needs.requiredFiles?.some(name=>!policy.canDeliver(name))) ||
+          (needs.allowTextOnly === false && !needs.requiredFiles?.length &&
+            (!policy.sampleFile || agreedOutputProblem(policy.sampleFile) || !policy.canDeliver(policy.sampleFile))) ||
+          ((needs.requiredFiles?.length || needs.allowTextOnly === false) && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) ||
+          (needs.modelCapCents !== undefined && !policy.firstTurnFits(this.listingFirstRound(agentId,needs.modelCapCents)!,needs.promptBytes ?? 0))) return false;
+    }
+    return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId));
   }
 
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
   supportsPrivateInputs(agentId: string): boolean {
     const executor = this.executorFor(agentId);
-    return executor?.argv[2] !== "peer-job" && !this.#usesClaude(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+    return executor?.argv[2] !== "peer-job" && !this.connectedAgent(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
       this.#options.roomWork?.(agentId) !== undefined;
   }
 
@@ -751,12 +787,14 @@ export class EarnHost {
     if (entry?.discovering) entry.awaitingListings = false;
   }
 
-  async checkListingReady(agentId: string, signal?: AbortSignal, needs: {privateInputs?: boolean; servicePin?: boolean; serviceDigest?: string} = {}) {
+  async checkListingReady(agentId: string, signal?: AbortSignal, needs: ListingNeeds = {}) {
     const entry = this.#running.get(agentId);
     if (!entry?.checkReady || !this.canTakeJobs(agentId)) throw new Error("Worker discovery is unavailable");
     return entry.checkReady(signal ? AbortSignal.any([signal,entry.controller.signal]) : entry.controller.signal, {
       source:"external",privateInputs:!!needs.privateInputs,servicePin:!!needs.servicePin,...(needs.serviceDigest && {serviceDigest:needs.serviceDigest}),reviewFiles:0,
-      requiredFiles:[],allowTextOnly:true,fileTransport:!!this.#services.fileLinkPrefix,promptBytes:0,
+      requiredFiles:needs.requiredFiles ?? [],allowTextOnly:needs.allowTextOnly ?? true,fileTransport:!!this.#services.fileLinkPrefix,promptBytes:needs.promptBytes ?? 0, verifiedAgreement:true,
+      ...(needs.extraRoomFeatures && {extraRoomFeatures:true}),
+      ...(needs.modelCapCents !== undefined && {firstRoundCents:this.listingFirstRound(agentId,needs.modelCapCents)!}),
     });
   }
 
@@ -951,7 +989,8 @@ export class EarnHost {
         }
         return "peer:" + generation();
       }
-      if (this.#usesClaude(agent.agentId)) return "claude-code";
+      const connected = this.connectedAgent(agent.agentId);
+      if (connected) return connected;
       if (executor.argv[2] === "job") return "core";
       return "command:" + createHash("sha256").update(JSON.stringify(executor.argv)).digest("hex");
     };
@@ -978,10 +1017,17 @@ export class EarnHost {
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
             (admission.servicePin && ["job", "peer-job"].includes(executor.argv[2] ?? ""))))
           throw new ExecutorCapabilityError("This job needs file delivery.");
-        if (!this.supportsService(agent.agentId,admission) || ((this.#usesClaude(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
+        const connected = this.connectedAgent(agent.agentId);
+        if ((admission.servicePin && (admission.revision || admission.privateInputs)) || !this.supportsService(agent.agentId,admission) ||
+            (connected && (!admission.verifiedAgreement || admission.extraRoomFeatures || admission.reviewFiles ||
+              !admission.requiredFiles.every(name=>this.#publicJobs(connected)?.canDeliver(name)))) ||
+            (executor.argv[2] === "peer-job" && admission.reviewFiles))
           throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
-        if (this.#usesClaude(agent.agentId) && admission.firstRoundCents !== undefined &&
-          (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
+        if (admission.verifiedPin && admission.requiredFiles.length) {
+          try { readServiceRehearsal(stateDir,admission.verifiedPin,admission.requiredFiles); }
+          catch { throw new ExecutorCapabilityError("The rehearsal cannot deliver the agreed files."); }
+        }
+        if (connected && admission.firstRoundCents !== undefined && !this.#publicJobs(connected)!.firstTurnFits(admission.firstRoundCents,admission.promptBytes))
           throw Object.assign(new Error("The first model turn exceeds this job's allowance."), {name:"ExecutorBudgetError"});
       };
       check();
@@ -1143,13 +1189,19 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, preview }) => {
+        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
-        const outputs = acceptance && outputAgreementFromSpec({acceptance:[...acceptance]});
+        let outputs;
+        try { outputs = acceptance && outputAgreementFromSpec({acceptance:[...acceptance]}); }
+        catch { throw new ExecutorCapabilityError("The job has invalid agreed outputs."); }
+        const listingTerms = listingMetadata && JSON.parse(Buffer.from(listingMetadata).toString("utf8")).custom?.listingMetadata;
+        if (creator && this.connectedAgent(agent.agentId) && firstRoundCents === undefined && !preview)
+          throw Object.assign(new Error("The job needs a verified model allowance."),{name:"ExecutorBudgetError"});
         return checkReady(signal, creator ? {
           source:this.#ownAddresses().includes(creator) ? "own" : "external", privateInputs:!!privateInputs,
-          servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest}),reviewFiles:reviewFiles ?? 0,requiredFiles:outputs?.requiredFiles ?? [],
+          servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest,verifiedPin:terms.servicePin}),reviewFiles:Math.max(reviewFiles ?? 0,reviewAttachments ?? 0),requiredFiles:outputs?.requiredFiles ?? [],
+          verifiedAgreement:!!outputs,revision:!!revision,extraRoomFeatures:!!extraRoomFeatures || !!listingTerms?.childHire || listingTerms?.fulfilment?.privateInputs === true || (requiredCapabilities ?? 1n)>1n,
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
           ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
         } : undefined,preview);

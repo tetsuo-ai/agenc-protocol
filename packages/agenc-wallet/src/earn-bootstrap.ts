@@ -11,6 +11,7 @@ export interface Bootstrap {
     executor: {
       argv: string[];
       mode: string;
+      connectedAgent?: string;
       isolatedJobRoom?: boolean;
       reserveRevisionBudget?: boolean;
       envAllowlist?: string[];
@@ -78,6 +79,8 @@ function parseExecutor(
       "The earn executor mode is not valid.",
     );
   }
+  if (executor.connectedAgent !== undefined && (typeof executor.connectedAgent !== "string" || !/^[a-z][a-z0-9:-]{0,63}$/.test(executor.connectedAgent) || executor.connectedAgent === "core"))
+    throw new WalletError("BAD_REQUEST", "The connected agent name is invalid.");
   const readiness = executor.readiness;
   if (
     readiness !== undefined &&
@@ -100,6 +103,7 @@ function parseExecutor(
   }
   return {
     argv: executor.argv,
+    ...(executor.connectedAgent && {connectedAgent:executor.connectedAgent}),
     mode: executor.mode,
     envAllowlist: executor.envAllowlist ?? [],
     isolatedJobRoom: executor.isolatedJobRoom === true,

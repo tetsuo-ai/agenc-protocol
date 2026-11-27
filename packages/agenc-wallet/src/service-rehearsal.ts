@@ -5,7 +5,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { validServicePin, type ServicePin } from "./client/seller-terms.js";
 import { WalletError } from "./errors.js";
-export function readServiceRehearsal(stateDir: string, pin: ServicePin) {
+export function readServiceRehearsal(stateDir: string, pin: ServicePin, requiredFiles:readonly string[] = []) {
   try {
     if (!validServicePin(pin)) throw new Error();
     const dir = join(stateDir, "service-bundles", pin.digest);
@@ -18,6 +18,8 @@ export function readServiceRehearsal(stateDir: string, pin: ServicePin) {
         manifest.runtimeDigest !== pin.runtimeDigest || manifest.permissionDigest !== pin.permissionDigest ||
         manifest.capabilities !== pin.capabilities || !Array.isArray(manifest.files) || manifest.files.length > 14)
       throw new Error();
+    if (requiredFiles.length && (!Array.isArray(manifest.outputs) || requiredFiles.some(name=>!manifest.outputs.includes(name))))
+      throw new Error("The rehearsal does not produce the agreed files.");
     for (const file of manifest.files) {
       if (!/^[0-9a-f]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes <= 0 || file.bytes > 4 * 1024 * 1024)
         throw new Error();
