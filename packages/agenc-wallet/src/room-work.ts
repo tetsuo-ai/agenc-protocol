@@ -197,12 +197,29 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
           state: "resume" as const,
           async resume(until,signal) {
             const saved = JSON.parse(readFileSync(runFile(ports.stateDir, binding.task), "utf8")) as Input & {chainEnd?:number};
-            if (saved.argv[2] === "job" && until !== undefined) {
+            if (saved.argv[2] === "job") {
               const old = saved.argv[10];
-              const chainEnd = saved.chainEnd ?? (old && /^[0-9]{1,12}$/.test(old) ? Number(old) : 0);
-              if (!ports.clusterTime || !Number.isSafeInteger(chainEnd) || chainEnd <= 0) throw new Error("The saved claim clock is unavailable.");
-              const end = Math.min(until,await chainDeadline(ports.clusterTime,saved.timeoutMs,BigInt(chainEnd)));
-              saved.argv = saved.argv.map((arg,i)=>i === 10 ? "mono:" + end : arg);
+              const legacy = old === "own" || old === "external";
+              const resumeFile = join(resumeDir(ports.stateDir,binding.task),continuation + ".json");
+              const conversationEnd = JSON.parse(readFileSync(resumeFile,"utf8")).deadline;
+              if (!ports.clusterTime || !Number.isSafeInteger(until) || !Number.isSafeInteger(conversationEnd) || conversationEnd <= 0)
+                throw new Error("The saved claim clock is unavailable.");
+              const ends = [BigInt(Math.floor(conversationEnd / 1000))];
+              if (!legacy) {
+                const chainEnd = saved.chainEnd ?? (old && /^[0-9]{1,12}$/.test(old) ? Number(old) : 0);
+                if (!Number.isSafeInteger(chainEnd) || chainEnd <= 0 || !["own","external"].includes(saved.argv[11] ?? ""))
+                  throw new Error("The saved claim clock is unavailable.");
+                ends.push(BigInt(chainEnd));
+              }
+              const end = Math.min(until!, await chainDeadline(ports.clusterTime,saved.timeoutMs,...ends));
+              if (end <= monotonicMs()) throw new Error("The claim expired.");
+              const args = [...saved.argv];
+              args.splice(10,legacy ? 0 : 1,"boot:" + end);
+              const scope = JSON.parse(args[12]!);
+              if (scope.task !== binding.task || (scope.executor && scope.executor !== "core"))
+                throw new Error("This private run belongs to another claim.");
+              args[12] = JSON.stringify({...scope,executor:"core",resume:true});
+              saved.argv = args;
             }
             if (signal) saved.signal = signal;
             // Consume the continuation once: a restarted host cannot run it again.
@@ -220,7 +237,7 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
           mkdirSync(join(ports.stateDir, "room-runs"), { recursive: true, mode: 0o700 });
           const { signal: _signal, ...durable } = input;
           let chainEnd: number | undefined;
-          const cutoff = input.argv[2] === "job" && input.argv[10]?.match(/^mono:([0-9]+)$/);
+          const cutoff = input.argv[2] === "job" && input.argv[10]?.match(/^boot:([0-9]+)$/);
           if (cutoff) {
             if (!ports.clusterTime) throw new Error("The claim clock is unavailable.");
             const chainNow = await ports.clusterTime();
