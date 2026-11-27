@@ -121,7 +121,7 @@ it.each(["own","external"])("resumes a parked 0.1.17 %s job with its original so
     mkdirSync(resume,{recursive:true}); mkdirSync(path.join(dir,"room-runs"));
     const message=path.join(resume,id+".json");
     writeFileSync(message,JSON.stringify({answer:"Q3",deadline:1_020_000}));
-    const argv=["/node","/host","job","/room","/core","780","/assets","","","2",source,JSON.stringify({task,pin:null,receipt:null}),"question"];
+    const argv=["/node","/host","job","/room","/core","780","/assets","","","2",source,JSON.stringify({task,pin:null,receipt:path.join(dir,"first.receipt")}),"question"];
     writeFileSync(path.join(dir,"room-runs",task+".json"),JSON.stringify({argv,timeoutMs:780000,prompt:"question"}));
     let now=1030, run:string[]=[];
     const work=walletRoomWork({stateDir:dir,exchangeDir:dir,session:async()=>session as never,clusterTime:async()=>now,
@@ -132,10 +132,22 @@ it.each(["own","external"])("resumes a parked 0.1.17 %s job with its original so
     await expect(turn.resume(start+30_000)).rejects.toThrow();
     expect(existsSync(message)).toBe(true);
     now=1000;
-    await turn.resume(start+30_000);
+    const claimDir=path.join(dir,"model-spend","test-claim");
+    const round=path.join(claimDir,"0");
+    mkdirSync(claimDir,{recursive:true});
+    writeFileSync(path.join(claimDir,"admission"),JSON.stringify({executor:"core",budget:2}));
+    writeFileSync(round,"2");
+    // An old layout alone cannot prove how much of the original grant is left.
+    expect(await turn.resume(start+30_000,undefined,round)).toEqual({state:"parked"});
+    expect(run).toEqual([]);
+    expect(existsSync(message)).toBe(true);
+    writeFileSync(round+".usage",JSON.stringify({reservedCents:2,costUsd:0.004}));
+    writeFileSync(round+".counts",JSON.stringify({tokens:400,calls:1}));
+    await turn.resume(start+30_000,undefined,round);
     expect(run[10]).toMatch(/^boot:/);
     expect(Number(run[10]!.slice(5))-start).toBeLessThan(20_000);
     expect(run[11]).toBe(source);
-    expect(JSON.parse(run[12]!)).toMatchObject({task,executor:"core"});
+    expect(JSON.parse(run[12]!)).toMatchObject({task,executor:"core",claimRound:round,resume:true});
+    expect(existsSync(path.join(claimDir,"continuation-"+id))).toBe(true);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });

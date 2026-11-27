@@ -2040,7 +2040,9 @@ async function executeAndSubmit(
         }
       }
       executionGuard?.();
-      const result = await turn.resume(until,ctx.signal);
+      const round = ctx.modelSpendDir && join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress,
+        String(evidenceState.openClaim.revisionSubmissionCount ?? 0));
+      const result = await turn.resume(until,ctx.signal,round);
       if (result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     } else {

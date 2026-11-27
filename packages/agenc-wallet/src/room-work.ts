@@ -2,10 +2,10 @@
 // program gets B's scoped exchange session for this claim and room through a
 // per-run socket, and a buyer's answer becomes one durable resume of that run.
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Address } from "@solana/kit";
 import { chainDeadline, monotonicMs, ExecutorError, runExecutor, type WorkerContext } from "@tetsuo-ai/agenc-worker";
@@ -144,6 +144,20 @@ export interface RoomWorkPorts {
 const runFile = (dir: string, task: string) => join(dir, "room-runs", task + ".json");
 const resumeDir = (dir: string, task: string) => join(dir, "room-resume", task);
 
+// A pre-upgrade parked run can have a grant but no record of the calls it already made.
+function canResumeModel(round: string, pay: number): boolean {
+  try {
+    const claim = JSON.parse(readFileSync(join(dirname(round), "admission"), "utf8"));
+    const usage = JSON.parse(readFileSync(round + ".usage", "utf8"));
+    const counts = JSON.parse(readFileSync(round + ".counts", "utf8"));
+    return claim.executor === "core" && Number.isSafeInteger(claim.budget) && claim.budget >= pay &&
+      Number.isSafeInteger(pay) && pay > 0 && readFileSync(round, "utf8") === String(pay) &&
+      usage.reservedCents === pay && Number.isFinite(usage.costUsd) && usage.costUsd >= 0 && usage.costUsd * 100 < pay &&
+      Number.isSafeInteger(counts.tokens) && counts.tokens >= 0 && counts.tokens < 1_000_000 &&
+      Number.isSafeInteger(counts.calls) && counts.calls >= 0 && counts.calls < 64;
+  } catch { return false; }
+}
+
 /** The worker's RoomWork for one seller agent. Jobs without private inputs keep the ordinary path. */
 export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
   const execute = ports.execute ?? runExecutor;
@@ -195,7 +209,7 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
       if (continuation) {
         return {
           state: "resume" as const,
-          async resume(until,signal) {
+          async resume(until,signal,claimRound) {
             const saved = JSON.parse(readFileSync(runFile(ports.stateDir, binding.task), "utf8")) as Input & {chainEnd?:number};
             if (saved.argv[2] === "job") {
               const old = saved.argv[10];
@@ -218,7 +232,17 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
               const scope = JSON.parse(args[12]!);
               if (scope.task !== binding.task || (scope.executor && scope.executor !== "core"))
                 throw new Error("This private run belongs to another claim.");
-              args[12] = JSON.stringify({...scope,executor:"core",resume:true});
+              if (!claimRound || (scope.claimRound && scope.claimRound !== claimRound) ||
+                  !scope.receipt || !canResumeModel(claimRound, Number(args[9]))) return {state:"parked"};
+              const claimDir = dirname(claimRound);
+              const once = join(claimDir, "continuation-" + continuation);
+              if (existsSync(once)) return {state:"parked"};
+              signal?.throwIfAborted();
+              if (monotonicMs() >= end) throw new Error("The claim expired.");
+              writeFileSync(once, "", {flag:"wx",mode:0o600,flush:true});
+              const dir = openSync(claimDir, "r");
+              try { fsyncSync(dir); } finally { closeSync(dir); }
+              args[12] = JSON.stringify({...scope,executor:"core",claimRound,resume:true});
               saved.argv = args;
             }
             if (signal) saved.signal = signal;
