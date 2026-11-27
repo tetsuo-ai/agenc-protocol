@@ -880,3 +880,12 @@ it("withholds a manual funding transfer that outlasts its approved quote in the 
     expect(await world.balance(seller.address)).toBe(balance);
   } finally {sleep.ms=0;}
 });
+
+it("keeps a verified file job out of the picker while file transport is off",async()=>{
+  const {wallet,id,sandbox}=await setup(undefined,undefined,undefined,{services:s=>({...s,fileLinkPrefix:null,resultUploader:()=>null})});
+  const job=await sandbox.postOpenJob({title:"Return a file",instructions:"Make a table",rewardLamports:50n*CENT,
+    brief:{instructions:"Make a table",acceptance:["Agreed outputs v1: at least one file; required files: chart.csv"]}});
+  const page=await wallet.openWork(id,0,job.task);
+  expect(page.jobs).toHaveLength(0);
+  expect(page.eligibility?.code).not.toBe("available");
+});
