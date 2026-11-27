@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Address } from "@solana/kit";
-import { ExecutorError, runExecutor, type WorkerContext } from "@tetsuo-ai/agenc-worker";
+import { chainDeadline, monotonicMs, ExecutorError, runExecutor, type WorkerContext } from "@tetsuo-ai/agenc-worker";
 
 type RoomWork = NonNullable<WorkerContext["roomWork"]>;
 type VerifiedRoomWork = Parameters<RoomWork["admit"]>[0];
@@ -138,6 +138,7 @@ export interface RoomWorkPorts {
   /** The wallet's private socket folder, where each run's exchange is served. Default: the standalone wallet's. */
   exchangeDir?: string;
   execute?: Execute;
+  clusterTime?: () => Promise<number>;
 }
 
 const runFile = (dir: string, task: string) => join(dir, "room-runs", task + ".json");
@@ -194,8 +195,16 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
       if (continuation) {
         return {
           state: "resume" as const,
-          async resume() {
-            const saved = JSON.parse(readFileSync(runFile(ports.stateDir, binding.task), "utf8")) as Input;
+          async resume(until,signal) {
+            const saved = JSON.parse(readFileSync(runFile(ports.stateDir, binding.task), "utf8")) as Input & {chainEnd?:number};
+            if (saved.argv[2] === "job" && until !== undefined) {
+              const old = saved.argv[10];
+              const chainEnd = saved.chainEnd ?? (old && /^[0-9]{1,12}$/.test(old) ? Number(old) : 0);
+              if (!ports.clusterTime || !Number.isSafeInteger(chainEnd) || chainEnd <= 0) throw new Error("The saved claim clock is unavailable.");
+              const end = Math.min(until,await chainDeadline(ports.clusterTime,saved.timeoutMs,BigInt(chainEnd)));
+              saved.argv = saved.argv.map((arg,i)=>i === 10 ? "mono:" + end : arg);
+            }
+            if (signal) saved.signal = signal;
             // Consume the continuation once: a restarted host cannot run it again.
             const done = join(resumeDir(ports.stateDir, binding.task), continuation + ".done");
             writeFileSync(done, "", { flag: "wx", mode: 0o600 });
@@ -210,7 +219,15 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
           // Kept so the buyer's answer resumes this same reserved run (same argv, budget receipt and deadline).
           mkdirSync(join(ports.stateDir, "room-runs"), { recursive: true, mode: 0o700 });
           const { signal: _signal, ...durable } = input;
-          writeFileSync(runFile(ports.stateDir, binding.task), JSON.stringify(durable), { mode: 0o600 });
+          let chainEnd: number | undefined;
+          const cutoff = input.argv[2] === "job" && input.argv[10]?.match(/^mono:([0-9]+)$/);
+          if (cutoff) {
+            if (!ports.clusterTime) throw new Error("The claim clock is unavailable.");
+            const chainNow = await ports.clusterTime();
+            chainEnd = chainNow + Math.floor((Number(cutoff[1]) - monotonicMs()) / 1000);
+            if (!Number.isSafeInteger(chainEnd) || chainEnd <= chainNow) throw new Error("The job deadline passed.");
+          }
+          writeFileSync(runFile(ports.stateDir, binding.task), JSON.stringify({...durable,chainEnd}), { mode: 0o600 });
           return runRoom(binding, session, input);
         },
       };
