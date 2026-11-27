@@ -1189,7 +1189,7 @@ export class AgencWallet {
       policy: agent.policy,
       earn: {
         enabled: agent.earn.enabled && !retired,
-        ...(this.#earn.chosenRoom && { chooseOpenJobs: agent.earn.chooseOpenJobs ?? (agentOffers(agent).length > 0) }),
+        ...(this.#earn.chosenRoomFor(agent.id) && { chooseOpenJobs: agent.earn.chooseOpenJobs ?? (agentOffers(agent).length > 0) }),
         ...(this.#earn.hasChosenClaim(agent.id) && { heldChosenJob: true }),
         state: agent.earn.enabled && !retired
           ? earn.state
@@ -5936,7 +5936,7 @@ export class AgencWallet {
 
   chooseWork(agentId: string, manual: boolean) {
     this.#agentRecord(agentId);
-    if (!this.#earn.chosenRoom || typeof manual !== "boolean")
+    if (!this.#earn.chosenRoomFor(agentId) || typeof manual !== "boolean")
       throw new WalletError("NOT_AVAILABLE", "Choosing jobs needs an enabled job room.");
     this.#store.update((draft) => { draft.agents[agentId]!.earn.chooseOpenJobs = manual; });
     this.#emit({ type: "overview" });
@@ -5980,7 +5980,7 @@ export class AgencWallet {
       return { ...("eligibility" in page && page.eligibility && { eligibility: page.eligibility }),
         // The page's listing was gone, so this is page 1 of a new one (review 0.1.17 money 8, MAJOR 1).
         ...("relisted" in page && page.relisted && { relisted: true as const }),
-        ...(short && { shortOfMoney: { jobs: short.jobs, needs: money(short.neededLamports, rate), add: amountWords(rate).add(BigInt(short.neededLamports)) } }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoom && this.#agentRecord(agentId).earn.enabled } : null };
+        ...(short && { shortOfMoney: { jobs: short.jobs, needs: money(short.neededLamports, rate), add: amountWords(rate).add(BigInt(short.neededLamports)) } }), jobs: page.jobs.map(view), next: page.next, held: held ? { ...view(held), canSubmit: held.canSubmit && this.#earn.chosenRoomFor(agentId) && this.#agentRecord(agentId).earn.enabled } : null };
     });
   }
 
@@ -6101,7 +6101,7 @@ export class AgencWallet {
   }
 
   async startManualWork(agentId: string, fundingQuoteId: string) {
-    if (!fundingQuoteId || !this.#earn.chosenRoom) throw new WalletError("NOT_AVAILABLE", "Review the job room and its exact funding quote.");
+    if (!fundingQuoteId || !this.#earn.chosenRoomFor(agentId)) throw new WalletError("NOT_AVAILABLE", "Review the job room and its exact funding quote.");
     this.#checkBusinessConsent();
     return this.#lock(`seller-confirm:${agentId}`, async () => {
       await checkBusinessRoom(this.#config.earn, agentId);

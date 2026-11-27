@@ -102,6 +102,7 @@ export interface EarnOptions {
   executor: EarnExecutor | null;
   /** The host can make its preconfigured room available while this wallet is open. */
   defaultExecutorEnabled?: () => boolean;
+  defaultExecutorGeneration?: () => string;
   /**
    * A different way of running jobs for named agents, such as the one seller
    * the owner paired with a remote room. Every other agent keeps `executor`.
@@ -613,7 +614,11 @@ export class EarnHost {
   }
 
   get chosenRoom(): boolean {
-    const executor = this.#defaultExecutor();
+    return this.chosenRoomFor();
+  }
+
+  chosenRoomFor(agentId?: string): boolean {
+    const executor = agentId === undefined ? this.#defaultExecutor() : this.executorFor(agentId);
     return this.#options.chosenRoomEnabled?.() === true && !this.ownJobsOnly &&
       executor?.mode === "sandboxed" &&
       !!(executor.readiness || this.#options.checkExecutionReady);
@@ -646,7 +651,7 @@ export class EarnHost {
   workerLane(agentId: string, heldOnly = false, readonly = false): WorkerDispatch {
     const running = this.#running.get(agentId);
     const dispatch = readonly ? running?.read : running?.dispatch;
-    if (!dispatch || (heldOnly ? !this.hasChosenClaim(agentId) : !this.chosenRoom || !this.canTakeJobs(agentId))) {
+    if (!dispatch || (heldOnly ? !this.hasChosenClaim(agentId) : !this.chosenRoomFor(agentId) || !this.canTakeJobs(agentId))) {
       throw new WalletError("NOT_AVAILABLE", "Turn on Take jobs from other agents and Earns with a ready job room.");
     }
     return dispatch;
@@ -888,13 +893,23 @@ export class EarnHost {
       this.#workerEvent(agent.agentId, event);
     };
 
-    const checkReady = async (signal?: AbortSignal): Promise<void> => {
-      if (this.executorFor(agent.agentId) !== executor) throw new Error("This job room is no longer selected.");
+    const generation = () => Object.hasOwn(this.#options.agentExecutors ?? {}, agent.agentId)
+      ? undefined : this.#options.defaultExecutorGeneration?.();
+    const guard = () => {
+      const selected = generation();
+      return () => {
+        if (this.executorFor(agent.agentId) !== executor || selected !== generation())
+          throw new Error("This job room is no longer selected.");
+      };
+    };
+    const checkReady = async (signal?: AbortSignal, admission: string[] = []): Promise<void> => {
+      const current = guard();
+      current();
       if (this.#options.checkExecutionReady !== undefined) {
         await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
       } else if (executor.readiness !== undefined) {
         await runExecutor({
-          argv: executor.readiness.argv.map(fill),
+          argv: [...executor.readiness.argv.map(fill), ...admission],
           timeoutMs: executor.readiness.timeoutMs ?? 30_000,
           envAllowlist: executor.envAllowlist,
           maxStdoutBytes: 64 * 1024,
@@ -903,6 +918,7 @@ export class EarnHost {
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }
+      current();
     };
     entry.checkReady = checkReady;
 
@@ -928,7 +944,7 @@ export class EarnHost {
           const revoke = () => stop.abort(new Error("Taking jobs from other agents is off."));
           const current = AbortSignal.any([stop.signal, signal, this.#shutdown.signal]);
           const unwatch = this.#options.watchChosenRoom?.(revoke);
-          const check = () => { if (!this.chosenRoom) revoke(); };
+          const check = () => { if (!this.chosenRoomFor(agent.agentId)) revoke(); };
           const timer = setInterval(check, 25);
           try {
             check();
@@ -937,10 +953,10 @@ export class EarnHost {
           } finally { clearInterval(timer); unwatch?.(); }
         },
         checkChosenRoom: async (scope?: AbortSignal) => {
-          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          if (!this.chosenRoomFor(agent.agentId)) throw new Error("Taking jobs from other agents is off.");
           signal.throwIfAborted();
           await checkReady(scope ?? signal);
-          if (!this.chosenRoom) throw new Error("Taking jobs from other agents is off.");
+          if (!this.chosenRoomFor(agent.agentId)) throw new Error("Taking jobs from other agents is off.");
           signal.throwIfAborted();
         },
       } : {}),
@@ -959,7 +975,7 @@ export class EarnHost {
           ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
         }).modelBudgetCents;
       },
-      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents) => {
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires) => {
         // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
         const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
         const ownRequest = this.#ownAddresses().includes(task.creator);
@@ -1003,7 +1019,12 @@ export class EarnHost {
             if (!pin) throw new Error("The paired service requires a verified service pin.");
             return [pin.digest];
           }
-          if (part === "{jobExpires}") return [task.deadline.toString()];
+          if (part === "{jobExpires}") {
+            const cutoffs = [task.deadline, claimExpires ?? 0n].filter(time => time > 0n);
+            const expiry = cutoffs.length ? cutoffs.reduce((a, b) => a < b ? a : b)
+              : BigInt(Math.floor((Date.now() + executor.timeoutMs) / 1000));
+            return [expiry.toString()];
+          }
           return [fill(part).replaceAll("{pay}", String(pay))];
         });
       },
@@ -1016,9 +1037,18 @@ export class EarnHost {
         executorTimeoutMs: executor.timeoutMs,
       },
       log,
-      checkExecutionReady: async ({ listing, signal }) => {
+      checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
-        await checkReady(signal);
+        const current = guard();
+        let admission: string[] = [];
+        if (creator && executor.isolatedJobRoom && executor.readiness?.argv[2] === "self-test") {
+          const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
+          const source = this.#ownAddresses().includes(creator) ? "own" : "external";
+          admission = ["admit", source, privateInputs ? "private" : terms?.servicePin ? "service" : "public"];
+        }
+        await checkReady(signal, admission);
+        current();
+        return current;
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }

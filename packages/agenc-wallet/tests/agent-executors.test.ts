@@ -157,6 +157,67 @@ it("hands a local room the agreed outputs even without a reservation or a pinned
   expect(plain.some(part => part.startsWith('{"'))).toBe(false);
 });
 
+it.each([[0n, 90n, "90"], [150n, 90n, "90"], [75n, 90n, "75"]])("binds executor time to task %s and canonical claim %s", async (deadline, expiry, expected) => {
+  const earn = host({executor: { ...local, argv: [...local.argv, "{jobExpires}"] }});
+  void earn.start({agentId:"worker", signer:{address:"fake"} as unknown as KeyPairSigner, minRewardLamports:0n, solUsd:async()=>100});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as { executorForTask(...args: unknown[]): Promise<string[]> };
+    const argv = await ctx.executorForTask({creator:"buyer", deadline, rewardAmount:100_000_000n}, "task",
+      undefined, null, null, undefined, undefined, undefined, expiry);
+    expect(argv.at(-1)).toBe(expected);
+  } finally { await earn.stopAll(); }
+});
+
+it("keeps hand-picked jobs available to a named worker with its own ready sandbox", async () => {
+  const ready = { ...local, mode:"sandboxed" as const, isolatedJobRoom:true, readiness:{argv:["/ready"]} };
+  const earn = host({ executor:ready, agentExecutors:{named:ready}, defaultExecutorEnabled:()=>false,
+    chosenRoomEnabled:()=>true, checkExecutionReady:async()=>{} });
+  void earn.start({agentId:"named", signer:{address:"fake"} as unknown as KeyPairSigner, minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const dispatch = vi.fn();
+    ctx.log({event:"watch.started"});
+    ctx.onWorkerReady!(dispatch, dispatch);
+    expect(earn.workerLane("named")).toBe(dispatch);
+    await expect(ctx.withChosenRoom!(async stop => { await ctx.checkChosenRoom!(stop); return !stop.aborted; })).resolves.toBe(true);
+  } finally { await earn.stopAll(); }
+});
+
+it("invalidates an automatic admission while its room boots, including a switch away and back", async () => {
+  let generation = "one";
+  const earn = host({ executor:{...local, mode:"sandboxed"}, defaultExecutorGeneration:()=>generation,
+    checkExecutionReady:async()=>{ generation="three"; } });
+  void earn.start({agentId:"seller", signer:{address:"fake"} as unknown as KeyPairSigner, minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    await expect(ctx.checkExecutionReady!({task:"task" as never})).rejects.toThrow(/selected|changed/);
+  } finally { await earn.stopAll(); }
+});
+
+it.each(["public", "service", "private"])("passes verified %s admission and provenance to the actual readiness process", async kind => {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "room-preclaim-"));
+  folders.push(dataDir);
+  const program = path.join(dataDir, "room.cjs");
+  const {writeFileSync} = await import("node:fs");
+  // Stand-in readiness succeeds for a generic room probe. The paid executor rejects this buyer's job.
+  writeFileSync(program, 'if(process.argv.slice(-3).join(" ") === "admit external '+kind+'") process.exit(78);');
+  const room: EarnExecutor = {...local, mode:"sandboxed", isolatedJobRoom:true,
+    readiness:{argv:[process.execPath, program, "self-test", "/assets", dataDir]} };
+  const pin = {digest:"a".repeat(64),runtimeDigest:"b".repeat(64),permissionDigest:"c".repeat(64),capabilities:"1" as const};
+  const earn = host({executor:room});
+  void earn.start({agentId:"seller", signer:{address:"fake"} as unknown as KeyPairSigner, minRewardLamports:0n,
+    ...(kind === "service" && {specialistTerms:()=>({servicePin:pin})}) });
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    await expect(ctx.checkExecutionReady!({task:"task" as never,creator:"buyer" as never,
+      privateInputs:kind === "private", requiredCapabilities:1n})).rejects.toThrow();
+  } finally { await earn.stopAll(); }
+});
+
 it("refreshes room availability and readiness while the same wallet is open", async () => {
   let selected = false;
   const room: EarnExecutor = { ...local, mode: "sandboxed", isolatedJobRoom: true, readiness: { argv: ["/test/ready"] } };
