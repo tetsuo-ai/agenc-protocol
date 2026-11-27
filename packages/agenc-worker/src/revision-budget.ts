@@ -1,7 +1,7 @@
-import { mkdirSync, openSync, closeSync, fsyncSync, unlinkSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, fsyncSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Address } from "@solana/kit";
-import type { ModelBudget } from "./state.js";
+import { acquireStateLock, type ModelBudget } from "./state.js";
 
 // Hold one fifth for each of the two possible revisions, with one cent for
 // each round on small jobs. The initial run keeps the rest.
@@ -68,11 +68,10 @@ export function requireClaimExecutor(dir: string, executor: string, legacyPrivat
 
 export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number, cents?: number): string {
   const dir = join(root, wallet + "-" + claim);
-  const lock = join(dir,".reserving");
-  let held = false;
+  let release: (() => void) | undefined;
   try {
-    writeFileSync(lock,"",{flag:"wx",mode:0o600,flush:true});
-    held = true;
+    if (!existsSync(dir)) throw new Error("Missing claim ledger.");
+    release = acquireStateLock(dir);
     if (existsSync(join(dir, "admission"))) {
       const {budget} = JSON.parse(readFileSync(join(dir, "admission"), "utf8"));
       const prior = readdirSync(dir).filter(n => /^(?:-1|[0-2])$/.test(n)).map(n => Number(readFileSync(join(dir,n), "utf8")));
@@ -95,6 +94,6 @@ export function spendClaimRound(root: string, wallet: Address, claim: Address, r
   } catch (cause) {
     throw new Error("Previous model spend for this round is exhausted or unknown.", { cause });
   } finally {
-    if (held) { unlinkSync(lock); syncDirectory(dir); }
+    release?.();
   }
 }
