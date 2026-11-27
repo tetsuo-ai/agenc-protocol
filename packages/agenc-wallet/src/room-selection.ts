@@ -14,10 +14,13 @@ export interface LiveRoom {
   coreCandidates: readonly string[];
   baseFiles: readonly string[];
   agentFiles: readonly string[];
+  codexFiles?: readonly string[];
+  codexPlanMinimumCents?: number;
   generationFiles?: readonly string[];
 }
 export interface RoomSelection {
-  agent: "core" | "claude-code";
+  agent: "core" | "claude-code" | "codex-api" | "codex-plan";
+  minimumModelCents?: number;
   ready: boolean;
   coreCommand: string | null;
   generation: string;
@@ -72,17 +75,30 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.coreCandidates,
       ...room.baseFiles,
       ...room.agentFiles,
+      ...(room.codexFiles ?? []),
       ...(room.generationFiles ?? []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
-    !room.agentFiles.length
+    !room.agentFiles.length ||
+    (room.codexPlanMinimumCents !== undefined &&
+      (!Number.isSafeInteger(room.codexPlanMinimumCents) || room.codexPlanMinimumCents < 1))
   )
     throw new Error("Invalid job room paths.");
   return () => {
     const slot = file(room.setting);
-    const base = room.baseFiles.map(file),
-      agentFiles = room.agentFiles.map(file),
-      commands = room.coreCandidates.map(file);
+    let agent: RoomSelection["agent"] = slot.id === "missing" ? "core" : "claude-code";
+    let validSlot = slot.regular;
+    if (slot.regular && room.codexFiles !== undefined) {
+      try {
+        // Desktop seals the login. The wallet needs only the public choice in the envelope.
+        const choice: unknown = JSON.parse(readFileSync(room.setting, "utf8")).agent;
+        if (choice === "codex-api" || choice === "codex-plan" || choice === "claude-code") agent = choice;
+        else validSlot = false;
+      } catch { validSlot = false; }
+    }
+    const codex = agent === "codex-api" || agent === "codex-plan";
+    const agentFiles = (codex ? room.codexFiles ?? [] : room.agentFiles).map(file);
+    const base = room.baseFiles.map(file), commands = room.coreCandidates.map(file);
     const coreCommand =
       room.coreCandidates.find((p, i) => {
         if (!commands[i]?.regular) return false;
@@ -93,7 +109,6 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
           return false;
         }
       }) ?? null;
-    const agent = slot.id === "missing" ? "core" : "claude-code";
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -112,7 +127,8 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
-        : slot.regular && agentFiles.every((f) => f.regular));
+        : validSlot && agentFiles.length > 0 && agentFiles.every((f) => f.regular) &&
+          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
@@ -130,6 +146,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       agentFiles,
       room.generationFiles?.map(file),
     ]);
-    return { agent, ready, coreCommand, generation };
+    return { agent, ready, coreCommand, generation,
+      ...(agent === "codex-plan" && room.codexPlanMinimumCents !== undefined && {minimumModelCents:room.codexPlanMinimumCents}) };
   };
 }

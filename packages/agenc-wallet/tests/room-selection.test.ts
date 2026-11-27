@@ -2,9 +2,32 @@ import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { commandGeneration } from "../src/room-selection.js";
+import { commandGeneration, liveRoomSelection } from "../src/room-selection.js";
 import { earnOptions } from "../src/earn-bootstrap.js";
 import { checkBusinessRoom } from "../src/business-room.js";
+
+it("selects the installed Codex room live and refuses a plan without registration", () => {
+  const dir = mkdtempSync(join(tmpdir(),"codex-selection-"));
+  const path = (name:string) => join(dir,name);
+  const room = {setting:path("choice"), keyStore:path("empty"),coreCandidates:[],
+    baseFiles:[path("base")],agentFiles:[path("claude")],codexFiles:[path("codex")]};
+  try {
+    writeFileSync(path("base"),"fixture");
+    writeFileSync(room.setting,JSON.stringify({agent:"codex-api"}));
+    const read = liveRoomSelection(room);
+    expect(read()).toMatchObject({agent:"codex-api",ready:false});
+    writeFileSync(path("codex"),"fixture");
+    const api = read();
+    expect(api).toMatchObject({agent:"codex-api",ready:true});
+    writeFileSync(room.setting,JSON.stringify({agent:"codex-plan"}));
+    expect(read()).toMatchObject({agent:"codex-plan",ready:false});
+    const plan = liveRoomSelection({...room,codexPlanMinimumCents:78})();
+    expect(plan).toMatchObject({agent:"codex-plan",ready:true,minimumModelCents:78});
+    expect(plan.generation).not.toBe(api.generation);
+    writeFileSync(room.setting,"unreadable selection");
+    expect(read().ready).toBe(false);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
 
 it("retains the money restrictions and chosen switch with only a named executor", () => {
   const config = earnOptions({

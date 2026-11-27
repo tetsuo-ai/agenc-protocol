@@ -325,20 +325,22 @@ export class EarnHost {
     return JSON.stringify([supplied,executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
   }
 
-  #usesClaude(agentId: string): boolean {
-    return !Object.hasOwn(this.#options.agentExecutors ?? {}, agentId) && this.#options.liveRoomState?.().agent === "claude-code";
+  #connectedRoom(agentId: string): RoomSelection | undefined {
+    if (Object.hasOwn(this.#options.agentExecutors ?? {}, agentId)) return undefined;
+    const room = this.#options.liveRoomState?.();
+    return room?.agent === "core" ? undefined : room;
   }
 
   supportsService(agentId: string, needs: {privateInputs?: boolean; servicePin?: boolean}): boolean {
     const executor = this.executorFor(agentId);
     return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId)) &&
-      (!needs.servicePin || !this.#usesClaude(agentId));
+      (!needs.servicePin || !this.#connectedRoom(agentId));
   }
 
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
   supportsPrivateInputs(agentId: string): boolean {
     const executor = this.executorFor(agentId);
-    return executor?.argv[2] !== "peer-job" && !this.#usesClaude(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+    return executor?.argv[2] !== "peer-job" && !this.#connectedRoom(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
       this.#options.roomWork?.(agentId) !== undefined;
   }
 
@@ -945,6 +947,7 @@ export class EarnHost {
       const current = guard();
       current();
       let hostCheck: void | (() => void);
+      let reportedMinimum = 0;
       const check = () => {
         signal?.throwIfAborted();
         current();
@@ -954,17 +957,26 @@ export class EarnHost {
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
             (admission.servicePin && executor.argv[2] === "job")))
           throw new ExecutorCapabilityError("This job needs file delivery.");
-        if (!this.supportsService(agent.agentId,admission) || ((this.#usesClaude(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
+        const room = this.#connectedRoom(agent.agentId);
+        if (!this.supportsService(agent.agentId,admission) || ((room || executor.argv[2] === "peer-job") && admission.reviewFiles))
           throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
-        if (this.#usesClaude(agent.agentId) && admission.firstRoundCents !== undefined &&
+        const floor = Math.max(reportedMinimum, room?.minimumModelCents ?? 0);
+        if ((admission.firstRoundCents !== undefined || admission.promptBytes > 0) &&
+            (admission.firstRoundCents ?? 0) < floor)
+          throw new Error("The first round's allowance is below the selected room's minimum.");
+        if (room?.agent === "claude-code" && admission.firstRoundCents !== undefined &&
           (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
+          throw new Error("The first model turn exceeds this job's allowance.");
+        // The API proxy reserves at least the serialized prompt and 16 output tokens.
+        if (room?.agent === "codex-api" && admission.firstRoundCents !== undefined &&
+            (admission.promptBytes + 64) * 30 + 16 * 180 > admission.firstRoundCents * 400_000)
           throw new Error("The first model turn exceeds this job's allowance.");
       };
       check();
       if (this.#options.checkExecutionReady !== undefined) {
         hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
-        await runExecutor({
+        const report = await runExecutor({
           argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
             ["admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
             executor.readiness.argv[2] === "peer-ready" && admission?.serviceDigest ? [admission.serviceDigest] : [])],
@@ -973,6 +985,17 @@ export class EarnHost {
           maxStdoutBytes: 64 * 1024,
           ...(signal === undefined ? {} : { signal }),
         });
+        if (admission && executor.readiness.argv[2] === "self-test") {
+          const text = report.stdout.toString("utf8").trimStart();
+          if (text.startsWith("{")) {
+            const floor: unknown = JSON.parse(text).minimumModelCents;
+            if (floor !== undefined) {
+              if (typeof floor !== "number" || !Number.isSafeInteger(floor) || floor < 1)
+                throw new Error("The selected room returned an invalid model minimum.");
+              reportedMinimum = floor;
+            }
+          }
+        }
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }

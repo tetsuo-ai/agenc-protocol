@@ -326,7 +326,26 @@ it("takes a model minimum only from the host room readiness report", async () =>
   try {
     await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
-    const admission = await ctx.checkExecutionReady!({task:"test" as never,creator:"buyer" as never});
-    expect(admission).toMatchObject({minimumModelCents:78,current:expect.any(Function)});
+    const paid = {task:"test" as never,creator:"buyer" as never,promptBytes:36};
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:77})).rejects.toThrow("allowance");
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:78})).resolves.toBeTypeOf("function");
+  } finally { await earn.stopAll(); }
+});
+
+it.each(["codex-api","codex-plan"] as const)("applies verified job requirements to %s before the host check", async agent => {
+  const probe = vi.fn(async () => {});
+  const earn = host({executor:{...local, mode:"sandboxed", isolatedJobRoom:true},
+    liveRoomState:()=>({agent,ready:true,coreCommand:null,generation:"selected",
+      ...(agent === "codex-plan" && {minimumModelCents:78})}), checkExecutionReady:probe});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const paid = {task:"test" as never, creator:"buyer" as never, firstRoundCents:1, promptBytes:20000};
+    await expect(ctx.checkExecutionReady!(paid)).rejects.toThrow(/allowance/);
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:100,reviewFiles:1})).rejects.toThrow(/tools/);
+    expect(earn.supportsPrivateInputs("seller")).toBe(false);
+    expect(earn.supportsService("seller",{servicePin:true})).toBe(false);
+    await expect(ctx.checkExecutionReady!({...paid,firstRoundCents:100})).resolves.toBeTypeOf("function");
   } finally { await earn.stopAll(); }
 });
