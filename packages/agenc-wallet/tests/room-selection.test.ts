@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { commandGeneration } from "../src/room-selection.js";
+import { commandGeneration, liveRoomSelection } from "../src/room-selection.js";
 import { earnOptions } from "../src/earn-bootstrap.js";
 import { checkBusinessRoom } from "../src/business-room.js";
 
@@ -107,4 +107,33 @@ it("invalidates a named peer admission if its pairing is replaced", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("tracks the selected ACP image and rejects a missing or unknown profile", () => {
+  const dir = mkdtempSync(join(tmpdir(), "profile-room-"));
+  const path = (n: string) => join(dir, n);
+  const room = {setting:path("choice"), keyStore:path("keystore"), baseFiles:[path("base")],
+    agentFiles:[path("claude")], coreCandidates:[], acpFiles:[path("acp")],
+    acpPrices:{grok:{baseTicks:60_000_000_000, inputTicksPerByte:0}, business:{baseTicks:1000,inputTicksPerByte:1,needsExpiry:true}}};
+  const select = liveRoomSelection(room);
+  try {
+    writeFileSync(path("base"), "");
+    writeFileSync(path("choice"), JSON.stringify({agent:"grok"}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("acp"), "stand-in");
+    expect(select()).toMatchObject({agent:"acp", ready:true, firstCall:room.acpPrices.grok});
+    const initial = select().generation;
+    writeFileSync(path("acp"), "changed");
+    expect(select().generation).not.toBe(initial);
+    writeFileSync(path("choice"), JSON.stringify({agent:"business",validUntil:Date.now() - 1}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("choice"), JSON.stringify({agent:"business",validUntil:Date.now() + 60000}));
+    expect(select().ready).toBe(true);
+    writeFileSync(path("choice"), JSON.stringify({agent:"unsupported"}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("choice"), JSON.stringify({agent:"claude-code"}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("claude"), "stand-in");
+    expect(select()).toMatchObject({agent:"claude-code", ready:true});
+  } finally { rmSync(dir,{recursive:true,force:true}); }
 });

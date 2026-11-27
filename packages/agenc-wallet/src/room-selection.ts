@@ -8,16 +8,25 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 
+export interface FirstCallPrice {
+  baseTicks: number;
+  inputTicksPerByte: number;
+  needsExpiry?: boolean;
+}
+
 export interface LiveRoom {
   setting: string;
   keyStore: string;
   coreCandidates: readonly string[];
   baseFiles: readonly string[];
   agentFiles: readonly string[];
+  acpFiles?: readonly string[];
+  acpPrices?: Record<string, FirstCallPrice>;
   generationFiles?: readonly string[];
 }
 export interface RoomSelection {
-  agent: "core" | "claude-code";
+  agent: "core" | "claude-code" | "acp";
+  firstCall?: FirstCallPrice;
   ready: boolean;
   coreCommand: string | null;
   generation: string;
@@ -72,16 +81,19 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.coreCandidates,
       ...room.baseFiles,
       ...room.agentFiles,
+      ...(room.acpFiles ?? []),
       ...(room.generationFiles ?? []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
-    !room.agentFiles.length
+    !room.agentFiles.length ||
+    (!!room.acpPrices !== !!room.acpFiles?.length) ||
+    Object.values(room.acpPrices ?? {}).some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
+      !Number.isSafeInteger(p.inputTicksPerByte) || p.inputTicksPerByte < 0)
   )
     throw new Error("Invalid job room paths.");
   return () => {
     const slot = file(room.setting);
     const base = room.baseFiles.map(file),
-      agentFiles = room.agentFiles.map(file),
       commands = room.coreCandidates.map(file);
     const coreCommand =
       room.coreCandidates.find((p, i) => {
@@ -93,7 +105,22 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
           return false;
         }
       }) ?? null;
-    const agent = slot.id === "missing" ? "core" : "claude-code";
+    let profile: unknown = "claude-code";
+    let validUntil: unknown;
+    // Desktop owns this envelope. Only its public profile name enters the wallet.
+    if (slot.regular && room.acpPrices) {
+      try {
+        if (statSync(room.setting).size > 65536) throw new Error();
+        const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
+        profile = envelope.agent;
+        validUntil = envelope.validUntil;
+      } catch { profile = null; }
+    }
+    const agent = slot.id === "missing" ? "core" : profile === "claude-code" ? "claude-code" : "acp";
+    const firstCall = agent === "acp" && typeof profile === "string" && Object.hasOwn(room.acpPrices ?? {}, profile)
+      ? room.acpPrices![profile] : undefined;
+    const loginCurrent = !firstCall?.needsExpiry || (typeof validUntil === "number" && Number.isSafeInteger(validUntil) && Date.now() < validUntil);
+    const agentFiles = (agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -107,12 +134,12 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       keysEpoch === "legacy" ||
       /^[0-9a-f-]{36}$/.test(keysEpoch);
     const ready =
-      keysStable &&
+      keysStable && loginCurrent &&
       (epoch === "legacy" || /^[0-9a-f-]{36}$/.test(epoch)) &&
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
-        : slot.regular && agentFiles.every((f) => f.regular));
+        : slot.regular && (agent !== "acp" || !!firstCall) && agentFiles.every((f) => f.regular));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
@@ -121,6 +148,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     const generation = JSON.stringify([
       epoch,
       keysEpoch,
+      loginCurrent,
       refusals,
       slot.id,
       file(room.keyStore).id,
@@ -130,6 +158,6 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       agentFiles,
       room.generationFiles?.map(file),
     ]);
-    return { agent, ready, coreCommand, generation };
+    return { agent, ready, coreCommand, generation, ...(firstCall && {firstCall}) };
   };
 }

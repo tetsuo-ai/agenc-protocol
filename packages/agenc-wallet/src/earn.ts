@@ -325,20 +325,22 @@ export class EarnHost {
     return JSON.stringify([supplied,executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
   }
 
-  #usesClaude(agentId: string): boolean {
-    return !Object.hasOwn(this.#options.agentExecutors ?? {}, agentId) && this.#options.liveRoomState?.().agent === "claude-code";
+  #connectedRoom(agentId: string): RoomSelection | undefined {
+    if (Object.hasOwn(this.#options.agentExecutors ?? {}, agentId)) return undefined;
+    const room = this.#options.liveRoomState?.();
+    return room?.agent === "core" ? undefined : room;
   }
 
   supportsService(agentId: string, needs: {privateInputs?: boolean; servicePin?: boolean}): boolean {
     const executor = this.executorFor(agentId);
     return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId)) &&
-      (!needs.servicePin || !this.#usesClaude(agentId));
+      (!needs.servicePin || !this.#connectedRoom(agentId));
   }
 
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
   supportsPrivateInputs(agentId: string): boolean {
     const executor = this.executorFor(agentId);
-    return executor?.argv[2] !== "peer-job" && !this.#usesClaude(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+    return executor?.argv[2] !== "peer-job" && !this.#connectedRoom(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
       this.#options.roomWork?.(agentId) !== undefined;
   }
 
@@ -954,11 +956,16 @@ export class EarnHost {
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
             (admission.servicePin && executor.argv[2] === "job")))
           throw new ExecutorCapabilityError("This job needs file delivery.");
-        if (!this.supportsService(agent.agentId,admission) || ((this.#usesClaude(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
+        if (!this.supportsService(agent.agentId,admission) || ((this.#connectedRoom(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
           throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
-        if (this.#usesClaude(agent.agentId) && admission.firstRoundCents !== undefined &&
-          (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
-          throw new Error("The first model turn exceeds this job's allowance.");
+        const selected = this.#connectedRoom(agent.agentId);
+        if (selected && admission.firstRoundCents !== undefined) {
+          const acp = selected.firstCall;
+          const affordable = selected.agent === "acp"
+            ? !!acp && acp.baseTicks + acp.inputTicksPerByte * admission.promptBytes <= admission.firstRoundCents * 100_000_000
+            : (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= admission.firstRoundCents * 200_000;
+          if (!affordable) throw new ExecutorCapabilityError("The first model turn exceeds this job's allowance.");
+        }
       };
       check();
       if (this.#options.checkExecutionReady !== undefined) {
