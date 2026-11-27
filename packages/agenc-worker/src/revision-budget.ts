@@ -34,7 +34,11 @@ function syncDirectory(dir: string): void {
 
 export function enrollClaimBudget(root: string, wallet: Address, claim: Address): void {
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  mkdirSync(join(root, wallet + "-" + claim), { recursive: true, mode: 0o700 });
+  const dir = join(root, wallet + "-" + claim);
+  try { mkdirSync(dir,{mode:0o700}); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
+  writeFileSync(join(dir,"format"),"1",{flag:"wx",mode:0o600,flush:true});
+  syncDirectory(dir);
   syncDirectory(root);
 }
 
