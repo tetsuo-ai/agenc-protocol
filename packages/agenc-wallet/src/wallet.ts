@@ -6099,13 +6099,14 @@ export class AgencWallet {
   /** The room download or changing the local room mode can restart the service. */
   async quoteManualWork(agentId: string) {
     this.#checkBusinessConsent();
+    const chainExpires = await this.#chain.clusterTime() + 300;
     const quote = await this.quoteEarn(agentId);
     const entry = this.#fundingQuotes.get(quote.quoteId)!;
     this.#store.update(draft => {
       const saved = draft.setupQuotes ??= {};
       for (const [key, old] of Object.entries(saved)) if (old.quote.expiresAt <= this.#now()) delete saved[key];
       if (Object.keys(saved).length >= 100) throw new WalletError("BUSY", "Too many worker setup requests are pending.");
-      saved[quote.quoteId] = { quote, action: "start-manual", before: entry.before, offers: entry.offers };
+      saved[quote.quoteId] = { quote, chainExpires, action: "start-manual", before: entry.before, offers: entry.offers };
     });
     this.#fundingQuotes.delete(quote.quoteId);
     return quote;
@@ -6115,8 +6116,22 @@ export class AgencWallet {
     if (!fundingQuoteId || !this.#earn.chosenRoomFor(agentId)) throw new WalletError("NOT_AVAILABLE", "Review the job room and its exact funding quote.");
     this.#checkBusinessConsent();
     return this.#lock(`seller-confirm:${agentId}`, async () => {
-      const current = await checkBusinessRoom(this.#config.earn, agentId, () => this.#earn.executorFor(agentId));
-      return this.#setEarn(agentId, true, undefined, fundingQuoteId, true,current);
+      const saved = this.#store.state.setupQuotes?.[fundingQuoteId];
+      if (!saved && this.#agentRecord(agentId).earn.sellerDecisions?.[fundingQuoteId]?.landed)
+        return this.#setEarn(agentId,true,undefined,fundingQuoteId,true);
+      if (!saved?.chainExpires || saved.action !== "start-manual" || saved.quote.agentId !== agentId)
+        throw new WalletError("PRICE_CHANGED","Review a new funding quote for this worker.");
+      const started = monotonicMs();
+      const now = await this.#chain.clusterTime();
+      if (!Number.isSafeInteger(now) || now <= 0) throw new WalletError("NETWORK","The marketplace clock is unavailable.");
+      const end = started + (saved.chainExpires - now) * 1000 - 999;
+      const current = await checkBusinessRoom(this.#config.earn,agentId,()=>this.#earn.executorFor(agentId));
+      const admitted = () => {
+        current();
+        if (monotonicMs() >= end || this.#now() >= saved.quote.expiresAt) throw new WalletError("PRICE_CHANGED","The funding quote expired.");
+      };
+      admitted();
+      return this.#setEarn(agentId,true,undefined,fundingQuoteId,true,admitted);
     });
   }
 
