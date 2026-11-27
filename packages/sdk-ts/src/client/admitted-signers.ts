@@ -17,9 +17,9 @@ export function recheckSigningAdmission(options: unknown): void {
 export function admittedSigners(signers: readonly TransactionSigner[], check: () => void) {
   const guarded: (TransactionPartialSigner | TransactionModifyingSigner)[] = [];
   for (const signer of signers) {
-    function atSigning<A extends unknown[], R>(sign: (...args: A) => R) {
+    function atSigning<A extends unknown[], R>(sign: (...args: A) => R, deferred = false) {
       return (...args: A) => {
-        if (!(signer as {[signerChecksAdmission]?:boolean})[signerChecksAdmission]) check();
+        if (!deferred) check();
         const guarded = [...args];
         guarded[1] = { ...((args[1] ?? {}) as object), [admission]: check };
         return sign.apply(signer, guarded as A);
@@ -29,7 +29,7 @@ export function admittedSigners(signers: readonly TransactionSigner[], check: ()
       ? { address: signer.address, modifyAndSignTransactions: atSigning(signer.modifyAndSignTransactions) }
       : undefined;
     if (isTransactionPartialSigner(signer)) {
-      guarded.push({ ...modifier, address: signer.address, signTransactions: atSigning(signer.signTransactions) });
+      guarded.push({ ...modifier, address: signer.address, signTransactions: atSigning(signer.signTransactions, (signer as {[signerChecksAdmission]?:boolean})[signerChecksAdmission] === true) });
     } else if (modifier) guarded.push(modifier);
   }
   return guarded;
