@@ -19,7 +19,7 @@ import { startProviderHeartbeat, type ServingListing } from "./client/provider-h
 import { DEFAULT_EARN_IDLE_POLL_INTERVAL_MS } from "./earn.js";
 import { pendingBusinessPayments, restoredBusiness, stagedBusiness, requireFreshRehearsals, unresolvedChildDispatch } from "./business-backup.js";
 import { checkBusinessRoom, restoredSeller } from "./business-room.js";
-import { correctChosenWork } from "@tetsuo-ai/agenc-worker";
+import { buildPrompt, correctChosenWork } from "@tetsuo-ai/agenc-worker";
 import { checkWorkFiles, correctionInputs, inspectWorkChunk, workFileSource } from "./work-inspection.js";
 import { readJobParties } from "./job-parties.js";
 import { projectInbox } from "./action-inbox.js";
@@ -234,6 +234,13 @@ const POSTING_GIVE_UP_MS = 30 * 60_000;
 function publishedOutputs(spec: Record<string, unknown>): OutputAgreement | undefined {
   try { return outputAgreementFromSpec(spec); }
   catch { throw new WalletError("NOT_ALLOWED", "This job's agreed outputs are invalid. Review it in Market."); }
+}
+
+function publicListingWork(spec:Record<string,unknown>) {
+  const metadata = Buffer.from(JSON.stringify(spec));
+  const minimumHire = Buffer.from(JSON.stringify({acceptance:[outputAgreementCriterion(DEFAULT_OUTPUT_AGREEMENT)]}));
+  const prompt = buildPrompt("0".repeat(128),minimumHire,null,metadata);
+  return {promptBytes:Buffer.byteLength(JSON.stringify(prompt)),...publishedOutputs(spec)};
 }
 
 /** Why the wallet refuses a purchase's agreed outputs, in words for the person or the agent. */
@@ -2909,7 +2916,7 @@ export class AgencWallet {
     if (message.kind === "availability") {
       const offer = agentOffers(agent).find(offer=>offer.listing === identity.listing && offer.status === "live");
       if (!offer || !this.#wantsLive(agent,offer)) throw new WalletError("NOT_ALLOWED","This agent is not serving that listing.");
-      const checked = await this.#earn.checkListingReady(agentId,AbortSignal.timeout(30_000),this.#listingNeeds(offer));
+      const checked = await this.#readyForOffer(agentId,offer,AbortSignal.timeout(30_000));
       admitted = () => {
         checked();
         const current = this.#agentRecord(agentId);
@@ -6481,6 +6488,7 @@ export class AgencWallet {
     let offers = agentOffers(agent);
     let price: bigint | null = null;
     let quotedTerms: ReturnType<typeof storedTerms> | undefined;
+    let quotedSpec: Record<string,unknown> | undefined;
     let action = JSON.stringify(["enable", minPayCents ?? null]);
     if (input !== undefined) {
       if (input === null || typeof input !== "object") {
@@ -6507,6 +6515,7 @@ export class AgencWallet {
       const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, previous);
       quotedTerms = terms;
       const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
+      quotedSpec = spec;
       action = this.#quotedOfferKey(offerId, name, summary, price, terms, input.enableEarns, input.setupId);
       const completed = input.setupId && Object.hasOwn(agent.serviceSetups ?? {}, input.setupId) ? agent.serviceSetups![input.setupId] : undefined;
       if (completed) throw new WalletError(completed.action !== action ? "PRICE_CHANGED" : "BAD_REQUEST",
@@ -6535,7 +6544,7 @@ export class AgencWallet {
       };
       offers = [...offers.filter((offer) => offer.id !== previous?.id), next];
     }
-    const admission = price !== null && quotedTerms ? await this.#serviceAdmission(agentId, price, quotedTerms) : undefined;
+    const admission = price !== null && quotedTerms ? await this.#serviceAdmission(agentId, price, quotedTerms, quotedSpec) : undefined;
     const quote = await this.#earningQuote(agent, offers, input && offers.at(-1)?.id);
     if (admission) quote.serviceAdmission = admission;
     quote.confirmAction = true;
@@ -6598,12 +6607,14 @@ export class AgencWallet {
     return registration ? this.#enabledServiceMask(this.#agentRecord(agentId)) & registration.account.capabilities : 0n;
   }
 
-  async #serviceAdmission(agentId: string, priceLamports: bigint, terms: ReturnType<typeof storedTerms>) {
+  async #serviceAdmission(agentId: string, priceLamports: bigint, terms: ReturnType<typeof storedTerms>, spec?:Record<string,unknown>) {
     if (!this.#earn.supportsService(agentId, { servicePin: !!terms.servicePin }))
       throw new WalletError("NOT_AVAILABLE", "The selected room cannot deliver this service.");
     if (terms.servicePin) readServiceRehearsal(this.#earn.stateDir(agentId), terms.servicePin);
     const result = serviceEconomics({ priceLamports, ...terms, marketFeeBps: await this.#marketFeeBps(),
       usdPerSol: await this.#freshRate().catch(() => null) });
+    if (!this.#earn.supportsService(agentId,{servicePin:!!terms.servicePin,extraRoomFeatures:!!terms.childPolicy,modelCapCents:result.modelBudgetCents,...(spec && this.#earn.connectedAgent(agentId) && publicListingWork(spec))}))
+      throw new WalletError("NOT_AVAILABLE","The selected room cannot start this service within its allowance.");
     return { minimumPriceLamports: String(result.minimumPriceLamports), modelBudgetCents: result.modelBudgetCents,
       capabilities: terms.servicePin?.capabilities ?? "1" };
   }
@@ -6683,7 +6694,7 @@ export class AgencWallet {
           // Admitted again at the current rate: the price must still cover the margin and a model budget.
           // The dollar figures move with the rate, so only the fixed terms are compared. The worker sets
           // the model budget again from the rate at claim.
-          const admission = await this.#serviceAdmission(agent.id, BigInt(offer.priceLamports), storedTerms(offer));
+          const admission = await this.#serviceAdmission(agent.id, BigInt(offer.priceLamports), storedTerms(offer),offer.spec);
           if (!sameServiceAdmission(admission, entry.quote.serviceAdmission))
             throw new WalletError("PRICE_CHANGED", "The service budget changed. Review a new quote.");
         }
@@ -7249,13 +7260,13 @@ export class AgencWallet {
     const priceLamports = await this.#offerLamports(input.price);
     this.#checkOfferPrice(priceLamports);
     const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, current);
+    const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
     if (!fundingQuoteId) {
       if (terms.servicePin || terms.modelCapCents || terms.minimumMarginCents || terms.childPolicy)
         throw new WalletError("APPROVAL_REQUIRED", "Review the rehearsed service and spending limits in Market.");
-      await this.#serviceAdmission(agentId, priceLamports, terms);
+      await this.#serviceAdmission(agentId, priceLamports, terms,spec);
     }
     const category = terms.category;
-    const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
     const hash = await jobSpecHash(spec);
     const price = priceLamports.toString();
     const id = current?.id ?? values.bytesToHex(values.randomId32());
@@ -7497,7 +7508,7 @@ export class AgencWallet {
   async #listingChecks(agentId:string, offers:readonly OfferRecord[]) {
     const checks: (()=>void)[] = [];
     for (const offer of offers) {
-      const ready = await listingRequest(()=>this.#earn.checkListingReady(agentId,transportSignal(),this.#listingNeeds(offer)));
+      const ready = await listingRequest(()=>this.#readyForOffer(agentId,offer,transportSignal()));
       checks.push(()=>{
         ready();
         const agent = this.#agentRecord(agentId);
@@ -7507,10 +7518,18 @@ export class AgencWallet {
     }
     return () => { for (const check of checks) check(); };
   }
+  async #readyForOffer(agentId:string,offer:OfferRecord,signal?:AbortSignal) {
+    const needs = this.#listingNeeds(offer);
+    if (this.#earn.connectedAgent(agentId)) {
+      const priced = await this.#serviceAdmission(agentId,BigInt(offer.priceLamports),storedTerms(offer),offer.spec);
+      return this.#earn.checkListingReady(agentId,signal,{...needs,...publicListingWork(offer.spec),modelCapCents:priced.modelBudgetCents});
+    }
+    return this.#earn.checkListingReady(agentId,signal,needs);
+  }
   #listingNeeds(offer: OfferRecord) {
     const spec = offer.spec as {custom?:{listingMetadata?:{fulfilment?:{privateInputs?:boolean;servicePin?:unknown}}}};
     const terms = spec.custom?.listingMetadata?.fulfilment;
-    return {privateInputs:terms?.privateInputs === true,servicePin:!!terms?.servicePin || !!storedTerms(offer).servicePin,...(storedTerms(offer).servicePin && {serviceDigest:storedTerms(offer).servicePin!.digest})};
+    return {...(storedTerms(offer).modelCapCents !== undefined && {modelCapCents:storedTerms(offer).modelCapCents!}),extraRoomFeatures:!!storedTerms(offer).childPolicy,privateInputs:terms?.privateInputs === true,servicePin:!!terms?.servicePin || !!storedTerms(offer).servicePin,...(storedTerms(offer).servicePin && {serviceDigest:storedTerms(offer).servicePin!.digest})};
   }
   #wantsLive(agent: AgentRecord, offer: OfferRecord): boolean {
     return (

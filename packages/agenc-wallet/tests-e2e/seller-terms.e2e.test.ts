@@ -564,3 +564,12 @@ it("binds a cold-room quote to one seller setup across a wallet restart", async 
   expect(world.wallet.sellerSetup(seller.id, input.setupId)).toMatchObject({ quoteId: quote.quoteId, offerId: funded!.offerId });
   expect(initial - await world.balance(world.wallet.mainAddress)).toBe(BigInt(quote.totalFromMain.lamports));
 });
+
+it("checks the connected room's first turn before quoting a listing",async()=>{
+  world=await startWorld({earn:{...earn,executor:{...earn.executor,isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"claude-code",ready:true,coreCommand:null,generation:"choice"}),checkExecutionReady:async()=>{}}});
+  const seller=await world.wallet.createAgent();
+  const quote=(modelCapCents:number)=>world.wallet.quoteEarn(seller.id,{...service,terms:{modelCapCents}});
+  await expect(quote(1)).rejects.toThrow(/allowance|start/);
+  await expect(quote(10)).resolves.toBeDefined();
+});
