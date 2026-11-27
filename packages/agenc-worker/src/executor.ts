@@ -391,6 +391,12 @@ export async function runExecutor(options: {
     }, timeoutMs);
     let grace: ReturnType<typeof setTimeout> | null = null;
     const onAbort = (): void => {
+      if (signal?.reason instanceof DOMException && signal.reason.name === "TimeoutError") {
+        failure = new ExecutorError("The job deadline passed.", { exitCode: null, signal: null, reason: "timeout" });
+        clearTimeout(timer);
+        killExecutor(child);
+        return;
+      }
       if (failure === null) {
         failure = new ExecutorError("executor was stopped", {
           exitCode: null,

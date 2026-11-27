@@ -1,4 +1,5 @@
 import { CODEX_CAP, CODEX_PRICE, codexMinimum } from "./client/codex-allowance.js";
+import { hasDeliveryFiles } from "./work-inspection.js";
 import { createHash } from "node:crypto";
 import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // "Take jobs while idle": run the stock marketplace worker loop for an agent,
@@ -52,7 +53,7 @@ import {
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import { claimBudget, chainDeadline, monotonicMs, ExecutorBudgetError, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
-import { checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
+import { privateProcessing, checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { outputAgreementFromSpec } from "./client/job-exchange.js";
@@ -69,6 +70,8 @@ export interface EarnExecutor {
   connectedAgent?:string;
   /** The trusted host selected the isolated guest adapter for this argv. */
   isolatedJobRoom?: boolean;
+  /** The host installed the Core job program and its delivery and exchange protocols. */
+  jobRoom?: boolean;
   /**
    * Command and arguments; one element must be exactly "{prompt}". Wherever
    * these appear they are replaced:
@@ -346,7 +349,7 @@ export class EarnHost {
     const executor = this.executorFor(agentId);
     const supplied = Object.hasOwn(this.#options.agentExecutors ?? {},agentId)
       ? "" : this.#options.defaultExecutorGeneration?.() ?? "";
-    return JSON.stringify([supplied,executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
+    return JSON.stringify([supplied,executor && privateProcessing(executor.argv,agentId),executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
   }
 
   connectedAgent(agentId: string): string | undefined {
@@ -370,11 +373,27 @@ export class EarnHost {
     return cents === undefined ? undefined : claimBudget(cents,this.executorFor(agentId)?.reserveRevisionBudget === true).remainingCents;
   }
 
+  minimumPublicBudget(agentId: string, bytes: number): number {
+    const policy = this.#publicJobs(this.connectedAgent(agentId) ?? "");
+    const fits = (n:number) => policy?.firstTurnFits(this.listingFirstRound(agentId,n)!,bytes) === true;
+    let low = 1, high = 999_999_999;
+    if (!fits(high)) throw new Error("This executor cannot price the first turn.");
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (fits(mid)) high = mid;
+      else low = mid + 1;
+    }
+    return low;
+  }
+
   supportsService(agentId: string, needs: ListingNeeds): boolean {
     const executor = this.executorFor(agentId);
     if (needs.servicePin && ["job","peer-job"].includes(executor?.argv[2] ?? "") && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) return false;
     const connected = this.connectedAgent(agentId);
     if (needs.servicePin && needs.privateInputs) return false;
+    const builtIn = executor?.jobRoom === true && executor.isolatedJobRoom === true && executor.mode === "sandboxed";
+    if (!connected && !builtIn &&
+        (needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || needs.requiredFiles?.length || needs.allowTextOnly === false)) return false;
     if (connected) {
       const policy = this.#publicJobs(connected);
       if (!policy || !executor?.isolatedJobRoom || executor.mode !== "sandboxed" || needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || executor?.argv[2] === "peer-job" ||
@@ -390,7 +409,7 @@ export class EarnHost {
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
   supportsPrivateInputs(agentId: string): boolean {
     const executor = this.executorFor(agentId);
-    return executor?.argv[2] !== "peer-job" && !this.connectedAgent(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+    return executor?.jobRoom === true && executor.argv[2] !== "peer-job" && !this.connectedAgent(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
       this.#options.roomWork?.(agentId) !== undefined;
   }
 
@@ -988,6 +1007,8 @@ export class EarnHost {
     };
 
     const generation = () => this.generationFor(agent.agentId);
+    const executorProgram = () => Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId)
+      ? createHash("sha256").update(JSON.stringify([executor.argv,commandGeneration(executor.argv)])).digest("hex") : undefined;
     const executorIdentity = () => {
       if (executor.argv[2] === "peer-job") {
         if (executor.argv[4]?.startsWith("pair:")) return executor.argv[4];
@@ -1010,7 +1031,8 @@ export class EarnHost {
           throw new Error("This job room is no longer selected.");
       };
     };
-    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false) => {
+    let goodProbe: string | undefined;
+    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false, policyOnly = false) => {
       const admission = requested && { ...requested, fileTransport: requested.fileTransport && !!fileLinkPrefix };
       const current = guard();
       const named = Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId);
@@ -1023,6 +1045,8 @@ export class EarnHost {
         if (named) checkNamedProgram(executor.argv);
         if (hostCheck) hostCheck();
         if (!admission) return;
+        if (admission.privateInputs && privateProcessing(executor.argv,agent.agentId) === "unavailable")
+          throw new ExecutorCapabilityError("Choose the model approved for private jobs.");
         if (admission.deadlineMs !== undefined && monotonicMs() >= admission.deadlineMs) throw new Error("The claim deadline passed.");
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
             (admission.servicePin && ["job", "peer-job"].includes(executor.argv[2] ?? ""))))
@@ -1049,10 +1073,13 @@ export class EarnHost {
           throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
       };
       check();
-      if (preview) return check;
+      if (policyOnly) return check;
       if (this.#options.checkExecutionReady !== undefined) {
         hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
+        const proof = JSON.stringify([generation(),admission?.source,admission?.privateInputs,admission?.servicePin,admission?.serviceDigest]);
+        const tracked = !named && !!(this.#options.defaultExecutorGeneration || this.#options.liveRoomState);
+        if (preview && tracked && proof === goodProbe) return check;
         const report = await runExecutor({
           argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
             [...(admission.deadlineMs === undefined ? [] : ["boot:" + admission.deadlineMs]),
@@ -1074,6 +1101,8 @@ export class EarnHost {
             }
           }
         }
+        check();
+        goodProbe = proof;
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }
@@ -1094,7 +1123,7 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
-      executorIdentity, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
+      executorIdentity, executorProgram, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
       modelBudgetCeiling:(task,metadata)=>(metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
       allowanceGeneration:(task,metadata,budget)=>{
         const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);
@@ -1102,6 +1131,13 @@ export class EarnHost {
         return JSON.stringify([cap,terms?.minimumMarginCents,cap !== undefined && budget !== undefined && budget >= cap ? null : agent.lastSolUsd?.()]);
       },
       ...(roomWork && { roomWork }),
+      checkTextRevision: async delivery => {
+        if (!this.connectedAgent(agent.agentId)) return;
+        const body = "output" in delivery ? delivery.output : (await this.#services.fetchResult(delivery.previous))?.bytes;
+        if (!body || ("previous" in delivery && createHash("sha256").update(body).digest("hex") !== delivery.previous.proofHashHex))
+          throw new Error("The previous delivery could not be verified.");
+        if (hasDeliveryFiles(Buffer.from(body))) throw new ExecutorCapabilityError("This room can revise only text deliveries without files.");
+      },
       admissionGeneration: () => String(generation() ?? "configured") + "/" + (entry.capabilityRevision ?? 0),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
       ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
@@ -1187,7 +1223,7 @@ export class EarnHost {
             : BigInt(await this.#chain.clusterTime()) + BigInt(Math.floor(executor.timeoutMs / 1000));
         }
         if (deadline !== undefined && monotonicMs() >= deadline) throw new Error("The claim expired.");
-        if (claimRound) requireClaimExecutor(path.dirname(claimRound),executorIdentity());
+        if (claimRound) requireClaimExecutor(path.dirname(claimRound),executorIdentity(),false,executorProgram());
         if (claimRound && (executor.argv[2] === "job" || executor.argv[2] === "peer-job")) indexClaimUsage(stateDir,address,claimRound);
         beforeLaunch?.();
         const receipt = reservedCents ? reserveServiceRun(stateDir,address,reservedCents) : null;
@@ -1219,7 +1255,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, claimCounts, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
+        acceptance, promptBytes, firstRoundCents, claimCounts, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview, policyOnly }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         let outputs;
@@ -1234,7 +1270,7 @@ export class EarnHost {
           verifiedAgreement:!!outputs,revision:!!revision,extraRoomFeatures:!!extraRoomFeatures || !!listingTerms?.childHire || listingTerms?.fulfilment?.privateInputs === true || (requiredCapabilities ?? 1n)>1n,
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
           ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
-        } : undefined,preview);
+        } : undefined,preview,policyOnly);
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }
@@ -1270,7 +1306,7 @@ export class EarnHost {
           // An own-jobs loop also starts afresh, to learn of agents added since.
           if (choosing !== agent.chooseOpenJobs?.() || (revision !== entry.capabilityRevision && !this.hasUnfinishedJob(agent.agentId))) run.abort();
           const due = this.#serves(agent.agentId) || this.ownJobsOnly;
-          if (due && Date.now() - startedAt >= refreshMs) run.abort();
+          if (due && Date.now() - startedAt >= refreshMs && !this.hasUnfinishedJob(agent.agentId)) run.abort();
         },
         Math.max(250, Math.min(refreshMs, 5_000)),
       );

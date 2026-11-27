@@ -45,7 +45,7 @@ it("reads 301 services on a fixed snapshot with no wallet, including a live muta
 
 it("reports exact revision 9 eligibility and never claims during inspection", async () => {
   world = await startWorld({ earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write('ok')", "{prompt}"],
-    mode: "sandboxed", timeoutMs: 3000, envAllowlist: [] }, chosenRoomEnabled: () => true, pollIntervalMs: 200 } });
+    mode: "sandboxed", jobRoom:true, isolatedJobRoom:true, timeoutMs: 3000, envAllowlist: [] }, chosenRoomEnabled: () => true, pollIntervalMs: 200 } });
   const { wallet, sandbox } = world;
   const worker = await wallet.createAgent("Worker");
   wallet.chooseWork(worker.id, true);
@@ -157,7 +157,7 @@ it("publishes an expiring seller heartbeat only after a room check and uses the 
     sent.push(JSON.parse(String(options?.body)));
     return Response.json({ ok: true });
   } }, earn: { executor: { argv: [process.execPath, "-e", "process.stdout.write('ok')", "{prompt}"],
-    envAllowlist: [], mode: "sandboxed", timeoutMs: 3000, isolatedJobRoom: true }, pollIntervalMs: 200,
+    envAllowlist: [], mode: "sandboxed", timeoutMs: 3000, jobRoom:true, isolatedJobRoom: true }, pollIntervalMs: 200,
     liveRoomState: () => ({ agent: selected, generation: selected, ready: true, coreCommand: process.execPath }),
     defaultExecutorGeneration: () => selected,
     checkExecutionReady: async () => { checks++; if (!ready) throw new Error("Room offline"); } } });

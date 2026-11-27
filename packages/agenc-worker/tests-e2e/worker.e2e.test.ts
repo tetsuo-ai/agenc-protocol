@@ -393,6 +393,8 @@ describe("e2e: one worker tick against the real program", () => {
       }),
     ]);
     const [task] = await findTaskPda({ creator: creator.address, taskId });
+    await creatorClient.send([await facade.configureTaskValidation({task, creator,
+      hireRecord:(await findHireRecordPda({task}))[0], mode:1, reviewWindowSecs:3600n, validatorQuorum:0, attestor:null})]);
     const jobSpecHash = SPEC.hash;
     await modClient.send([
       await facade.recordTaskModeration({

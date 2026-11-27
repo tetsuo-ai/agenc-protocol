@@ -83,7 +83,7 @@ it("journals a wire signature before a stalled RPC send, aborts HTTP and blocks 
   active.controller.abort();
   await rejected;
   expect(signal?.aborted).toBe(true);
-  expect(active.pending).toEqual([{ signature: expect.any(String), lastValidBlockHeight: "100" }]);
+  expect(active.pending).toEqual([{ signature: expect.any(String), signedTransaction:expect.any(String), lastValidBlockHeight: "100" }]);
   release({ jsonrpc: "2.0", id: "late", result: active.pending[0]!.signature });
   await new Promise((resolve) => setImmediate(resolve));
   expect(methods).toEqual(["getLatestBlockhash", "sendTransaction"]);

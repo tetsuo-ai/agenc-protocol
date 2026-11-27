@@ -42,7 +42,7 @@ export class ExecutorCapabilityError extends Error {
   override name = "ExecutorCapabilityError";
 }
 
-function syncDir(dir: string) {
+export function syncDir(dir: string) {
   if (process.platform === "win32") return;
   const fd = openSync(dir, "r");
   try {

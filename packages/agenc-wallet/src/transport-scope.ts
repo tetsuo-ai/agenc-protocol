@@ -11,7 +11,7 @@ export interface AllowanceCharge {
   usdCents?: number | null;
   id?: string;
   signature?: string;
-  work?: { lastValidBlockHeight: string; fee: string; rate: number };
+  work?: { lastValidBlockHeight: string; signedTransaction?: string; fee: string; rate: number };
 }
 
 export type ListingOperation =
@@ -179,7 +179,7 @@ export function scopedSendTransport(base: Transport): Transport {
       beforeSend?.();
       context.sending({
         signature,
-        ...(context.operation?.kind === "funding" && context.operation.decision && { signedTransaction: getBase64EncodedWireTransaction(transaction) }),
+        ...((!context.operation || (context.operation.kind === "funding" && context.operation.decision)) && { signedTransaction: getBase64EncodedWireTransaction(transaction) }),
         lastValidBlockHeight: transaction.lifetimeConstraint.lastValidBlockHeight.toString(),
         ...(context.operation && { operation: context.operation }),
       });

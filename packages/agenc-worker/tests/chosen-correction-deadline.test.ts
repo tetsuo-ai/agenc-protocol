@@ -18,7 +18,7 @@ it.each(["clock","launch","active"])("holds a correction that expires during %s"
   const state=emptyState();
   state.openClaim={task,claimedAt:new Date().toISOString(),phase:"executed",chosen:true,modelBudget:{totalCents:10,remainingCents:0,correctionCents:2},
     execution:{resultBytesBase64:Buffer.from("first").toString("base64"),resultHashHex:hash,rewardAmount:"10",executedAt:new Date().toISOString()}};
-  saveState(root,state);mkdirSync(join(root,"seller-claim"));
+  saveState(root,state);mkdirSync(join(root,"seller-claim"),{mode:0o700});
   held.mockResolvedValue({task,canSubmit:true,resultHash:hash,claimAccount:"claim",deadline:1400,expiresAt:9000,releaseWindow:null});
   read.mockResolvedValue({kind:"task",task:{creator:"buyer",requiredCapabilities:1n}});
   const execute=vi.fn(async (input:{signal:AbortSignal})=>{

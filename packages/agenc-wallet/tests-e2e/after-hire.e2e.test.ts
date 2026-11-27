@@ -65,7 +65,7 @@ it.each(["reject", "approve", "change"] as const)("refuses a signed %s for a sup
       return { stdout: Buffer.from(reviewInputs![0]!.bytes), exitCode: 0 };
     }, executor: { argv: [process.execPath, "-e",
       "process.stdout.write('First delivery')", "{prompt}"],
-      mode: "sandboxed", isolatedJobRoom: true, reserveRevisionBudget: true, envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 100 },
+      mode: "sandboxed", jobRoom: true, isolatedJobRoom: true, reserveRevisionBudget: true, envAllowlist: [], timeoutMs: 10000 }, pollIntervalMs: 100 },
   });
   const { wallet } = world;
   const buyer = await wallet.createAgent("Buyer");

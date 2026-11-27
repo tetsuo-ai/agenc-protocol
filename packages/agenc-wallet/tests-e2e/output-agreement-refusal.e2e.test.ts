@@ -50,7 +50,7 @@ it("refuses report.xlsx before any quote, and a seller skips a job that names it
   const openSeller = async () => {
     seller = await AgencWallet.open({ dataDir: join(dir, "seller"), unlockSecret: randomBytes(32), chain: sandbox.chain, services: sandbox.services,
       prices: sandbox.prices, earn: { executor: { argv: [process.execPath, "-e", program, "{outbox}", "{files}", "{prompt}"],
-        mode: "sandboxed", envAllowlist: [], timeoutMs: 30000, isolatedJobRoom: true }, pollIntervalMs: 120, checkExecutionReady: async () => {} } });
+        mode: "sandboxed", envAllowlist: [], timeoutMs: 30000, jobRoom: true, isolatedJobRoom: true }, pollIntervalMs: 120, checkExecutionReady: async () => {} } });
     sandbox.fund(seller.mainAddress, 5n * SOL);
     const provider = await seller.createAgent("Studio");
     await setEarnWithApproval(seller, provider.id, true, 10);

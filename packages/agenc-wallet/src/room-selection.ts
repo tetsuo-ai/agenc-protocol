@@ -56,12 +56,47 @@ function file(path: string) {
   }
 }
 
+function entryPoint(argv: readonly string[]): string | undefined {
+  const command = basename(argv[0] ?? "");
+  if (!/^(?:node|nodejs|python[\d.]*|bash|sh|electron)(?:\.exe)?$/i.test(command))
+    return ["job","peer-job"].includes(argv[2] ?? "") ? argv[1] : undefined;
+  const name = command.toLowerCase().replace(/\.exe$/, "");
+  const node = ["node","nodejs","electron"].includes(name);
+  const python = name.startsWith("python");
+  const inline = node ? ["-e","--eval"] : ["-c"];
+  const flags = node ? ["--no-warnings","--no-deprecation","--trace-warnings","--unhandled-rejections=strict","--enable-source-maps"] :
+    python ? ["-u","-B","-E","-I","-s","-S","-O"] : ["-e","-u","-x","--noprofile","--norc"];
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--") return argv[i+1] ?? "";
+    if (!arg.startsWith("-")) return arg;
+    if (inline.includes(arg)) return argv[i+1] ? undefined : "";
+    if (node && arg === "--disable-warning") {
+      if (!argv[++i] || argv[i]!.startsWith("-")) return "";
+    } else if (!flags.includes(arg)) return "";
+  }
+  return "";
+}
+
+export function privateProcessing(argv:readonly string[],agent:string): string | undefined {
+  if (argv[2] !== "job" || !argv[3] || !isAbsolute(argv[3])) return undefined;
+  const slot=argv[3].replaceAll("{agent}",agent)+".processing.json";
+  try {
+    const data=JSON.parse(readFileSync(slot,"utf8"));
+    const name=/^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
+    if (data.version === 1 && Object.keys(data).sort().join() === "model,provider,version" &&
+        typeof data.provider === "string" && name.test(data.provider) && typeof data.model === "string" && name.test(data.model))
+      return JSON.stringify([file(slot).id,data.provider,data.model]);
+  } catch {}
+  return "unavailable";
+}
+
 export function checkNamedProgram(argv: readonly string[]) {
-  const [command, script, mode] = argv;
+  const command = argv[0];
   if (!command || !executablePath(command))
     throw new ExecutorCapabilityError("The named job program is unavailable.");
-  const interpreter = /^(?:node|nodejs|python[\d.]*|bash|sh|electron)(?:\.exe)?$/i.test(basename(command));
-  if (!script || script.startsWith("-") || (!interpreter && mode !== "job" && mode !== "peer-job")) return;
+  const script = entryPoint(argv);
+  if (script === undefined) return;
   try {
     if (!isAbsolute(script) || !statSync(script).isFile()) throw new Error();
     accessSync(script, constants.R_OK);
@@ -75,7 +110,11 @@ export function commandGeneration(
   argv: readonly string[],
   probe: readonly string[] = [],
 ): string {
-  const commands = [argv,probe].flatMap(parts => parts[0] ? [executablePath(parts[0]) ?? parts[0], ...parts.slice(1,2).filter(isAbsolute)] : []);
+  const commands = [argv,probe].flatMap(parts => {
+    if (!parts[0]) return [];
+    const script = entryPoint(parts);
+    return [executablePath(parts[0]) ?? parts[0], ...(script && isAbsolute(script) ? [script] : [])];
+  });
   // The paired executor authenticates with this profile. Only its file identity is needed.
   if (probe[2] === "peer-ready" && probe[3] && isAbsolute(probe[3])) commands.push(probe[3]);
   return JSON.stringify(commands.map(file));

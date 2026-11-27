@@ -30,6 +30,7 @@ import { values } from "@tetsuo-ai/marketplace-sdk";
 /** What a provider says about a service, ready to show. */
 export interface FulfilmentTerms {
   minimumMarginCents?: number;
+  minimumModelCents?: number;
   modelCapCents?: number;
   privateInputs?: boolean;
   supplier?: ListedSupplier;
@@ -40,12 +41,13 @@ function fulfilmentTerms(raw: unknown, childHire?: unknown): FulfilmentTerms | u
   if (raw == null && childHire === undefined) return undefined;
   const value = record(raw ?? {});
   if (!value) throw new Error("Invalid listing fulfilment terms.");
-  const { minimumMarginCents, modelCapCents } = value;
+  const { minimumMarginCents, modelCapCents, minimumModelCents } = value;
+  if (minimumModelCents !== undefined && (typeof minimumModelCents !== 'number' || !Number.isSafeInteger(minimumModelCents) || minimumModelCents < 1)) throw new Error('Invalid minimum model budget.');
   if (minimumMarginCents !== undefined && (typeof minimumMarginCents !== "number" || !Number.isSafeInteger(minimumMarginCents) || minimumMarginCents < 0))
     throw new Error("Invalid seller margin.");
   if (modelCapCents !== undefined && (typeof modelCapCents !== "number" || !Number.isSafeInteger(modelCapCents) || modelCapCents < 1))
     throw new Error("Invalid model budget.");
-  return { ...(minimumMarginCents !== undefined && { minimumMarginCents }), ...(modelCapCents !== undefined && { modelCapCents }),
+  return { ...(minimumModelCents !== undefined && {minimumModelCents}), ...(minimumMarginCents !== undefined && { minimumMarginCents }), ...(modelCapCents !== undefined && { modelCapCents }),
     ...(value.privateInputs === true && { privateInputs: true }), ...(childHire !== undefined && { supplier: listedSupplier(childHire) }) };
 }
 
