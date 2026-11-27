@@ -2482,7 +2482,8 @@ export async function processCandidate(
     await ctx.executorForTask?.(decodedTask, task, undefined, hireBinding.listing, listingMetadata);
   } catch (error) {
     const reason = formatDiagnosticError(error);
-    if (error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name)) {
+    if (error instanceof Error && (["ExecutorBudgetError","ExecutorCapabilityError","RoomImageError"].includes(error.name) ||
+        (error instanceof ExecutorError && error.detail.reason === "exit" && error.detail.exitCode === SELLER_SETUP_EXIT))) {
       const current = () => error.name === "ExecutorBudgetError" ? ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) ?? "" : "";
       const allowance = current();
       refused.set(task+(chosen?"/chosen":"/automatic"),{hash:bytesToHex(new Uint8Array(verified.jobSpecHash)),snapshot:observedHash,scan,generation,reason,

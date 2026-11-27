@@ -3454,3 +3454,12 @@ it("refuses automatic Exclusive Auto work before reading its spec or signing",as
   expect(result.fetchUri).not.toHaveBeenCalled();
   expect(result.outcome).toMatchObject({status:"skipped",reason:"Automatic work requires buyer review."});
 });
+
+it("skips repeated account and spec reads for a permanent room image failure",async()=>{
+  const check=vi.fn(async()=>{throw Object.assign(new Error("Invalid installed image."),{name:"RoomImageError"});});
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},check);
+  const read=vi.spyOn(result.ctx,"readAccount");
+  await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
+  expect(read).not.toHaveBeenCalled();
+  expect(check).toHaveBeenCalledOnce();
+});
