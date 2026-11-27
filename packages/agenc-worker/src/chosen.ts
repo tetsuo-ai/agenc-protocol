@@ -1,5 +1,7 @@
 // The picker and the executor use the same verified spec, policy filters and claim instruction.
 import { unwrapOption, type Address } from "@solana/kit";
+import { join } from "node:path";
+import { requireClaimExecutor } from "./revision-budget.js";
 import {
   lighthouse, facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
@@ -18,6 +20,11 @@ import { chosenReleaseWindow, correctionCutoff } from "./chosen-release.js";
 import { resultDataFromHashHex, resultPlaceholderUri, uploadResult } from "./result.js";
 
 export type WorkerAction = "claim" | "submit" | "release";
+
+function checkResultExecutor(ctx: WorkerContext, claim: Address): void {
+  if (ctx.modelSpendDir && ctx.executorIdentity)
+    requireClaimExecutor(join(ctx.modelSpendDir, ctx.signer.address + "-" + claim), ctx.executorIdentity());
+}
 
 async function taskTerms(ctx: WorkerContext, agent: WorkerAgent, task: Address, data: Task, claimed = false) {
   const [validation] = await findTaskValidationConfigPda({ task });
@@ -223,14 +230,14 @@ export async function browseOpenWork(ctx: WorkerContext, agent: WorkerAgent, off
 }
 
 export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signal: AbortSignal, task: Address,
-  authorize: (job: OpenWork) => Promise<void>) {
+  authorize: (job: OpenWork) => Promise<void | (() => void)>) {
   const read = await readTaskAccount(ctx, task);
   if (read.kind !== "task" || !ctx.withChosenRoom) throw new Error("This job is unavailable.");
   const result = await ctx.withChosenRoom(room => processCandidate({ ...ctx, signal: room }, agent, candidate(task, read.task), {
     signal, authorizeChosen: async (facts, budget) => {
       const job = await openTerms(ctx, agent, task, facts, budget);
       if (!job) throw new Error("The chosen job changed.");
-      await authorize(job);
+      return authorize(job);
     },
   }));
   if (result.status !== "held") throw new Error("The worker could not confirm the claim. Refresh the jobs list.");
@@ -349,7 +356,8 @@ export async function heldWork(ctx: WorkerContext, agent: WorkerAgent) {
   const noPendingSend = !marker.chosenAttempt && !marker.releaseRequestedAt;
   const idle = noPendingSend && (marker.phase === "claimed" || marker.phase === "executed");
   const canDeliver = !cleanup && idle && marker.execution && (terms.deadline === 0 || now <= terms.deadline);
-  const room = ctx.checkChosenRoom !== undefined;
+  let room = ctx.checkChosenRoom !== undefined;
+  try { checkResultExecutor(ctx, claimPda); } catch { room = false; }
   const enoughTime = now + RELEASE_LANDING_MARGIN_SECS < expiresAt;
   const [release, submit] = await Promise.all([
     noPendingSend && cleanup && (live || terminal) ? ctx.simulateWork(await cleanupClaimInstruction(ctx, agent, task, read.task, terms.treasury, terminal)) :
@@ -376,14 +384,22 @@ export type HeldWork = NonNullable<Awaited<ReturnType<typeof heldWork>>>;
 export type { WorkSimulation };
 
 export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, signal: AbortSignal,
-  task: Address, action: "submit" | "release", authorize: (job: HeldWork) => Promise<void>,
+  task: Address, action: "submit" | "release", authorize: (job: HeldWork) => Promise<void | (() => void)>,
   prepare: (intent?: SubmissionIntent) => void) {
   const held = await heldWork(ctx, agent);
   if (held?.task !== task || !(action === "submit" ? held.canSubmit : held.canRelease))
     throw new Error("This action is no longer available for this claim.");
   const read = await readTaskAccount(ctx, task);
   if (read.kind !== "task") throw new Error("The job has ended.");
-  await authorize(held);
+  const quote = await authorize(held);
+  const generation = ctx.admissionGeneration?.();
+  const assertAuthorized = () => {
+    signal.throwIfAborted();
+    if (quote) quote();
+    if (action === "submit") checkResultExecutor(ctx, held.claimAccount);
+    if (action === "submit" && (ctx.admissionGeneration?.() !== generation || ctx.chosenRoomCurrent?.() === false))
+      throw new Error("This claim's room changed.");
+  };
   const marker = loadState(ctx.stateDir).openClaim;
   if (marker?.task !== task || !marker.chosen) throw new Error("The selected claim changed.");
   let ix;
@@ -402,6 +418,6 @@ export async function finishChosenWork(ctx: WorkerContext, agent: WorkerAgent, s
   }
   signal.throwIfAborted();
   const guards = action === "release" && !held.cleanup ? releaseGuards(held.releaseWindow, held.releaseState, held) : [];
-  await ctx.client.send([...guards, ix], { maxRetries: 0 });
+  await ctx.client.send([...guards, ix], { maxRetries: 0, assertAuthorized });
   await resumeOpenClaim(ctx, agent);
 }
