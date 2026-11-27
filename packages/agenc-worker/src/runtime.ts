@@ -295,6 +295,7 @@ export type WorkerContext = {
    * before every fresh claim, before its WAL or transaction. Throw to defer.
    * Receives no buyer text. Recovery and settlement remain available.
    */
+  checkTextRevision?: (delivery:{previous:{proofHashHex:string;resultData:Uint8Array}} | {output:Buffer}) => Promise<void>;
   chosenRoomCurrent?: () => boolean;
   admissionGeneration?: () => string;
   executorIdentity?: () => string;
@@ -2122,6 +2123,9 @@ async function executeAndSubmit(
       if ("state" in result && result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     }
+    executionGuard();
+    if (revisionHash) await ctx.checkTextRevision?.({output:stdout});
+    executionGuard();
     // B binds the v2 pointer to the claim generation; v1 remains for earlier rooms.
     if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v[12]:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
       throw new Error("The room has not produced a protected delivery.");
@@ -3112,6 +3116,7 @@ export async function resumeOpenClaim(
         const [address] = await findClaimPda({task,bidder:agent.agentPda});
         requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload));
       }
+      await ctx.checkTextRevision?.({previous:{proofHashHex:hashHex(submission!.account.proofHash),resultData:new Uint8Array(submission!.account.resultData)}});
       await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,
         ...(marker.listing && {listing:marker.listing as Address}),listingMetadata,requiredCapabilities:decodedTask.requiredCapabilities,
         privateInputs:needsPrivateRoom(payload),acceptance:parseJobBrief(payload).acceptance,

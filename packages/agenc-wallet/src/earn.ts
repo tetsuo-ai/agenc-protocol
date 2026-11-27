@@ -1,3 +1,4 @@
+import { hasDeliveryFiles } from "./work-inspection.js";
 import { createHash } from "node:crypto";
 import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // "Take jobs while idle": run the stock marketplace worker loop for an agent,
@@ -1072,6 +1073,13 @@ export class EarnHost {
         return JSON.stringify([cap,terms?.minimumMarginCents,cap !== undefined && budget !== undefined && budget >= cap ? null : agent.lastSolUsd?.()]);
       },
       ...(roomWork && { roomWork }),
+      checkTextRevision: async delivery => {
+        if (!this.connectedAgent(agent.agentId)) return;
+        const body = "output" in delivery ? delivery.output : (await this.#services.fetchResult(delivery.previous))?.bytes;
+        if (!body || ("previous" in delivery && createHash("sha256").update(body).digest("hex") !== delivery.previous.proofHashHex))
+          throw new Error("The previous delivery could not be verified.");
+        if (hasDeliveryFiles(Buffer.from(body))) throw new ExecutorCapabilityError("This room can revise only text deliveries without files.");
+      },
       admissionGeneration: () => String(generation() ?? "configured") + "/" + (entry.capabilityRevision ?? 0),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
       ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),

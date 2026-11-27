@@ -32,11 +32,11 @@ afterEach(() => {
 const local: EarnExecutor = { argv: ["/local/room", "job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 const peer: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 
-function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000, storage = false) {
+function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000, storage = false, fetchResult?: MarketServices['fetchResult']) {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
   folders.push(dataDir);
   return new EarnHost({ dataDir, chain: { clusterTime: async () => chainNow, clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
-    services: { resultUploader: () => storage ? {url:"agenc://local", fetch:vi.fn()} : null, fileLinkPrefix: storage ? "agenc://file/" : null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
+    services: { fetchResult, resultUploader: () => storage ? {url:"agenc://local", fetch:vi.fn()} : null, fileLinkPrefix: storage ? "agenc://file/" : null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
 }
 
 it("passes the owner's 0.01 SOL ceiling and buyer allowlist into a named-only worker", async () => {
@@ -447,4 +447,23 @@ it.each(["job","peer-job"].flatMap(mode=>["outputs","private","revision"].map(ki
     await expect(ctx.checkExecutionReady!({...facts,...extra})).rejects.toThrow();
     expect(callback).toHaveBeenCalledOnce();
   }finally{await earn.stopAll();}
+});
+
+it("holds text revisions of delivered files and rejects new files in a text correction",async()=>{
+  const {withFiles}=await import("../src/client/delivery-files.js");
+  const body=Buffer.from(withFiles("Original plot.",[{name:"plot.png",type:"image/png",bytes:5,sha256:"b".repeat(64)}],"agenc://file/"));
+  const {createHash}=await import("node:crypto");
+  const previous={proofHashHex:createHash("sha256").update(body).digest("hex"),resultData:new Uint8Array(64)};
+  const fetch=vi.fn(async()=>({bytes:body,uri:null}));
+  const earn=host({executor:{...local,isolatedJobRoom:true,mode:"sandboxed"},
+    liveRoomState:()=>({agent:"claude-code",coreCommand:null,ready:true,generation:"same"})},1000,true,fetch);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    await expect(ctx.checkTextRevision?.({previous}) ?? Promise.resolve()).rejects.toThrow(/file/);
+    expect(fetch).toHaveBeenCalledWith(previous);
+    await expect(ctx.checkTextRevision?.({output:body}) ?? Promise.resolve()).rejects.toThrow(/file/);
+    await expect(ctx.checkTextRevision?.({output:Buffer.from("Changed sentence.")})).resolves.toBeUndefined();
+  } finally {await earn.stopAll();}
 });

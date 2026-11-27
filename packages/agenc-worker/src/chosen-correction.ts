@@ -83,6 +83,8 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
       running.throwIfAborted();
       checkTime();
     } finally { clearInterval(watch); }
+    if (admit) admit();
+    await ctx.checkTextRevision?.({output:result.stdout});
     await verifyOutput(result.stdout);
     const revised = createHash("sha256").update(result.stdout).digest("hex");
     if (revised === hash) throw new Error("The room returned the same result. Review it before submitting.");
@@ -91,6 +93,10 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
         await ctx.clusterTime!() >= end) throw new Error("The claim changed before the correction finished.");
     const latest = loadState(ctx.stateDir);
     if (latest.openClaim?.execution?.resultHashHex !== hash) throw new Error("The result changed.");
+    stop.throwIfAborted();
+    checkTime();
+    if (admit) admit();
+    if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address + "-" + held.claimAccount),ctx.executorIdentity(),false,ctx.executorProgram?.());
     latest.openClaim.execution = { ...marker.execution, resultBytesBase64: result.stdout.toString("base64"),
       resultHashHex: revised, executedAt: new Date().toISOString() };
     saveState(ctx.stateDir, latest);

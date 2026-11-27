@@ -82,6 +82,7 @@ function decode(body: Buffer) {
     );
   }
 }
+export function hasDeliveryFiles(body: Buffer): boolean { return decode(body).files.length > 0; }
 export async function correctionInputs(body: Buffer, fetch: FetchFile) {
   const { text, files } = decode(body);
   if (!files.length) return [];
