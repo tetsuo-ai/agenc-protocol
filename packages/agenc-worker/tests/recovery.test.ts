@@ -3330,3 +3330,28 @@ describe("durable claim admission",()=>{
     expect(result.fetchUri).toHaveBeenCalledTimes(2);
   });
 });
+
+it.each(["verified","different hash","connected"])("recovers a 0.1.16 private submission only with its signed saved output (%s)",async kind=>{
+  const fs=await import("node:fs");
+  const stateDir=mkdtempSync(path.join(tmpdir(),"private-upgrade-"));
+  const [claim]=await findClaimPda({task:TASK,bidder:WORKER}), hash="b".repeat(64);
+  const ledger=path.join(stateDir,"outside"), dir=path.join(ledger,WALLET+"-"+claim);
+  fs.mkdirSync(dir,{recursive:true});writeFileSync(path.join(dir,"0"),"");
+  const state=emptyState();state.openClaim={task:TASK,claimedAt:"2023-11-14T22:13:20.000Z",phase:"submitting",
+    submission:{resultUri:"agenc://result/sha256/"+hash,resultHashHex:hash,rewardAmount:String(REWARD),preparedAt:"2023-11-14T22:13:30.000Z"}};
+  saveState(stateDir,state);
+  const sent=vi.fn(), start=vi.fn();
+  const ctx=context(stateDir,new Map([[TASK,taskData(TaskStatus.InProgress)],[claim,claimData(claim)]]),{
+    submitTaskResult:async (_:unknown,opts:{assertAuthorized:()=>void})=>{opts.assertAuthorized(); sent();return {signature:"local-output"};}},[]);
+  ctx.executorIdentity=()=>kind==="connected"?"claude-code":"core";ctx.clusterTime=async()=>1700000015;ctx.modelSpendDir=ledger;
+  ctx.executorForTask=start;
+  ctx.roomWork={admit:vi.fn(),open:vi.fn(),verifySavedOutput:async(t,account,h)=>kind==="verified" && t===TASK && account===claim && h===hash};
+  try {
+    const outcome=await resumeOpenClaim(ctx,agent);
+    expect(start).not.toHaveBeenCalled();
+    if(kind==="verified"){
+      expect(outcome?.status).toBe("submitted");expect(sent).toHaveBeenCalledOnce();
+      expect(JSON.parse(fs.readFileSync(path.join(dir,"admission"),"utf8"))).toEqual({executor:"core",budget:0});
+    }else{expect(sent).not.toHaveBeenCalled();expect(fs.existsSync(path.join(dir,"admission"))).toBe(false);}
+  }finally{fs.rmSync(stateDir,{recursive:true,force:true});}
+});

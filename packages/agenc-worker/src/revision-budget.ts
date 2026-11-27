@@ -52,13 +52,16 @@ export function pinClaim(dir: string, executor: string, budget?: number): boolea
   }
 }
 
+export function isReleasedClaimRound(dir:string):boolean {
+  return !existsSync(join(dir,"format")) && existsSync(join(dir,"0")) && readFileSync(join(dir,"0"),"utf8")==="";
+}
+
 export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false): void {
   if (existsSync(join(dir, "admission"))) {
     if (JSON.parse(readFileSync(join(dir, "admission"), "utf8")).executor === executor) return;
   } else {
     // Only these older runs identify their executor without guessing.
-    const connected = existsSync(join(dir, "0.counts"));
-    if (!connected && legacyPrivate && executor === "core") return;
+    if (legacyPrivate && executor === "core" && isReleasedClaimRound(dir)) return;
   }
   throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
 }

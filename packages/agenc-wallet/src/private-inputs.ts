@@ -174,6 +174,16 @@ export class JobExchange {
     return packet;
   }
 
+  async verifySavedOutput(task:string, claim:string, hash:string):Promise<boolean> {
+    if (!/^[a-f0-9]{64}$/.test(hash)) return false;
+    const parties = await this.live();
+    if (parties.task !== task || parties.claim !== claim || parties.authority !== this.signer.address) return false;
+    const saved = this.journal.read<{packet:Packet}>("out/"+hash);
+    if (!saved || saved.packet.header.id !== hash) return false;
+    try { await taskThread.verifyPacket(saved.packet,parties,parties.authority,"output"); return true; }
+    catch { return false; }
+  }
+
   async receive<T>(packet: Packet, purpose: Exclude<Purpose, "read" | "collect" | "key">): Promise<T> {
     const parties = await this.live();
     if (![parties.buyer, parties.authority].includes(this.signer.address)) return fail();

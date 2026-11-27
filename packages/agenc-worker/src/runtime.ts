@@ -53,7 +53,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { claimBudget, budgetForRevision, enrollClaimBudget, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -1811,12 +1811,18 @@ async function submitPreparedResult(
       const end = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,terms.deadline,live.expiresAt);
       const generation = ctx.admissionGeneration?.();
       const [account] = await findClaimPda({task,bidder:agent.agentPda});
+      if (ctx.modelSpendDir && ctx.executorIdentity?.() === "core") {
+        const dir=join(ctx.modelSpendDir,ctx.signer.address+"-"+account);
+        if (isReleasedClaimRound(dir) && !existsSync(join(dir,"admission")) &&
+            await ctx.roomWork?.verifySavedOutput?.(task,account,intent.resultHashHex)) pinClaim(dir,"core",0);
+      }
       assertAuthorized = () => {
         // A completed delivery drains after the seller turns off new claims.
         if (ctx.executorIdentity && ctx.modelSpendDir) requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+account),ctx.executorIdentity());
         if (monotonicMs() >= end || ctx.admissionGeneration?.() !== generation) throw new Error("The claim admission changed.");
       };
     }
+    assertAuthorized?.();
     const { signature } = await ctx.client.submitTaskResult(
       {
         task,

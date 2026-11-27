@@ -112,7 +112,7 @@ it("the room program refuses a link with a token in it, a token file others can 
   } finally { await link.close(); }
 });
 
-it.each(["own","external"])("resumes a parked 0.1.17 %s job with its original source and the earlier deadline",async source=>{
+it.each(["own","external"])("keeps a parked 0.1.16 %s answer and resumes only with a measured Core grant",async source=>{
   const {rmSync,existsSync}=await import("node:fs");
   const {monotonicMs}=await import("@tetsuo-ai/agenc-worker");
   const dir=privateDir(), id="a".repeat(64);
@@ -135,12 +135,14 @@ it.each(["own","external"])("resumes a parked 0.1.17 %s job with its original so
     const claimDir=path.join(dir,"model-spend","test-claim");
     const round=path.join(claimDir,"0");
     mkdirSync(claimDir,{recursive:true});
-    writeFileSync(path.join(claimDir,"admission"),JSON.stringify({executor:"core",budget:2}));
-    writeFileSync(round,"2");
+    writeFileSync(round,"");
     // An old layout alone cannot prove how much of the original grant is left.
     expect(await turn.resume(start+30_000,undefined,round)).toEqual({state:"parked"});
     expect(run).toEqual([]);
     expect(existsSync(message)).toBe(true);
+    // A current run has a pin, a numeric round and measured usage.
+    writeFileSync(path.join(claimDir,"admission"),JSON.stringify({executor:"core",budget:2}));
+    writeFileSync(round,"2");
     writeFileSync(round+".usage",JSON.stringify({reservedCents:2,costUsd:0.004}));
     writeFileSync(round+".counts",JSON.stringify({tokens:400,calls:1}));
     await turn.resume(start+30_000,undefined,round);

@@ -152,7 +152,7 @@ function canResumeModel(round: string, pay: number): boolean {
     const counts = JSON.parse(readFileSync(round + ".counts", "utf8"));
     return claim.executor === "core" && Number.isSafeInteger(claim.budget) && claim.budget >= pay &&
       Number.isSafeInteger(pay) && pay > 0 && readFileSync(round, "utf8") === String(pay) &&
-      usage.reservedCents === pay && Number.isFinite(usage.costUsd) && usage.costUsd >= 0 && usage.costUsd * 100 < pay &&
+      usage.reservedCents === pay && Number.isFinite(usage.costUsd) && usage.costUsd >= 0 && Math.round(usage.costUsd * 1_000_000_000) < pay * 10_000_000 &&
       Number.isSafeInteger(counts.tokens) && counts.tokens >= 0 && counts.tokens < 1_000_000 &&
       Number.isSafeInteger(counts.calls) && counts.calls >= 0 && counts.calls < 64;
   } catch { return false; }
@@ -178,6 +178,9 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
     } finally { await link.close(); }
   };
   return {
+    async verifySavedOutput(task,claim,hash) {
+      return (await ports.session(task))?.verifySavedOutput(task,claim,hash) ?? false;
+    },
     async admit(binding: VerifiedRoomWork) {
       if (binding.privateInputs && !privateRequirementFromSpec(binding.spec)) throw new Error("The private input terms are not valid.");
       // Before the claim, so no deposit moves: a public job whose agreed outputs are malformed, repeated, or name a
@@ -220,7 +223,7 @@ export function walletRoomWork(ports: RoomWorkPorts): RoomWork {
                 throw new Error("The saved claim clock is unavailable.");
               const ends = [BigInt(Math.floor(conversationEnd / 1000))];
               if (!legacy) {
-                const chainEnd = saved.chainEnd ?? (old && /^[0-9]{1,12}$/.test(old) ? Number(old) : 0);
+                const chainEnd = saved.chainEnd ?? 0;
                 if (!Number.isSafeInteger(chainEnd) || chainEnd <= 0 || !["own","external"].includes(saved.argv[11] ?? ""))
                   throw new Error("The saved claim clock is unavailable.");
                 ends.push(BigInt(chainEnd));
