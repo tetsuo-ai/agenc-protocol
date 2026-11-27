@@ -90,6 +90,23 @@ it("journals a wire signature before a stalled RPC send, aborts HTTP and blocks 
   expect(active.pending).toHaveLength(1);
 });
 
+it("checks admission after RPC pacing and before a signed claim leaves the wallet", async () => {
+  let current=true, sends=0;
+  const chain=createRpcChain({network:"localnet",rpcUrl:"http://localhost:8899",minRequestGapMs:120,
+    transport:(async c=>{
+      const {id,method}=c.payload as {id:string;method:string};
+      if (method==="getLatestBlockhash") return {jsonrpc:"2.0",id,result:{context:{slot:1},value:{blockhash:"11111111111111111111111111111111",lastValidBlockHeight:100}}};
+      if (method==="sendTransaction") sends++;
+      throw new Error("Unexpected transmission.");
+    }) as RpcTransport});
+  const signer=await generateKeyPairSigner();
+  const sending=inTransportScope({signal:new AbortController().signal,sending:()=>{setTimeout(()=>{current=false;},5);},confirmed:()=>{}},
+    ()=>chain.clientFor(signer).send([transferInstruction(signer,signer.address,1n)],{maxRetries:0,
+      assertAuthorized:()=>{if(!current) throw new Error("Admission changed.");}}));
+  await expect(sending).rejects.toMatchObject({signature:expect.any(String)});
+  expect(sends).toBe(0);
+});
+
 it.each(["request", "body"])("cancels a stalled marketplace HTTP %s", async (where) => {
   const active = scope();
   const started = gate();

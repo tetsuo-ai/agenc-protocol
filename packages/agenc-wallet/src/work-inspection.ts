@@ -84,6 +84,7 @@ function decode(body: Buffer) {
 }
 export async function correctionInputs(body: Buffer, fetch: FetchFile) {
   const { text, files } = decode(body);
+  if (!files.length) return [];
   let previous = "previous-result.txt";
   while (files.some((f) => f.name.toLowerCase() === previous))
     previous = "p-" + previous;

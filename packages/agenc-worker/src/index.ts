@@ -1,3 +1,4 @@
+export { chainDeadline, monotonicMs, ExecutorCapabilityError } from "./claim-admission.js";
 // @tetsuo-ai/agenc-worker — programmatic surface.
 //
 // Everything the CLI composes is exported here so the worker loop can be

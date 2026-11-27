@@ -125,7 +125,7 @@ export interface Transport {
    * A mismatched, empty, or malformed success result is rejected as an unknown
    * outcome carrying the local signature and must not be re-submitted.
    */
-  sendAndConfirm(signedTx: SignedTransaction): Promise<TransportSendResult>;
+  sendAndConfirm(signedTx: SignedTransaction, beforeSend?: () => void): Promise<TransportSendResult>;
   /**
    * OPTIONAL: look up the current status of a previously submitted signature.
    *
@@ -402,6 +402,7 @@ class RpcRequestConstructionFailure extends Error {
  */
 function guardSendTransactionConstruction(
   rpc: RpcTransportRpc,
+  beforeSend?: () => void,
 ): RpcTransportRpc {
   const boundMethods = new Map<PropertyKey, unknown>();
   // Proxy a fresh target rather than `rpc` itself. A frozen custom RPC may
@@ -423,7 +424,12 @@ function guardSendTransactionConstruction(
       }
       return (...args: Parameters<RpcTransportRpc["sendTransaction"]>) => {
         try {
-          return rpc.sendTransaction(...args);
+          const request = rpc.sendTransaction(...args);
+          if (!beforeSend) return request;
+          return { ...request, send(options?: Parameters<typeof request.send>[0]) {
+            beforeSend();
+            return request.send(options);
+          } };
         } catch (error) {
           throw new RpcRequestConstructionFailure(error);
         }
@@ -548,10 +554,14 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
       getLatestBlockhash,
       getSignatureStatus,
       resolveAddressLookupTables,
-      async sendAndConfirm(signedTx) {
+      async sendAndConfirm(signedTx, beforeSend) {
         const signature = getSignatureFromTransaction(signedTx);
         try {
-          await sendAndConfirmTransaction(signedTx, { commitment });
+          beforeSend?.();
+          const dispatch = beforeSend ? sendAndConfirmTransactionFactory({
+            rpc:guardSendTransactionConstruction(rpc,beforeSend),rpcSubscriptions,
+          }) : sendAndConfirmTransaction;
+          await dispatch(signedTx, { commitment });
         } catch (error) {
           if (error instanceof RpcRequestConstructionFailure) {
             throw error.original;
@@ -576,11 +586,12 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
     getLatestBlockhash,
     getSignatureStatus,
     resolveAddressLookupTables,
-    async sendAndConfirm(signedTx) {
+    async sendAndConfirm(signedTx, beforeSend) {
       const signature = getSignatureFromTransaction(signedTx);
       const wireTransaction = getBase64EncodedWireTransaction(signedTx);
       let sendRequest: ReturnType<RpcTransportRpc["sendTransaction"]>;
       try {
+        beforeSend?.();
         sendRequest = rpc.sendTransaction(wireTransaction, {
           encoding: "base64",
           preflightCommitment: commitment,
@@ -591,6 +602,7 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
         throw error;
       }
       try {
+        beforeSend?.();
         await sendRequest.send();
       } catch (error) {
         // A standard -32002 simulation rejection is deterministic and was not

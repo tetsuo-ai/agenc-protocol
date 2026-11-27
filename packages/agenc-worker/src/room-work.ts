@@ -53,7 +53,7 @@ export interface RoomWork {
    * A parked turn reattaches only to the run that already owns its budget. */
   open(binding: VerifiedRoomWork): Promise<
     { state: "ordinary" } | { state: "waiting" } |
-    { state: "resume"; resume(): Promise<RoomTurnResult> } |
+    { state: "resume"; resume(deadlineMs?: number, signal?: AbortSignal): Promise<RoomTurnResult> } |
     { state: "ready"; execute(input: Parameters<Execute>[0]): Promise<RoomTurnResult> }
   >;
 }

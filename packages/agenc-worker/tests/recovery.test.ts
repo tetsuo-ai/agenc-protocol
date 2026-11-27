@@ -248,8 +248,9 @@ const agent: WorkerAgent = {
 async function attemptFreshClaimWithHireSnapshot(
   snapshot: AccountSnapshot,
   readiness?: WorkerContext["checkExecutionReady"],
-  budget?: number,
+  configure?: (ctx: WorkerContext) => void,
 ): Promise<{
+  ctx: WorkerContext;
   outcome: Awaited<ReturnType<typeof processCandidate>>;
   claimTaskWithJobSpec: ReturnType<typeof vi.fn>;
   fetchUri: ReturnType<typeof vi.fn>;
@@ -313,10 +314,10 @@ async function attemptFreshClaimWithHireSnapshot(
     return snapshot;
   };
   if (readiness !== undefined) ctx.checkExecutionReady = readiness;
-  if (budget !== undefined) { ctx.modelBudgetForTask = async () => budget; ctx.reserveRevisionBudget = true; }
   ctx.fetchUri = fetchUri;
   ctx.getBalance = getBalance;
   ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
+  configure?.(ctx);
 
   const outcome = await processCandidate(ctx, agent, {
     task: TASK,
@@ -328,6 +329,7 @@ async function attemptFreshClaimWithHireSnapshot(
   });
   return {
     outcome,
+    ctx,
     claimTaskWithJobSpec,
     fetchUri,
     getBalance,
@@ -1243,7 +1245,7 @@ describe("transaction-boundary recovery", () => {
         options: { maxRetries?: number },
       ) => {
         expect(input.parentTask).toBe(PARENT);
-        expect(options).toEqual({ maxRetries: 0 });
+        expect(options).toEqual({ maxRetries: 0, assertAuthorized: expect.any(Function) });
         expect(loadState(stateDir).openClaim?.phase).toBe("claiming");
         accounts.set(TASK, taskData(TaskStatus.InProgress));
         accounts.set(claimPda, claimData(claimPda));
@@ -1373,7 +1375,7 @@ describe("transaction-boundary recovery", () => {
       ]);
       const claimTaskWithJobSpec = vi.fn(
         async (_input: unknown, options: { maxRetries?: number }) => {
-          expect(options).toEqual({ maxRetries: 0 });
+          expect(options).toEqual({ maxRetries: 0, assertAuthorized: expect.any(Function) });
           throw fixture.error;
         },
       );
@@ -2972,15 +2974,18 @@ describe("upkeep that cannot read the chain", () => {
     const stop = new AbortController();
     const selected = () => { throw new Error("The selected room changed."); };
     ctx.checkExecutionReady = async () => selected;
-    let observed: unknown;
+    let changed = false;
     ctx.onWorkerReady = (_dispatch, read) => {
       if (read) void read(async live => {
-        try { observed = await live.checkExecutionReady!({task:TASK}); }
+        try {
+          const guard = await live.checkExecutionReady!({task:TASK});
+          try { if (guard) guard(); } catch (e) { changed = (e as Error).message === "The selected room changed."; }
+        }
         finally { stop.abort(); }
       });
     };
     await runUp(ctx,{signal:stop.signal});
-    expect(observed).toBe(selected);
+    expect(changed).toBe(true);
   });
 
   it("does not stop a tick: the rest of its work is done and the failure is logged", async () => {
@@ -2991,6 +2996,23 @@ describe("upkeep that cannot read the chain", () => {
     expect(events.find((event) => event.event === "upkeep.failed")).toMatchObject({
       reason: expect.stringMatching(/rpc answered 503/),
     });
+  });
+
+  it("keeps the wallet guard on the continuous worker lane", async () => {
+    const { ctx } = await workerWithUpkeepDown();
+    const stop = new AbortController();
+    const current = vi.fn(() => { throw new Error("selection changed"); });
+    ctx.checkExecutionReady = async () => current;
+    let result: Promise<void> | undefined;
+    ctx.onWorkerReady = lane => {
+      if (lane) result = lane(async running => {
+        const guard = await running.checkExecutionReady!({task:TASK});
+        expect(typeof guard).toBe("function");
+        expect(() => (guard as () => void)()).toThrow(/selection changed/);
+      }).finally(() => stop.abort());
+    };
+    await runUp(ctx, {signal:stop.signal});
+    await result;
   });
 
   it("does not stop a long run when the first upkeep fails", async () => {
@@ -3134,10 +3156,10 @@ function sellingListing(hash: Uint8Array): Uint8Array {
 
 describe("selling preflight", () => {
   it("never writes a claim or WAL when the host self-test fails", async () => {
-    const ready = vi.fn(async () => { throw new Error("KVM self-test failed"); });
+    const ready = vi.fn(async (_input: Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0]) => { throw new Error("KVM self-test failed"); });
     const result = await attemptFreshClaimWithHireSnapshot({ owner: PARENT, executable: false, data: new Uint8Array() }, ready);
     expect(ready).toHaveBeenCalledOnce();
-    expect(ready.mock.calls[0]).toEqual([{ task: TASK, creator: CREATOR, privateInputs: false, listingMetadata: null, requiredCapabilities: 1n }]);
+    expect(ready.mock.calls[0]?.[0]).toMatchObject({task:TASK,creator:CREATOR,privateInputs:false,listingMetadata:null,requiredCapabilities:1n});
     expect(result.outcome).toMatchObject({ status: "skipped", retryable: true, reason: "KVM self-test failed" });
     expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(result.getBalance).not.toHaveBeenCalled();
@@ -3155,10 +3177,51 @@ describe("selling preflight", () => {
     expect(loadState(result.stateDir).openClaim).toBeNull();
   });
 
-  it("refuses a deposit when the first round cannot fund the selected room", async () => {
-    const admission = async () => ({current: () => {}, minimumModelCents:78});
-    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT, executable:false, data:new Uint8Array()}, admission, 80);
-    expect(result.outcome).toMatchObject({status:"skipped", reason:expect.stringContaining("allowance")});
+  it("remembers an incompatible candidate until its selected executor changes", async () => {
+    let generation = "one";
+    const ready = vi.fn(async () => { throw Object.assign(new Error("This room cannot receive private inputs."),{name:"ExecutorCapabilityError"}); });
+    const result = await attemptFreshClaimWithHireSnapshot({ owner:PARENT,executable:false,data:new Uint8Array() },ready,
+      ctx => { ctx.admissionGeneration = () => generation; });
+    const rec = {task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT};
+    await processCandidate(result.ctx, agent, rec);
+    expect(result.fetchUri).toHaveBeenCalledTimes(1);
+    generation = "two";
+    await processCandidate(result.ctx, agent, rec);
+    expect(result.fetchUri).toHaveBeenCalledTimes(2);
+  });
+
+  it("journals a signed but withheld one-shot claim across a later sweep", async () => {
+    let selected = true, signatures = 0;
+    const ready = async () => () => { if (!selected) throw new Error("selection changed"); };
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()}, ready,
+      ctx => {
+        ctx.client = {claimTaskWithJobSpec: async (_input: unknown, opts: {assertAuthorized: (stage:string, sig?:string)=>void}) => {
+          opts.assertAuthorized("sign");
+          signatures++;
+          selected = false;
+          try { opts.assertAuthorized("send", "stand-in-signature"); }
+          catch (cause) { throw new AgencError("withheld",{signature:"stand-in-signature",cause}); }
+        }} as unknown as MarketplaceClient;
+      });
+    selected = true;
+    const initial = loadState(result.stateDir);
+    initial.openClaim = null;
+    saveState(result.stateDir, initial);
+    await processCandidate({...result.ctx},agent,{task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,
+      requiredCapabilities:1n,parentTask:PARENT});
+    expect(signatures).toBe(1);
+  });
+
+  it("checks the first round after revisions before spending a deposit", async () => {
+    const ready = vi.fn(async ({firstRoundCents}: Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0]) => {
+      if ((firstRoundCents ?? 0) < 78) throw new Error("The plan needs a larger first round.");
+    });
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT, executable:false, data:new Uint8Array()}, ready, ctx => {
+      ctx.reserveRevisionBudget = true;
+      ctx.modelBudgetForTask = async () => 80;
+    });
+    expect(ready.mock.calls[0]?.[0].firstRoundCents).toBeLessThan(78);
+    expect(result.outcome.status).toBe("skipped");
     expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(loadState(result.stateDir).openClaim).toBeNull();
   });
