@@ -32,11 +32,11 @@ afterEach(() => {
 const local: EarnExecutor = { argv: ["/local/room", "job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 const peer: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 
-function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000) {
+function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000, fileLinkPrefix: string | null = null) {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
   folders.push(dataDir);
   return new EarnHost({ dataDir, chain: { clusterTime: async () => chainNow, clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
-    services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
+    services: { resultUploader: () => fileLinkPrefix ? {url:"http://127.0.0.1",fetch:vi.fn()} : null, fileLinkPrefix } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
 }
 
 it("passes the owner's 0.01 SOL ceiling and buyer allowlist into a named-only worker", async () => {
@@ -389,4 +389,21 @@ it("reads a restored seller's measured cost from the original claim",async()=>{
   indexClaimUsage(state,task,path.join(dir,"0"));
   fs.mkdirSync(state,{recursive:true}); fs.rmSync(state,{recursive:true});
   expect(serviceUsage(state,task)).toEqual({budgetCents:10,reservedCents:8,unknownReservedCents:0,costUsd:0.071,runs:1});
+});
+
+it("prices the ACP command, answer and each promised revision before approval",async()=>{
+  const firstCall={baseTicks:60000000000,inputTicksPerByte:0};
+  const earn=host({executor:{...local, mode:"sandboxed",isolatedJobRoom:true},roomWork:()=>({} as never),
+    checkExecutionReady:async()=>{},liveRoomState:()=>({agent:"acp",identity:"acp:grok:"+"a".repeat(64),ready:true,coreCommand:null,generation:"one",firstCall})},1000,"agenc://files/");
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const facts={task:"job" as never,creator:"buyer" as never,promptBytes:60};
+    const files={...facts,acceptance:["Agreed outputs v1: at least one file; required files: note.txt"]};
+    await expect.soft(ctx.checkExecutionReady!({...files,firstRoundCents:600})).rejects.toThrow(/allowance/);
+    await expect.soft(ctx.checkExecutionReady!({...facts,firstRoundCents:600,laterRoundCents:[200,200]})).rejects.toThrow(/allowance/);
+    await expect(ctx.checkExecutionReady!({...files,firstRoundCents:1200,laterRoundCents:[1200,1200]})).resolves.toBeTypeOf("function");
+    expect(ctx.executorIdentity?.()).toBe("acp:grok:"+"a".repeat(64));
+  } finally {await earn.stopAll();}
 });

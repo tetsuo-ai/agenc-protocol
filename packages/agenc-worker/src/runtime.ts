@@ -53,7 +53,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { claimBudget, budgetForRevision, enrollClaimBudget, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { claimBudget, budgetForRevision, correctionAllowance, enrollClaimBudget, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -296,12 +296,13 @@ export type WorkerContext = {
   chosenRoomCurrent?: () => boolean;
   admissionGeneration?: () => string;
   executorIdentity?: () => string;
+  localExecutorReady?: () => boolean;
   capabilityRefusals?: Map<Address, string>;
   revisionRefusals?: Map<Address,string>;
   budgetRefusals?: Map<Address, {generation:string; unchanged:()=>Promise<boolean>}>;
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
-    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
+    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; laterRoundCents?: readonly number[]; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -2195,6 +2196,10 @@ export async function processCandidate(
   const refused = ctx.capabilityRefusals ??= new Map();
   const budgetRefusals = ctx.budgetRefusals ??= new Map();
   const mode = options.authorizeChosen || options.inspect ? "/chosen" : "/automatic";
+  if (ctx.localExecutorReady?.() === false) {
+    refused.set(task,generation);
+    return {status:"skipped",task,reason:"The selected room needs its login or image.",retryable:true};
+  }
   const past = budgetRefusals.get(task);
   if (past?.generation === generation + mode && await past.unchanged())
     return {status:"skipped", task, reason:"The first turn exceeds this job's allowance.",retryable:true};
@@ -2363,9 +2368,17 @@ export async function processCandidate(
     budget = await ctx.modelBudgetForTask?.(decodedTask, task, listingMetadata);
     if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0))
       throw Object.assign(new Error("This job has no valid model budget."),{name:"ExecutorBudgetError"});
-    let firstRoundCents = budget === undefined ? undefined : claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive).remainingCents;
-    if (chosen && ctx.reviewRoom && ctx.modelSpendDir && firstRoundCents !== undefined && firstRoundCents >= 2)
-      firstRoundCents -= Math.max(1, Math.floor(firstRoundCents / 4));
+    const terms = budget === undefined ? undefined : claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive);
+    let firstRoundCents = terms?.remainingCents;
+    const laterRoundCents: number[] = [];
+    if (terms?.revisionRound === 0) {
+      for (const round of [1,2]) laterRoundCents.push(budgetForRevision(terms,round)!.remainingCents);
+    }
+    if (chosen && ctx.reviewRoom && ctx.modelSpendDir && firstRoundCents !== undefined && firstRoundCents >= 2) {
+      const correction = correctionAllowance(firstRoundCents);
+      firstRoundCents -= correction;
+      laterRoundCents.push(correction);
+    }
     let deadlineMs: number | undefined;
     if (ctx.clusterTime || ctx.config.executor.includes("{jobDeadline}")) {
       if (!ctx.clusterTime) throw new Error("The chain clock is unavailable.");
@@ -2384,7 +2397,7 @@ export async function processCandidate(
       task, creator: decodedTask.creator, privateInputs, listingMetadata, requiredCapabilities: decodedTask.requiredCapabilities,
       ...(ctx.dryRun && {preview:true}),
       acceptance: parseJobBrief(verifiedSpec).acceptance, promptBytes: Buffer.byteLength(JSON.stringify(prompt)),
-      ...(firstRoundCents !== undefined && {firstRoundCents}), ...(deadlineMs !== undefined && {deadlineMs}),
+      ...(firstRoundCents !== undefined && {firstRoundCents,laterRoundCents}), ...(deadlineMs !== undefined && {deadlineMs}),
       ...(hireBinding.listing && { listing: hireBinding.listing }),
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     });

@@ -9,6 +9,10 @@ function perRevision(total: number): number {
   return total >= 3 ? Math.max(1, Math.floor(total / 5)) : 0;
 }
 
+export function correctionAllowance(cents: number): number {
+  return cents < 2 ? 0 : Math.max(1, Math.floor(cents / 4));
+}
+
 export function claimBudget(totalCents: number, reserve: boolean): ModelBudget {
   const slice = reserve ? perRevision(totalCents) : 0;
   return slice ? { totalCents, remainingCents: totalCents - 2 * slice, revisionRound: 0 }

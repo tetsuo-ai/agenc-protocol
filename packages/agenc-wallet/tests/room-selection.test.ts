@@ -118,16 +118,16 @@ it("tracks the selected ACP image and rejects a missing or unknown profile", () 
   const select = liveRoomSelection(room);
   try {
     writeFileSync(path("base"), "");
-    writeFileSync(path("choice"), JSON.stringify({agent:"grok"}));
+    writeFileSync(path("choice"), JSON.stringify({agent:"grok",version:"1".repeat(64)}));
     expect(select().ready).toBe(false);
     writeFileSync(path("acp"), "stand-in");
-    expect(select()).toMatchObject({agent:"acp", ready:true, firstCall:room.acpPrices.grok});
+    expect(select()).toMatchObject({agent:"acp", ready:true,identity:"acp:grok:"+"1".repeat(64), firstCall:room.acpPrices.grok});
     const initial = select().generation;
     writeFileSync(path("acp"), "changed");
     expect(select().generation).not.toBe(initial);
-    writeFileSync(path("choice"), JSON.stringify({agent:"business",validUntil:Date.now() - 1}));
+    writeFileSync(path("choice"), JSON.stringify({agent:"business",version:"2".repeat(64),validUntil:Date.now() - 1}));
     expect(select().ready).toBe(false);
-    writeFileSync(path("choice"), JSON.stringify({agent:"business",validUntil:Date.now() + 60000}));
+    writeFileSync(path("choice"), JSON.stringify({agent:"business",version:"2".repeat(64),validUntil:Date.now() + 60000}));
     expect(select().ready).toBe(true);
     writeFileSync(path("choice"), JSON.stringify({agent:"unsupported"}));
     expect(select().ready).toBe(false);

@@ -1,7 +1,7 @@
 // The picker and the executor use the same verified spec, policy filters and claim instruction.
 import { unwrapOption, type Address } from "@solana/kit";
 import { join } from "node:path";
-import { requireClaimExecutor } from "./revision-budget.js";
+import { correctionAllowance, requireClaimExecutor } from "./revision-budget.js";
 import {
   lighthouse, facade, findClaimPda, findWorkerStatsPda, findEscrowPda, findProtocolConfigPda, findTaskSubmissionPda,
   findTaskValidationConfigPda, getAgentRegistrationDecoder, getProtocolConfigDecoder,
@@ -248,7 +248,7 @@ export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signa
   const budget = marker?.modelBudget;
   if (marker?.chosen && marker.task === task && marker.phase === "claimed" && ctx.reviewRoom && ctx.modelSpendDir &&
       budget && budget.remainingCents >= 2) {
-    const heldBack = Math.max(1, Math.floor(budget.remainingCents / 4));
+    const heldBack = correctionAllowance(budget.remainingCents);
     budget.remainingCents -= heldBack;
     budget.correctionCents = heldBack;
     saveState(ctx.stateDir, state);

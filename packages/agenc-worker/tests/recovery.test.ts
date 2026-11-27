@@ -1,5 +1,5 @@
 import { findWorkerStatsPda } from "@tetsuo-ai/marketplace-sdk";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { address, type Address, type TransactionSigner } from "@solana/kit";
@@ -3329,4 +3329,48 @@ describe("durable claim admission",()=>{
     await processCandidate(result.ctx,agent,candidate);
     expect(result.fetchUri).toHaveBeenCalledTimes(2);
   });
+});
+
+it("parks a locally expired ACP login before task and quote reads",async()=>{
+  let ready=false;
+  const price=vi.fn(async()=>1000);
+  const reads=vi.fn();
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{throw Error("stop before signing");},ctx=>{
+      ctx.localExecutorReady=()=>ready;
+      ctx.admissionGeneration=()=>ready?"new":"expired";
+      ctx.modelBudgetForTask=price;
+      const read=ctx.readAccount;
+      ctx.readAccount=async address=>{reads();return read(address);};
+    });
+  const candidate={task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT};
+  await processCandidate(result.ctx,agent,candidate);
+  expect(reads).not.toHaveBeenCalled();
+  expect(price).not.toHaveBeenCalled();
+  ready=true;
+  await processCandidate(result.ctx,agent,candidate);
+  expect(reads).toHaveBeenCalled();
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+});
+
+it("keeps the admitted ACP profile and login after a switch during confirmation",async()=>{
+  const admitted="acp:hermes:"+"a".repeat(64);
+  let selected=admitted;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},async()=>()=>{},ctx=>{
+    ctx.modelSpendDir=path.join(ctx.stateDir,"canonical-claims");
+    ctx.modelBudgetForTask=async()=>1000;
+    ctx.executorIdentity=()=>selected;
+    ctx.client={claimTaskWithJobSpec:async (_input:unknown,opts:{assertAuthorized:(stage:string,signature?:string)=>void})=>{
+      opts.assertAuthorized("sign");opts.assertAuthorized("send","practice-confirmation");
+      selected="core";
+      return {signature:"practice-confirmation"};
+    }} as unknown as MarketplaceClient;
+  });
+  const [claim]=await findClaimPda({task:TASK,bidder:agent.agentPda});
+  const dir=path.join(result.ctx.modelSpendDir!,result.ctx.signer.address+"-"+claim);
+  expect(JSON.parse(readFileSync(path.join(dir,"admission"),"utf8"))).toEqual({executor:admitted,budget:1000});
+  const {requireClaimExecutor}=await import("../src/revision-budget.js");
+  expect(()=>requireClaimExecutor(dir,"core")).toThrow();
+  expect(()=>requireClaimExecutor(dir,"acp:hermes:"+"b".repeat(64))).toThrow();
+  expect(()=>requireClaimExecutor(dir,admitted)).not.toThrow();
 });

@@ -51,7 +51,7 @@ import {
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import { chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
-import { commandGeneration, type RoomSelection } from "./room-selection.js";
+import { admissionArgs, commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { outputAgreementFromSpec } from "./client/job-exchange.js";
@@ -109,6 +109,7 @@ export interface JobAdmission {
   fileTransport: boolean;
   promptBytes: number;
   firstRoundCents?: number;
+  laterRoundCents?: readonly number[];
   deadlineMs?: number;
 }
 
@@ -950,7 +951,8 @@ export class EarnHost {
         }
         return "peer:" + generation();
       }
-      if (this.#usesClaude(agent.agentId)) return "claude-code";
+      const room = this.#connectedRoom(agent.agentId);
+      if (room) return room.identity ?? room.agent;
       if (executor.argv[2] === "job") return "core";
       return "command:" + createHash("sha256").update(JSON.stringify(executor.argv)).digest("hex");
     };
@@ -981,7 +983,9 @@ export class EarnHost {
         if (selected && admission.firstRoundCents !== undefined) {
           const acp = selected.firstCall;
           const affordable = selected.agent === "acp"
-            ? !!acp && acp.baseTicks + acp.inputTicksPerByte * admission.promptBytes <= admission.firstRoundCents * 100_000_000
+            ? !!acp && [admission.firstRoundCents,...(admission.laterRoundCents ?? [])].every(cents =>
+                Number.isSafeInteger(cents) && cents >= 0 && (acp.baseTicks + acp.inputTicksPerByte * admission.promptBytes) *
+                  (admission.requiredFiles.length || !admission.allowTextOnly ? 2 : 1) <= cents * 100_000_000)
             : (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= admission.firstRoundCents * 200_000;
           if (!affordable) throw Object.assign(new Error("The first model turn exceeds this job's allowance."), {name:"ExecutorBudgetError"});
         }
@@ -992,7 +996,7 @@ export class EarnHost {
         hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
         await runExecutor({
-          argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
+          argv: [...executor.readiness.argv.map(fill), ...admissionArgs(executor.readiness.argv,this.#connectedRoom(agent.agentId)), ...(admission && executor.readiness.argv[2] === "self-test" ?
             ["admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
             executor.readiness.argv[2] === "peer-ready" && admission?.serviceDigest ? [admission.serviceDigest] : [])],
           timeoutMs: executor.readiness.timeoutMs ?? 30_000,
@@ -1020,7 +1024,7 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
-      executorIdentity, capabilityRefusals:new Map(), budgetRefusals:new Map(), revisionRefusals:new Map(),
+      executorIdentity, localExecutorReady: () => this.#connectedRoom(agent.agentId)?.ready !== false, capabilityRefusals:new Map(), budgetRefusals:new Map(), revisionRefusals:new Map(),
       ...(roomWork && { roomWork }),
       admissionGeneration: () => String(generation() ?? "configured") + "/" + (entry.capabilityRevision ?? 0),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
@@ -1139,7 +1143,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, preview }) => {
+        acceptance, promptBytes, firstRoundCents, laterRoundCents, deadlineMs, reviewFiles, preview }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         const outputs = acceptance && outputAgreementFromSpec({acceptance:[...acceptance]});
@@ -1147,7 +1151,7 @@ export class EarnHost {
           source:this.#ownAddresses().includes(creator) ? "own" : "external", privateInputs:!!privateInputs,
           servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest}),reviewFiles:reviewFiles ?? 0,requiredFiles:outputs?.requiredFiles ?? [],
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
-          ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
+          ...(firstRoundCents !== undefined && {firstRoundCents}),...(laterRoundCents && {laterRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
         } : undefined,preview);
       },
       ...(uploader !== null
