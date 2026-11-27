@@ -162,3 +162,16 @@ it("opens an exact paid v1 output with its original key without reactivating its
   await expect(openLegacyBuyerOutput(send.journal, parties, pointer + "0", key, packet)).rejects.toThrow();
   expect(() => taskThread.exchangeContext(parties)).toThrow();
 });
+
+it("binds a released private delivery to its actual claim, signer and submitted hash",async()=>{
+  const {receive,file,bk,parts,send}=await setup();
+  const bundle={version:1,salt:"d".repeat(64),text:"fixture",files:[file]};
+  const {pointer}=await protectOutput(receive,bundle,bk);
+  const hash=digest(pointer);
+  await expect(receive.verifySavedOutput(parts.task,parts.claim,hash)).resolves.toBe(true);
+  await expect(receive.verifySavedOutput(parts.worker,parts.claim,hash)).resolves.toBe(false);
+  await expect(receive.verifySavedOutput(parts.task,parts.claim,"e".repeat(64))).resolves.toBe(false);
+  await expect(send.verifySavedOutput(parts.task,parts.claim,hash)).resolves.toBe(false);
+  parts.generation="2";
+  await expect(receive.verifySavedOutput(parts.task,parts.claim,hash)).resolves.toBe(false);
+});

@@ -581,3 +581,16 @@ describe("a delivery the buyer turned down (revision 9)", () => {
     });
   });
 });
+
+it("guards an automatic refundable release through signing and landing",async()=>{
+  let instructions: readonly Instruction[] = [], checked = false;
+  const send=vi.fn(async(ix:readonly Instruction[], options:{assertAuthorized?:()=>void})=>{
+    instructions=ix; options.assertAuthorized?.(); checked=!!options.assertAuthorized; return {signature:"local"};
+  });
+  const w=await setup({send});givenUp(w.stateDir);
+  w.accounts.set(TASK,taskData(TaskStatus.InProgress));w.accounts.set(w.claim,claimData(BigInt(NOW+7200),BigInt(NOW-3590)));
+  await releaseOwnClaims(w.ctx,agent);
+  expect(checked).toBe(true);
+  const {lighthouse}=await import("@tetsuo-ai/marketplace-sdk");
+  expect(instructions).toContainEqual(lighthouse.assertClockBefore(NOW+11));
+});

@@ -6,7 +6,8 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { executablePath, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 export interface LiveRoom {
   setting: string;
@@ -20,7 +21,7 @@ export interface LiveRoom {
   managedSettingsRoot?: string;
 }
 export interface RoomSelection {
-  agent: "core" | "claude-code" | "codex-api" | "codex-plan";
+  agent: string;
   minimumModelCents?: number;
   ready: boolean;
   coreCommand: string | null;
@@ -55,14 +56,26 @@ function file(path: string) {
   }
 }
 
+export function checkNamedProgram(argv: readonly string[]) {
+  const [command, script, mode] = argv;
+  if (!command || !executablePath(command))
+    throw new ExecutorCapabilityError("The named job program is unavailable.");
+  const interpreter = /^(?:node|nodejs|python[\d.]*|bash|sh|electron)(?:\.exe)?$/i.test(basename(command));
+  if (!script || script.startsWith("-") || (!interpreter && mode !== "job" && mode !== "peer-job")) return;
+  try {
+    if (!isAbsolute(script) || !statSync(script).isFile()) throw new Error();
+    accessSync(script, constants.R_OK);
+  } catch {
+    throw new ExecutorCapabilityError("The named job script is unavailable.");
+  }
+}
+
 // Named executors own their program, script and readiness command independently of the default.
 export function commandGeneration(
   argv: readonly string[],
   probe: readonly string[] = [],
 ): string {
-  const commands = [...argv.slice(0, 2), ...probe.slice(0, 2)].filter(
-    isAbsolute,
-  );
+  const commands = [argv,probe].flatMap(parts => parts[0] ? [executablePath(parts[0]) ?? parts[0], ...parts.slice(1,2).filter(isAbsolute)] : []);
   // The paired executor authenticates with this profile. Only its file identity is needed.
   if (probe[2] === "peer-ready" && probe[3] && isAbsolute(probe[3])) commands.push(probe[3]);
   return JSON.stringify(commands.map(file));
@@ -156,7 +169,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       refusals = readdirSync(dirname(room.setting))
         .filter((n) => {
           if (/^\.paid-agent-(denied|refused)\./.test(n))
-            return !planVersion || n === ".paid-agent-refused." + planVersion || n === ".paid-agent-denied." + planTag;
+            return !planVersion || n === ".paid-agent-denied.unidentified" || n === ".paid-agent-refused." + planVersion || n === ".paid-agent-denied." + planTag;
           if (!/^\.paid-agent-claim\.[a-f0-9]{64}\.[a-f0-9]{64}$/.test(n)) return false;
           if (planVersion && !n.startsWith(".paid-agent-claim." + planTag + ".")) return false;
           const marker = readFileSync(join(dirname(room.setting),n),"utf8");

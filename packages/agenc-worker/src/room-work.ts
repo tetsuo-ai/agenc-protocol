@@ -46,6 +46,7 @@ export async function waitForRoomAnswer(stateDir: string, task: Address, host: R
 }
 
 export interface RoomWork {
+  verifySavedOutput?(task:Address,claim:Address,hash:string):Promise<boolean>;
   questions?(binding: VerifiedRoomWork): Promise<RoomQuestionHost | undefined>;
   /** Refuse incompatible inputs, image, disclosure or output terms before claim. */
   admit(binding: VerifiedRoomWork): Promise<void>;

@@ -9,7 +9,8 @@ import {
   readFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import type { Address } from "@solana/kit";
+import { enrollClaimBudget } from "./revision-budget.js";
 
 import { monotonicMs } from "./boot-clock.js";
 export { monotonicMs };
@@ -60,18 +61,14 @@ export function claimSignatureJournal(
   claim: string,
 ) {
   const dir = join(root, signer + "-" + claim);
-  const id = createHash("sha256")
-    .update(JSON.stringify([signer, task]))
-    .digest("hex");
-  const legacy = join(root, "claim-signatures", id);
   const path = join(dir, "signature-attempt");
   const confirmed = join(dir, "confirmed");
-  const exists = () => existsSync(path) || existsSync(confirmed) || existsSync(legacy) || existsSync(join(dir, "0"));
+  const exists = () => existsSync(path) || existsSync(confirmed) || existsSync(join(dir,"0")) ||
+    (existsSync(dir) && (!existsSync(join(dir,"format")) || readFileSync(join(dir,"format"),"utf8") !== "1"));
   return {
     exists,
     reserve() {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      syncDir(root);
+      enrollClaimBudget(root,signer as Address,claim as Address);
       if (exists()) throw new Error("This claim already has a signature attempt.");
       const fd = openSync(path, "wx", 0o600);
       try {

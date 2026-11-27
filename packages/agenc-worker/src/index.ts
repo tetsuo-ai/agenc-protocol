@@ -1,4 +1,4 @@
-export { firstClaimRoundCents, requireClaimExecutor } from "./revision-budget.js";
+export { requireClaimExecutor, claimBudget } from "./revision-budget.js";
 export { chainDeadline, deadlineFromChain, monotonicMs, ExecutorBudgetError, ExecutorCapabilityError } from "./claim-admission.js";
 // @tetsuo-ai/agenc-worker — programmatic surface.
 //
@@ -35,7 +35,7 @@ export {
 export {
   buildExecutorArgv,
   assertExecutorPromptFits,
-  preflightExecutor,
+  preflightExecutor, executablePath,
   runExecutor,
   ExecutorError,
   DEFAULT_MAX_STDOUT_BYTES,

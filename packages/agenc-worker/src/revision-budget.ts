@@ -15,11 +15,6 @@ export function claimBudget(totalCents: number, reserve: boolean): ModelBudget {
     : { totalCents, remainingCents: totalCents };
 }
 
-export function firstClaimRoundCents(total: number, reserveRevisions: boolean, reserveCorrection: boolean): number {
-  const first = claimBudget(total, reserveRevisions).remainingCents;
-  return reserveCorrection && first >= 2 ? first - Math.max(1, Math.floor(first / 4)) : first;
-}
-
 /** Only a newer confirmed submission count releases the next slice. Retries,
  * restarts and budgets created before this feature cannot acquire more money. */
 export function budgetForRevision(budget: ModelBudget | undefined, round: number): ModelBudget | undefined {
@@ -39,7 +34,11 @@ function syncDirectory(dir: string): void {
 
 export function enrollClaimBudget(root: string, wallet: Address, claim: Address): void {
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  mkdirSync(join(root, wallet + "-" + claim), { recursive: true, mode: 0o700 });
+  const dir = join(root, wallet + "-" + claim);
+  try { mkdirSync(dir,{mode:0o700}); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
+  writeFileSync(join(dir,"format"),"1",{flag:"wx",mode:0o600,flush:true});
+  syncDirectory(dir);
   syncDirectory(root);
 }
 
@@ -53,13 +52,16 @@ export function pinClaim(dir: string, executor: string, budget?: number): boolea
   }
 }
 
+export function isReleasedClaimRound(dir:string):boolean {
+  return !existsSync(join(dir,"format")) && existsSync(join(dir,"0")) && readFileSync(join(dir,"0"),"utf8")==="";
+}
+
 export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false): void {
   if (existsSync(join(dir, "admission"))) {
     if (JSON.parse(readFileSync(join(dir, "admission"), "utf8")).executor === executor) return;
   } else {
     // Only these older runs identify their executor without guessing.
-    const connected = existsSync(join(dir, "0.counts"));
-    if (!connected && legacyPrivate && executor === "core") return;
+    if (legacyPrivate && executor === "core" && isReleasedClaimRound(dir)) return;
   }
   throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
 }
@@ -78,8 +80,16 @@ export function spendClaimRound(root: string, wallet: Address, claim: Address, r
           prior.some(n => !Number.isSafeInteger(n) || n <= 0) || prior.reduce((a,b) => a+b, cents!) > budget)
         throw new Error("The claim has no further allowance.");
     }
-    writeFileSync(join(dir, String(round)), cents === undefined ? "" : String(cents), { flag:"wx", mode:0o600, flush:true });
-    if (cents !== undefined) writeFileSync(join(dir,round+".usage"),JSON.stringify({reservedCents:cents,costUsd:0}),{flag:"wx",mode:0o600,flush:true});
+    const reservation = join(dir,String(round));
+    if (existsSync(reservation)) throw new Error("This round already has a reservation.");
+    if (cents !== undefined) {
+      const zero = JSON.stringify({reservedCents:cents,costUsd:0});
+      const usage = reservation+".usage";
+      try { writeFileSync(usage,zero,{flag:"wx",mode:0o600,flush:true}); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || readFileSync(usage,"utf8") !== zero) throw error; }
+      syncDirectory(dir);
+    }
+    writeFileSync(reservation,cents === undefined ? "" : String(cents),{flag:"wx",mode:0o600,flush:true});
     syncDirectory(dir);
     return join(dir, String(round));
   } catch (cause) {

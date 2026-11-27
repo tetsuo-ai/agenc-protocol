@@ -48,7 +48,7 @@ import {
   isTaskJobSpecPinned,
   isTaskStateDirectlyClaimable,
   listDirectClaimableTasks,
-  listPinnedJobSpecTasks,
+  listPinnedJobSpecHashes,
   type ProgramAccountsSource,
 } from "../queries/index.js";
 
@@ -98,6 +98,7 @@ export type ClaimableTask = {
   rewardMint: Address | null;
   /** Which read path first surfaced this task. */
   source: "event" | "catch-up";
+  jobSpecHash?: string;
   /**
    * The fully-decoded current on-chain {@link Task} account.
    */
@@ -133,6 +134,7 @@ export type ClaimableTask = {
  * rejected synchronously instead of silently dropping every event.
  */
 export type WatchClaimableTasksOptions = {
+  onCandidateSnapshot?: (open:ReadonlySet<Address>, pins:ReadonlyMap<Address,string>)=>void;
   /** Live event source (kit `RpcSubscriptions` or a structural double). */
   rpcSubscriptions?: MarketplaceEventsRpcSubscriptions | null;
   /**
@@ -356,7 +358,7 @@ function dedupeKey(
 class BoundedSeenSet {
   readonly #keys = new Map<
     Address,
-    { key: string; generation: bigint; lastObservedSweep: number }
+    { key: string; generation: bigint; lastObservedSweep: number; hash?:string }
   >();
   readonly #max: number;
   constructor(max: number) {
@@ -374,6 +376,7 @@ class BoundedSeenSet {
     generation: bigint,
     isZeroWorkerOpen: boolean,
     observedSweep: number,
+    hash?:string,
   ): boolean {
     const prior = this.#keys.get(task);
     // A delayed TaskCreated event (generation 0) or stale RPC snapshot must not
@@ -385,6 +388,8 @@ class BoundedSeenSet {
       );
       return false;
     }
+    const changedHash = !!(hash && prior?.hash && prior.hash !== hash);
+    const observedHash = hash ?? prior?.hash;
     if (prior !== undefined && generation > 0n) {
       const provesHiddenReopen =
         isZeroWorkerOpen && generation > prior.generation;
@@ -395,11 +400,13 @@ class BoundedSeenSet {
       this.#keys.set(task, {
         key,
         generation,
+        ...(observedHash && {hash:observedHash}),
         lastObservedSweep: Math.max(prior.lastObservedSweep, observedSweep),
       });
-      return provesHiddenReopen;
+      return provesHiddenReopen || changedHash;
     }
-    if (prior?.key === key) {
+    if (prior?.key === key && !changedHash) {
+      if (hash) prior.hash = hash;
       prior.lastObservedSweep = Math.max(
         prior.lastObservedSweep,
         observedSweep,
@@ -407,7 +414,7 @@ class BoundedSeenSet {
       return false;
     }
     if (prior === undefined && this.#keys.size >= this.#max) return false;
-    this.#keys.set(task, { key, generation, lastObservedSweep: observedSweep });
+    this.#keys.set(task, { key, generation, lastObservedSweep: observedSweep,...(observedHash && {hash:observedHash}) });
     return true;
   }
   /** Forget tasks absent from a complete successful candidate sweep. */
@@ -771,7 +778,7 @@ export function watchClaimableTasks(
       key,
       marker.claimGeneration,
       marker.isZeroWorkerOpen,
-      observedSweep,
+      observedSweep,task.jobSpecHash,
     );
   };
 
@@ -936,7 +943,7 @@ export function watchClaimableTasks(
             );
             // Keep this second read in the same serialized, aggregate-timeout
             // operation. ProgramAccountsTransport has no reentrancy guarantee.
-            const pinnedTasks = await listPinnedJobSpecTasks(catchUpSource);
+            const pinnedTasks = await listPinnedJobSpecHashes(catchUpSource);
             return [taskStateCandidates, pinnedTasks] as const;
           }),
           controller.signal,
@@ -972,6 +979,7 @@ export function watchClaimableTasks(
               ? unwrapOption(account.rewardMint)
               : null,
             source: "catch-up",
+            jobSpecHash:pinned.get(address)!,
             account,
           };
           deliveries.push({
@@ -993,6 +1001,7 @@ export function watchClaimableTasks(
         // evict active entries within a sweep: that caused oversized backlogs
         // to be delivered again on every poll.
         seen.retainTasks(candidateAddresses, successfulSweep);
+        options.onCandidateSnapshot?.(candidateAddresses,pinned);
         let emitted = 0;
         for (const { claimable, marker } of deliveries) {
           if (controller.signal.aborted) return;

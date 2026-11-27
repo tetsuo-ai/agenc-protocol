@@ -21,7 +21,7 @@ import { address, unwrapOption, type Address } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgencError,
-  facade,
+  facade, lighthouse,
   findClaimPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
@@ -39,6 +39,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { chainDeadline, monotonicMs } from "./claim-admission.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import type { WorkerAgent, WorkerContext } from "./runtime.js";
 import { loadState, saveState, type FailedJob } from "./state.js";
@@ -308,7 +309,10 @@ export async function sendReleaseClaim(
   agent: WorkerAgent,
   task: Address,
   decoded: Task,
+  refundBefore?: bigint,
 ): Promise<string> {
+  const end = refundBefore === undefined ? undefined : await chainDeadline(ctx.clusterTime ?? (()=>claimChainTime(ctx.readAccount)),Number.MAX_SAFE_INTEGER,refundBefore);
+  const check = () => { if (end !== undefined && monotonicMs() >= end) throw new Error("The claim refund window closed."); };
   const { signature } = await ctx.client.send(
     [
       await facade.releaseClaim({
@@ -318,8 +322,9 @@ export async function sendReleaseClaim(
         authority: ctx.signer,
         taskValidationConfig: await validationConfigOrNull(ctx, task),
       }),
+      ...(refundBefore === undefined ? [] : [lighthouse.assertClockBefore(Number(refundBefore))]),
     ],
-    { maxRetries: 0 },
+    { maxRetries: 0,...(end !== undefined && {assertAuthorized:check}) },
   );
   return signature;
 }
@@ -400,7 +405,9 @@ export async function releaseOwnClaims(
     memory.set(key, now);
     try {
       if (releasable) {
-        const signature = await sendReleaseClaim(ctx, agent, task, decoded);
+        const lastRefundSecond = claim.claimedAt + BigInt(values.CLAIM_RELEASE_GRACE_SECS);
+        const early = now <= Number(lastRefundSecond);
+        const signature = await sendReleaseClaim(ctx, agent, task, decoded, early ? lastRefundSecond + 1n : undefined);
         markReleased(ctx, task);
         released.push({ task, how: "released" });
         ctx.log({

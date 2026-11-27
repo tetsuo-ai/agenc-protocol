@@ -65,7 +65,7 @@ export {
   listHireRecordsForBuyer,
   listingsByProvider,
   listOpenTasks,
-  listPinnedJobSpecTasks,
+  listPinnedJobSpecTasks, listPinnedJobSpecHashes,
   type DecodedProgramAccount,
   type ListActiveListingsOptions,
   type ListDirectClaimableTasksOptions,

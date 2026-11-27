@@ -32,11 +32,11 @@ afterEach(() => {
 const local: EarnExecutor = { argv: ["/local/room", "job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 const peer: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 
-function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000, files = false) {
+function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000, storage = false) {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
   folders.push(dataDir);
   return new EarnHost({ dataDir, chain: { clusterTime: async () => chainNow, clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
-    services: { resultUploader: () => files ? {url:"http://127.0.0.1",fetch:vi.fn()} : null, fileLinkPrefix: files ? "agenc://files/" : null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
+    services: { resultUploader: () => storage ? {url:"agenc://local", fetch:vi.fn()} : null, fileLinkPrefix: storage ? "agenc://file/" : null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
 }
 
 it("passes the owner's 0.01 SOL ceiling and buyer allowlist into a named-only worker", async () => {
@@ -64,7 +64,7 @@ it("applies verified requirements to callbacks, listing terms and the first paid
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
-    const facts = {task:"task" as never,creator:"buyer" as never,firstRoundCents:4,promptBytes:40};
+    const facts = {task:"task" as never,creator:"buyer" as never,firstRoundCents:4,promptBytes:40,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})]};
     await ctx.checkExecutionReady!(facts);
     expect(check).toHaveBeenCalledWith(expect.objectContaining({admission:expect.objectContaining({source:"external",promptBytes:40})}));
     for (const extra of [{privateInputs:true}, {reviewFiles:1}, {promptBytes:6144},
@@ -260,7 +260,7 @@ it.each([[0n, 90n, "90"], [150n, 90n, "90"], [75n, 90n, "75"]])("binds executor 
 });
 
 it("keeps hand-picked jobs available to a named worker with its own ready sandbox", async () => {
-  const ready = { ...local, mode:"sandboxed" as const, isolatedJobRoom:true, readiness:{argv:["/ready"]} };
+  const ready = { ...local, argv:[process.execPath,"-e","void 0","room:{agent}","{prompt}"],mode:"sandboxed" as const, isolatedJobRoom:true, readiness:{argv:["/ready"]} };
   const earn = host({ executor:ready, agentExecutors:{named:ready}, defaultExecutorEnabled:()=>false,
     chosenRoomEnabled:()=>true, checkExecutionReady:async()=>{} });
   void earn.start({agentId:"named", signer:{address:"fake"} as unknown as KeyPairSigner, minRewardLamports:0n});
@@ -357,7 +357,9 @@ it.each(["codex-api","codex-plan"] as const)("applies verified job requirements 
   try {
     await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
-    const paid = {task:"test" as never, creator:"buyer" as never, firstRoundCents:1, promptBytes:20000};
+    const paid = {acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})],task:"test" as never, creator:"buyer" as never, firstRoundCents:1, promptBytes:20000};
+    await expect(ctx.checkExecutionReady!({...paid, acceptance:undefined, firstRoundCents:200})).rejects.toThrow(/tools/);
+    await expect(ctx.checkExecutionReady!({...paid, extraRoomFeatures:true, firstRoundCents:200})).rejects.toThrow(/tools/);
     await expect(ctx.checkExecutionReady!(paid)).rejects.toThrow(/allowance/);
     if (agent === "codex-api") {
       await expect(ctx.checkExecutionReady!({...paid, promptBytes:11_000})).rejects.toThrow(/allowance/);
@@ -377,7 +379,7 @@ it("prices the required Claude system instruction and Bash tool before admission
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
-    const job={task:"job" as never, creator:"buyer" as never,firstRoundCents:1,promptBytes:4850};
+    const job={task:"job" as never, creator:"buyer" as never,firstRoundCents:1,promptBytes:4850,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})]};
     await expect(ctx.checkExecutionReady!(job)).rejects.toMatchObject({name:"ExecutorBudgetError"});
     await expect(ctx.checkExecutionReady!({...job,promptBytes:100,firstRoundCents:4})).resolves.toBeTypeOf("function");
   } finally {await earn.stopAll();}
@@ -426,7 +428,7 @@ it("pins the actual Codex executor and prices mandatory tool and final turns bef
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
-    const job={creator:"buyer" as never,task:"task" as never,firstRoundCents:78,promptBytes:20};
+    const job={acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})],creator:"buyer" as never,task:"task" as never,firstRoundCents:78,promptBytes:20};
     const acceptance=[outputAgreementCriterion({allowTextOnly:false,requiredFiles:["answer.txt"]})];
     await expect(ctx.checkExecutionReady!({...job,acceptance})).rejects.toMatchObject({name:"ExecutorBudgetError"});
     await expect(ctx.checkExecutionReady!({...job,acceptance,firstRoundCents:155})).rejects.toThrow(/allowance/);
@@ -449,9 +451,83 @@ it("uses the offer's first-round money at activation and availability", async ()
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     (seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext).log({event:"watch.started"});
     for(const modelBudgetCents of [20,78]) {
-      await expect(earn.checkListingReady("seller",undefined,{modelBudgetCents})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+      await expect(earn.checkListingReady("seller",undefined,{modelCapCents:modelBudgetCents})).rejects.toMatchObject({name:"ExecutorBudgetError"});
     }
-    await expect(earn.checkListingReady("seller",undefined,{modelBudgetCents:200})).resolves.toBeTypeOf("function");
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:200})).resolves.toBeTypeOf("function");
     expect(check).toHaveBeenCalledWith(expect.objectContaining({admission:expect.objectContaining({firstRoundCents:120})}));
   } finally {await earn.stopAll();}
+});
+
+it.each(["claude-code","codex","acp:fixture","pi"])("admits only verified public work for %s", async agent => {
+  const callback = vi.fn(async () => {});
+  const room = {...local,mode:"sandboxed" as const,isolatedJobRoom:true, reserveRevisionBudget:true};
+  const earn=host({executor:room,roomWork:()=>({} as never),checkExecutionReady:callback,
+    connectedPublicJobs:{[agent]:{canDeliver:name=>name.endsWith(".txt"),firstTurnFits:(cents,bytes)=>cents>=4 && bytes<5000}},
+    liveRoomState:()=>({agent,coreCommand:null,ready:true,generation:agent})},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    ctx.log({event:"watch.started"});
+    const facts={task:"job" as never,creator:"buyer" as never,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})],promptBytes:30,firstRoundCents:6};
+    await expect(ctx.checkExecutionReady!(facts)).resolves.toBeTypeOf("function");
+    for (const extra of [{privateInputs:true},{reviewFiles:1},{extraRoomFeatures:true},{revision:true,reviewAttachments:1},
+      {acceptance:[]},{requiredCapabilities:2n}]) {
+      await expect(ctx.checkExecutionReady!({...facts,...extra})).rejects.toThrow();
+    }
+    expect(callback).toHaveBeenCalledTimes(1);
+    await expect(ctx.checkExecutionReady!({...facts,acceptance:[outputAgreementCriterion({requiredFiles:["chart.csv"],allowTextOnly:false})]})).rejects.toThrow();
+    await expect(ctx.checkExecutionReady!({...facts,revision:true})).resolves.toBeTypeOf("function");
+    await expect(ctx.checkExecutionReady!({...facts,acceptance:[outputAgreementCriterion({requiredFiles:["answer.txt"],allowTextOnly:false})]})).resolves.toBeTypeOf("function");
+    await expect(ctx.checkExecutionReady!({...facts,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:false})]})).rejects.toThrow();
+    expect(earn.supportsService("seller",{modelCapCents:1})).toBe(false);
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:5})).rejects.toThrow();
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:10})).resolves.toBeTypeOf("function");
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:10,promptBytes:6000})).rejects.toThrow();
+  } finally {await earn.stopAll();}
+});
+
+it("refuses a named job executable that disappears or loses execute permission",async()=>{
+  const fs=await import("node:fs");
+  const dir=fs.mkdtempSync(path.join(tmpdir(),"named-job-"));folders.push(dir);
+  const exe=path.join(dir,"room");fs.writeFileSync(exe,"#!/bin/sh\nexit 0\n",{mode:0o700});
+  const callback=vi.fn(async()=>{});
+  const earn=host({executor:null,agentExecutors:{seller:{...local,argv:[exe,"room:{agent}","{prompt}"]}},checkExecutionReady:callback});
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const current=await ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never});
+    fs.chmodSync(exe,0o600);
+    expect(()=>current && current()).toThrow();
+    await expect(ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never})).rejects.toThrow();
+    fs.rmSync(exe);
+    await expect(ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never})).rejects.toThrow();
+  } finally {await earn.stopAll();}
+});
+
+it.each(["job","peer-job"].flatMap(mode=>["outputs","private","revision"].map(kind=>[mode,kind])))("refuses unsupported %s rehearsal %s before admission",async (mode,kind)=>{
+  const fs=await import("node:fs"),{createHash}=await import("node:crypto");
+  const sha=(s:string)=>createHash("sha256").update(s).digest("hex");
+  const runtimeDigest="a".repeat(64), permissionDigest="b".repeat(64);
+  const manifest=JSON.stringify({outputs:["answer.txt"],files:[],runtimeDigest,permissionDigest,capabilities:"1"});
+  const pin={digest:sha(manifest),runtimeDigest,permissionDigest,capabilities:"1" as const};
+  const dir=mkdtempSync(path.join(tmpdir(),"pinned-admission-"));folders.push(dir);
+  const callback=vi.fn(async()=>{}),room={...local,mode:"sandboxed" as const,isolatedJobRoom:true,argv:[process.execPath,"room:{agent}",mode,"pair:fixture","{prompt}"]};
+  const earn=new EarnHost({dataDir:dir,chain:{clientFor:()=>({}),network:"sandbox"} as never,
+    services:{resultUploader:()=>({url:"agenc://test",fetch:vi.fn()}),fileLinkPrefix:"agenc://file/"} as never,
+    options:{executor:room,checkExecutionReady:callback,roomWork:()=>({} as never)},log:vi.fn(),notify:vi.fn()});
+  const installed=path.join(earn.stateDir("seller"),"service-bundles",pin.digest);fs.mkdirSync(installed,{recursive:true});
+  fs.writeFileSync(path.join(installed,"manifest.json"),manifest);fs.writeFileSync(path.join(installed,"passed.json"),JSON.stringify({passed:true,digest:pin.digest}));
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n,specialistTerms:()=>({servicePin:pin})});
+  try{
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const facts={task:"job" as never,creator:"buyer" as never,requiredCapabilities:5n};
+    const agreement=(name:string)=>[outputAgreementCriterion({requiredFiles:[name],allowTextOnly:false})];
+    await expect(ctx.checkExecutionReady!({...facts,acceptance:agreement("answer.txt")})).resolves.toBeTypeOf("function");
+    const extra = kind === "outputs" ? {acceptance:agreement("chart.csv")} : kind === "private" ? {privateInputs:true} : {revision:true};
+    await expect(ctx.checkExecutionReady!({...facts,...extra})).rejects.toThrow();
+    expect(callback).toHaveBeenCalledOnce();
+  }finally{await earn.stopAll();}
 });

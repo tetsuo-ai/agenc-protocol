@@ -435,7 +435,7 @@ export interface WalletState extends ChildHireState {
   contestRegistrations?: Record<string, ContestRegistration>;
   actionInbox?: import("./action-inbox.js").SavedAction[];
   businessRecovery?: { restoredAt: number; requiresConsent: boolean; sellers?: string[] };
-  setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; action: string; before: string; offers: OfferRecord[] }>;
+  setupQuotes?: Record<string, { quote: import("./client/types.js").EarnFundingQuote; chainExpires?: number; action: string; before: string; offers: OfferRecord[] }>;
   version: number;
   createdAt: number;
   agents: Record<string, AgentRecord>;

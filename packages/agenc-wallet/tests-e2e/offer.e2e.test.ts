@@ -637,6 +637,6 @@ it("refuses to advertise a twenty cent service through the plan", async () => {
   await wallet.postListingMessage(seller.id,message);
   const before = relays;
   plan = true;
-  await expect(wallet.postListingMessage(seller.id,message)).rejects.toThrow(/allowance/);
+  await expect(wallet.postListingMessage(seller.id,message)).rejects.toMatchObject({code:"NOT_ALLOWED"});
   expect(relays).toBe(before);
 }, 60_000);

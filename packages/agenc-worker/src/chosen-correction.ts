@@ -8,6 +8,7 @@ import { loadState, saveState } from "./state.js";
 import { readTaskAccount } from "./upkeep.js";
 import { join } from "node:path";
 import { requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { deadlineFromChain, monotonicMs } from "./claim-admission.js";
 import { correctionCutoff, correctionRunSeconds } from "./chosen-release.js";
 
 /** Run on the same serialized worker lane as submit/release. Charge a slice
@@ -40,7 +41,8 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
         ...(!reviewInputs.length && {previousText:body.toString("utf8")})});
     assertExecutorPromptFits(prompt);
     const admit = await ctx.checkExecutionReady?.({task,creator:read.task.creator,requiredCapabilities:read.task.requiredCapabilities,
-      acceptance:marker.jobEvidence?.acceptance ?? [],reviewFiles:reviewInputs.length,firstRoundCents:cents,promptBytes:Buffer.byteLength(JSON.stringify(prompt)),signal:stop});
+      acceptance:marker.jobEvidence?.acceptance ?? [],revision:true,reviewFiles:reviewInputs.length,firstRoundCents:cents,promptBytes:Buffer.byteLength(JSON.stringify(prompt)),signal:stop});
+    const start = monotonicMs();
     const now = await ctx.clusterTime!();
     // Stop early enough to submit, and before the early release pause, so the
     // owner can still deliver or give the claim back after the correction.
@@ -48,13 +50,15 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     const end = cutoff ?? Infinity;
     const seconds = correctionRunSeconds(cutoff, now, ctx.config.executorTimeoutMs / 1000);
     if (seconds === null) throw new Error("Too little time is left for a correction. Submit or give back the claim.");
-    const timeoutMs = Math.floor(seconds * 1000);
+    const deadline = deadlineFromChain(start,now,Math.floor(seconds*1000),BigInt(cutoff ?? 0));
+    const checkTime = () => { if (monotonicMs() >= deadline) throw new Error("The correction deadline passed."); };
     stop.throwIfAborted();
     if (admit) admit();
     if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address + "-" + held.claimAccount),ctx.executorIdentity());
     const claimRound = join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount,"-1");
     let reserved = false;
     const reserve = () => {
+      checkTime();
       if (reserved) return;
       stop.throwIfAborted();
       if (admit) admit();
@@ -65,12 +69,20 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
       reserved = true;
     };
     const argv = await executorForTask(read.task, task, cents, undefined, undefined, marker.jobEvidence?.request, marker.jobEvidence?.acceptance,
-      budget.totalCents, BigInt(held.expiresAt), claimRound, reserve);
+      budget.totalCents, BigInt(cutoff ?? held.expiresAt), claimRound, reserve, deadline);
     reserve();
-    const result = await reviewRoom.execute({ argv, reviewInputs, timeoutMs, signal: stop,
-      envAllowlist: ctx.config.executorEnvAllowlist,
-      prompt });
-    stop.throwIfAborted();
+    const expiry = new AbortController();
+    const running = AbortSignal.any([stop,expiry.signal]);
+    const watch = setInterval(() => {
+      try { checkTime(); } catch (error) { expiry.abort(error); }
+    },250);
+    let result;
+    try {
+      result = await reviewRoom.execute({argv,reviewInputs,timeoutMs:deadline-monotonicMs(),signal:running,
+        envAllowlist:ctx.config.executorEnvAllowlist,prompt});
+      running.throwIfAborted();
+      checkTime();
+    } finally { clearInterval(watch); }
     await verifyOutput(result.stdout);
     const revised = createHash("sha256").update(result.stdout).digest("hex");
     if (revised === hash) throw new Error("The room returned the same result. Review it before submitting.");
