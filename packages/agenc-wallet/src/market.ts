@@ -1646,6 +1646,7 @@ export async function sendCreateListing(
   chain: Chain,
   provider: KeyPairSigner,
   offer: ListingOffer,
+  assertAuthorized?: () => void,
 ): Promise<string> {
   const result = await chain.clientFor(provider).createServiceListing({
     providerAgent: offer.providerAgent,
@@ -1663,7 +1664,7 @@ export async function sendCreateListing(
     maxOpenJobs: offer.terms.maxOpenJobs,
     operator: offer.terms.operator ? address(offer.terms.operator) : null,
     operatorFeeBps: offer.terms.operatorFeeBps,
-  });
+  },assertAuthorized ? {assertAuthorized} : undefined);
   return result.signature;
 }
 
@@ -1679,6 +1680,7 @@ export async function sendUpdateListing(
     spec: { hash: Uint8Array; uri: string } | null;
     deliverySecs?: number | undefined;
   },
+  assertAuthorized?: () => void,
 ): Promise<string> {
   return withListingOperation({ kind: "update", listings: [input.listing], lamports: "0" }, async () => {
     const result = await chain.clientFor(provider).send([
@@ -1697,7 +1699,7 @@ export async function sendUpdateListing(
         operator: input.terms.operator ? address(input.terms.operator) : SYSTEM_PROGRAM_ADDRESS,
         operatorFeeBps: input.terms.operatorFeeBps,
       }),
-    ]);
+    ],assertAuthorized ? {assertAuthorized} : undefined);
     return result.signature;
   });
 }
@@ -1710,8 +1712,9 @@ export async function sendListingState(
   chain: Chain,
   provider: KeyPairSigner,
   input: { listing: Address; providerAgent: Address; state: "Active" | "Paused" | "Retired" },
+  assertAuthorized?: () => void,
 ): Promise<string> {
-  const sent = await sendListingStates(chain, provider, input.providerAgent, [input.listing], input.state);
+  const sent = await sendListingStates(chain, provider, input.providerAgent, [input.listing], input.state,assertAuthorized);
   return sent.get(input.listing)!;
 }
 
@@ -1733,6 +1736,7 @@ export async function sendListingStates(
   providerAgent: Address,
   listings: readonly Address[],
   state: "Active" | "Paused" | "Retired",
+  assertAuthorized?: () => void,
 ): Promise<Map<Address, string>> {
   const sent = new Map<Address, string>();
   for (let start = 0; start < listings.length; start += LISTINGS_PER_TRANSACTION) {
@@ -1741,7 +1745,7 @@ export async function sendListingStates(
       batch.map((listing) => facade.setServiceListingState({ listing, authority: provider, providerAgent, state })),
     );
     const signature = await withListingOperation({ kind: "state", state, listings: batch, lamports: "0" },
-      async () => (await chain.clientFor(provider).send(instructions)).signature);
+      async () => (await chain.clientFor(provider).send(instructions,assertAuthorized ? {assertAuthorized} : undefined)).signature);
     for (const listing of batch) sent.set(listing, signature);
   }
   return sent;

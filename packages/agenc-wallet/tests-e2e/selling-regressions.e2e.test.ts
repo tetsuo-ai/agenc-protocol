@@ -33,7 +33,7 @@ it("preserves APPROVAL_REQUIRED when earn.set exceeds the automatic cap over the
 });
 
 it("pauses a legacy unlimited listing with two hires across restart and rejects a third in LiteSVM", async () => {
-  let ready = false;
+  let ready = true;
   world = await startWorld({ earn: { ...EARN, checkExecutionReady: async () => {
     if (!ready) throw new Error("unready");
   } } });
@@ -49,6 +49,7 @@ it("pauses a legacy unlimited listing with two hires across restart and rejects 
     return agent.earn.offer?.status === "live" ? agent.earn.offer : null;
   });
   const listing = offer.listing as Address;
+  ready = false;
   const account = (await readListing(sandbox.chain, listing))!;
   const raw = sandbox.market.svm.getAccount(listing);
   // Model the pre-upgrade unlimited policy, then fund two real hires.

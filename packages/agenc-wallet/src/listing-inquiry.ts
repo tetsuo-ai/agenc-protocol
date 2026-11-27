@@ -36,15 +36,17 @@ export async function readListingExchange(identity: ListingIdentity, now = Date.
   return verifiedExchange({ identity, heartbeat, threads }, identity, now);
 }
 
-export async function publishListingMessage(identity: ListingIdentity, message: ListingMessage, signer: KeyPairSigner, now: number, send = fetch) {
+export async function publishListingMessage(identity: ListingIdentity, message: ListingMessage, signer: KeyPairSigner, now: number, send = fetch, admitted?: () => void) {
   if (identity.listing !== message.listing || identity.version !== message.version || identity.provider !== message.provider ||
       signer.address !== (message.kind === "question" ? message.buyer : identity.provider))
     throw new WalletError("NOT_ALLOWED", "The listing or signing identity changed.");
+  admitted?.();
   const [proof] = await signer.signMessages([{ content: new TextEncoder().encode(listingMessageText(message)), signatures: {} }]);
   const signed = { message, signature: Buffer.from(proof![signer.address]!).toString("base64") };
   await verifyListingMessage(signed, identity, now);
   const section = message.kind === "availability" ? "availability" : "inquiries";
-  const response = await requestJson(send, "https://agenc.ag/api/listings/" + encodeURIComponent(identity.listing) + "/" + section,
+  const guarded: typeof fetch = (...args) => { admitted?.(); return send(...args); };
+  const response = await requestJson(guarded, "https://agenc.ag/api/listings/" + encodeURIComponent(identity.listing) + "/" + section,
     { method: "POST", body: signed }, { timeoutMs: 4000, maxBytes: 4096 });
   if (response.status !== 200) throw new WalletError("NOT_AVAILABLE", "The provider exchange did not accept the message. Refresh the listing.");
   return signed;

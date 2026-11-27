@@ -8,22 +8,26 @@ import type { WalletState } from "./store.js";
 export async function checkBusinessRoom(
   options: EarnOptions | undefined,
   agentId: string,
-  resolve: () => EarnExecutor | null = () => options?.agentExecutors?.[agentId] ?? options?.executor ?? null,
+  resolve: () => EarnExecutor | null = () =>
+    options?.agentExecutors?.[agentId] ?? options?.executor ?? null,
 ) {
   const executor = resolve();
-  const generation = () => JSON.stringify([options?.agentExecutors?.[agentId] ? "" : options?.defaultExecutorGeneration?.(),
-    executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
+  const generation = () =>
+    JSON.stringify([
+      options?.agentExecutors?.[agentId]
+        ? ""
+        : options?.defaultExecutorGeneration?.(),
+      executor && commandGeneration(executor.argv, executor.readiness?.argv),
+    ]);
   const before = generation();
-  if (
-    executor?.mode !== "sandboxed" ||
-    options?.chosenRoomEnabled?.() !== true
-  )
+  if (executor?.mode !== "sandboxed" || options?.chosenRoomEnabled?.() !== true)
     throw new WalletError(
       "NOT_AVAILABLE",
       "Enable the isolated job room on this device first.",
     );
+  let hostCheck: void | (() => void);
   if (options.checkExecutionReady)
-    await options.checkExecutionReady({ agentId });
+    hostCheck = await options.checkExecutionReady({ agentId });
   else {
     const { readiness, envAllowlist } = executor;
     if (!readiness)
@@ -32,27 +36,48 @@ export async function checkBusinessRoom(
         "The room self-test is unavailable.",
       );
     await runExecutor({
-      argv: readiness.argv.map(arg => arg === "{roomCore}" ? options.liveRoomState?.().coreCommand ?? "room-agent" : arg.replaceAll("{agent}",agentId)),
+      argv: readiness.argv.map((arg) =>
+        arg === "{roomCore}"
+          ? (options.liveRoomState?.().coreCommand ?? "room-agent")
+          : arg.replaceAll("{agent}", agentId),
+      ),
       timeoutMs: readiness.timeoutMs ?? 30_000,
       envAllowlist,
       maxStdoutBytes: 65536,
     });
   }
-  if (!options.chosenRoomEnabled() || resolve() !== executor || generation() !== before)
-    throw new WalletError(
-      "NOT_AVAILABLE",
-      "Room permission changed during the check.",
-    );
+  const current = () => {
+    if (hostCheck) hostCheck();
+    if (
+      !options.chosenRoomEnabled?.() ||
+      resolve() !== executor ||
+      generation() !== before
+    )
+      throw new WalletError(
+        "NOT_AVAILABLE",
+        "Room permission changed during the check.",
+      );
+  };
+  current();
+  return current;
 }
 
 /** Seller state from before the restore, or still open on this device. A buyer only never needs the room. */
-export function restoredSeller(state: WalletState, agentId: string, openClaim: boolean): boolean {
+export function restoredSeller(
+  state: WalletState,
+  agentId: string,
+  openClaim: boolean,
+): boolean {
   const agent = state.agents[agentId];
   if (!agent) return false;
   const sellers = state.businessRecovery?.sellers ?? [];
   return (
     openClaim ||
     sellers.includes(agentId) ||
-    Boolean(agent.earn?.offer || agent.earn?.offers?.length || agent.earn?.pendingListingSends?.length)
+    Boolean(
+      agent.earn?.offer ||
+      agent.earn?.offers?.length ||
+      agent.earn?.pendingListingSends?.length,
+    )
   );
 }

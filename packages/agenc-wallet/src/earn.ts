@@ -48,6 +48,8 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
+import { chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
+import { commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { outputAgreementFromSpec } from "./client/job-exchange.js";
@@ -92,7 +94,24 @@ export interface EarnExecutor {
   readiness?: { argv: string[]; timeoutMs?: number };
 }
 
+// promptBytes already includes the JSON quotes. Every allowed first POST must contain this envelope.
+const MINIMUM_MESSAGE_BYTES = Buffer.byteLength(JSON.stringify({model:"claude-haiku-4-5-20251001",messages:[{role:"user",content:""}]})) - 2;
+export interface JobAdmission {
+  source: "own" | "external";
+  privateInputs: boolean;
+  servicePin: boolean;
+  serviceDigest?: string;
+  reviewFiles: number;
+  requiredFiles: readonly string[];
+  allowTextOnly: boolean;
+  fileTransport: boolean;
+  promptBytes: number;
+  firstRoundCents?: number;
+  deadlineMs?: number;
+}
+
 export interface EarnOptions {
+  liveRoomState?: () => RoomSelection;
   /** Host-owned exchange and supplier grant resolved independently for each seller. */
   roomWork?: (agentId: string) => WorkerContext["roomWork"];
   /** The host selected its isolated open-job room under the operator switch. */
@@ -117,7 +136,7 @@ export interface EarnOptions {
   maxIdlePollIntervalMs?: number;
   /** In-process equivalent of executor.readiness. Throw when the job room is unavailable. */
   runReviewRoom?: typeof runExecutor;
-  checkExecutionReady?: (input: { agentId: string; signal?: AbortSignal }) => Promise<void>;
+  checkExecutionReady?: (input: { agentId: string; signal?: AbortSignal; admission?: JobAdmission }) => Promise<void | (() => void)>;
   /** Endpoint recorded with the agent's registration. */
   endpoint?: string;
   /**
@@ -228,7 +247,7 @@ interface Running {
   firstDiscovery: Promise<void>;
   finishStartup: () => void;
   awaitingListings: boolean;
-  checkReady?: (signal?: AbortSignal) => Promise<void>;
+  checkReady?: (signal?: AbortSignal, requirements?: JobAdmission) => Promise<() => void>;
   controller: AbortController;
   done: Promise<void>;
   state: EarnState;
@@ -299,10 +318,27 @@ export class EarnHost {
     return own !== undefined && Object.hasOwn(own, agentId) ? own[agentId]! : this.#defaultExecutor();
   }
 
+  generationFor(agentId: string): string {
+    const executor = this.executorFor(agentId);
+    const supplied = Object.hasOwn(this.#options.agentExecutors ?? {},agentId)
+      ? "" : this.#options.defaultExecutorGeneration?.() ?? "";
+    return JSON.stringify([supplied,executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
+  }
+
+  #usesClaude(agentId: string): boolean {
+    return !Object.hasOwn(this.#options.agentExecutors ?? {}, agentId) && this.#options.liveRoomState?.().agent === "claude-code";
+  }
+
+  supportsService(agentId: string, needs: {privateInputs?: boolean; servicePin?: boolean}): boolean {
+    const executor = this.executorFor(agentId);
+    return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId)) &&
+      (!needs.servicePin || !this.#usesClaude(agentId));
+  }
+
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
   supportsPrivateInputs(agentId: string): boolean {
     const executor = this.executorFor(agentId);
-    return executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+    return executor?.argv[2] !== "peer-job" && !this.#usesClaude(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
       this.#options.roomWork?.(agentId) !== undefined;
   }
 
@@ -708,10 +744,13 @@ export class EarnHost {
     if (entry?.discovering) entry.awaitingListings = false;
   }
 
-  async checkListingReady(agentId: string, signal?: AbortSignal): Promise<void> {
+  async checkListingReady(agentId: string, signal?: AbortSignal, needs: {privateInputs?: boolean; servicePin?: boolean; serviceDigest?: string} = {}) {
     const entry = this.#running.get(agentId);
     if (!entry?.checkReady || !this.canTakeJobs(agentId)) throw new Error("Worker discovery is unavailable");
-    await entry.checkReady(signal ? AbortSignal.any([signal, entry.controller.signal]) : entry.controller.signal);
+    return entry.checkReady(signal ? AbortSignal.any([signal,entry.controller.signal]) : entry.controller.signal, {
+      source:"external",privateInputs:!!needs.privateInputs,servicePin:!!needs.servicePin,...(needs.serviceDigest && {serviceDigest:needs.serviceDigest}),reviewFiles:0,
+      requiredFiles:[],allowTextOnly:true,fileTransport:!!this.#services.fileLinkPrefix,promptBytes:0,
+    });
   }
 
   /** Whether this agent is only draining persisted work. */
@@ -785,7 +824,7 @@ export class EarnHost {
     const outboxDir = path.join(stateDir, "outbox");
     if (fileLinkPrefix !== null) prepareOutbox(outboxDir);
     const fill = (part: string): string =>
-      part
+      (part === "{roomCore}" ? this.#options.liveRoomState?.().coreCommand ?? "room-agent" : part)
         .replaceAll("{agent}", agent.agentId)
         .replaceAll("{outbox}", fileLinkPrefix === null ? "" : outboxDir)
         .replaceAll("{files}", fileLinkPrefix ?? "");
@@ -893,8 +932,7 @@ export class EarnHost {
       this.#workerEvent(agent.agentId, event);
     };
 
-    const generation = () => Object.hasOwn(this.#options.agentExecutors ?? {}, agent.agentId)
-      ? undefined : this.#options.defaultExecutorGeneration?.();
+    const generation = () => this.generationFor(agent.agentId);
     const guard = () => {
       const selected = generation();
       return () => {
@@ -902,14 +940,34 @@ export class EarnHost {
           throw new Error("This job room is no longer selected.");
       };
     };
-    const checkReady = async (signal?: AbortSignal, admission: string[] = []): Promise<void> => {
+    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission) => {
+      const admission = requested && { ...requested, fileTransport: requested.fileTransport && !!fileLinkPrefix };
       const current = guard();
       current();
+      let hostCheck: void | (() => void);
+      const check = () => {
+        signal?.throwIfAborted();
+        current();
+        if (hostCheck) hostCheck();
+        if (!admission) return;
+        if (admission.deadlineMs !== undefined && monotonicMs() >= admission.deadlineMs) throw new Error("The claim deadline passed.");
+        if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
+            (admission.servicePin && executor.argv[2] === "job")))
+          throw new ExecutorCapabilityError("This job needs file delivery.");
+        if (!this.supportsService(agent.agentId,admission) || ((this.#usesClaude(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
+          throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
+        if (this.#usesClaude(agent.agentId) && admission.firstRoundCents !== undefined &&
+          (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
+          throw new Error("The first model turn exceeds this job's allowance.");
+      };
+      check();
       if (this.#options.checkExecutionReady !== undefined) {
-        await this.#options.checkExecutionReady({ agentId: agent.agentId, ...(signal === undefined ? {} : { signal }) });
+        hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
         await runExecutor({
-          argv: [...executor.readiness.argv.map(fill), ...admission],
+          argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
+            ["admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
+            executor.readiness.argv[2] === "peer-ready" && admission?.serviceDigest ? [admission.serviceDigest] : [])],
           timeoutMs: executor.readiness.timeoutMs ?? 30_000,
           envAllowlist: executor.envAllowlist,
           maxStdoutBytes: 64 * 1024,
@@ -918,7 +976,8 @@ export class EarnHost {
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }
-      current();
+      check();
+      return check;
     };
     entry.checkReady = checkReady;
 
@@ -933,7 +992,10 @@ export class EarnHost {
     const roomWork = executor.isolatedJobRoom && executor.mode === "sandboxed" ? this.#options.roomWork?.(agent.agentId) : undefined;
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
+      chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
+      capabilityRefusals:new Map(),
       ...(roomWork && { roomWork }),
+      admissionGeneration: () => String(generation() ?? "configured") + "/" + (entry.capabilityRevision ?? 0),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),
       ...(agent.chooseOpenJobs && { chooseOpenJobs: agent.chooseOpenJobs }),
       onWorkerReady: (dispatch, read) => { entry.dispatch = dispatch; entry.read = read; },
@@ -1011,7 +1073,16 @@ export class EarnHost {
         if (receipt && budgetTotalCents) recordServiceBudget(stateDir, address, budgetTotalCents);
         // D's paired peer gets the verified request, usage reservation and the buyer-approved processing (or null).
         const privateProcessing = paired ? await this.#privateProcessing(agent.agentId, address).catch(() => null) : undefined;
+        const deadline = executor.argv.includes("{jobDeadline}") ? await chainDeadline(() => this.#chain.clusterTime(),
+          executor.timeoutMs, task.deadline, claimExpires ?? 0n) : undefined;
+        let legacyExpiry: bigint | undefined;
+        if (executor.argv.includes("{jobExpires}")) {
+          const ends = [task.deadline, claimExpires ?? 0n].filter(time => time > 0n);
+          legacyExpiry = ends.length ? ends.reduce((a, b) => a < b ? a : b)
+            : BigInt(await this.#chain.clusterTime()) + BigInt(Math.floor(executor.timeoutMs / 1000));
+        }
         return executor.argv.flatMap(part => {
+          if (part === "{jobDeadline}") return ["mono:" + deadline];
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
             // The agreed outputs alone also need the scope, so a public post without a reservation still enforces them.
@@ -1023,12 +1094,7 @@ export class EarnHost {
             if (!pin) throw new Error("The paired service requires a verified service pin.");
             return [pin.digest];
           }
-          if (part === "{jobExpires}") {
-            const cutoffs = [task.deadline, claimExpires ?? 0n].filter(time => time > 0n);
-            const expiry = cutoffs.length ? cutoffs.reduce((a, b) => a < b ? a : b)
-              : BigInt(Math.floor((Date.now() + executor.timeoutMs) / 1000));
-            return [expiry.toString()];
-          }
+          if (part === "{jobExpires}") return [legacyExpiry!.toString()];
           return [fill(part).replaceAll("{pay}", String(pay))];
         });
       },
@@ -1041,18 +1107,17 @@ export class EarnHost {
         executorTimeoutMs: executor.timeoutMs,
       },
       log,
-      checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities }) => {
+      checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
+        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
-        const current = guard();
-        let admission: string[] = [];
-        if (creator && executor.isolatedJobRoom && executor.readiness?.argv[2] === "self-test") {
-          const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
-          const source = this.#ownAddresses().includes(creator) ? "own" : "external";
-          admission = ["admit", source, privateInputs ? "private" : terms?.servicePin ? "service" : "public"];
-        }
-        await checkReady(signal, admission);
-        current();
-        return current;
+        const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
+        const outputs = acceptance && outputAgreementFromSpec({acceptance:[...acceptance]});
+        return checkReady(signal, creator ? {
+          source:this.#ownAddresses().includes(creator) ? "own" : "external", privateInputs:!!privateInputs,
+          servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest}),reviewFiles:reviewFiles ?? 0,requiredFiles:outputs?.requiredFiles ?? [],
+          allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
+          ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
+        } : undefined);
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }

@@ -676,7 +676,7 @@ export class AgencWallet {
       // The wallet's own RoomWork gives a private job's room B's scoped session and the durable resume.
       options: { ...(config.earn ?? { executor: null }),
         roomWork: config.earn?.roomWork ?? (agentId => walletRoomWork({
-          session: task => this.#roomSession(agentId, task),
+          session: task => this.#roomSession(agentId, task), clusterTime:()=>this.#chain.clusterTime(),
           stateDir: path.join(config.dataDir, "earn", "room-work", agentId),
           ...(config.privateSocketDir !== undefined && { exchangeDir: config.privateSocketDir }),
         })) },
@@ -1592,12 +1592,12 @@ export class AgencWallet {
   }
 
   /** Send lamports between two of this wallet's own keys, or out of it. */
-  async #send(fromKey: string, to: Address, lamports: bigint, singleAttempt = false): Promise<string> {
+  async #send(fromKey: string, to: Address, lamports: bigint, singleAttempt = false, assertAuthorized?:()=>void): Promise<string> {
     const signer = await this.#signer(fromKey);
     try {
       const result = await this.#chain
         .clientFor(signer)
-        .send([transferInstruction(signer, to, lamports)], singleAttempt ? { maxRetries: 0 } : undefined);
+        .send([transferInstruction(signer, to, lamports)], singleAttempt || assertAuthorized ? { maxRetries: 0,...(assertAuthorized && {assertAuthorized}) } : undefined);
       return result.signature;
     } catch (error) {
       if (error instanceof WalletError) throw error;
@@ -1670,7 +1670,7 @@ export class AgencWallet {
     agent: AgentRecord,
     lamports: bigint,
     text: string,
-    funding?: { approved?: boolean; exact?: EarnFundingQuote; decision?: SellerDecision },
+    funding?: { approved?: boolean; exact?: EarnFundingQuote; decision?: SellerDecision; admitted?:()=>void },
   ): Promise<void> {
     await this.#lock(MAIN_KEY, async () => {
       await this.#checkMoneyPending(this.mainAddress);
@@ -1738,7 +1738,7 @@ export class AgencWallet {
       };
       let signature: string;
       if (transportSignal()) {
-        signature = await withListingOperation(operation, () => this.#send(MAIN_KEY, agent.address as Address, lamports, !!funding?.decision));
+        signature = await withListingOperation(operation, () => this.#send(MAIN_KEY, agent.address as Address, lamports, !!funding?.decision,funding?.admitted));
       } else {
         const signer = await this.#vault.signer(MAIN_KEY);
         const recipient = agent.address as Address;
@@ -2880,10 +2880,9 @@ export class AgencWallet {
         if (!agent.earn.enabled || !this.#earn.canTakeJobs(agent.id) || this.#earn.ownJobsOnly) continue;
         const offers = agentOffers(agent).filter(offer => offer.status === "live" && offer.listing);
         if (!offers.length) continue;
-        try { await this.#earn.checkListingReady(agent.id, AbortSignal.timeout(30_000)); }
-        catch { continue; }
-        const roomChecked = this.#now();
         for (const offer of offers) {
+          if (!this.#wantsLive(agent,offer)) continue;
+          const roomChecked = this.#now();
           const listing = toAddress(offer.listing!, "service");
           const terms = await readHireableListing(this.#chain, listing).catch(() => null);
           if (!terms || terms.deliverySecs === null) continue;
@@ -2906,9 +2905,19 @@ export class AgencWallet {
     if (this.#chain.network !== "mainnet" && !this.#config.listingRelay) throw new WalletError("NOT_AVAILABLE", "Provider inquiries use the public marketplace.");
     const identity = await currentListingIdentity(this.#chain, toAddress(message.listing, "service"));
     const agent = this.#agentRecord(agentId);
-    if (message.kind === "availability" && (!agent.earn.enabled || !agentOffers(agent).some(offer => offer.listing === identity.listing && offer.status === "live")))
-      throw new WalletError("NOT_ALLOWED", "This agent is not serving that listing.");
-    return publishListingMessage(identity, message, await this.#vault.signer(agent.keyId), this.#now(), this.#config.listingRelay);
+    let admitted: (() => void) | undefined;
+    if (message.kind === "availability") {
+      const offer = agentOffers(agent).find(offer=>offer.listing === identity.listing && offer.status === "live");
+      if (!offer || !this.#wantsLive(agent,offer)) throw new WalletError("NOT_ALLOWED","This agent is not serving that listing.");
+      const checked = await this.#earn.checkListingReady(agentId,AbortSignal.timeout(30_000),this.#listingNeeds(offer));
+      admitted = () => {
+        checked();
+        const current = this.#agentRecord(agentId);
+        if (!agentOffers(current).some(o => o.listing === identity.listing && o.status === "live" && this.#wantsLive(current,o)))
+          throw new WalletError("NOT_AVAILABLE","The listing changed.");
+      };
+    }
+    return publishListingMessage(identity,message,await this.#vault.signer(agent.keyId),this.#now(),this.#config.listingRelay,admitted);
   }
 
   /** The same choice the quote makes: the agent pays when it covers price, deposits and floor, else the main wallet. */
@@ -6069,16 +6078,18 @@ export class AgencWallet {
       for (const payment of pendingBusinessPayments(this.#store.state)) await money.operationOutcome?.(payment.id);
       for (const jobId of Object.keys(this.#store.state.reviewIntents ?? {}))
         await this.#reconcileReview(jobId);
+      const checks: (()=>void)[] = [];
       for (const id of Object.keys(this.#store.state.agents)) {
         await this.#reconcileWorkAllowance(id);
         await this.#reconcileListingSends(id);
         this.#store.update(draft => { draft.agents[id]!.earn.enabled = false; });
         if (restoredSeller(this.#store.state, id, this.#earn.hasUnfinishedJob(id)))
-          await checkBusinessRoom(this.#config.earn, id);
+          checks.push(await checkBusinessRoom(this.#config.earn, id, () => this.#earn.executorFor(id)));
       }
       const current = await this.businessStatus();
       if (current?.pendingSignatures.length) throw new WalletError("NOT_AVAILABLE", "A signed operation is still pending. Check again after confirmation.");
       requireFreshRehearsals(this.#config.dataDir, restoredAt, restoredBusiness(this.#config.dataDir));
+      checks.forEach(check=>check());
       this.#store.update(draft => { draft.businessRecovery!.requiresConsent = false; });
       this.#emit({type: "overview"});
       return this.businessStatus();
@@ -6104,8 +6115,8 @@ export class AgencWallet {
     if (!fundingQuoteId || !this.#earn.chosenRoomFor(agentId)) throw new WalletError("NOT_AVAILABLE", "Review the job room and its exact funding quote.");
     this.#checkBusinessConsent();
     return this.#lock(`seller-confirm:${agentId}`, async () => {
-      await checkBusinessRoom(this.#config.earn, agentId);
-      return this.#setEarn(agentId, true, undefined, fundingQuoteId, true);
+      const current = await checkBusinessRoom(this.#config.earn, agentId, () => this.#earn.executorFor(agentId));
+      return this.#setEarn(agentId, true, undefined, fundingQuoteId, true,current);
     });
   }
 
@@ -6567,6 +6578,8 @@ export class AgencWallet {
   }
 
   async #serviceAdmission(agentId: string, priceLamports: bigint, terms: ReturnType<typeof storedTerms>) {
+    if (!this.#earn.supportsService(agentId, { servicePin: !!terms.servicePin }))
+      throw new WalletError("NOT_AVAILABLE", "The selected room cannot deliver this service.");
     if (terms.servicePin) readServiceRehearsal(this.#earn.stateDir(agentId), terms.servicePin);
     const result = serviceEconomics({ priceLamports, ...terms, marketFeeBps: await this.#marketFeeBps(),
       usdPerSol: await this.#freshRate().catch(() => null) });
@@ -6607,7 +6620,7 @@ export class AgencWallet {
       throw new WalletError("NETWORK", "Market is checking an earlier funding transfer. Wait for its outcome.");
   }
 
-  async #consumeFunding(quoteId: string, confirm?: { agentId: string; action: string; effect: SellerEffect }): Promise<{ agent: AgentRecord; replayed: boolean }> {
+  async #consumeFunding(quoteId: string, confirm?: { agentId: string; action: string; effect: SellerEffect; admitted?:()=>void }): Promise<{ agent: AgentRecord; replayed: boolean }> {
     if (confirm) {
       const agent = this.#agentRecord(confirm.agentId);
       if ("offer" in confirm.effect && confirm.effect.setupId && Object.hasOwn(agent.serviceSetups ?? {}, confirm.effect.setupId)) {
@@ -6682,8 +6695,9 @@ export class AgencWallet {
       if (amount > 0n) {
         await this.#withListingTransport(agent.id, this.#listingAbort.signal, () =>
           this.#mainToAgent(agent, amount, `Approved funding for ${agent.name} to earn.`,
-            { approved: true, ...(decision && { exact: entry.quote, decision }) }));
+            { approved: true,...(confirm?.admitted && {admitted:confirm.admitted}), ...(decision && { exact: entry.quote, decision }) }));
       } else if (decision) {
+        confirm?.admitted?.();
         this.#store.update((draft) => recordSellerDecision(draft.agents[agent.id]!, decision, true));
       }
       this.#store.update((draft) => agentOffers(draft.agents[agent.id]!).forEach(clearOfferFundingWait));
@@ -6841,7 +6855,7 @@ export class AgencWallet {
     return this.#lock(`seller-confirm:${agentId}`, apply);
   }
 
-  async #setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string, manual = false): Promise<AgentView> {
+  async #setEarn(agentId: string, enabled: boolean, minPayCents?: number, fundingQuoteId?: string, manual = false, admitted?:()=>void): Promise<AgentView> {
     if (this.#closed) throw new WalletError("NOT_AVAILABLE", "This wallet is closed.");
     const agent = this.#agentRecord(agentId);
     this.#checkPendingFunding(agentId, enabled ? undefined : {});
@@ -6851,7 +6865,7 @@ export class AgencWallet {
       throw new WalletError("BAD_REQUEST", "The smallest pay must be zero or more.");
     }
     if (enabled) {
-      if (!this.#earn.available) {
+      if (!this.#earn.executorFor(agentId)) {
         throw new WalletError(
           "NOT_AVAILABLE",
           "This computer is not set up to do jobs yet.",
@@ -6859,7 +6873,7 @@ export class AgencWallet {
       }
       if (fundingQuoteId !== undefined) {
         const decision = await this.#consumeFunding(fundingQuoteId, {
-          agentId, action: manual ? "start-manual" : JSON.stringify(["enable", minPayCents ?? null]),
+          ...(admitted && {admitted}), agentId, action: manual ? "start-manual" : JSON.stringify(["enable", minPayCents ?? null]),
           effect: { minPayCents: minPayCents ?? agent.earn.minPayCents },
         });
         if (decision.replayed) return this.#oneAgentView(agentId);
@@ -7458,9 +7472,27 @@ export class AgencWallet {
    * On offer only while someone is here to do the work: wanted, taking jobs
    * switched on, a host that can run jobs at all, and not closing.
    */
+  async #listingChecks(agentId:string, offers:readonly OfferRecord[]) {
+    const checks: (()=>void)[] = [];
+    for (const offer of offers) {
+      const ready = await listingRequest(()=>this.#earn.checkListingReady(agentId,transportSignal(),this.#listingNeeds(offer)));
+      checks.push(()=>{
+        ready();
+        const agent = this.#agentRecord(agentId);
+        const latest = agentOffers(agent).find(item=>item.id === offer.id);
+        if (!latest || latest.specHashHex !== offer.specHashHex || !this.#wantsLive(agent,latest)) throw new Error("The listing changed.");
+      });
+    }
+    return () => { for (const check of checks) check(); };
+  }
+  #listingNeeds(offer: OfferRecord) {
+    const spec = offer.spec as {custom?:{listingMetadata?:{fulfilment?:{privateInputs?:boolean;servicePin?:unknown}}}};
+    const terms = spec.custom?.listingMetadata?.fulfilment;
+    return {privateInputs:terms?.privateInputs === true,servicePin:!!terms?.servicePin || !!storedTerms(offer).servicePin,...(storedTerms(offer).servicePin && {serviceDigest:storedTerms(offer).servicePin!.digest})};
+  }
   #wantsLive(agent: AgentRecord, offer: OfferRecord): boolean {
     return (
-      offer.wanted &&
+      offer.wanted && this.#earn.supportsService(agent.id,this.#listingNeeds(offer)) &&
       BigInt(offer.priceLamports) <= maximumOfferPrice(this.#config.earn ?? { executor: null }) &&
       agent.earn.enabled &&
       !this.#closing &&
@@ -7519,19 +7551,19 @@ export class AgencWallet {
     ] as const) {
       // The reads above took a while: only what is still wanted that way goes.
       if (found.length < 2) continue;
-      if (state === "Active") await listingRequest(() => this.#earn.checkListingReady(agentId, transportSignal()));
       const now = this.#agentRecord(agentId);
       const listings = found.filter((listing) => {
         const offer = agentOffers(now).find((entry) => entry.listing === listing);
         return offer !== undefined && this.#wantsLive(now, offer) === (state === "Active");
       });
       if (listings.length < 2) continue;
+      const admit = state === "Active" ? await this.#listingChecks(agentId,agentOffers(now).filter(o=>listings.includes(o.listing as Address))) : undefined;
       await sendListingStates(
         this.#chain,
         await this.#signer(agent.keyId),
         providerAgent,
         listings,
-        state,
+        state, admit,
       );
       if (state === "Active") this.#earn.listingsReconciled(agentId);
       this.#dropBalances();
@@ -7598,12 +7630,13 @@ export class AgencWallet {
       const latest = this.#agentRecord(agentId);
       const wanted = agentOffers(latest).find((item) => item.id === offerId);
       if (!wanted || !this.#wantsLive(latest, wanted)) return settle("paused");
+      const admit = await this.#listingChecks(agentId,[wanted]);
       await withListingOperation({ kind: "create", listing, offerId, listingId: offer.listingIdHex, name: offer.name, lamports: deposit.toString() },
         async () => sendCreateListing(this.#chain, await this.#signer(agent.keyId), {
           providerAgent, listingId, name: offer.name, category: offer.category,
           specHash: values.hexToBytes(offer.specHashHex), specUri,
           priceLamports: BigInt(offer.priceLamports), deliverySecs: offer.pendingDeliverySecs ?? offer.deliverySecs, terms: storedTerms(offer),
-        }));
+        }, admit));
       this.#dropBalances();
       this.#emit({ type: "overview" });
       this.#emit({ type: "activity" });
@@ -7684,23 +7717,25 @@ export class AgencWallet {
         wordsChanged || movedDescription
           ? { hash: values.hexToBytes(offer.specHashHex), uri: specUri }
           : null;
+      // Paused listings can tighten their limits offline. Activation has its own check.
+      const admit = state === LISTING_STATE_PAUSED ? undefined : await this.#listingChecks(agentId, [offer]);
       await sendUpdateListing(
         this.#chain,
         await this.#signer(agent.keyId),
-        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec, terms },
+        { listing, providerAgent, priceLamports: BigInt(offer.priceLamports), spec, terms }, admit,
       );
       this.#dropBalances();
       return true;
     }
     if (state === LISTING_STATE_PAUSED) {
-      await listingRequest(() => this.#earn.checkListingReady(agentId, transportSignal()));
+      const admit = await this.#listingChecks(agentId,[offer]);
       const current = this.#agentRecord(agentId);
       const latest = agentOffers(current).find((item) => item.id === offerId);
       if (!latest || !this.#wantsLive(current, latest)) return settle("paused");
       await sendListingState(
         this.#chain,
         await this.#signer(agent.keyId),
-        { listing, providerAgent, state: "Active" },
+        { listing, providerAgent, state: "Active" }, admit,
       );
       this.#earn.listingsReconciled(agentId);
       this.#dropBalances();

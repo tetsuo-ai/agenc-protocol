@@ -31,12 +31,86 @@ afterEach(() => {
 const local: EarnExecutor = { argv: ["/local/room", "job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 const peer: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 
-function host(options: ConstructorParameters<typeof EarnHost>[0]["options"]) {
+function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000) {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
   folders.push(dataDir);
-  return new EarnHost({ dataDir, chain: { clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
+  return new EarnHost({ dataDir, chain: { clusterTime: async () => chainNow, clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
     services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
 }
+
+it("applies verified requirements to callbacks, listing terms and the first paid turn", async () => {
+  let generation = "one", agent = "claude-code" as "core" | "claude-code";
+  const check = vi.fn(async () => {});
+  const room = {...local, mode:"sandboxed" as const, isolatedJobRoom:true};
+  const earn = host({executor:room, roomWork:()=>({} as never), checkExecutionReady:check,
+    defaultExecutorGeneration:()=>generation, liveRoomState:()=>({agent,coreCommand:null,generation,ready:true})});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const facts = {task:"task" as never,creator:"buyer" as never,firstRoundCents:1,promptBytes:40};
+    await ctx.checkExecutionReady!(facts);
+    expect(check).toHaveBeenCalledWith(expect.objectContaining({admission:expect.objectContaining({source:"external",promptBytes:40})}));
+    for (const extra of [{privateInputs:true}, {reviewFiles:1}, {promptBytes:6144},
+      {acceptance:[outputAgreementCriterion({requiredFiles:["answer.txt"],allowTextOnly:false})]}])
+      await expect(ctx.checkExecutionReady!({...facts,...extra})).rejects.toThrow();
+    expect(earn.supportsPrivateInputs("seller")).toBe(false);
+    expect(earn.supportsService("seller",{servicePin:true})).toBe(false);
+    generation = "two"; agent = "core";
+    expect(earn.supportsPrivateInputs("seller")).toBe(true);
+    expect(earn.supportsService("seller",{servicePin:true})).toBe(true);
+  } finally { await earn.stopAll(); }
+});
+
+it.each([
+  ["missing delivery store",{acceptance:[outputAgreementCriterion({requiredFiles:["answer.txt"],allowTextOnly:false})]}],
+  ["first turn, 6 KiB",{promptBytes:6144}],["first turn, minimum JSON envelope",{promptBytes:4920}],
+  ["private hire sent to a callback",{privateInputs:true}],["review attachments",{reviewFiles:1}],
+] as const)("refuses %s before the host callback commits a claim",async (_name,extra)=>{
+  const room={...local,mode:"sandboxed" as const,isolatedJobRoom:true};
+  const earn=host({executor:room,roomWork:()=>({} as never),checkExecutionReady:async()=>{},
+    liveRoomState:()=>({agent:"claude-code",ready:true,coreCommand:null,generation:"one"})});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    await expect(ctx.checkExecutionReady!({task:"task" as never,creator:"external" as never,promptBytes:100,
+      firstRoundCents:1,...extra})).rejects.toThrow();
+  } finally { await earn.stopAll(); }
+});
+
+it("rechecks the specific listing's advertised terms through a Core to Claude switch", async ()=>{
+  let agent:"core"|"claude-code"="core";
+  const room={...local,mode:"sandboxed" as const,isolatedJobRoom:true};
+  const earn=host({executor:room,roomWork:()=>({} as never),checkExecutionReady:async()=>{},
+    liveRoomState:()=>({agent,generation:agent,ready:true,coreCommand:process.execPath}),defaultExecutorGeneration:()=>agent});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    ctx.log({event:"watch.started"});
+    const ready=await earn.checkListingReady("seller",undefined,{servicePin:true});
+    ready();
+    agent="claude-code";
+    expect(()=>ready()).toThrow();
+    await expect(earn.checkListingReady("seller",undefined,{servicePin:true})).rejects.toThrow();
+    expect(earn.supportsPrivateInputs("seller")).toBe(false);
+  } finally { await earn.stopAll(); }
+});
+
+it("hands the executor only the remaining chain time on the host monotonic clock", async () => {
+  const earn = host({executor:{...local,argv:[...local.argv,"{jobDeadline}"]}},1000);
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n,solUsd:async()=>100});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as { executorForTask(...args:unknown[]):Promise<string[]> };
+    const start = Number(process.hrtime.bigint()/1000000n);
+    const result = await ctx.executorForTask({creator:"buyer",deadline:0n,rewardAmount:100000000n},"task",undefined,null,null,undefined,undefined,undefined,1030n);
+    const until = Number(result.at(-1)?.replace("mono:",""));
+    expect(until-start).toBeGreaterThanOrEqual(29000);
+    expect(until-start).toBeLessThanOrEqual(30100);
+  } finally { await earn.stopAll(); }
+});
 
 it("keeps the shared executor for every seller the host did not pair", () => {
   const earn = host({ executor: local, agentExecutors: { paired: peer } });
