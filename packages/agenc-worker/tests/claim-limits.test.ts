@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -32,4 +32,19 @@ it("reads paid deadlines from the chain clock and stops when that clock is missi
   new DataView(account.buffer).setBigInt64(32, 1000n, true);
   await expect(claimChainTime(async () => account)).resolves.toBe(1000);
   await expect(claimChainTime(async () => null)).rejects.toThrow("clock");
+});
+
+it("reads prior counts after this invocation reserves a round and before it starts", () => {
+  const dir = mkdtempSync(join(tmpdir(),"admitted-counts-"));
+  try {
+    writeFileSync(join(dir,"0"),"78");
+    writeFileSync(join(dir,"0.counts"),JSON.stringify({tokens:600000,calls:2}));
+    writeFileSync(join(dir,"1"),"78");
+    expect(() => ledger.claimModelCounts(dir)).toThrow("unknown");
+    expect(ledger.claimModelCounts(dir,1)).toEqual({tokens:600000,calls:2});
+    writeFileSync(join(dir,"1.counts"),JSON.stringify({tokens:12,calls:1}));
+    expect(ledger.claimModelCounts(dir,1)).toEqual({tokens:600012,calls:3});
+    writeFileSync(join(dir,"0.counts"),"invalid");
+    expect(() => ledger.claimModelCounts(dir,1)).toThrow("unknown");
+  } finally {rmSync(dir,{recursive:true,force:true});}
 });

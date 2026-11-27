@@ -2036,6 +2036,7 @@ async function executeAndSubmit(
     };
     const checkTime = () => { expireIfDue(); running.throwIfAborted(); };
     watch = setInterval(expireIfDue, 100);
+    let justReserved: number | undefined;
     let executionGuard: () => void = checkTime;
     let checkCompleted: () => void = checkTime;
     if (currentExecutor && ctx.modelSpendDir) {
@@ -2045,7 +2046,7 @@ async function executeAndSubmit(
         checkPin();
         const marker = evidenceState.openClaim;
         const deadlineMs = cutoff;
-        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,claimCounts:()=>claimModelCounts(ledger),
+        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,claimCounts:()=>claimModelCounts(ledger,justReserved),
           requiredCapabilities:decodedTask.requiredCapabilities,acceptance:brief.acceptance,listingMetadata:serviceMetadata ?? null,
           ...(binding.listing && {listing:binding.listing}),reviewFiles:reviewInputs?.length ?? 0,
           revision:!!revisionHash,reviewAttachments,extraRoomFeatures:requiresExtraRoom(decodedTask,payload),
@@ -2118,7 +2119,10 @@ async function executeAndSubmit(
           if (committed) return;
           executionGuard?.();
           ctx.signal?.throwIfAborted();
-          if (ctx.modelSpendDir) spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents);
+          if (ctx.modelSpendDir) {
+            spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents);
+            justReserved = round;
+          }
           marker.modelBudget = { ...marker.modelBudget!, remainingCents:0 };
           saveState(ctx.stateDir,state);
           committed = true;

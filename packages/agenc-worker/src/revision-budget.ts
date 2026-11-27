@@ -68,12 +68,15 @@ export function requireClaimExecutor(dir: string, executor: string, legacyPrivat
 }
 
 // Each numbered round has its own measured counters in the durable claim directory.
-export function claimModelCounts(dir: string): { tokens: number; calls: number } {
+export function claimModelCounts(dir: string, justReserved?: number): { tokens: number; calls: number } {
   let tokens = 0, calls = 0;
   if (existsSync(join(dir, ".agent-active"))) throw new Error("A round is still active.");
   try {
     for (const name of readdirSync(dir).filter(name => /^(?:-1|[0-2])$/.test(name))) {
-      const used = JSON.parse(readFileSync(join(dir, name + ".counts"), "utf8"));
+      const file = join(dir, name + ".counts");
+      // Only the caller that just created this reservation knows its room has not started.
+      if (name === String(justReserved) && !existsSync(file)) continue;
+      const used = JSON.parse(readFileSync(file, "utf8"));
       if (![used.tokens, used.calls].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error();
       tokens += used.tokens;
       calls += used.calls;
