@@ -15,11 +15,14 @@ import {
   assertIsTransactionMessageWithinSizeLimit,
   assertIsTransactionWithinSizeLimit,
   address,
+  compileTransaction,
   compressTransactionMessageUsingAddressLookupTables,
   createSolanaRpc,
   createSolanaRpcSubscriptions,
   createTransactionMessage,
   getSignatureFromTransaction,
+  getSignersFromTransactionMessage,
+  signTransactionWithSigners,
   pipe,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
@@ -31,6 +34,7 @@ import {
   type TransactionSigner,
 } from "@solana/kit";
 import * as facade from "../facade/index.js";
+import { admittedSigners } from "./admitted-signers.js";
 import {
   getSetComputeUnitLimitInstruction,
   getSetComputeUnitPriceInstruction,
@@ -866,10 +870,13 @@ export function createMarketplaceClient(
         assertIsTransactionMessageWithinSizeLimit(message);
         // RE-SIGNED on every attempt: the message embeds the freshly fetched
         // blockhash, so a retry is a new signature over a new lifetime.
-        options?.assertAuthorized?.("sign");
-        signedTransaction = (await signTransactionMessageWithSigners(
-          message,
-        )) as SignedTransaction;
+        const admit = options?.assertAuthorized;
+        signedTransaction = (await (admit
+          ? signTransactionWithSigners(
+              admittedSigners(getSignersFromTransactionMessage(message), () => admit("sign")),
+              compileTransaction(message),
+            )
+          : signTransactionMessageWithSigners(message))) as SignedTransaction;
         // Defense in depth at the transport seam. Signing must not be able to
         // turn a size-checked message into an oversized wire transaction.
         assertIsTransactionWithinSizeLimit(signedTransaction);
