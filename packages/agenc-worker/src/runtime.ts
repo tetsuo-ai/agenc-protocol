@@ -273,7 +273,7 @@ export type WorkerContext = {
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
   /** `acceptance` is the verified spec's criteria, including the wallet's agreed-outputs line. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint, claimRound?: string, beforeLaunch?: () => void) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint, claimRound?: string, beforeLaunch?: () => void, earlierDeadlineMs?:number) => Promise<string[]>;
   /** The wallet can validate the live claim clock before it commits the round. */
   reserveAtLaunch?: boolean;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */

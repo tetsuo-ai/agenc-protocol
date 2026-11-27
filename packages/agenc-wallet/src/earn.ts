@@ -1062,7 +1062,7 @@ export class EarnHost {
           ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
         }).modelBudgetCents;
       },
-      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires, claimRound, beforeLaunch) => {
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires, claimRound, beforeLaunch, earlierDeadlineMs) => {
         // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
         const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
         const ownRequest = this.#ownAddresses().includes(task.creator);
@@ -1091,8 +1091,8 @@ export class EarnHost {
         const pay = reservedCents ?? jobPayCents(task.rewardAmount, await agent.solUsd?.() ?? null);
         // D's paired peer gets the verified request, usage reservation and the buyer-approved processing (or null).
         const privateProcessing = paired ? await this.#privateProcessing(agent.agentId, address).catch(() => null) : undefined;
-        const deadline = executor.argv.includes("{jobDeadline}") ? await chainDeadline(() => this.#chain.clusterTime(),
-          executor.timeoutMs, task.deadline, claimExpires ?? 0n) : undefined;
+        const deadline = executor.argv.includes("{jobDeadline}") ? Math.min(earlierDeadlineMs ?? Infinity,
+          await chainDeadline(() => this.#chain.clusterTime(),executor.timeoutMs,task.deadline,claimExpires ?? 0n)) : earlierDeadlineMs;
         let legacyExpiry: bigint | undefined;
         if (executor.argv.includes("{jobExpires}")) {
           const ends = [task.deadline, claimExpires ?? 0n].filter(time => time > 0n);
