@@ -153,3 +153,27 @@ it("invalidates a ready room when machine settings arrive",async()=>{
     expect(select().ready).toBe(false);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+it("keeps the seller selection stable when the same plan rotates its token", () => {
+  const dir = mkdtempSync(join(tmpdir(),"codex-rotation-"));
+  const setting = join(dir,"choice"), image = join(dir,"image");
+  try {
+    writeFileSync(image,"test image");
+    const read = liveRoomSelection({setting,keyStore:join(dir,"keys"),coreCandidates:[],
+      agentFiles:[image],baseFiles:[image],codexFiles:[image],codexPlanMinimumCents:78});
+    const write = (version:string, tag:string) => writeFileSync(setting,JSON.stringify({
+      agent:"codex-plan",version,tag,sealed:"fixture-"+tag}));
+    write("a".repeat(64),"b".repeat(64));
+    const selected = read();
+    write("a".repeat(64),"c".repeat(64));
+    expect(read()).toEqual(selected);
+    const marker = join(dir,"0.refused");
+    writeFileSync(join(dir,".paid-agent-claim."+"c".repeat(64)+"."+"e".repeat(64)),marker);
+    writeFileSync(marker,"b".repeat(64));
+    expect(read()).toEqual(selected);
+    writeFileSync(marker,"c".repeat(64));
+    expect(read().generation).not.toBe(selected.generation);
+    write("d".repeat(64),"c".repeat(64));
+    expect(read().generation).not.toBe(selected.generation);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});

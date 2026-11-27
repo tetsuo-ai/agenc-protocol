@@ -90,10 +90,17 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     const slot = file(room.setting);
     let agent: RoomSelection["agent"] = slot.id === "missing" ? "core" : "claude-code";
     let validSlot = slot.regular;
+    let planVersion: string | undefined;
+    let planTag: string | undefined;
     if (slot.regular && room.codexFiles !== undefined) {
       try {
         // Desktop seals the login. The wallet needs only the public choice in the envelope.
-        const choice: unknown = JSON.parse(readFileSync(room.setting, "utf8")).agent;
+        const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
+        const choice: unknown = envelope.agent;
+        if (choice === "codex-plan" && /^[a-f0-9]{64}$/.test(envelope.version)) {
+          planVersion = envelope.version;
+          planTag = envelope.tag;
+        }
         if (choice === "codex-api" || choice === "codex-plan" || choice === "claude-code") agent = choice;
         else validSlot = false;
       } catch { validSlot = false; }
@@ -148,10 +155,16 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
         .filter((n) => {
-          if (/^\.paid-agent-(denied|refused)\./.test(n)) return true;
+          if (/^\.paid-agent-(denied|refused)\./.test(n))
+            return !planVersion || n === ".paid-agent-refused." + planVersion || n === ".paid-agent-denied." + planTag;
           if (!/^\.paid-agent-claim\.[a-f0-9]{64}\.[a-f0-9]{64}$/.test(n)) return false;
+          if (planVersion && !n.startsWith(".paid-agent-claim." + planTag + ".")) return false;
           const marker = readFileSync(join(dirname(room.setting),n),"utf8");
-          return !isAbsolute(marker) || file(marker).regular;
+          if (!isAbsolute(marker)) return true;
+          if (!file(marker).regular) return false;
+          if (!planVersion) return true;
+          const denied = readFileSync(marker,"utf8");
+          return !/^[a-f0-9]{64}$/.test(denied) || denied === planTag;
         })
         .sort();
     const generation = JSON.stringify([
@@ -159,7 +172,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       keysEpoch,
       managed,
       refusals,
-      slot.id,
+      planVersion ?? slot.id,
       file(room.keyStore).id,
       coreCommand,
       commands,

@@ -3351,6 +3351,20 @@ describe("durable claim admission",()=>{
     await processCandidate(result.ctx,agent,candidate);
     expect(signatures).toBe(1);
   });
+  it("skips network prices and job reads while a fixed service cap cannot fund the room",async()=>{
+    let cap = 20;
+    const price = vi.fn(async()=>cap);
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+      async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError",minimumCents:78});},
+      ctx=>{ctx.modelBudgetForTask=price; ctx.modelCapForTask=()=>cap;});
+    const initial = price.mock.calls.length;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(price).toHaveBeenCalledTimes(initial);
+    expect(result.fetchUri).toHaveBeenCalledTimes(1);
+    cap = 200;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(result.fetchUri).toHaveBeenCalledTimes(2);
+  });
   it("caches a fixed first-turn refusal until the allowance changes",async()=>{
     let budget=1;
     const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},

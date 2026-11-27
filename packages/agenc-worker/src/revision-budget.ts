@@ -15,6 +15,11 @@ export function claimBudget(totalCents: number, reserve: boolean): ModelBudget {
     : { totalCents, remainingCents: totalCents };
 }
 
+export function firstClaimRoundCents(total: number, reserveRevisions: boolean, reserveCorrection: boolean): number {
+  const first = claimBudget(total, reserveRevisions).remainingCents;
+  return reserveCorrection && first >= 2 ? first - Math.max(1, Math.floor(first / 4)) : first;
+}
+
 /** Only a newer confirmed submission count releases the next slice. Retries,
  * restarts and budgets created before this feature cannot acquire more money. */
 export function budgetForRevision(budget: ModelBudget | undefined, round: number): ModelBudget | undefined {

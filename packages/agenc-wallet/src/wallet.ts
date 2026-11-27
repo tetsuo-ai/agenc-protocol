@@ -2909,11 +2909,11 @@ export class AgencWallet {
     if (message.kind === "availability") {
       const offer = agentOffers(agent).find(offer=>offer.listing === identity.listing && offer.status === "live");
       if (!offer || !this.#wantsLive(agent,offer)) throw new WalletError("NOT_ALLOWED","This agent is not serving that listing.");
-      const checked = await this.#earn.checkListingReady(agentId,AbortSignal.timeout(30_000),this.#listingNeeds(offer));
+      const checked = await this.#offerReady(agentId,offer,AbortSignal.timeout(30_000));
       admitted = () => {
         checked();
         const current = this.#agentRecord(agentId);
-        if (!agentOffers(current).some(o => o.listing === identity.listing && o.status === "live" && this.#wantsLive(current,o)))
+        if (!agentOffers(current).some(o => o.listing === identity.listing && o.status === "live" && o.specHashHex === offer.specHashHex && o.priceLamports === offer.priceLamports && sameOfferTerms(o,offer) && this.#wantsLive(current,o)))
           throw new WalletError("NOT_AVAILABLE","The listing changed.");
       };
     }
@@ -7481,15 +7481,22 @@ export class AgencWallet {
   async #listingChecks(agentId:string, offers:readonly OfferRecord[]) {
     const checks: (()=>void)[] = [];
     for (const offer of offers) {
-      const ready = await listingRequest(()=>this.#earn.checkListingReady(agentId,transportSignal(),this.#listingNeeds(offer)));
+      const ready = await listingRequest(()=>this.#offerReady(agentId,offer,transportSignal()));
       checks.push(()=>{
         ready();
         const agent = this.#agentRecord(agentId);
         const latest = agentOffers(agent).find(item=>item.id === offer.id);
-        if (!latest || latest.specHashHex !== offer.specHashHex || !this.#wantsLive(agent,latest)) throw new Error("The listing changed.");
+        if (!latest || latest.specHashHex !== offer.specHashHex || latest.priceLamports !== offer.priceLamports ||
+            !sameOfferTerms(latest,offer) || !this.#wantsLive(agent,latest)) throw new Error("The listing changed.");
       });
     }
     return () => { for (const check of checks) check(); };
+  }
+  async #offerReady(agentId: string, offer: OfferRecord, signal?: AbortSignal) {
+    const {modelBudgetCents} = await this.#serviceAdmission(agentId, BigInt(offer.priceLamports), storedTerms(offer));
+    const outputs = publishedOutputs(offer.spec);
+    return this.#earn.checkListingReady(agentId, signal, {...this.#listingNeeds(offer), modelBudgetCents,
+      ...(outputs && {requiredFiles:outputs.requiredFiles, allowTextOnly:outputs.allowTextOnly})});
   }
   #listingNeeds(offer: OfferRecord) {
     const spec = offer.spec as {custom?:{listingMetadata?:{fulfilment?:{privateInputs?:boolean;servicePin?:unknown}}}};

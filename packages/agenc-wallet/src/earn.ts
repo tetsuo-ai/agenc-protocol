@@ -50,7 +50,7 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
-import { chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
+import { chainDeadline, monotonicMs, firstClaimRoundCents, ExecutorBudgetError, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
 import { commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
@@ -752,12 +752,14 @@ export class EarnHost {
     if (entry?.discovering) entry.awaitingListings = false;
   }
 
-  async checkListingReady(agentId: string, signal?: AbortSignal, needs: {privateInputs?: boolean; servicePin?: boolean; serviceDigest?: string} = {}) {
+  async checkListingReady(agentId: string, signal?: AbortSignal, needs: {privateInputs?: boolean; servicePin?: boolean; serviceDigest?: string; modelBudgetCents?: number; requiredFiles?: readonly string[]; allowTextOnly?: boolean} = {}) {
     const entry = this.#running.get(agentId);
     if (!entry?.checkReady || !this.canTakeJobs(agentId)) throw new Error("Worker discovery is unavailable");
     return entry.checkReady(signal ? AbortSignal.any([signal,entry.controller.signal]) : entry.controller.signal, {
       source:"external",privateInputs:!!needs.privateInputs,servicePin:!!needs.servicePin,...(needs.serviceDigest && {serviceDigest:needs.serviceDigest}),reviewFiles:0,
-      requiredFiles:[],allowTextOnly:true,fileTransport:!!this.#services.fileLinkPrefix,promptBytes:0,
+      requiredFiles:needs.requiredFiles ?? [],allowTextOnly:needs.allowTextOnly ?? true,fileTransport:!!this.#services.fileLinkPrefix,promptBytes:0,
+      ...(needs.modelBudgetCents !== undefined && {firstRoundCents:firstClaimRoundCents(
+        needs.modelBudgetCents, this.executorFor(agentId)?.reserveRevisionBudget === true, false)}),
     });
   }
 
@@ -952,7 +954,8 @@ export class EarnHost {
         }
         return "peer:" + generation();
       }
-      if (this.#usesClaude(agent.agentId)) return "claude-code";
+      const connected = this.#connectedRoom(agent.agentId);
+      if (connected) return connected.agent;
       if (executor.argv[2] === "job") return "core";
       return "command:" + createHash("sha256").update(JSON.stringify(executor.argv)).digest("hex");
     };
@@ -981,18 +984,20 @@ export class EarnHost {
         const room = this.#connectedRoom(agent.agentId);
         if (!this.supportsService(agent.agentId,admission) || ((room || executor.argv[2] === "peer-job") && admission.reviewFiles))
           throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
-        const floor = Math.max(reportedMinimum, room?.minimumModelCents ?? 0);
+        const turns = admission.requiredFiles.length || !admission.allowTextOnly ? 2 : 1;
+        const floor = Math.max(reportedMinimum, room?.minimumModelCents ?? 0) * turns;
         if ((admission.firstRoundCents !== undefined || admission.promptBytes > 0) &&
             (admission.firstRoundCents ?? 0) < floor)
-          throw new Error("The first round's allowance is below the selected room's minimum.");
+          throw new ExecutorBudgetError("The first round's allowance is below the selected room's minimum.", floor);
         if (room?.agent === "claude-code" && admission.firstRoundCents !== undefined &&
           (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 > admission.firstRoundCents * 200_000)
-          throw Object.assign(new Error("The first model turn exceeds this job's allowance."), {name:"ExecutorBudgetError"});
+          throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
         if (room?.agent === "codex-api" && admission.firstRoundCents !== undefined) {
           const wireBytes = admission.promptBytes + CODEX_FIRST_REQUEST_OVERHEAD;
           const inputTokens = Math.min(272_000, Math.ceil(wireBytes * 1.1) + 64);
-          if (inputTokens * 30 + 16 * 180 > admission.firstRoundCents * 400_000)
-            throw new Error("The first model turn exceeds this job's allowance.");
+          const minimum = Math.ceil((inputTokens * 30 + 16 * 180) / 400_000);
+          if (minimum > admission.firstRoundCents)
+            throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.", minimum);
         }
       };
       check();
@@ -1002,7 +1007,8 @@ export class EarnHost {
       } else if (executor.readiness !== undefined) {
         const report = await runExecutor({
           argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
-            ["admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
+            [...(admission.deadlineMs === undefined ? [] : ["boot:" + admission.deadlineMs]),
+              "admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
             executor.readiness.argv[2] === "peer-ready" && admission?.serviceDigest ? [admission.serviceDigest] : [])],
           timeoutMs: executor.readiness.timeoutMs ?? 30_000,
           envAllowlist: executor.envAllowlist,
@@ -1078,6 +1084,8 @@ export class EarnHost {
       modelSpendDir: path.resolve(this.#dataDir, "..", "model-spend"),
       reserveAtLaunch: true,
       reserveRevisionBudget: executor.reserveRevisionBudget === true,
+      modelCapForTask: (task, metadata) =>
+        (metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
       modelBudgetForTask: async (task, _address, metadata) => {
         const rate = await agent.solUsd?.() ?? null;
         const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);

@@ -1,3 +1,4 @@
+import { ExecutorBudgetError } from "./claim-admission.js";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { chainDeadline, monotonicMs, claimSignatureJournal, ExecutorCapabilityError } from "./claim-admission.js";
@@ -53,7 +54,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { claimBudget, budgetForRevision, enrollClaimBudget, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { firstClaimRoundCents, claimBudget, budgetForRevision, enrollClaimBudget, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -286,6 +287,8 @@ export type WorkerContext = {
   /** Kept outside the wallet backup and restore set. */
   modelSpendDir?: string;
   modelBudgetForTask?: (task: Task, address: Address, listingMetadata?: Uint8Array | null) => Promise<number>;
+  /** The seller's fixed cap from the verified terms. Reading it needs no price quote. */
+  modelCapForTask?: (task: Task, listingMetadata?: Uint8Array | null) => number | undefined;
   /** Wallet-local authority over canonical listing addresses. Rechecked before the claim journal. */
   admitsListing?: (listing: Address) => boolean;
   /**
@@ -2359,13 +2362,14 @@ export async function processCandidate(
   // submission.
   let assertAdmission: () => void;
   let budget: number | undefined;
+  const firstRound = (cents: number) => firstClaimRoundCents(cents,
+    ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive,
+    !!(chosen && ctx.reviewRoom && ctx.modelSpendDir));
   try {
     budget = await ctx.modelBudgetForTask?.(decodedTask, task, listingMetadata);
     if (budget !== undefined && (!Number.isSafeInteger(budget) || budget <= 0))
-      throw Object.assign(new Error("This job has no valid model budget."),{name:"ExecutorBudgetError"});
-    let firstRoundCents = budget === undefined ? undefined : claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive).remainingCents;
-    if (chosen && ctx.reviewRoom && ctx.modelSpendDir && firstRoundCents !== undefined && firstRoundCents >= 2)
-      firstRoundCents -= Math.max(1, Math.floor(firstRoundCents / 4));
+      throw new ExecutorBudgetError("This job has no valid model budget.");
+    const firstRoundCents = budget === undefined ? undefined : firstRound(budget);
     let deadlineMs: number | undefined;
     if (ctx.clusterTime || ctx.config.executor.includes("{jobDeadline}")) {
       if (!ctx.clusterTime) throw new Error("The chain clock is unavailable.");
@@ -2405,7 +2409,12 @@ export async function processCandidate(
   } catch (error) {
     if (error instanceof Error && error.name === "ExecutorBudgetError" && ctx.modelBudgetForTask) {
       if (budgetRefusals.size >= 100) budgetRefusals.delete(budgetRefusals.keys().next().value!);
-      budgetRefusals.set(task,{generation:generation + mode, unchanged:async () => await ctx.modelBudgetForTask!(decodedTask,task,listingMetadata) === budget});
+      const floor = (error as ExecutorBudgetError).minimumCents;
+      budgetRefusals.set(task, {generation:generation + mode, unchanged:async () => {
+        const cap = ctx.modelCapForTask?.(decodedTask,listingMetadata);
+        if (cap !== undefined && floor !== undefined && firstRound(cap) < floor) return true;
+        return await ctx.modelBudgetForTask!(decodedTask,task,listingMetadata) === budget;
+      }});
     } else if (error instanceof Error && error.name === "ExecutorCapabilityError") refused.set(task,generation);
     const reason = formatDiagnosticError(error);
     ctx.log({ event: "task.execution-not-ready", task, reason });

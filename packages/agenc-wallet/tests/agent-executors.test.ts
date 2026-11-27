@@ -32,11 +32,11 @@ afterEach(() => {
 const local: EarnExecutor = { argv: ["/local/room", "job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 const peer: EarnExecutor = { argv: ["/node", "/job-room.mjs", "peer-job", "room:{agent}", "{prompt}"], mode: "safe", envAllowlist: [], timeoutMs: 60_000 };
 
-function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000) {
+function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], chainNow = 1000, files = false) {
   const dataDir = mkdtempSync(path.join(tmpdir(), "agent-executors-"));
   folders.push(dataDir);
   return new EarnHost({ dataDir, chain: { clusterTime: async () => chainNow, clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
-    services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
+    services: { resultUploader: () => files ? {url:"http://127.0.0.1",fetch:vi.fn()} : null, fileLinkPrefix: files ? "agenc://files/" : null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
 }
 
 it("passes the owner's 0.01 SOL ceiling and buyer allowlist into a named-only worker", async () => {
@@ -413,4 +413,45 @@ it("reads a restored seller's measured cost from the original claim",async()=>{
   indexClaimUsage(state,task,path.join(dir,"0"));
   fs.mkdirSync(state,{recursive:true}); fs.rmSync(state,{recursive:true});
   expect(serviceUsage(state,task)).toEqual({budgetCents:10,reservedCents:8,unknownReservedCents:0,costUsd:0.071,runs:1});
+});
+
+
+it("pins the actual Codex executor and prices mandatory tool and final turns before signing", async () => {
+  const check = vi.fn(async()=>{});
+  let agent: "codex-plan" | "codex-api" = "codex-plan";
+  const earn = host({executor:{...local, argv:["/node","/room","job","{prompt}"], mode:"sandboxed",isolatedJobRoom:true},
+    liveRoomState:()=>({agent,...(agent==="codex-plan" && {minimumModelCents:78}),coreCommand:null,ready:true,generation:agent}),
+    checkExecutionReady:check},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fake"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={creator:"buyer" as never,task:"task" as never,firstRoundCents:78,promptBytes:20};
+    const acceptance=[outputAgreementCriterion({allowTextOnly:false,requiredFiles:["answer.txt"]})];
+    await expect(ctx.checkExecutionReady!({...job,acceptance})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    await expect(ctx.checkExecutionReady!({...job,acceptance,firstRoundCents:155})).rejects.toThrow(/allowance/);
+    expect(check).not.toHaveBeenCalled();
+    await expect(ctx.checkExecutionReady!({...job,acceptance,firstRoundCents:156})).resolves.toBeTypeOf("function");
+    await expect(ctx.checkExecutionReady!(job)).resolves.toBeTypeOf("function");
+    expect(ctx.executorIdentity!()).toBe("codex-plan");
+    agent="codex-api";
+    expect(ctx.executorIdentity!()).toBe("codex-api");
+    await expect(ctx.checkExecutionReady!({...job,firstRoundCents:1,promptBytes:16_384})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+  } finally {await earn.stopAll();}
+});
+
+it("uses the offer's first-round money at activation and availability", async () => {
+  const check = vi.fn(async()=>{});
+  const earn=host({executor:{...local, mode:"sandboxed", isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"codex-plan",minimumModelCents:78,coreCommand:null,ready:true,generation:"plan"}),checkExecutionReady:check});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    (seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext).log({event:"watch.started"});
+    for(const modelBudgetCents of [20,78]) {
+      await expect(earn.checkListingReady("seller",undefined,{modelBudgetCents})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    }
+    await expect(earn.checkListingReady("seller",undefined,{modelBudgetCents:200})).resolves.toBeTypeOf("function");
+    expect(check).toHaveBeenCalledWith(expect.objectContaining({admission:expect.objectContaining({firstRoundCents:120})}));
+  } finally {await earn.stopAll();}
 });

@@ -32,6 +32,11 @@ export function deadlineFromChain(start:number,chainNow:number,timeoutMs:number,
   return end;
 }
 
+export class ExecutorBudgetError extends Error {
+  override name = "ExecutorBudgetError";
+  constructor(message: string, readonly minimumCents?: number) { super(message); }
+}
+
 export class ExecutorCapabilityError extends Error {
   override name = "ExecutorCapabilityError";
 }
