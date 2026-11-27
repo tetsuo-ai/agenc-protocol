@@ -959,10 +959,12 @@ export class EarnHost {
         if (!this.supportsService(agent.agentId,admission) || ((this.#connectedRoom(agent.agentId) || executor.argv[2] === "peer-job") && admission.reviewFiles))
           throw new ExecutorCapabilityError("This job needs tools the selected room cannot use.");
         const selected = this.#connectedRoom(agent.agentId);
+        if (selected?.agent === "pi" && !Number.isSafeInteger(admission.firstRoundCents))
+          throw new ExecutorCapabilityError("This job needs a known first model allowance.");
         if (selected && admission.firstRoundCents !== undefined) {
-          const acp = selected.firstCall;
-          const affordable = selected.agent === "acp"
-            ? !!acp && acp.baseTicks + acp.inputTicksPerByte * admission.promptBytes <= admission.firstRoundCents * 100_000_000
+          const price = selected.firstCall;
+          const affordable = selected.agent === "acp" || selected.agent === "pi"
+            ? !!price && price.baseTicks + price.inputTicksPerByte * admission.promptBytes <= admission.firstRoundCents * 100_000_000
             : (admission.promptBytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= admission.firstRoundCents * 200_000;
           if (!affordable) throw new ExecutorCapabilityError("The first model turn exceeds this job's allowance.");
         }

@@ -330,16 +330,17 @@ it("refreshes room availability and readiness while the same wallet is open", as
   } finally { await earn.stopAll(); }
 });
 
-it("refuses an unfundable first ACP call before the seller can sign", async () => {
+it.each(["acp", "pi"] as const)("refuses an unfundable first %s call before the seller can sign", async agent => {
   const room = {...local, mode:"sandboxed" as const, isolatedJobRoom:true};
   const firstCall = {baseTicks:60_000_000_000,inputTicksPerByte:0};
   const earn = host({executor:room, roomWork:()=>({} as never), checkExecutionReady:async()=>{},
-    liveRoomState:()=>({agent:"acp", ready:true, coreCommand:null, generation:"one", firstCall})});
+    liveRoomState:()=>({agent, ready:true, coreCommand:null, generation:"one", firstCall})});
   void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
     const facts = {task:"task" as never,creator:"buyer" as never,promptBytes:40};
+    if (agent === "pi") await expect(ctx.checkExecutionReady!(facts)).rejects.toThrow(/allowance/);
     await expect(ctx.checkExecutionReady!({...facts,firstRoundCents:599})).rejects.toThrow(/allowance/);
     await ctx.checkExecutionReady!({...facts,firstRoundCents:600});
     expect(earn.supportsPrivateInputs("seller")).toBe(false);

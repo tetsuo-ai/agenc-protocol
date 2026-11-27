@@ -22,10 +22,12 @@ export interface LiveRoom {
   agentFiles: readonly string[];
   acpFiles?: readonly string[];
   acpPrices?: Record<string, FirstCallPrice>;
+  piFiles?: readonly string[];
+  piPrices?: Record<string, FirstCallPrice>;
   generationFiles?: readonly string[];
 }
 export interface RoomSelection {
-  agent: "core" | "claude-code" | "acp";
+  agent: "core" | "claude-code" | "acp" | "pi";
   firstCall?: FirstCallPrice;
   ready: boolean;
   coreCommand: string | null;
@@ -82,12 +84,15 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.baseFiles,
       ...room.agentFiles,
       ...(room.acpFiles ?? []),
+      ...(room.piFiles ?? []),
       ...(room.generationFiles ?? []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
     !room.agentFiles.length ||
     (!!room.acpPrices !== !!room.acpFiles?.length) ||
-    Object.values(room.acpPrices ?? {}).some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
+    (!!room.piPrices !== !!room.piFiles?.length) ||
+    Object.keys(room.piPrices ?? {}).some(id => Object.hasOwn(room.acpPrices ?? {}, id)) ||
+    [...Object.values(room.acpPrices ?? {}), ...Object.values(room.piPrices ?? {})].some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
       !Number.isSafeInteger(p.inputTicksPerByte) || p.inputTicksPerByte < 0)
   )
     throw new Error("Invalid job room paths.");
@@ -108,7 +113,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     let profile: unknown = "claude-code";
     let validUntil: unknown;
     // Desktop owns this envelope. Only its public profile name enters the wallet.
-    if (slot.regular && room.acpPrices) {
+    if (slot.regular && (room.acpPrices || room.piPrices)) {
       try {
         if (statSync(room.setting).size > 65536) throw new Error();
         const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
@@ -116,11 +121,13 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
         validUntil = envelope.validUntil;
       } catch { profile = null; }
     }
-    const agent = slot.id === "missing" ? "core" : profile === "claude-code" ? "claude-code" : "acp";
-    const firstCall = agent === "acp" && typeof profile === "string" && Object.hasOwn(room.acpPrices ?? {}, profile)
-      ? room.acpPrices![profile] : undefined;
+    const pi = typeof profile === "string" && Object.hasOwn(room.piPrices ?? {}, profile);
+    const agent = slot.id === "missing" ? "core" : profile === "claude-code" ? "claude-code" : pi ? "pi" : "acp";
+    const prices = pi ? room.piPrices : room.acpPrices;
+    const firstCall = (agent === "acp" || agent === "pi") && typeof profile === "string" && prices && Object.hasOwn(prices, profile)
+      ? prices[profile] : undefined;
     const loginCurrent = !firstCall?.needsExpiry || (typeof validUntil === "number" && Number.isSafeInteger(validUntil) && Date.now() < validUntil);
-    const agentFiles = (agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
+    const agentFiles = (pi ? room.piFiles ?? [] : agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -139,7 +146,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
-        : slot.regular && (agent !== "acp" || !!firstCall) && agentFiles.every((f) => f.regular));
+        : slot.regular && (agent === "claude-code" || !!firstCall) && agentFiles.every((f) => f.regular));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
@@ -157,6 +164,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       base,
       agentFiles,
       room.generationFiles?.map(file),
+      ...(pi ? [profile, firstCall] : []),
     ]);
     return { agent, ready, coreCommand, generation, ...(firstCall && {firstCall}) };
   };
