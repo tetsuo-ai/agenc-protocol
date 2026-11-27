@@ -38,12 +38,13 @@ export function enrollClaimBudget(root: string, wallet: Address, claim: Address)
   syncDirectory(root);
 }
 
-export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number): void {
+export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number): string {
   const dir = join(root, wallet + "-" + claim);
   try {
     const fd = openSync(join(dir, String(round)), "wx", 0o600);
     try { fsyncSync(fd); } finally { closeSync(fd); }
     syncDirectory(dir);
+    return join(dir, String(round));
   } catch (cause) {
     throw new Error("Previous model spend for this round is exhausted or unknown.", { cause });
   }

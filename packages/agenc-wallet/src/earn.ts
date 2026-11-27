@@ -944,7 +944,11 @@ export class EarnHost {
           const revoke = () => stop.abort(new Error("Taking jobs from other agents is off."));
           const current = AbortSignal.any([stop.signal, signal, this.#shutdown.signal]);
           const unwatch = this.#options.watchChosenRoom?.(revoke);
-          const check = () => { if (!this.chosenRoomFor(agent.agentId)) revoke(); };
+          const selected = guard();
+          const check = () => {
+            try { selected(); if (!this.chosenRoomFor(agent.agentId)) revoke(); }
+            catch { revoke(); }
+          };
           const timer = setInterval(check, 25);
           try {
             check();
@@ -975,7 +979,7 @@ export class EarnHost {
           ...(terms.modelCapCents !== undefined && { modelCapCents: terms.modelCapCents }),
         }).modelBudgetCents;
       },
-      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires) => {
+      executorForTask: async (task, address, reservedCents, listing, metadata, request, acceptance, budgetTotalCents, claimExpires, claimRound) => {
         // The room enforces the public job's agreed outputs on export. A private job's are in its staged bundle.
         const outputs = acceptance ? outputAgreementFromSpec({ acceptance: [...acceptance] }) : undefined;
         const ownRequest = this.#ownAddresses().includes(task.creator);
@@ -1011,7 +1015,7 @@ export class EarnHost {
           if (part === "{requestSource}") {
             const source = ownRequest ? "own" : "external";
             // The agreed outputs alone also need the scope, so a public post without a reservation still enforces them.
-            return room && (receipt || bundleDir || (paired && pin) || outputs) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
+            return room && (receipt || bundleDir || (paired && pin) || outputs) ? [source, JSON.stringify({ bundleDir, pin: pin ?? null, receipt, ...(claimRound && {claimRound}), hardBudget: !!listing || !!pin, task: address, ...(pin && { request }),
               ...(paired && { privateProcessing: privateProcessing ?? null }), ...(outputs && { outputs }) })] : [source];
           }
           if (part === "{task}") return [address];

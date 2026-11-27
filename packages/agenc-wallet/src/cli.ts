@@ -236,13 +236,17 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
       catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" && conditional.when === "core"; }
     } }),
     ...(selection && { defaultExecutorGeneration: () => {
-      // The wallet reads only file metadata. The epoch also remembers a switch away and back.
-      return [selection, selection + ".epoch"].map(file => {
-        try {
-          const stat = lstatSync(file, {bigint:true});
-          return [stat.dev, stat.ino, stat.ctimeNs].join("-");
-        } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent"; throw error; }
-      }).join("/");
+      // Read the public epoch. Only stat the encrypted slot. A switch away and back has a new epoch.
+      let epoch = "legacy", slot = "core";
+      try {
+        epoch = readFileSync(selection + ".epoch", "utf8");
+        if (!/^[0-9a-f-]{36}$/.test(epoch)) throw new Error("The job room selection is changing.");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try {
+        const stat = lstatSync(selection, {bigint:true});
+        slot = [stat.dev, stat.ino, stat.ctimeNs].join("-");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      return epoch + "/" + slot;
     } }),
     ...(maxReward === undefined
       ? {}

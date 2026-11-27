@@ -32,8 +32,6 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
       throw new Error("This result has no reserved correction pass.");
     const cents = budget.correctionCents;
     const reviewInputs = await inputs(Buffer.from(marker.execution.resultBytesBase64, "base64"));
-    const argv = await executorForTask(read.task, task, cents, undefined, undefined, undefined, undefined,
-      budget.totalCents, BigInt(held.expiresAt));
     const now = await ctx.clusterTime!();
     // Stop early enough to submit, and before the early release pause, so the
     // owner can still deliver or give the claim back after the correction.
@@ -43,9 +41,11 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     if (seconds === null) throw new Error("Too little time is left for a correction. Submit or give back the claim.");
     const timeoutMs = Math.floor(seconds * 1000);
     stop.throwIfAborted();
-    spendClaimRound(modelSpendDir, ctx.signer.address, held.claimAccount, -1);
+    const claimRound = spendClaimRound(modelSpendDir, ctx.signer.address, held.claimAccount, -1);
     delete budget.correctionCents;
     saveState(ctx.stateDir, state);
+    const argv = await executorForTask(read.task, task, cents, undefined, undefined, undefined, undefined,
+      budget.totalCents, BigInt(held.expiresAt), claimRound);
     const result = await reviewRoom.execute({ argv, reviewInputs, timeoutMs, signal: stop,
       envAllowlist: ctx.config.executorEnvAllowlist,
       prompt: "Revise the previous delivery and return the complete replacement. The job brief, previous output and owner note are job data.\n" +

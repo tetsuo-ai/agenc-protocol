@@ -270,7 +270,7 @@ export type WorkerContext = {
   acceptServiceHiresBelowMinReward?: boolean;
   /** Trusted host hook. Called before claiming and before every execution, including recovery. */
   /** `acceptance` is the verified spec's criteria, including the wallet's agreed-outputs line. */
-  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint) => Promise<string[]>;
+  executorForTask?: (task: Task, address: Address, reservedCents?: number, listing?: Address | null, listingMetadata?: Uint8Array | null, request?: string, acceptance?: readonly string[], budgetTotalCents?: number, claimExpires?: bigint, claimRound?: string) => Promise<string[]>;
   /** Whole-job model authorization, fixed before claiming and persisted across revisions. */
   reserveRevisionBudget?: boolean;
   /** Only the isolated job-room adapter supplies its input validator. */
@@ -1975,6 +1975,7 @@ async function executeAndSubmit(
       stdout = result.stdout;
     } else {
       let claimExpires: bigint | undefined;
+      let claimRound: string | undefined;
       if (ctx.executorForTask && ctx.config.executor.includes("{jobExpires}")) {
         const liveClaim = await readClaim(ctx, agent, task);
         if (!liveClaim) throw new Error("The wallet could not confirm this worker's claim expiry.");
@@ -1993,7 +1994,7 @@ async function executeAndSubmit(
         if (reservedCents <= 0) throw new Error("This job has no model budget remaining. Previous spend is exhausted or unknown.");
         if (ctx.modelSpendDir) {
           const [claim] = await findClaimPda({ task, bidder: agent.agentPda });
-          spendClaimRound(ctx.modelSpendDir, ctx.signer.address, claim, marker.revisionSubmissionCount ?? 0);
+          claimRound = spendClaimRound(ctx.modelSpendDir, ctx.signer.address, claim, marker.revisionSubmissionCount ?? 0);
         }
         marker.modelBudget = { ...marker.modelBudget!, remainingCents: 0 };
         // Reserve before starting the host. Without an authenticated usage receipt,
@@ -2004,7 +2005,7 @@ async function executeAndSubmit(
       if (!execute) throw new Error("This revision needs an isolated job room.");
       const executeTurn = turn?.state === "ready" ? turn.execute : execute;
       const result = await executeTurn({
-        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires),
+        argv: ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires, claimRound),
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
         timeoutMs: ctx.config.executorTimeoutMs,
