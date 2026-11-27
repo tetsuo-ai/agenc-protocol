@@ -646,6 +646,7 @@ export class AgencWallet {
   readonly #discovery: ServiceDiscovery;
   readonly #records: RecordKeeper;
   /** The marketplace's fee rate in basis points, as last read (null: it could not be). */
+  #currentSolUsd: number | null = null;
   #feeRate: { at: number; bps: number | null } | null = null;
 
   private constructor(
@@ -864,6 +865,7 @@ export class AgencWallet {
   async #freshRate(fresh = false): Promise<number | null> {
     const raw = await listingRequest(() => this.#config.prices.solUsd({ fresh }));
     const value = raw !== null && Number.isFinite(raw) && raw > 0 ? raw : null;
+    this.#currentSolUsd = value;
     if (value !== null) {
       const previous = this.#store.state.lastSolUsd;
       if (previous === null || Math.abs(previous.value - value) / value > 0.002) {
@@ -6522,7 +6524,7 @@ export class AgencWallet {
       this.#checkOfferPrice(price);
       const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, previous);
       quotedTerms = terms;
-      const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
+      const spec = this.#sellerSpec(agent,{ name, summary, ...terms });
       quotedSpec = spec;
       action = this.#quotedOfferKey(offerId, name, summary, price, terms, input.enableEarns, input.setupId);
       const completed = input.setupId && Object.hasOwn(agent.serviceSetups ?? {}, input.setupId) ? agent.serviceSetups![input.setupId] : undefined;
@@ -6613,6 +6615,17 @@ export class AgencWallet {
   async effectiveServiceCapabilities(agentId: string): Promise<bigint> {
     const registration = await this.#earn.registration(agentId);
     return registration ? this.#enabledServiceMask(this.#agentRecord(agentId)) & registration.account.capabilities : 0n;
+  }
+
+  #sellerSpec(agent: AgentRecord, input: Parameters<typeof sellerListingSpec>[0]) {
+    const spec = sellerListingSpec(input,agent.address,this.#earn.supportsPrivateInputs(agent.id));
+    if (this.#earn.connectedAgent(agent.id)) {
+      const meta = (spec.custom as {listingMetadata:{fulfilment?:Record<string,unknown>}}).listingMetadata;
+      const terms = meta.fulfilment ??= {};
+      terms.minimumModelCents = 999_999_999;
+      terms.minimumModelCents = this.#earn.minimumPublicBudget(agent.id,publicListingWork(spec).promptBytes);
+    }
+    return spec;
   }
 
   async #serviceAdmission(agentId: string, priceLamports: bigint, terms: ReturnType<typeof storedTerms>, spec?:Record<string,unknown>) {
@@ -7268,7 +7281,7 @@ export class AgencWallet {
     const priceLamports = await this.#offerLamports(input.price);
     this.#checkOfferPrice(priceLamports);
     const terms = resolveTerms(input.deliverySecs === undefined ? input.terms : { ...input.terms, deliverySecs: input.deliverySecs }, current);
-    const spec = sellerListingSpec({ name, summary, ...terms }, agent.address, this.#earn.supportsPrivateInputs(agent.id));
+    const spec = this.#sellerSpec(agent,{ name, summary, ...terms });
     if (!fundingQuoteId) {
       if (terms.servicePin || terms.modelCapCents || terms.minimumMarginCents || terms.childPolicy)
         throw new WalletError("APPROVAL_REQUIRED", "Review the rehearsed service and spending limits in Market.");
@@ -7428,6 +7441,10 @@ export class AgencWallet {
             ({ operation }) => !pendingOffers.has(fundedOfferId(operation) ?? ""),
           );
           const agent = this.#agentRecord(agentId);
+          if (agentOffers(agent).length && this.#earn.connectedAgent(agentId) && !shutdown) {
+            try { await this.#freshRate(true); await this.#marketFeeBps(); }
+            catch { this.#currentSolUsd = null; }
+          }
           const remaining = agentOffers(agent).filter((offer) =>
             !pendingOffers.has(offer.id) && this.#offerNeedsStep(agent, offer));
           try {
@@ -7529,8 +7546,9 @@ export class AgencWallet {
   async #readyForOffer(agentId:string,offer:OfferRecord,signal?:AbortSignal) {
     const needs = this.#listingNeeds(offer);
     if (this.#earn.connectedAgent(agentId)) {
+      const work = this.#publishedWork(agentId,offer);
       const priced = await this.#serviceAdmission(agentId,BigInt(offer.priceLamports),storedTerms(offer),offer.spec);
-      return this.#earn.checkListingReady(agentId,signal,{...needs,...publicListingWork(offer.spec),modelCapCents:priced.modelBudgetCents});
+      return this.#earn.checkListingReady(agentId,signal,{...needs,...work,modelCapCents:priced.modelBudgetCents});
     }
     return this.#earn.checkListingReady(agentId,signal,needs);
   }
@@ -7539,7 +7557,23 @@ export class AgencWallet {
     const terms = spec.custom?.listingMetadata?.fulfilment;
     return {...(storedTerms(offer).modelCapCents !== undefined && {modelCapCents:storedTerms(offer).modelCapCents!}),extraRoomFeatures:!!storedTerms(offer).childPolicy,privateInputs:terms?.privateInputs === true,servicePin:!!terms?.servicePin || !!storedTerms(offer).servicePin,...(storedTerms(offer).servicePin && {serviceDigest:storedTerms(offer).servicePin!.digest})};
   }
+  #publishedWork(agentId: string, offer: OfferRecord) {
+    const work = publicListingWork(offer.spec);
+    const meta = (offer.spec.custom as {listingMetadata?:{fulfilment?:{minimumModelCents?:number}}})?.listingMetadata?.fulfilment;
+    if (!meta?.minimumModelCents || meta.minimumModelCents < this.#earn.minimumPublicBudget(agentId,work.promptBytes))
+      throw new WalletError("NOT_AVAILABLE","Review the service price for the selected agent.");
+    return work;
+  }
+
   #wantsLive(agent: AgentRecord, offer: OfferRecord): boolean {
+    if (this.#earn.connectedAgent(agent.id)) {
+      try {
+        const work = this.#publishedWork(agent.id,offer);
+        const economics = serviceEconomics({...storedTerms(offer),priceLamports:BigInt(offer.priceLamports),
+          usdPerSol:this.#currentSolUsd,marketFeeBps:this.#feeRate?.bps ?? null});
+        if (!this.#earn.supportsService(agent.id,{...this.#listingNeeds(offer),...work,modelCapCents:economics.modelBudgetCents})) return false;
+      } catch { return false; }
+    }
     return (
       offer.wanted && this.#earn.supportsService(agent.id,this.#listingNeeds(offer)) &&
       BigInt(offer.priceLamports) <= maximumOfferPrice(this.#config.earn ?? { executor: null }) &&

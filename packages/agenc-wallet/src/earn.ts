@@ -362,6 +362,19 @@ export class EarnHost {
     return cents === undefined ? undefined : claimBudget(cents,this.executorFor(agentId)?.reserveRevisionBudget === true).remainingCents;
   }
 
+  minimumPublicBudget(agentId: string, bytes: number): number {
+    const policy = this.#publicJobs(this.connectedAgent(agentId) ?? "");
+    const fits = (n:number) => policy?.firstTurnFits(this.listingFirstRound(agentId,n)!,bytes) === true;
+    let low = 1, high = 999_999_999;
+    if (!fits(high)) throw new Error("This executor cannot price the first turn.");
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (fits(mid)) high = mid;
+      else low = mid + 1;
+    }
+    return low;
+  }
+
   supportsService(agentId: string, needs: ListingNeeds): boolean {
     const executor = this.executorFor(agentId);
     if (needs.servicePin && ["job","peer-job"].includes(executor?.argv[2] ?? "") && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) return false;
