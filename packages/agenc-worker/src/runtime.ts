@@ -103,6 +103,7 @@ import {
 } from "./state.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import {
+  claimChainTime,
   clusterNowSeconds,
   readTaskAccount,
   runUpkeep,
@@ -2011,6 +2012,7 @@ async function executeAndSubmit(
   const binding = { task, seller: agent.agentPda, deadline: decodedTask.deadline, spec: payload, privateInputs, listingMetadata: serviceMetadata ?? null,
     listing: (evidenceState.openClaim?.listing as Address | undefined) ?? null };
   let stdout: Buffer;
+  let watch: ReturnType<typeof setInterval> | undefined;
   try {
     // A queued recovery tick can drain after shutdown. Cancellation must not
     // turn an already-spent reservation into an additional failed attempt.
@@ -2021,22 +2023,34 @@ async function executeAndSubmit(
     }
     const [claimAddress] = await findClaimPda({task, bidder:agent.agentPda});
     const currentExecutor = ctx.executorIdentity?.();
-    let executionGuard: (() => void) | undefined;
+    const liveClaim = await readClaim(ctx,agent,task);
+    if (!liveClaim) throw new Error("The worker could not verify its claim.");
+    const cutoff = await chainDeadline(ctx.clusterTime ?? (()=>claimChainTime(ctx.readAccount)),
+      ctx.config.executorTimeoutMs,decodedTask.deadline,liveClaim.expiresAt);
+    const expired = new AbortController();
+    const running = ctx.signal ? AbortSignal.any([ctx.signal,expired.signal]) : expired.signal;
+    const expireIfDue = () => {
+      if (monotonicMs() >= cutoff) expired.abort(new DOMException("The claim expired.", "TimeoutError"));
+    };
+    const checkTime = () => { expireIfDue(); running.throwIfAborted(); };
+    watch = setInterval(expireIfDue, 100);
+    let executionGuard: () => void = checkTime;
+    let checkCompleted: () => void = checkTime;
     if (currentExecutor && ctx.modelSpendDir) {
       const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs,ctx.executorProgram?.());
       try {
         checkPin();
         const marker = evidenceState.openClaim;
-        const live = await readClaim(ctx,agent,task);
-        if (!live || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
-        const deadlineMs = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,live.expiresAt);
+        const deadlineMs = cutoff;
         const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,
           requiredCapabilities:decodedTask.requiredCapabilities,acceptance:brief.acceptance,listingMetadata:serviceMetadata ?? null,
           ...(binding.listing && {listing:binding.listing}),reviewFiles:reviewInputs?.length ?? 0,
           revision:!!revisionHash,reviewAttachments,extraRoomFeatures:requiresExtraRoom(decodedTask,payload),
           ...(marker?.modelBudget?.remainingCents && {firstRoundCents:marker.modelBudget.remainingCents}),
           promptBytes:Buffer.byteLength(JSON.stringify(prompt)),deadlineMs,...(ctx.signal && {signal:ctx.signal})});
-        executionGuard = () => { checkPin(); if (ready) ready(); if (monotonicMs() >= deadlineMs) throw new Error("The claim expired."); };
+        // Turning off discovery lets an admitted job finish on its original program.
+        checkCompleted = () => { checkTime(); checkPin(); };
+        executionGuard = () => { checkCompleted(); if (ready) ready(); };
       } catch (error) {
         ctx.log({event:"task.execution-not-ready",task,reason:formatDiagnosticError(error)});
         if (evidenceState.openClaim?.revisionSubmissionCount && error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name))
@@ -2070,7 +2084,8 @@ async function executeAndSubmit(
       executionGuard?.();
       const round = ctx.modelSpendDir && join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress,
         String(evidenceState.openClaim.revisionSubmissionCount ?? 0));
-      const result = await turn.resume(until,ctx.signal,round);
+      const result = await turn.resume(Math.min(until ?? cutoff,cutoff),running,round);
+      checkTime();
       if (result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     } else {
@@ -2112,21 +2127,25 @@ async function executeAndSubmit(
       if (!ctx.reserveAtLaunch) commitRound?.();
       const argv = ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires, claimRound, commitRound);
       commitRound?.();
+      executionGuard();
       const result = await executeTurn({
         argv,
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
-        timeoutMs: ctx.config.executorTimeoutMs,
+        timeoutMs: Math.max(1,cutoff-monotonicMs()),
         envAllowlist: ctx.config.executorEnvAllowlist,
         unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
-        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+        signal: running,
       });
+      checkTime();
       if ("state" in result && result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     }
-    executionGuard();
-    if (revisionHash) await ctx.checkTextRevision?.({output:stdout});
-    executionGuard();
+    checkCompleted();
+    if (revisionHash) {
+      await ctx.checkTextRevision?.({output:stdout});
+      checkCompleted();
+    }
     // B binds the v2 pointer to the claim generation; v1 remains for earlier rooms.
     if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v[12]:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
       throw new Error("The room has not produced a protected delivery.");
@@ -2146,7 +2165,7 @@ async function executeAndSubmit(
     }
     noteJobFailure(ctx, task, reason, { rewardAmount: decodedTask.rewardAmount, ranWork: true });
     return { status: "execution-failed", task, reason };
-  }
+  } finally { clearInterval(watch); }
 
   const resultBytes = new Uint8Array(stdout);
   const execution: ExecutionIntent = {

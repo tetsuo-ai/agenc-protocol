@@ -346,7 +346,7 @@ describe("runExecutor", () => {
     }
   });
 
-  it("kills a stopped program that does not end within the grace", async () => {
+  it.each([false, true])("kills a stopped program within its allowed time (deadline=%s)", async deadline => {
     const folder = mkdtempSync(path.join(tmpdir(), "agenc-executor-stubborn-"));
     const pidFile = path.join(folder, "pid");
     const controller = new AbortController();
@@ -363,13 +363,10 @@ describe("runExecutor", () => {
       }
       pid = Number(readFileSync(pidFile, "utf8"));
       const stoppedAt = Date.now();
-      controller.abort();
-      const outcome = await running.then(
-        () => "finished",
-        (error: unknown) => error,
-      );
-      expect((outcome as ExecutorError).detail.reason).toBe("aborted");
-      expect(Date.now() - stoppedAt).toBeLessThan(ABORT_GRACE_MS + 1_500);
+      controller.abort(deadline ? new DOMException("The claim expired.", "TimeoutError") : undefined);
+      const outcome = await running.catch((error: unknown) => error);
+      expect((outcome as ExecutorError).detail.reason).toBe(deadline ? "timeout" : "aborted");
+      expect(Date.now() - stoppedAt).toBeLessThan(deadline ? ABORT_GRACE_MS : ABORT_GRACE_MS + 1_500);
       expect(alive(pid)).toBe(false);
     } finally {
       if (pid > 0 && alive(pid)) process.kill(-pid, "SIGKILL");

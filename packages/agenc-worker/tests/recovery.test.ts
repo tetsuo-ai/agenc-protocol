@@ -223,7 +223,12 @@ function context(
     client: client as unknown as MarketplaceClient,
     signer: { address: WALLET } as TransactionSigner,
     gpa: { getProgramAccounts: async () => [] } as ProgramAccountsTransport,
-    readAccount: async (account) => accounts.get(account) ?? null,
+    readAccount: async (account) => {
+      if (account === "SysvarC1ock11111111111111111111111111111111" && !accounts.has(account)) {
+        const clock=Buffer.alloc(40); clock.writeBigInt64LE(1_700_000_001n,32); return clock;
+      }
+      return accounts.get(account) ?? null;
+    },
     stateDir,
     log: (event) => events.push(event),
     // Every fresh-claim path is live-funded. Individual tests override these
@@ -3414,4 +3419,27 @@ it("rechecks a restored discovery hash after a newer scan",async()=>{
   Object.assign(result.ctx,{candidateScan:1});
   await processCandidate(result.ctx,agent,candidate);
   expect(result.fetchUri).toHaveBeenCalledTimes(2);
+});
+
+it("stops a named executor at claim expiry without a deadline placeholder",async()=>{
+  const dir=mkdtempSync(path.join(tmpdir(),"worker-claim-cutoff-"));
+  const [claim]=await findClaimPda({task:TASK,bidder:WORKER}),[spec]=await findTaskJobSpecPda({task:TASK});
+  const payload={instructions:"Write a sentence"},hash=await values.canonicalJobSpecHash(payload);
+  const state=emptyState();state.openClaim={task:TASK,phase:"claimed",claimedAt:new Date().toISOString()};saveState(dir,state);
+  const ctx=context(dir,new Map([[TASK,taskData(TaskStatus.InProgress)],[claim,claimData(claim)],[spec,
+    new Uint8Array(getTaskJobSpecEncoder().encode({task:TASK,creator:CREATOR,jobSpecHash:hash.bytes,jobSpecUri:SPEC_URI,createdAt:1n,updatedAt:1n,bump:248,reserved:new Uint8Array(7)}))]]),{},[]);
+  ctx.fetchUri=async()=>Buffer.from(JSON.stringify({integrity:{algorithm:"sha256",canonicalization:"json-stable-v1",payloadHash:hash.hex},payload}));
+  ctx.clusterTime=async()=>3999999998;
+  ctx.config.executorTimeoutMs=900000;
+  let stopped=false, timeout=0;
+  ctx.roomWork={admit:async()=>{},open:async()=>({state:"ready",execute:async options=>{
+    timeout=options.timeoutMs!;
+    if(options.signal && timeout<=1001) {
+      await new Promise<void>(resolve=>options.signal!.addEventListener("abort",()=>resolve(),{once:true}));
+      stopped=options.signal.aborted;
+    }
+    return {stdout:Buffer.from("done"),exitCode:0};
+  }})};
+  await resumeOpenClaim(ctx,agent);
+  expect(timeout).toBeGreaterThan(0);expect(timeout).toBeLessThanOrEqual(1001);expect(stopped).toBe(true);
 });
