@@ -50,7 +50,7 @@ import { readProtocolConfig } from "./market.js";
 import { reviewBlockhash } from "./review-blockhash.js";
 import { provenNeverLanded } from "./send-expiry.js";
 import { deliveryBeforeDecision, readReviewHistory, type ReviewAnchor, type ReviewHistory } from "./review-history.js";
-import { abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
+import { assertRpcAdmission, abortableTransport, scopedRpcTransport, scopedSendTransport, scopeAdapterRequests, usesScopedRequests, type ListingSendOutcome, type PendingListingSend } from "./transport-scope.js";
 
 export const SYSTEM_PROGRAM_ADDRESS = address("11111111111111111111111111111111");
 const CLOCK_SYSVAR_ADDRESS = address("SysvarC1ock11111111111111111111111111111111");
@@ -305,6 +305,7 @@ export function politeTransport(
       await turn(config.signal);
       config.signal?.throwIfAborted();
       try {
+        assertRpcAdmission(config);
         return await base(config);
       } catch (error) {
         const refused = refusedStatus(error);

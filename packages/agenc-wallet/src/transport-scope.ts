@@ -128,13 +128,16 @@ export function scopeAdapterRequests<T extends object>(adapter: T, methods: read
 
 /** Forward cancellation all the way to Kit's HTTP fetch, including queued RPCs. */
 const claimAdmission = new AsyncLocalStorage<() => void>();
+export function assertRpcAdmission(config: Parameters<RpcTransport>[0]) {
+  if ((config.payload as {method?:string}).method === "sendTransaction") claimAdmission.getStore()?.();
+}
 export function scopedRpcTransport(base: RpcTransport): RpcTransport {
   return ((config: Parameters<RpcTransport>[0]) => listingRequest(async () => {
     const parent = transportSignal();
     const signal = parent === undefined ? config.signal
       : config.signal === undefined ? parent : AbortSignal.any([parent, config.signal]);
     const response = await abortableTransport(signal, () => {
-      if ((config.payload as {method?: string}).method === "sendTransaction") claimAdmission.getStore()?.();
+      assertRpcAdmission(config);
       return base({ ...config, ...(signal === undefined ? {} : { signal }) });
     });
     // The SDK polls for confirmation after this RPC. Give that wait its own budget.

@@ -402,6 +402,7 @@ class RpcRequestConstructionFailure extends Error {
  */
 function guardSendTransactionConstruction(
   rpc: RpcTransportRpc,
+  beforeSend?: () => void,
 ): RpcTransportRpc {
   const boundMethods = new Map<PropertyKey, unknown>();
   // Proxy a fresh target rather than `rpc` itself. A frozen custom RPC may
@@ -423,7 +424,12 @@ function guardSendTransactionConstruction(
       }
       return (...args: Parameters<RpcTransportRpc["sendTransaction"]>) => {
         try {
-          return rpc.sendTransaction(...args);
+          const request = rpc.sendTransaction(...args);
+          if (!beforeSend) return request;
+          return { ...request, send(options?: Parameters<typeof request.send>[0]) {
+            beforeSend();
+            return request.send(options);
+          } };
         } catch (error) {
           throw new RpcRequestConstructionFailure(error);
         }
@@ -552,7 +558,10 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
         const signature = getSignatureFromTransaction(signedTx);
         try {
           beforeSend?.();
-          await sendAndConfirmTransaction(signedTx, { commitment });
+          const dispatch = beforeSend ? sendAndConfirmTransactionFactory({
+            rpc:guardSendTransactionConstruction(rpc,beforeSend),rpcSubscriptions,
+          }) : sendAndConfirmTransaction;
+          await dispatch(signedTx, { commitment });
         } catch (error) {
           if (error instanceof RpcRequestConstructionFailure) {
             throw error.original;
@@ -593,6 +602,7 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
         throw error;
       }
       try {
+        beforeSend?.();
         await sendRequest.send();
       } catch (error) {
         // A standard -32002 simulation rejection is deterministic and was not
