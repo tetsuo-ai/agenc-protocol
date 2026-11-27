@@ -3318,13 +3318,27 @@ describe("durable claim admission",()=>{
     await processCandidate(result.ctx,agent,candidate);
     expect(signatures).toBe(1);
   });
+  it("checks a fixed model ceiling before the first price read",async()=>{
+    const price=vi.fn(async()=>1);
+    const check=vi.fn(async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError"});});
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+      check,ctx=>{ctx.modelBudgetCeiling=()=>1;ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>"one cent";});
+    await processCandidate(result.ctx,agent,candidate);
+    expect(check).toHaveBeenCalledOnce();
+    expect(price).not.toHaveBeenCalled();
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
   it("caches a fixed first-turn refusal until the allowance changes",async()=>{
     let budget=1;
+    const price=vi.fn(async()=>budget);
     const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
       async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError"});},
-      ctx=>{ctx.modelBudgetForTask=async()=>budget;});
+      ctx=>{ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>String(budget);});
+    const reads=vi.spyOn(result.ctx,"readAccount");
     await processCandidate(result.ctx,agent,candidate);
     expect(result.fetchUri).toHaveBeenCalledTimes(1);
+    expect(price).toHaveBeenCalledTimes(1);
+    expect(reads).not.toHaveBeenCalled();
     budget=3;
     await processCandidate(result.ctx,agent,candidate);
     expect(result.fetchUri).toHaveBeenCalledTimes(2);
@@ -3354,4 +3368,24 @@ it.each(["verified","different hash","connected"])("recovers a 0.1.16 private su
       expect(JSON.parse(fs.readFileSync(path.join(dir,"admission"),"utf8"))).toEqual({executor:"core",budget:0});
     }else{expect(sent).not.toHaveBeenCalled();expect(fs.existsSync(path.join(dir,"admission"))).toBe(false);}
   }finally{fs.rmSync(stateDir,{recursive:true,force:true});}
+});
+
+it.each(["between attempts","during admission"])("reconsiders a changed spec observed %s",async timing=>{
+  let available=false;
+  const seen = new Map<Address,string>();
+  const payload={title:"A new text job",instructions:"Return a sentence.",acceptance:["Agreed outputs v1: text-only delivery allowed; no required files"]};
+  const digest=await values.canonicalJobSpecHash(payload), [pda]=await findTaskJobSpecPda({task:TASK});
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},async()=>{
+    if(timing === "during admission") seen.set(TASK,digest.hex);
+    if(!available)throw Object.assign(new Error("File transport is off."),{name:"ExecutorCapabilityError"});
+  },ctx=>{ctx.candidateHashes=seen;});
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  seen.set(TASK,digest.hex);
+  const previous=result.ctx.readAccount;
+  result.ctx.readAccount=async address=>address!==pda?previous(address):new Uint8Array(getTaskJobSpecEncoder().encode({
+    task:TASK,creator:CREATOR,jobSpecHash:digest.bytes,jobSpecUri:SPEC_URI,createdAt:1n,updatedAt:2n,bump:248,reserved:new Uint8Array(7)}));
+  result.fetchUri.mockResolvedValue(Buffer.from(JSON.stringify({integrity:{algorithm:"sha256",canonicalization:"json-stable-v1",payloadHash:digest.hex},payload})));
+  available=true;
+  await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,jobSpecHash:digest.hex,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
+  expect(result.claimTaskWithJobSpec).toHaveBeenCalledOnce();
 });
