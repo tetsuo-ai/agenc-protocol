@@ -71,7 +71,7 @@ import {
 import { childHireActions } from "./child-hire-store.js";
 import { workerJob, workAddress, quoteTransfers, workAuthorizationTerms, releaseQuoteLifetime } from "./worker-jobs.js";
 import type { WorkerQuote, WorkAction } from "./client/types.js";
-import { loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, type WorkerDispatch, workEligibility, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, readReviewEnvelope, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
+import { deadlineFromChain, monotonicMs, loadState as loadWorkerState, saveState as saveWorkerState, type SubmissionIntent, type WorkerDispatch, workEligibility, browseOpenWork, heldWork, takeOpenWork, finishChosenWork, type OpenWork, type HeldWork, readReviewEnvelope, decodeHostedBrief, fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { assertionFailed, laterRentWithinApproval, readHireRent } from "./money-assertions.js";
 import { deliveryNotice } from "./review-history.js";
 import { publishReviewFiles, reviewChargeCents, quoteReview, reviewRead, reviewAttachments, reviewNote } from "./review.js";
@@ -620,7 +620,7 @@ export class AgencWallet {
   readonly #quotedContinuation = new AsyncLocalStorage<{ agentId: string; active: boolean }>();
   readonly #fundingQuotes = new Map<string, { quote: EarnFundingQuote; target: bigint; action: string; before: string; offers: OfferRecord[] }>();
   readonly #spendingJob = new AsyncLocalStorage<string>();
-  readonly #workQuotes = new Map<string, { quote: WorkerQuote; terms: string }>();
+  readonly #workQuotes = new Map<string, { quote: WorkerQuote; terms: string; deadline: number; generation: string }>();
   /**
    * An agent's waiting hires, found when stopping it for good was refused for
    * them, with what each pays: its loop takes them whatever its smallest pay
@@ -6121,8 +6121,8 @@ export class AgencWallet {
   }
 
   pendingWork() {
-    for (const [id, { quote }] of this.#workQuotes) {
-      if (quote.expiresAt <= this.#now()) this.#workQuotes.delete(id);
+    for (const [id, { deadline }] of this.#workQuotes) {
+      if (deadline <= monotonicMs()) this.#workQuotes.delete(id);
     }
     return [...this.#workQuotes.values()].map(({ quote }) => structuredClone(quote));
   }
@@ -6135,6 +6135,7 @@ export class AgencWallet {
     await this.#reconcileWorkAllowance(agentId);
     const rate = await this.#workRate();
     return dispatch(async (ctx, agent) => {
+      const generation = this.#earn.generationFor(agentId);
       const job = action === "claim" ? (await browseOpenWork(ctx, agent, 0, target)).jobs[0] : await heldWork(ctx, agent);
       if (job?.task !== task)
         throw new WalletError("NOT_ALLOWED", "This job is no longer available for that action.");
@@ -6145,18 +6146,22 @@ export class AgencWallet {
       }
       const view = workerJob(job, rate, this.#chain.transferFeeLamports, action);
       const quotedAt = this.#now();
-      const lifetime = action === "release" ? releaseQuoteLifetime(view, await this.#chain.clusterTime()) : Infinity;
+      const start = monotonicMs();
+      const chainNow = await this.#chain.clusterTime();
+      const lifetime = action === "release" ? releaseQuoteLifetime(view, chainNow) : Infinity;
+      const deadline = deadlineFromChain(start,chainNow,Math.min(5 * 60_000,lifetime),
+        ...(action === "release" ? [] : [BigInt(job.deadline),BigInt("expiresAt" in job ? job.expiresAt : 0)]));
       if ((action === "release" && !view.canRelease) || (action === "submit" && !view.canSubmit))
         throw new WalletError("NOT_ALLOWED", "This job is no longer available for that action.");
       const quote: WorkerQuote = {
         id: newId("work"), agentId, action, job: view, ...quoteTransfers(job, action, rate),
         dailyRemaining: money(this.#workRoom(this.#agentRecord(agentId), rate), rate),
-        expiresAt: quotedAt + Math.min(5 * 60_000, lifetime),
+        expiresAt: quotedAt + deadline - start,
       };
       const terms = workAuthorizationTerms(job, action);
       for (const pending of this.pendingWork()) {
         if (pending.agentId === agentId && pending.action === action && pending.job.task === task) {
-          if (this.#workQuotes.get(pending.id)?.terms === terms && pending.expiresAt <= quote.expiresAt && pending.charge.usdCents === quote.charge.usdCents &&
+          if (this.#workQuotes.get(pending.id)?.generation === generation && this.#workQuotes.get(pending.id)?.terms === terms && pending.expiresAt <= quote.expiresAt && pending.charge.usdCents === quote.charge.usdCents &&
             pending.dailyRemaining.lamports === quote.dailyRemaining.lamports) return pending;
           this.#workQuotes.delete(pending.id);
         }
@@ -6164,7 +6169,7 @@ export class AgencWallet {
       // The owner must always be able to read the entire pending list over the wallet socket.
       const pendingBytes = Buffer.byteLength(JSON.stringify([...this.pendingWork(), quote]));
       if (this.#workQuotes.size >= 24 || pendingBytes > MAX_FRAME_BYTES - 4096) throw new WalletError("NOT_ALLOWED", "Too many job requests are waiting.");
-      this.#workQuotes.set(quote.id, { quote, terms });
+      this.#workQuotes.set(quote.id, { quote, terms, deadline, generation });
       this.#emit({ type: "approval", approvalId: quote.id });
       this.#emit({ type: "overview" });
       return structuredClone(quote);
@@ -6175,7 +6180,7 @@ export class AgencWallet {
     const entry = this.#workQuotes.get(id);
     this.#workQuotes.delete(id);
     this.#emit({ type: "overview" });
-    if (!entry || entry.quote.expiresAt <= this.#now()) throw new WalletError("NOT_ALLOWED", "That job quote has expired.");
+    if (!entry || entry.deadline <= monotonicMs()) throw new WalletError("NOT_ALLOWED", "That job quote has expired.");
     if (!approve) return { approved: false };
     const { agentId, action, job, charge } = entry.quote;
     const task = workAddress(job.task);
@@ -6188,7 +6193,7 @@ export class AgencWallet {
       const check = () => {
         this.#workLane(agentId, action === "release");
         signal.throwIfAborted();
-        if (rate === undefined || this.#now() >= entry.quote.expiresAt)
+        if (rate === undefined || monotonicMs() >= entry.deadline || (action !== "release" && this.#earn.generationFor(agentId) !== entry.generation))
           throw new WalletError("NOT_ALLOWED", "Review a new job quote.");
         // Only the owner decides a work quote: that yes is the person's
         // approval of this exact quote, and it covers the charge above what is
@@ -6209,6 +6214,7 @@ export class AgencWallet {
         if (amount > await this.#chain.getBalance(this.#agentRecord(agentId).address as Address))
           throw new WalletError("NOT_ENOUGH_MONEY", "Other jobs have reserved this money.");
         check();
+        return check;
       };
       const sending = (receipt: { signature: string; lastValidBlockHeight: string }) => {
         check();

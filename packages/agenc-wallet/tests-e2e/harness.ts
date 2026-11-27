@@ -82,7 +82,7 @@ export async function startWorld(options: {
 } = {}): Promise<World> {
   const sandbox: Sandbox = await startSandbox({ followWallClock: false, transport: base => {
     const decorated = options.transport?.(base) ?? base;
-    return { ...decorated, async sendAndConfirm(tx) {
+    return { ...decorated, async sendAndConfirm(tx,guard) {
       const msg = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
       if (msg.version === 0) for (const ix of msg.instructions) {
         if (msg.staticAccounts[ix.programAddressIndex] !== lighthouse.LIGHTHOUSE) continue;
@@ -99,7 +99,7 @@ export async function startWorld(options: {
           expect.soft(account.exists ? account.programAddress : "11111111111111111111111111111111").not.toBe(lighthouse.LIGHTHOUSE);
         }
       }
-      return decorated.sendAndConfirm(tx);
+      return decorated.sendAndConfirm(tx,guard);
     } };
   } });
   const listing = await sandbox.addService(HAIKU);

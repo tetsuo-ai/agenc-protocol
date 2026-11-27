@@ -137,3 +137,25 @@ it("tracks the selected ACP image and rejects a missing or unknown profile", () 
     expect(select()).toMatchObject({agent:"claude-code", ready:true});
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
+
+it("invalidates a ready room when machine settings arrive",async()=>{
+  const {liveRoomSelection}=await import("../src/room-selection.js");
+  const {mkdirSync}=await import("node:fs");
+  const dir=mkdtempSync(join(tmpdir(),"managed-room-"));
+  try {
+    const path=join(dir,"core");
+    writeFileSync(path,"fixture",{mode:0o700});
+    const select=liveRoomSelection({setting:join(dir,"choice"),keyStore:join(dir,"store"),agentFiles:[path],baseFiles:[path],coreCandidates:[path],managedSettingsRoot:dir});
+    const before=select();
+    expect(before.ready).toBe(true);
+    const config=join(dir,"config.toml");
+    writeFileSync(config,"fixture");
+    expect(select().ready).toBe(false);
+    expect(select().generation).not.toBe(before.generation);
+    rmSync(config);
+    mkdirSync(join(dir,"config.d"));
+    expect(select().ready).toBe(true);
+    writeFileSync(join(dir,"config.d","rule.toml"),"test");
+    expect(select().ready).toBe(false);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

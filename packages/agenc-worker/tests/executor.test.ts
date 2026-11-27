@@ -3,7 +3,7 @@
 // interpretation (spawn shell:false). The stub executor is `node -e` printing
 // its own process.argv back as JSON, so the test observes precisely what the
 // OS handed the child.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -394,4 +394,14 @@ describe("runExecutor", () => {
       }),
     ).rejects.toMatchObject({ detail: { reason: "timeout" } });
   });
+});
+
+it.skipIf(process.platform==="win32")("gives only the isolated job program a wallet-owned pipe",async()=>{
+  const dir=mkdtempSync(path.join(tmpdir(),"room-pipe-"));
+  const file=path.join(dir,"fixture.mjs");
+  try {
+    writeFileSync(file,'import {fstatSync} from "node:fs"; console.log(fstatSync(3).isSocket() && process.env.AGENC_JOB_WALLET_PID===String(process.ppid));');
+    const run=await runExecutor({argv:[process.execPath,file,"job","{prompt}"],prompt:"practice",timeoutMs:5000});
+    expect(run.stdout.toString().trim()).toBe("true");
+  } finally {rmSync(dir,{recursive:true,force:true});}
 });

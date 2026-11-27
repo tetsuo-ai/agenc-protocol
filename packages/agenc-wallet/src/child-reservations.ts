@@ -1,4 +1,5 @@
 import { getCompiledTransactionMessageDecoder, type Address, type KeyPairSigner } from "@solana/kit";
+import { recheckSigningAdmission, signerChecksAdmission } from "@tetsuo-ai/marketplace-sdk";
 import type { Chain } from "./chain.js";
 import { WalletError } from "./errors.js";
 import { reservedLamports } from "./child-hire-store.js";
@@ -12,9 +13,10 @@ export function reservedForPayer(store: StateStore, payer: Address, ownJob?: str
 /** Worker, seller, transfer and review builders all use the same agent signer.
  * Check the complete debit (including rent and fees), even on paths which
  * otherwise have no funding preflight. The wallet serializes the sends per payer. */
-export function reservationSigner(signer: KeyPairSigner, chain: Chain, held: () => bigint): KeyPairSigner {
+export function reservationSigner(signer: KeyPairSigner, chain: Chain, held: () => bigint): KeyPairSigner & { [signerChecksAdmission]:true } {
   return {
     ...signer,
+    [signerChecksAdmission]:true,
     async signTransactions(transactions, options) {
       if (held() > 0n) {
         if (transactions.length !== 1)
@@ -26,6 +28,7 @@ export function reservationSigner(signer: KeyPairSigner, chain: Chain, held: () 
             "This transaction would use SOL reserved for another job.",
           );
       }
+      recheckSigningAdmission(options);
       return signer.signTransactions(transactions, options);
     },
   };

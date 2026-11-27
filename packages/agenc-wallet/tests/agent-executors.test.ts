@@ -64,7 +64,7 @@ it("applies verified requirements to callbacks, listing terms and the first paid
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
-    const facts = {task:"task" as never,creator:"buyer" as never,firstRoundCents:1,promptBytes:40};
+    const facts = {task:"task" as never,creator:"buyer" as never,firstRoundCents:4,promptBytes:40};
     await ctx.checkExecutionReady!(facts);
     expect(check).toHaveBeenCalledWith(expect.objectContaining({admission:expect.objectContaining({source:"external",promptBytes:40})}));
     for (const extra of [{privateInputs:true}, {reviewFiles:1}, {promptBytes:6144},
@@ -120,9 +120,9 @@ it("hands the executor only the remaining chain time on the host monotonic clock
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as { executorForTask(...args:unknown[]):Promise<string[]> };
-    const start = Number(process.hrtime.bigint()/1000000n);
+    const start = (await import("@tetsuo-ai/agenc-worker")).monotonicMs();
     const result = await ctx.executorForTask({creator:"buyer",deadline:0n,rewardAmount:100000000n},"task",undefined,null,null,undefined,undefined,undefined,1030n);
-    const until = Number(result.at(-1)?.replace("mono:",""));
+    const until = Number(result.at(-1)?.replace("boot:",""));
     expect(until-start).toBeGreaterThanOrEqual(29000);
     expect(until-start).toBeLessThanOrEqual(30100);
   } finally { await earn.stopAll(); }
@@ -344,4 +344,49 @@ it("refuses an unfundable first ACP call before the seller can sign", async () =
     await ctx.checkExecutionReady!({...facts,firstRoundCents:600});
     expect(earn.supportsPrivateInputs("seller")).toBe(false);
   } finally { await earn.stopAll(); }
+});
+
+it("prices the required Claude system instruction and Bash tool before admission", async () => {
+  const earn = host({ executor:{...local,mode:"sandboxed",isolatedJobRoom:true}, checkExecutionReady:async()=>{},
+    liveRoomState:()=>({agent:"claude-code",coreCommand:null,ready:true,generation:"test"}) });
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={task:"job" as never, creator:"buyer" as never,firstRoundCents:1,promptBytes:4850};
+    await expect(ctx.checkExecutionReady!(job)).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    await expect(ctx.checkExecutionReady!({...job,promptBytes:100,firstRoundCents:4})).resolves.toBeTypeOf("function");
+  } finally {await earn.stopAll();}
+});
+
+it("refuses pinned paired offers without file transport", () => {
+  const earn = host({executor:null,agentExecutors:{seller:{...peer,mode:"sandboxed",isolatedJobRoom:true}}});
+  expect(earn.supportsService("seller",{servicePin:true})).toBe(false);
+});
+
+it("keeps a clock refusal before launch out of the usage receipt", async () => {
+  const earn=host({executor:{...local,argv:[...local.argv,"{jobDeadline}"]}},1000);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const task="11111111111111111111111111111111" as never;
+    await expect(ctx.executorForTask!({deadline:1001n,creator:"other"} as never,task,3,null,null,undefined,undefined,5,999n)).rejects.toThrow();
+    const {serviceUsage}=await import("../src/service-usage.js");
+    expect(serviceUsage(earn.stateDir("seller"),task)).toBeNull();
+  } finally {await earn.stopAll();}
+});
+
+it("reads a restored seller's measured cost from the original claim",async()=>{
+  const fs=await import("node:fs");
+  const {serviceUsage,indexClaimUsage}=await import("../src/service-usage.js");
+  const root=mkdtempSync(path.join(tmpdir(),"usage-restore-")); folders.push(root);
+  const task="1".repeat(32), state=path.join(root,"earn","seller"),dir=path.join(root,"model-spend",task+"-"+task);
+  fs.mkdirSync(dir,{recursive:true});
+  fs.writeFileSync(path.join(dir,"admission"),JSON.stringify({executor:"core",budget:10}));
+  fs.writeFileSync(path.join(dir,"0"),"8");
+  fs.writeFileSync(path.join(dir,"0.usage"),JSON.stringify({reservedCents:8,costUsd:0.071}));
+  indexClaimUsage(state,task,path.join(dir,"0"));
+  fs.mkdirSync(state,{recursive:true}); fs.rmSync(state,{recursive:true});
+  expect(serviceUsage(state,task)).toEqual({budgetCents:10,reservedCents:8,unknownReservedCents:0,costUsd:0.071,runs:1});
 });

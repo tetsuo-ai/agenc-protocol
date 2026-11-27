@@ -13,6 +13,7 @@
 export * from "./generated/index.js";
 export * as facade from "./facade/index.js";
 export * from "./client/index.js";
+export { recheckSigningAdmission, signerChecksAdmission } from "./client/admitted-signers.js";
 export * from "./queries/index.js";
 export * from "./indexer/index.js";
 export * from "./webhooks/index.js";
