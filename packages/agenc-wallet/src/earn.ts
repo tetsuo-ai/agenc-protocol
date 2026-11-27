@@ -52,7 +52,7 @@ import {
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import { claimBudget, chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
-import { checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
+import { privateProcessing, checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { outputAgreementFromSpec } from "./client/job-exchange.js";
@@ -343,7 +343,7 @@ export class EarnHost {
     const executor = this.executorFor(agentId);
     const supplied = Object.hasOwn(this.#options.agentExecutors ?? {},agentId)
       ? "" : this.#options.defaultExecutorGeneration?.() ?? "";
-    return JSON.stringify([supplied,executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
+    return JSON.stringify([supplied,executor && privateProcessing(executor.argv,agentId),executor && commandGeneration(executor.argv,executor.readiness?.argv)]);
   }
 
   connectedAgent(agentId: string): string | undefined {
@@ -1034,6 +1034,8 @@ export class EarnHost {
         if (named) checkNamedProgram(executor.argv);
         if (hostCheck) hostCheck();
         if (!admission) return;
+        if (admission.privateInputs && privateProcessing(executor.argv,agent.agentId) === "unavailable")
+          throw new ExecutorCapabilityError("Choose the model approved for private jobs.");
         if (admission.deadlineMs !== undefined && monotonicMs() >= admission.deadlineMs) throw new Error("The claim deadline passed.");
         if (!admission.fileTransport && (admission.requiredFiles.length || !admission.allowTextOnly ||
             (admission.servicePin && ["job", "peer-job"].includes(executor.argv[2] ?? ""))))

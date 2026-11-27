@@ -75,6 +75,19 @@ function entryPoint(argv: readonly string[]): string | undefined {
   return "";
 }
 
+export function privateProcessing(argv:readonly string[],agent:string): string | undefined {
+  if (argv[2] !== "job" || !argv[3] || !isAbsolute(argv[3])) return undefined;
+  const slot=argv[3].replaceAll("{agent}",agent)+".processing.json";
+  try {
+    const data=JSON.parse(readFileSync(slot,"utf8"));
+    const name=/^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
+    if (data.version === 1 && Object.keys(data).sort().join() === "model,provider,version" &&
+        typeof data.provider === "string" && name.test(data.provider) && typeof data.model === "string" && name.test(data.model))
+      return JSON.stringify([file(slot).id,data.provider,data.model]);
+  } catch {}
+  return "unavailable";
+}
+
 export function checkNamedProgram(argv: readonly string[]) {
   const command = argv[0];
   if (!command || !executablePath(command))

@@ -527,3 +527,21 @@ it("checks the interpreter entry point after flags before admission and signing"
     expect(()=>check && check()).toThrow();
   } finally {await earn.stopAll();}
 });
+
+it("holds a Core private hire when its approved processing selection is removed",async()=>{
+  const fs=await import("node:fs"), dir=fs.mkdtempSync(path.join(tmpdir(),"private-choice-"));folders.push(dir);
+  const slot=path.join(dir,"seller.processing.json");
+  const earn=host({executor:{...local,mode:"sandboxed",jobRoom:true,isolatedJobRoom:true,argv:[process.execPath,"/fixture/room.mjs","job",path.join(dir,"{agent}"),"room:{agent}","{prompt}"]},
+    roomWork:()=>({} as never),checkExecutionReady:async()=>{}});
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={task:"job" as never,creator:"buyer" as never,privateInputs:true};
+    fs.writeFileSync(slot,JSON.stringify({version:1,provider:"fixture",model:"example"}));
+    const check=await ctx.checkExecutionReady!(job);
+    fs.unlinkSync(slot);
+    await expect(ctx.checkExecutionReady!(job)).rejects.toThrow();
+    expect(()=>check && check()).toThrow();
+  } finally {await earn.stopAll();}
+});
