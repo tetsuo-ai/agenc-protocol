@@ -486,3 +486,25 @@ it.each([false,true])("gives an ordinary job argument no built-in file policy (n
   expect(earn.supportsService("seller",{requiredFiles:["report.pdf"]})).toBe(false);
   expect(earn.supportsService("seller",{})).toBe(true);
 });
+
+it("pins the resolved named program even when both rooms use the same adapter ID",async()=>{
+  const fs=await import("node:fs");
+  const dir=fs.mkdtempSync(path.join(tmpdir(),"named-id-"));folders.push(dir);
+  const program=path.join(dir,"program");
+  const identity=async()=>{
+    const earn=host({executor:null,agentExecutors:{seller:{...local,argv:[program,"room:{agent}","{prompt}"],connectedAgent:"acp:example"}}});
+    const count=seen.contexts.length;
+    void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+    try {
+      await vi.waitFor(()=>expect(seen.contexts).toHaveLength(count+1));
+      const ctx=seen.contexts.at(-1) as import("@tetsuo-ai/agenc-worker").WorkerContext;
+      return [ctx.executorIdentity?.(),ctx.executorProgram?.()];
+    } finally {await earn.stopAll();}
+  };
+  fs.writeFileSync(program,"#!/bin/sh\nexit 0\n",{mode:0o700});
+  const first=await identity();
+  fs.writeFileSync(program,"#!/bin/sh\nexit 1\n");
+  const second=await identity();
+  expect(second[0]).toBe(first[0]);
+  expect(second[1]).not.toBe(first[1]);
+});

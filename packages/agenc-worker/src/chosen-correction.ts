@@ -54,7 +54,7 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     const checkTime = () => { if (monotonicMs() >= deadline) throw new Error("The correction deadline passed."); };
     stop.throwIfAborted();
     if (admit) admit();
-    if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address + "-" + held.claimAccount),ctx.executorIdentity());
+    if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address + "-" + held.claimAccount),ctx.executorIdentity(),false,ctx.executorProgram?.());
     const claimRound = join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount,"-1");
     let reserved = false;
     const reserve = () => {
@@ -62,7 +62,7 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
       if (reserved) return;
       stop.throwIfAborted();
       if (admit) admit();
-      if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount),ctx.executorIdentity());
+      if (ctx.executorIdentity) requireClaimExecutor(join(modelSpendDir,ctx.signer.address+"-"+held.claimAccount),ctx.executorIdentity(),false,ctx.executorProgram?.());
       spendClaimRound(modelSpendDir,ctx.signer.address,held.claimAccount,-1,cents);
       delete budget.correctionCents;
       saveState(ctx.stateDir,state);

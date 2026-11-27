@@ -299,6 +299,7 @@ export type WorkerContext = {
   chosenRoomCurrent?: () => boolean;
   admissionGeneration?: () => string;
   executorIdentity?: () => string;
+  executorProgram?: () => string | undefined;
   capabilityRefusals?: Map<Address, string>;
   candidateHashes?: Map<Address,string>;
   candidateScan?: number;
@@ -1837,7 +1838,7 @@ async function submitPreparedResult(
       }
       assertAuthorized = () => {
         // A completed delivery drains after the seller turns off new claims.
-        if (ctx.executorIdentity && ctx.modelSpendDir) requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+account),ctx.executorIdentity());
+        if (ctx.executorIdentity && ctx.modelSpendDir) requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+account),ctx.executorIdentity(),false,ctx.executorProgram?.());
         if (monotonicMs() >= end || ctx.admissionGeneration?.() !== generation) throw new Error("The claim admission changed.");
       };
     }
@@ -2022,7 +2023,7 @@ async function executeAndSubmit(
     const currentExecutor = ctx.executorIdentity?.();
     let executionGuard: (() => void) | undefined;
     if (currentExecutor && ctx.modelSpendDir) {
-      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs);
+      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs,ctx.executorProgram?.());
       try {
         checkPin();
         const marker = evidenceState.openClaim;
@@ -2246,6 +2247,7 @@ export async function processCandidate(
   const [claimAddress] = await findClaimPda({task, bidder:agent.agentPda});
   const journal = claimSignatureJournal(ctx.modelSpendDir ?? ctx.stateDir, ctx.signer.address, task, claimAddress);
   const executor = ctx.executorIdentity?.();
+  const program = ctx.executorProgram?.();
   if (journal.exists() && !options.inspect && !options.authorizeChosen) return {status:"skipped",task,reason:"A previous signature needs reconciliation."};
   const state = loadState(ctx.stateDir);
   const verdict = passesLocalFilters(ctx, state, candidate);
@@ -2545,7 +2547,7 @@ export async function processCandidate(
       reservedSignature = true;
       let createdPin = false;
       try {
-        if (executor && ctx.modelSpendDir) createdPin = pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget);
+        if (executor && ctx.modelSpendDir) createdPin = pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget,program);
         assertAdmission();
       } catch (error) { journal.clearUnsigned(createdPin); reservedSignature=false; throw error; }
     }
@@ -2576,7 +2578,7 @@ export async function processCandidate(
     };
     saveState(ctx.stateDir, claimedState);
     if (executor && ctx.modelSpendDir && !reservedSignature) {
-      pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget);
+      pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget,program);
     }
     if (reservedSignature || ctx.modelSpendDir) journal.confirmed(signature);
     ctx.log({ event: "task.claimed", task, signature, parentTask, ...labels });
@@ -3114,7 +3116,7 @@ export async function resumeOpenClaim(
     try {
       if (ctx.modelSpendDir && ctx.executorIdentity) {
         const [address] = await findClaimPda({task,bidder:agent.agentPda});
-        requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload));
+        requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload),ctx.executorProgram?.());
       }
       await ctx.checkTextRevision?.({previous:{proofHashHex:hashHex(submission!.account.proofHash),resultData:new Uint8Array(submission!.account.resultData)}});
       await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,

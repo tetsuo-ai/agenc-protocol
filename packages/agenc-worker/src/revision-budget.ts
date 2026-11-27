@@ -42,8 +42,8 @@ export function enrollClaimBudget(root: string, wallet: Address, claim: Address)
   syncDirectory(root);
 }
 
-export function pinClaim(dir: string, executor: string, budget?: number): boolean {
-  const pin = JSON.stringify({executor, budget: budget ?? null});
+export function pinClaim(dir: string, executor: string, budget?: number, program?:string): boolean {
+  const pin = JSON.stringify({executor, budget: budget ?? null,...(program && {program})});
   try { writeFileSync(join(dir, "admission"), pin, {flag:"wx", mode:0o600, flush:true}); syncDirectory(dir); return true; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST" || readFileSync(join(dir, "admission"), "utf8") !== pin)
@@ -56,12 +56,13 @@ export function isReleasedClaimRound(dir:string):boolean {
   return !existsSync(join(dir,"format")) && existsSync(join(dir,"0")) && readFileSync(join(dir,"0"),"utf8")==="";
 }
 
-export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false): void {
+export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false, program?:string): void {
   if (existsSync(join(dir, "admission"))) {
-    if (JSON.parse(readFileSync(join(dir, "admission"), "utf8")).executor === executor) return;
+    const saved = JSON.parse(readFileSync(join(dir, "admission"), "utf8"));
+    if (saved.executor === executor && saved.program === program) return;
   } else {
     // Only these older runs identify their executor without guessing.
-    if (legacyPrivate && executor === "core" && isReleasedClaimRound(dir)) return;
+    if (!program && legacyPrivate && executor === "core" && isReleasedClaimRound(dir)) return;
   }
   throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
 }

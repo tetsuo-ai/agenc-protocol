@@ -998,6 +998,8 @@ export class EarnHost {
     };
 
     const generation = () => this.generationFor(agent.agentId);
+    const executorProgram = () => Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId)
+      ? createHash("sha256").update(JSON.stringify([executor.argv,commandGeneration(executor.argv)])).digest("hex") : undefined;
     const executorIdentity = () => {
       if (executor.argv[2] === "peer-job") {
         if (executor.argv[4]?.startsWith("pair:")) return executor.argv[4];
@@ -1083,7 +1085,7 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
-      executorIdentity, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
+      executorIdentity, executorProgram, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
       modelBudgetCeiling:(task,metadata)=>(metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
       allowanceGeneration:(task,metadata,budget)=>{
         const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);
@@ -1183,7 +1185,7 @@ export class EarnHost {
             : BigInt(await this.#chain.clusterTime()) + BigInt(Math.floor(executor.timeoutMs / 1000));
         }
         if (deadline !== undefined && monotonicMs() >= deadline) throw new Error("The claim expired.");
-        if (claimRound) requireClaimExecutor(path.dirname(claimRound),executorIdentity());
+        if (claimRound) requireClaimExecutor(path.dirname(claimRound),executorIdentity(),false,executorProgram());
         if (claimRound && (executor.argv[2] === "job" || executor.argv[2] === "peer-job")) indexClaimUsage(stateDir,address,claimRound);
         beforeLaunch?.();
         const receipt = reservedCents ? reserveServiceRun(stateDir,address,reservedCents) : null;

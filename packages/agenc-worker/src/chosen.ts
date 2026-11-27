@@ -23,7 +23,7 @@ export type WorkerAction = "claim" | "submit" | "release";
 
 function checkResultExecutor(ctx: WorkerContext, claim: Address): void {
   if (ctx.modelSpendDir && ctx.executorIdentity)
-    requireClaimExecutor(join(ctx.modelSpendDir, ctx.signer.address + "-" + claim), ctx.executorIdentity());
+    requireClaimExecutor(join(ctx.modelSpendDir, ctx.signer.address + "-" + claim), ctx.executorIdentity(),false,ctx.executorProgram?.());
 }
 
 async function taskTerms(ctx: WorkerContext, agent: WorkerAgent, task: Address, data: Task, claimed = false) {
