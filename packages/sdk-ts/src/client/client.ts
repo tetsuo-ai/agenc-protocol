@@ -183,7 +183,7 @@ export type SendResult = TransportSendResult;
 /** Per-call overrides for {@link MarketplaceClient.send}. */
 export interface SendOptions {
   /** Host admission must still be valid at signing and before handing this transaction to transport. */
-  assertAuthorized?: () => void;
+  assertAuthorized?: (boundary: "sign" | "send", signature?: string) => void;
   /** Set to `false` to omit ALL compute-budget instructions for this call. */
   computeBudget?: false;
   /**
@@ -866,19 +866,25 @@ export function createMarketplaceClient(
         assertIsTransactionMessageWithinSizeLimit(message);
         // RE-SIGNED on every attempt: the message embeds the freshly fetched
         // blockhash, so a retry is a new signature over a new lifetime.
-        options?.assertAuthorized?.();
+        options?.assertAuthorized?.("sign");
         signedTransaction = (await signTransactionMessageWithSigners(
           message,
         )) as SignedTransaction;
         // Defense in depth at the transport seam. Signing must not be able to
         // turn a size-checked message into an oversized wire transaction.
         assertIsTransactionWithinSizeLimit(signedTransaction);
-        options?.assertAuthorized?.();
       } catch (error) {
         throw toAgencError(error);
       }
+      const guard = options?.assertAuthorized;
+      const beforeSend = guard && (() => {
+        const signature = getSignatureFromTransaction(signedTransaction);
+        try { guard("send", signature); }
+        catch (cause) { throw new AgencError("The signed transaction was withheld.", { signature, cause }); }
+      });
+      beforeSend?.();
       try {
-        const result = await transport.sendAndConfirm(signedTransaction);
+        const result = await transport.sendAndConfirm(signedTransaction, beforeSend);
         return validateTransportSendResult(signedTransaction, result);
       } catch (error) {
         const expired = isBlockhashExpiredError(error);

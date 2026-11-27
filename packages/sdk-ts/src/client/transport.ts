@@ -125,7 +125,7 @@ export interface Transport {
    * A mismatched, empty, or malformed success result is rejected as an unknown
    * outcome carrying the local signature and must not be re-submitted.
    */
-  sendAndConfirm(signedTx: SignedTransaction): Promise<TransportSendResult>;
+  sendAndConfirm(signedTx: SignedTransaction, beforeSend?: () => void): Promise<TransportSendResult>;
   /**
    * OPTIONAL: look up the current status of a previously submitted signature.
    *
@@ -548,9 +548,10 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
       getLatestBlockhash,
       getSignatureStatus,
       resolveAddressLookupTables,
-      async sendAndConfirm(signedTx) {
+      async sendAndConfirm(signedTx, beforeSend) {
         const signature = getSignatureFromTransaction(signedTx);
         try {
+          beforeSend?.();
           await sendAndConfirmTransaction(signedTx, { commitment });
         } catch (error) {
           if (error instanceof RpcRequestConstructionFailure) {
@@ -576,11 +577,12 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
     getLatestBlockhash,
     getSignatureStatus,
     resolveAddressLookupTables,
-    async sendAndConfirm(signedTx) {
+    async sendAndConfirm(signedTx, beforeSend) {
       const signature = getSignatureFromTransaction(signedTx);
       const wireTransaction = getBase64EncodedWireTransaction(signedTx);
       let sendRequest: ReturnType<RpcTransportRpc["sendTransaction"]>;
       try {
+        beforeSend?.();
         sendRequest = rpc.sendTransaction(wireTransaction, {
           encoding: "base64",
           preflightCommitment: commitment,

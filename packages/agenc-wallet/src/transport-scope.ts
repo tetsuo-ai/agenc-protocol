@@ -127,12 +127,16 @@ export function scopeAdapterRequests<T extends object>(adapter: T, methods: read
 }
 
 /** Forward cancellation all the way to Kit's HTTP fetch, including queued RPCs. */
+const claimAdmission = new AsyncLocalStorage<() => void>();
 export function scopedRpcTransport(base: RpcTransport): RpcTransport {
   return ((config: Parameters<RpcTransport>[0]) => listingRequest(async () => {
     const parent = transportSignal();
     const signal = parent === undefined ? config.signal
       : config.signal === undefined ? parent : AbortSignal.any([parent, config.signal]);
-    const response = await abortableTransport(signal, () => base({ ...config, ...(signal === undefined ? {} : { signal }) }));
+    const response = await abortableTransport(signal, () => {
+      if ((config.payload as {method?: string}).method === "sendTransaction") claimAdmission.getStore()?.();
+      return base({ ...config, ...(signal === undefined ? {} : { signal }) });
+    });
     // The SDK polls for confirmation after this RPC. Give that wait its own budget.
     if ((config.payload as { method?: string }).method === "sendTransaction") scope.getStore()?.startConfirmation?.();
     return response;
@@ -155,22 +159,28 @@ export function scopedSendTransport(base: Transport): Transport {
       resolveAddressLookupTables: (addresses: Parameters<NonNullable<Transport["resolveAddressLookupTables"]>>[0]) =>
         listingRequest(() => base.resolveAddressLookupTables!(addresses)),
     }),
-    async sendAndConfirm(transaction) {
+    async sendAndConfirm(transaction, beforeSend) {
+      const send = () => {
+        beforeSend?.();
+        const dispatch = () => base.sendAndConfirm(transaction, beforeSend);
+        return beforeSend ? claimAdmission.run(beforeSend, dispatch) : dispatch();
+      };
       const context = scope.getStore();
-      if (context === undefined) return base.sendAndConfirm(transaction);
+      if (context === undefined) return send();
       context.signal.throwIfAborted();
       const signature = getSignatureFromTransaction(transaction);
       if (context.beforeSend) {
         await context.beforeSend();
         context.signal.throwIfAborted();
       }
+      beforeSend?.();
       context.sending({
         signature,
         ...(context.operation?.kind === "funding" && context.operation.decision && { signedTransaction: getBase64EncodedWireTransaction(transaction) }),
         lastValidBlockHeight: transaction.lifetimeConstraint.lastValidBlockHeight.toString(),
         ...(context.operation && { operation: context.operation }),
       });
-      const result = await listingRequest(() => base.sendAndConfirm(transaction), true);
+      const result = await listingRequest(send, true);
       if (result.signature !== signature) throw new Error("Transport returned a different transaction signature");
       if (!context.operation) context.confirmed(signature);
       return result;

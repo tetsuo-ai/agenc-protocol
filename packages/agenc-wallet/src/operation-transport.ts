@@ -8,9 +8,10 @@ const recordedTransports = new WeakSet<Transport>();
 export const recordsSignedOperations = (transport: Transport) => recordedTransports.has(transport);
 
 export function operationTransport(transport: Transport): Transport {
-  const wrapped: Transport = { ...transport, sendAndConfirm: tx => {
+  const wrapped: Transport = { ...transport, sendAndConfirm: (tx, beforeSend) => {
+    beforeSend?.();
     signedOperation.getStore()?.(tx);
-    return transport.sendAndConfirm(tx);
+    return transport.sendAndConfirm(tx, beforeSend);
   } };
   recordedTransports.add(wrapped);
   return wrapped;

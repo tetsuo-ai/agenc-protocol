@@ -440,7 +440,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   const transport: Transport = {
     ...base,
     getLatestBlockhash: () => base.getLatestBlockhash(),
-    async sendAndConfirm(signedTx) {
+    async sendAndConfirm(signedTx, beforeSend) {
       const signal = transportSignal();
       signal?.throwIfAborted();
       syncClock();
@@ -448,6 +448,7 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
       const payer = message.staticAccounts[0]!;
       const balances = new Map(message.staticAccounts.map(address => [address, BigInt(svm.getBalance(address) ?? 0)]));
       const before = balances.get(payer)!;
+      beforeSend?.();
       const result = await base.sendAndConfirm(signedTx).catch(error => {
         const signature = getSignatureFromTransaction(signedTx);
         const fee = before - BigInt(svm.getBalance(payer) ?? 0);
@@ -571,10 +572,10 @@ export async function startSandbox(options: StartSandboxOptions = {}): Promise<S
   const inFlight = new Set<string>();
   const sending = operationTransport(scopedSendTransport({
     ...decorated,
-    async sendAndConfirm(tx) {
+    async sendAndConfirm(tx, beforeSend) {
       const signature = getSignatureFromTransaction(tx);
       inFlight.add(signature);
-      try { return await decorated.sendAndConfirm(tx); }
+      try { beforeSend?.(); return await decorated.sendAndConfirm(tx, beforeSend); }
       finally { inFlight.delete(signature); }
     },
   }));

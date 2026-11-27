@@ -133,7 +133,7 @@ it.each([1, 2])("checks admission at signing and transmission boundary %i", asyn
   let checks = 0;
   await expect(client.send([DUMMY_IX], { assertAuthorized() {
     if (++checks === boundary) throw new Error("The selected room changed.");
-  } })).rejects.toMatchObject({ signature: null });
+  } })).rejects.toMatchObject({ signature: boundary === 1 ? null : expect.any(String) });
   expect(transport.sendCalls()).toBe(0);
 });
 
