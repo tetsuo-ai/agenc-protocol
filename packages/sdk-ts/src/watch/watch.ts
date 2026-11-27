@@ -134,6 +134,8 @@ export type ClaimableTask = {
  * rejected synchronously instead of silently dropping every event.
  */
 export type WatchClaimableTasksOptions = {
+  /** A local executor change reopens the current snapshot. False parks delivery before deduplication. */
+  candidateEpoch?: () => string | false;
   onCandidateSnapshot?: (open:ReadonlySet<Address>, pins:ReadonlyMap<Address,string>)=>void;
   /** Live event source (kit `RpcSubscriptions` or a structural double). */
   rpcSubscriptions?: MarketplaceEventsRpcSubscriptions | null;
@@ -651,7 +653,8 @@ export function watchClaimableTasks(
   // bounded so a long-running watch cannot grow memory without limit. A task
   // stays at-most-once while continuously candidate-eligible; an observed absence or a
   // later generation in the Open+zero-workers shape permits re-delivery.
-  const seen = new BoundedSeenSet(maxSeen);
+  let seen = new BoundedSeenSet(maxSeen);
+  let deliveryEpoch: string | false | undefined;
   let successfulSweep = 0;
 
   // Async-iterable plumbing: a queue the generator drains, woken by each
@@ -757,6 +760,15 @@ export function watchClaimableTasks(
     await raceWithAbort(deliveryChain, controller.signal);
   };
 
+  const candidateEpoch = () => {
+    const epoch = options.candidateEpoch?.();
+    if (epoch !== deliveryEpoch) {
+      seen = new BoundedSeenSet(maxSeen);
+      deliveryEpoch = epoch;
+    }
+    return epoch;
+  };
+
   const admit = (
     task: ClaimableTask,
     marker: {
@@ -766,7 +778,9 @@ export function watchClaimableTasks(
       isZeroWorkerOpen: boolean;
     },
     observedSweep: number,
+    epoch = candidateEpoch(),
   ): boolean => {
+    if (epoch === false) return false;
     const key = dedupeKey(
       task.task,
       marker.currentWorkers,
@@ -1000,10 +1014,12 @@ export function watchClaimableTasks(
         // Release capacity only from a complete successful snapshot. Never
         // evict active entries within a sweep: that caused oversized backlogs
         // to be delivered again on every poll.
+        const epoch = candidateEpoch();
         seen.retainTasks(candidateAddresses, successfulSweep);
         options.onCandidateSnapshot?.(candidateAddresses,pinned);
         let emitted = 0;
         for (const { claimable, marker } of deliveries) {
+          if (epoch === false) break;
           if (controller.signal.aborted) return;
           const account = claimable.account;
           if (
@@ -1016,7 +1032,7 @@ export function watchClaimableTasks(
           ) {
             continue;
           }
-          if (admit(claimable, marker, successfulSweep)) {
+          if (admit(claimable, marker, successfulSweep, epoch)) {
             emitted += 1;
             await deliver(claimable);
           }
