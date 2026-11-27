@@ -861,3 +861,31 @@ it("withholds a signed chosen submission if the quote expires in the transport q
     expect(sandbox.market.svm.getAccount(address(task))).toEqual(accountBefore);
   } finally {sleep.ms=0;}
 });
+
+it("withholds a manual funding transfer that outlasts its approved quote in the queue",async()=>{
+  let held=false,queued=false,dispatched=false;
+  world=await startWorld({earn:{executor,chosenRoomEnabled:()=>true,checkExecutionReady:async()=>{}},
+    transport:base=>({...base,async sendAndConfirm(tx,guard){
+      if(held){queued=true;sleep.ms+=301000;guard?.();dispatched=true;}
+      return base.sendAndConfirm(tx,guard);
+    }})});
+  try {
+    const w=world.wallet, seller=await w.createAgent("Practice worker");
+    const quote=await w.quoteManualWork(seller.id);
+    expect(BigInt(quote.fromMain.lamports)).toBeGreaterThan(0n);
+    const balance=await world.balance(seller.address);
+    held=true;
+    await expect(w.startManualWork(seller.id,quote.quoteId)).rejects.toThrow();
+    expect(queued).toBe(true);expect(dispatched).toBe(false);
+    expect(await world.balance(seller.address)).toBe(balance);
+  } finally {sleep.ms=0;}
+});
+
+it("keeps a verified file job out of the picker while file transport is off",async()=>{
+  const {wallet,id,sandbox}=await setup(undefined,undefined,undefined,{services:s=>({...s,fileLinkPrefix:null,resultUploader:()=>null})});
+  const job=await sandbox.postOpenJob({title:"Return a file",instructions:"Make a table",rewardLamports:50n*CENT,
+    brief:{instructions:"Make a table",acceptance:["Agreed outputs v1: at least one file; required files: chart.csv"]}});
+  const page=await wallet.openWork(id,0,job.task);
+  expect(page.jobs).toHaveLength(0);
+  expect(page.eligibility?.code).not.toBe("available");
+});

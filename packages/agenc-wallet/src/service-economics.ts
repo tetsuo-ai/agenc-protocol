@@ -39,7 +39,7 @@ export function serviceEconomics(input: ServiceEconomicsInput) {
   while (net(minimumPriceLamports) < target) minimumPriceLamports++;
   const sellerNetLamports = net(priceLamports);
   if (sellerNetLamports < target)
-    throw new WalletError("BAD_REQUEST", `This price leaves less than one cent for the job after fees and margin. The minimum is ${minimumPriceLamports} lamports at the current rate.`);
+    throw Object.assign(new WalletError("BAD_REQUEST", `This price leaves less than one cent for the job after fees and margin. The minimum is ${minimumPriceLamports} lamports at the current rate.`), { name: "ExecutorBudgetError" });
   const available = sellerNetLamports * rate / divisor - BigInt(margin);
   return { minimumPriceLamports, sellerNetLamports, modelBudgetCents: Number(available < BigInt(cap) ? available : BigInt(cap)) };
 }

@@ -9,6 +9,7 @@ import { address, type Address } from "@solana/kit";
 import type { Chain } from "./chain.js";
 
 export interface PriceSource {
+  remainingMs?(): number;
   /** Dollars per SOL, or null when no trustworthy price is available. */
   solUsd(options?: { fresh?: boolean }): Promise<number | null>;
 }
@@ -29,7 +30,7 @@ export const PYTH_SOL_USD_FEED_ID =
 const PRICE_UPDATE_DISCRIMINATOR = "22f123639d7ef4cd";
 /** A price older than this is not shown as current. */
 const MAX_PRICE_AGE_SECS = 15 * 60;
-const CACHE_MS = 60_000;
+export const PRICE_CACHE_MS = 60_000;
 
 /**
  * Decode a Pyth `PriceUpdateV2` account. Returns null unless every check
@@ -74,8 +75,9 @@ export function pythPrice(
   const now = options.now ?? Date.now;
   let cached: { at: number; value: number | null } | null = null;
   return {
+    remainingMs: () => cached ? Math.max(0, Math.min(PRICE_CACHE_MS, cached.at + PRICE_CACHE_MS - now())) : 0,
     async solUsd(read) {
-      if (!read?.fresh && cached !== null && now() - cached.at < CACHE_MS) return cached.value;
+      if (!read?.fresh && cached !== null && now() - cached.at < PRICE_CACHE_MS) return cached.value;
       let value: number | null = null;
       try {
         const raw = await chain.readRawAccount(account);

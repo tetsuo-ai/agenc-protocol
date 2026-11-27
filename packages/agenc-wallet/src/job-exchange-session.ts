@@ -32,6 +32,10 @@ export class JobExchangeSession {
     return { id, read: (): Mailbox => this.exchange.journal.read<Mailbox>(id) ?? {} };
   }
 
+  async verifySavedOutput(task:string,claim:string,hash:string):Promise<boolean> {
+    return !!this.required && this.exchange.verifySavedOutput(task,claim,hash);
+  }
+
   async join() {
     const packet = await this.exchange.announceKey();
     return this.relay.put(this.exchange, packet);

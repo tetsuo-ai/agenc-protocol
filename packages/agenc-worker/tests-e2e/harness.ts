@@ -5,6 +5,8 @@
 // because their real initializers need an upgradeable ProgramData account
 // litesvm doesn't model.
 import path from "node:path";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { LiteSVM, FailedTransactionMetadata } from "litesvm";
 import {
@@ -19,6 +21,7 @@ import {
   getProtocolConfigEncoder,
   findProtocolConfigPda,
   getModerationConfigEncoder,
+  lighthouse,
   findModerationConfigPda,
 } from "@tetsuo-ai/marketplace-sdk";
 
@@ -33,6 +36,8 @@ const DEFAULT_ADDR = address("11111111111111111111111111111111");
 export function freshSvm(): LiteSVM {
   const svm = new LiteSVM();
   svm.addProgramFromFile(PROGRAM, SO);
+  const fixture = JSON.parse(readFileSync(path.resolve(__dirname, "../../agenc-wallet/testing-assets/lighthouse.so.json"), "utf8"));
+  svm.addProgram(lighthouse.LIGHTHOUSE, gunzipSync(Buffer.from(fixture.gzipBase64,"base64")));
   const c = svm.getClock();
   c.unixTimestamp = 1_700_000_000n;
   svm.setClock(c);

@@ -9,7 +9,7 @@ import {
   directClaimState, listDirectClaimableTasks, SubmissionStatus, TaskStatus, TaskType, ValidationMode, values, type Task,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
-  FEE_HEADROOM_LAMPORTS, claimFundingRequirement, claimDepositFor, expectedWorkerPayout, jobTitle, processCandidate,
+  FEE_HEADROOM_LAMPORTS, claimFundingRequirement, claimDepositFor, expectedWorkerPayout, jobTitle, processCandidate, cachedJobRefusal,
   readClaimAccountRentMinimums, workerRecordShortfall, resumeOpenClaim, RELEASE_LANDING_MARGIN_SECS,
   type VerifiedCandidate, type WorkerAgent, type WorkerContext, type WorkSimulation,
 } from "./runtime.js";
@@ -128,6 +128,7 @@ export function workEligibility(task: string, code: keyof typeof eligibilityReas
 async function inspect(ctx: WorkerContext, agent: WorkerAgent, task: Address) {
   const refused = (code: keyof typeof eligibilityReasons) => ({ job: null, eligibility: workEligibility(task, code) });
   try {
+    if (ctx.localExecutorReady?.() === false || cachedJobRefusal(ctx,task,true)) return refused("unavailable");
     const read = await readTaskAccount(ctx, task);
     if (read.kind !== "task") return refused(read.kind);
     const now = await ctx.clusterTime!();
@@ -143,7 +144,7 @@ async function inspect(ctx: WorkerContext, agent: WorkerAgent, task: Address) {
     if (reputation < read.task.minReputation) return refused("reputation");
     let verified: VerifiedCandidate | undefined;
     const outcome = await processCandidate({ ...ctx, dryRun: true }, agent, candidate(task, read.task), { inspect: facts => { verified = facts; } });
-    if (!verified) {
+    if (!verified || outcome.status !== "dry-run") {
       return refused(outcome.status === "skipped" && (outcome.retryable || /error|unreachable/i.test(outcome.reason)) ? "unavailable" : "policy");
     }
     if (verified.isHire || read.task.creator === ctx.signer.address) return refused("policy");

@@ -3318,13 +3318,55 @@ describe("durable claim admission",()=>{
     await processCandidate(result.ctx,agent,candidate);
     expect(signatures).toBe(1);
   });
+  it("checks a fixed model ceiling before the first price read",async()=>{
+    const price=vi.fn(async()=>1);
+    const check=vi.fn(async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError"});});
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+      check,ctx=>{ctx.modelBudgetCeiling=()=>1;ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>"one cent";});
+    await processCandidate(result.ctx,agent,candidate);
+    expect(check).toHaveBeenCalledOnce();
+    expect(price).not.toHaveBeenCalled();
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
+  it("retries an affordable Grok job after the local quote crosses six dollars",async()=>{
+    let cents=599;
+    const price=vi.fn(async()=>cents);
+    const ready=vi.fn(async(input:Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0])=>{
+      if ((input.firstRoundCents ?? 0) < 600)
+        throw Object.assign(new Error("Grok needs six dollars."),{name:"ExecutorBudgetError"});
+      throw new Error("Practice check stops before signing.");
+    });
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},ready,
+      ctx=>{ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>String(cents);});
+    const read=vi.spyOn(result.ctx,"readAccount");
+    await processCandidate(result.ctx,agent,candidate);
+    expect(read).not.toHaveBeenCalled();
+    expect(price).toHaveBeenCalledOnce();
+    cents=601;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(ready.mock.calls.map(([facts])=>facts.firstRoundCents)).toEqual([599,601]);
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
+  it("expires a price refusal with the rate even when no other job refreshes it",async()=>{
+    const price=vi.fn().mockResolvedValueOnce(599).mockResolvedValue(601);
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()}, async()=>{
+      throw Object.assign(new Error("Price check."),{name:"ExecutorBudgetError"});
+    },ctx=>{ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>"unchanged";ctx.quoteLifetimeMs=()=>0;});
+    await processCandidate(result.ctx,agent,candidate);
+    expect(price).toHaveBeenCalledTimes(2);
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
   it("caches a fixed first-turn refusal until the allowance changes",async()=>{
     let budget=1;
+    const price=vi.fn(async()=>budget);
     const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
       async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError"});},
-      ctx=>{ctx.modelBudgetForTask=async()=>budget;});
+      ctx=>{ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>String(budget);});
+    const reads=vi.spyOn(result.ctx,"readAccount");
     await processCandidate(result.ctx,agent,candidate);
     expect(result.fetchUri).toHaveBeenCalledTimes(1);
+    expect(price).toHaveBeenCalledTimes(1);
+    expect(reads).not.toHaveBeenCalled();
     budget=3;
     await processCandidate(result.ctx,agent,candidate);
     expect(result.fetchUri).toHaveBeenCalledTimes(2);
@@ -3373,4 +3415,49 @@ it("keeps the admitted ACP profile and login after a switch during confirmation"
   expect(()=>requireClaimExecutor(dir,"core")).toThrow();
   expect(()=>requireClaimExecutor(dir,"acp:hermes:"+"b".repeat(64))).toThrow();
   expect(()=>requireClaimExecutor(dir,admitted)).not.toThrow();
+});
+
+it.each(["verified","different hash","connected"])("recovers a 0.1.16 private submission only with its signed saved output (%s)",async kind=>{
+  const fs=await import("node:fs");
+  const stateDir=mkdtempSync(path.join(tmpdir(),"private-upgrade-"));
+  const [claim]=await findClaimPda({task:TASK,bidder:WORKER}), hash="b".repeat(64);
+  const ledger=path.join(stateDir,"outside"), dir=path.join(ledger,WALLET+"-"+claim);
+  fs.mkdirSync(dir,{recursive:true});writeFileSync(path.join(dir,"0"),"");
+  const state=emptyState();state.openClaim={task:TASK,claimedAt:"2023-11-14T22:13:20.000Z",phase:"submitting",
+    submission:{resultUri:"agenc://result/sha256/"+hash,resultHashHex:hash,rewardAmount:String(REWARD),preparedAt:"2023-11-14T22:13:30.000Z"}};
+  saveState(stateDir,state);
+  const sent=vi.fn(), start=vi.fn();
+  const ctx=context(stateDir,new Map([[TASK,taskData(TaskStatus.InProgress)],[claim,claimData(claim)]]),{
+    submitTaskResult:async (_:unknown,opts:{assertAuthorized:()=>void})=>{opts.assertAuthorized(); sent();return {signature:"local-output"};}},[]);
+  ctx.executorIdentity=()=>kind==="connected"?"claude-code":"core";ctx.clusterTime=async()=>1700000015;ctx.modelSpendDir=ledger;
+  ctx.executorForTask=start;
+  ctx.roomWork={admit:vi.fn(),open:vi.fn(),verifySavedOutput:async(t,account,h)=>kind==="verified" && t===TASK && account===claim && h===hash};
+  try {
+    const outcome=await resumeOpenClaim(ctx,agent);
+    expect(start).not.toHaveBeenCalled();
+    if(kind==="verified"){
+      expect(outcome?.status).toBe("submitted");expect(sent).toHaveBeenCalledOnce();
+      expect(JSON.parse(fs.readFileSync(path.join(dir,"admission"),"utf8"))).toEqual({executor:"core",budget:0});
+    }else{expect(sent).not.toHaveBeenCalled();expect(fs.existsSync(path.join(dir,"admission"))).toBe(false);}
+  }finally{fs.rmSync(stateDir,{recursive:true,force:true});}
+});
+
+it.each(["between attempts","during admission"])("reconsiders a changed spec observed %s",async timing=>{
+  let available=false;
+  const seen = new Map<Address,string>();
+  const payload={title:"A new text job",instructions:"Return a sentence.",acceptance:["Agreed outputs v1: text-only delivery allowed; no required files"]};
+  const digest=await values.canonicalJobSpecHash(payload), [pda]=await findTaskJobSpecPda({task:TASK});
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},async()=>{
+    if(timing === "during admission") seen.set(TASK,digest.hex);
+    if(!available)throw Object.assign(new Error("File transport is off."),{name:"ExecutorCapabilityError"});
+  },ctx=>{ctx.candidateHashes=seen;});
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  seen.set(TASK,digest.hex);
+  const previous=result.ctx.readAccount;
+  result.ctx.readAccount=async address=>address!==pda?previous(address):new Uint8Array(getTaskJobSpecEncoder().encode({
+    task:TASK,creator:CREATOR,jobSpecHash:digest.bytes,jobSpecUri:SPEC_URI,createdAt:1n,updatedAt:2n,bump:248,reserved:new Uint8Array(7)}));
+  result.fetchUri.mockResolvedValue(Buffer.from(JSON.stringify({integrity:{algorithm:"sha256",canonicalization:"json-stable-v1",payloadHash:digest.hex},payload})));
+  available=true;
+  await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,jobSpecHash:digest.hex,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
+  expect(result.claimTaskWithJobSpec).toHaveBeenCalledOnce();
 });

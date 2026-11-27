@@ -34,3 +34,8 @@ describe("earning limits", () => {
     expect(await host.jobDeposits()).toBe(203n + 273n);
   });
 });
+
+it("caches a valid price below one cent and retries a missing quote",()=>{
+  expect(()=>jobPayCents(1n,100)).toThrow(expect.objectContaining({name:"ExecutorBudgetError"}));
+  expect(()=>jobPayCents(1n,null)).toThrow(expect.objectContaining({name:"Error"}));
+});
