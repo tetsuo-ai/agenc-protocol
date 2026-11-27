@@ -3401,3 +3401,17 @@ it("keeps a capability refusal when only the SOL price changes",async()=>{
   expect(reads).not.toHaveBeenCalled();
   expect(result.fetchUri).toHaveBeenCalledOnce();
 });
+
+it("rechecks a restored discovery hash after a newer scan",async()=>{
+  const first="a".repeat(64), seen=new Map<Address,string>([[TASK,first]]);
+  let calls=0;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{ if (++calls===1) throw Object.assign(new Error("Files are unavailable."),{name:"ExecutorCapabilityError"}); },
+    ctx=>{ctx.candidateHashes=seen;});
+  const candidate={task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT};
+  await processCandidate(result.ctx,agent,candidate);
+  expect(result.fetchUri).toHaveBeenCalledOnce();
+  Object.assign(result.ctx,{candidateScan:1});
+  await processCandidate(result.ctx,agent,candidate);
+  expect(result.fetchUri).toHaveBeenCalledTimes(2);
+});

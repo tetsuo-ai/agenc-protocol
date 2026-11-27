@@ -300,7 +300,8 @@ export type WorkerContext = {
   executorIdentity?: () => string;
   capabilityRefusals?: Map<Address, string>;
   candidateHashes?: Map<Address,string>;
-  refusals?: Map<string,{hash:string; snapshot?:string | undefined; generation:string; reason:string; expires?:number; unchanged:()=>boolean}>;
+  candidateScan?: number;
+  refusals?: Map<string,{hash:string; snapshot?:string | undefined; scan?:number; generation:string; reason:string; expires?:number; unchanged:()=>boolean}>;
   /** Synchronous local revision. Checking a refused job must not fetch the price again. */
   allowanceGeneration?: (task:Task, metadata:Uint8Array|null, lastBudget?:number)=>string;
   revisionRefusals?: Map<Address,string>;
@@ -875,6 +876,7 @@ export async function listClaimCandidates(
     }),
     listPinnedJobSpecHashes(ctx.gpa),
   ]);
+  observeCandidateScan(ctx, new Set(open.map(row => row.address)), pinned);
   const candidates: ClaimCandidate[] = [];
   for (const { address, account } of open) {
     if (account.status !== TaskStatus.Open) continue; // defensive
@@ -899,6 +901,13 @@ export async function listClaimCandidates(
         : 0,
   );
   return candidates;
+}
+
+function observeCandidateScan(ctx: WorkerContext, open: ReadonlySet<Address>, pins: ReadonlyMap<Address,string>) {
+  ctx.candidateScan = (ctx.candidateScan ?? 0) + 1;
+  ctx.candidateHashes = new Map(Array.from(pins).filter(([task])=>open.has(task)));
+  if (ctx.refusals)
+    for (const key of ctx.refusals.keys()) if (!open.has(key.split("/")[0] as Address)) ctx.refusals.delete(key);
 }
 
 /** Outcome of attempting one candidate. */
@@ -2203,7 +2212,7 @@ export function cachedJobRefusal(ctx:WorkerContext,task:Address,chosen:boolean,h
   if (!prior) return undefined;
   const observed = ctx.candidateHashes?.get(task) ?? hint;
   if (prior.generation === (ctx.admissionGeneration?.() ?? "configured") &&
-      (!observed || observed === prior.hash || observed === prior.snapshot) && prior.unchanged()) {
+      (!observed || observed === prior.hash || (observed === prior.snapshot && (ctx.candidateScan ?? 0) === prior.scan)) && prior.unchanged()) {
     if (prior.expires !== undefined && monotonicMs() >= prior.expires)
       return {status:"skipped" as const,task,reason:"The job deadline passed."};
     return {status:"skipped" as const,task,reason:prior.reason,retryable:true};
@@ -2226,6 +2235,7 @@ export async function processCandidate(
   const generation = ctx.admissionGeneration?.() ?? "configured";
   const refused = ctx.refusals ??= new Map();
   const chosen = !!(options.authorizeChosen || options.inspect);
+  const scan = ctx.candidateScan ?? 0;
   const observedHash = ctx.candidateHashes?.get(task) ?? candidate.jobSpecHash;
   const cached = cachedJobRefusal(ctx,task,chosen,observedHash);
   if (cached) return cached;
@@ -2448,7 +2458,7 @@ export async function processCandidate(
     if (error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name)) {
       const current = () => error.name === "ExecutorBudgetError" ? ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) ?? "" : "";
       const allowance = current();
-      refused.set(task+(chosen?"/chosen":"/automatic"),{hash:bytesToHex(new Uint8Array(verified.jobSpecHash)),snapshot:observedHash,generation,reason,
+      refused.set(task+(chosen?"/chosen":"/automatic"),{hash:bytesToHex(new Uint8Array(verified.jobSpecHash)),snapshot:observedHash,scan,generation,reason,
         ...(expires !== undefined && {expires}),unchanged:()=>current()===allowance});
     }
     ctx.log({ event: "task.execution-not-ready", task, reason });
@@ -3852,10 +3862,8 @@ async function runUpLocked(
     // SDK's independent signature/log polling loop behind this budget.
     indexer: ctx.gpa,
     onCandidateSnapshot(open,pins) {
+      observeCandidateScan(ctx,open,pins);
       for (const task of deferred.keys()) if (!open.has(task)) deferred.delete(task);
-      for (const key of ctx.refusals!.keys()) if (!open.has(key.split("/")[0] as Address)) ctx.refusals!.delete(key);
-      for (const task of ctx.candidateHashes!.keys()) if (!open.has(task)) ctx.candidateHashes!.delete(task);
-      for (const task of open) { const hash=pins.get(task); if (hash) ctx.candidateHashes!.set(task,hash); }
     },
     filter: {
       capabilities: ctx.config.capabilities,
