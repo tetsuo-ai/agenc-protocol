@@ -1760,7 +1760,7 @@ describe("transaction-boundary recovery", () => {
     expect(submitTaskResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["available", "exhausted", "unsupported", "attached"])("restores a revision with its reserved budget (%s)", async mode => {
+  it.each(["available", "exhausted", "unsupported", "attached", "claim counters"])("restores a revision with its reserved budget (%s)", async mode => {
     const budgeted = mode !== "available";
     const file = Buffer.from(mode === "attached" ? "a,b\n1,2\n" : "not a picture");
     const fileHash = sha256Hex(file);
@@ -1786,7 +1786,7 @@ describe("transaction-boundary recovery", () => {
       rewardAmount: REWARD.toString(),
       submittedAt: "2026-07-18T00:00:00.000Z",
       settled: false,
-      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(["unsupported","attached"].includes(mode) && { revisionRound: 0 }) } } : {}),
+      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(["unsupported","attached","claim counters"].includes(mode) && { revisionRound: 0 }) } } : {}),
     });
     saveState(stateDir, state);
 
@@ -1879,14 +1879,23 @@ describe("transaction-boundary recovery", () => {
     expect(threadGet).not.toHaveBeenCalled();
     expect(submitTaskResult).not.toHaveBeenCalled();
     ctx.reviewRoom = room;
-    if (mode === "attached") {
+    if (mode === "attached" || mode === "claim counters") {
       const fs=await import("node:fs");
       const root=path.join(stateDir,"model-spend"),dir=path.join(root,WALLET+"-"+claimPda);
       fs.mkdirSync(dir,{recursive:true});
-      fs.writeFileSync(path.join(dir,"admission"),JSON.stringify({executor:"claude-code",budget:50}));
-      ctx.modelSpendDir=root; ctx.executorIdentity=()=>"claude-code";
+      const connected = mode === "attached" ? "claude-code" : "codex-plan";
+      fs.writeFileSync(path.join(dir,"admission"),JSON.stringify({executor:connected,budget:50}));
+      ctx.modelSpendDir=root; ctx.executorIdentity=()=>connected;
       ctx.clusterTime=async()=>1_700_000_299;
-      ctx.checkExecutionReady=async requirements=>{if(requirements.reviewFiles) throw Object.assign(new Error("Unsupported review files."),{name:"ExecutorCapabilityError"});};
+      if (mode === "claim counters") {
+        fs.writeFileSync(path.join(dir,"0"),"30");
+        fs.writeFileSync(path.join(dir,"0.counts"), JSON.stringify({tokens:600001,calls:2}));
+      }
+      ctx.checkExecutionReady=async requirements=>{
+        if (requirements.reviewFiles) throw Object.assign(new Error("Unsupported review files."),{name:"ExecutorCapabilityError"});
+        if (mode === "claim counters" && requirements.claimCounts?.().tokens === 600001)
+          throw Object.assign(new Error("The revision exceeds the token cap."),{name:"ExecutorBudgetError"});
+      };
       ctx.reviewRoom={fileProblem:()=>null,execute:vi.fn(room.execute)};
       ctx.readReviewArtifact=async hash=>hash===fileHash?file:Buffer.from(taskThread.canonicalEnvelopeJson(changesEnvelope));
       const before=loadState(stateDir).openClaim!.modelBudget;

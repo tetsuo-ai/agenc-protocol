@@ -66,6 +66,22 @@ export function requireClaimExecutor(dir: string, executor: string, legacyPrivat
   throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
 }
 
+// Each numbered round has its own measured counters in the durable claim directory.
+export function claimModelCounts(dir: string): { tokens: number; calls: number } {
+  let tokens = 0, calls = 0;
+  if (existsSync(join(dir, ".agent-active"))) throw new Error("A round is still active.");
+  try {
+    for (const name of readdirSync(dir).filter(name => /^(?:-1|[0-2])$/.test(name))) {
+      const used = JSON.parse(readFileSync(join(dir, name + ".counts"), "utf8"));
+      if (![used.tokens, used.calls].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error();
+      tokens += used.tokens;
+      calls += used.calls;
+    }
+    if (Number.isSafeInteger(tokens) && Number.isSafeInteger(calls)) return { tokens, calls };
+  } catch { /* Missing or unreadable counters close admission. */ }
+  throw Object.assign(new Error("The claim's model usage is unknown."), { name: "ExecutorBudgetError" });
+}
+
 export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number, cents?: number): string {
   const dir = join(root, wallet + "-" + claim);
   const lock = join(dir,".reserving");

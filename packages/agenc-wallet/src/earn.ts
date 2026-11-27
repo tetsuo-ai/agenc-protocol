@@ -1,3 +1,4 @@
+import { CODEX_CAP, CODEX_PRICE, codexMinimum } from "./client/codex-allowance.js";
 import { createHash } from "node:crypto";
 import type { BriefTerms } from "@tetsuo-ai/agenc-worker";
 // "Take jobs while idle": run the stock marketplace worker loop for an agent,
@@ -104,12 +105,12 @@ function firstTurnFits(cents:number, bytes:number):boolean {
   return Number.isSafeInteger(cents) && (bytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= cents * 200_000;
 }
 // Codex checks the same envelope in the host proxy before sending its first request.
-function codexApiFirstTurn(cents: number, promptBytes: number): boolean {
-  const input = Math.min(272_000, Math.ceil((promptBytes + 4096) * 1.1) + 64);
-  return Number.isSafeInteger(cents) && input * 30 + 16 * 180 <= cents * 400_000;
+function codexApiFirstTurn(cents: number, promptBytes: number, file = false): boolean {
+  return Number.isSafeInteger(cents) && codexMinimum(false, promptBytes, file).units <= cents * CODEX_PRICE.cent;
 }
 type ListingNeeds = {promptBytes?:number; requiredFiles?:readonly string[]; allowTextOnly?:boolean; privateInputs?:boolean; servicePin?:boolean; serviceDigest?:string; modelCapCents?:number; extraRoomFeatures?:boolean};
 export interface JobAdmission {
+  claimCounts?: () => {tokens:number; calls:number};
   source: "own" | "external";
   privateInputs: boolean;
   servicePin: boolean;
@@ -361,7 +362,7 @@ export class EarnHost {
     if (adapters && Object.hasOwn(adapters,adapter)) return adapters[adapter];
     if (adapter === "codex-api") return {sampleFile:"answer.txt", canDeliver:()=>true, firstTurnFits:codexApiFirstTurn};
     if (adapter === "codex-plan") return {sampleFile:"answer.txt", canDeliver:()=>true,
-      firstTurnFits:(cents:number, _bytes:number, requiresFile = false) => cents >= (requiresFile ? 156 : 78)};
+      firstTurnFits:(cents:number, _bytes:number, requiresFile = false) => Number.isSafeInteger(cents) && cents * CODEX_PRICE.cent >= codexMinimum(true, 0, requiresFile).units};
     return adapter === "claude-code" ? {sampleFile:"answer.txt",canDeliver:()=>true,firstTurnFits} : undefined;
   }
 
@@ -1037,6 +1038,12 @@ export class EarnHost {
           catch { throw new ExecutorCapabilityError("The rehearsal cannot deliver the agreed files."); }
         }
         const requiresFile = admission.requiredFiles.length > 0 || !admission.allowTextOnly;
+        if (admission.claimCounts && (connected === "codex-api" || connected === "codex-plan")) {
+          const used = admission.claimCounts();
+          const needed = codexMinimum(connected === "codex-plan", admission.promptBytes, requiresFile);
+          if (used.calls + needed.calls > CODEX_CAP.calls || used.tokens + needed.tokens > CODEX_CAP.tokens)
+            throw new ExecutorBudgetError("The claim has too few model calls or tokens left.");
+        }
         if (admission.firstRoundCents !== undefined && (admission.firstRoundCents < reportedMinimum * (requiresFile ? 2 : 1) ||
             (connected && !this.#publicJobs(connected)!.firstTurnFits(admission.firstRoundCents,admission.promptBytes,requiresFile))))
           throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
@@ -1212,7 +1219,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
+        acceptance, promptBytes, firstRoundCents, claimCounts, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         let outputs;
@@ -1222,7 +1229,7 @@ export class EarnHost {
         if (creator && this.connectedAgent(agent.agentId) && firstRoundCents === undefined && !preview)
           throw Object.assign(new Error("The job needs a verified model allowance."),{name:"ExecutorBudgetError"});
         return checkReady(signal, creator ? {
-          source:this.#ownAddresses().includes(creator) ? "own" : "external", privateInputs:!!privateInputs,
+          ...(claimCounts && {claimCounts}), source:this.#ownAddresses().includes(creator) ? "own" : "external", privateInputs:!!privateInputs,
           servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest,verifiedPin:terms.servicePin}),reviewFiles:Math.max(reviewFiles ?? 0,reviewAttachments ?? 0),requiredFiles:outputs?.requiredFiles ?? [],
           verifiedAgreement:!!outputs,revision:!!revision,extraRoomFeatures:!!extraRoomFeatures || !!listingTerms?.childHire || listingTerms?.fulfilment?.privateInputs === true || (requiredCapabilities ?? 1n)>1n,
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,

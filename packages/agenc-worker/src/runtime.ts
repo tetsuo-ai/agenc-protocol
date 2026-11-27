@@ -54,7 +54,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { claimModelCounts, claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -305,7 +305,7 @@ export type WorkerContext = {
   allowanceGeneration?: (task:Task, metadata:Uint8Array|null, lastBudget?:number)=>string;
   revisionRefusals?: Map<Address,string>;
   budgetRefusals?: Map<Address, {generation:string; unchanged:()=>Promise<boolean>}>;
-  checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
+  checkExecutionReady?: (input: { claimCounts?: () => {tokens:number;calls:number}; task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
     revision?: boolean; reviewAttachments?: number; extraRoomFeatures?: boolean;
     acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
@@ -2012,14 +2012,15 @@ async function executeAndSubmit(
     const currentExecutor = ctx.executorIdentity?.();
     let executionGuard: (() => void) | undefined;
     if (currentExecutor && ctx.modelSpendDir) {
-      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs);
+      const ledger = join(ctx.modelSpendDir, ctx.signer.address + "-" + claimAddress);
+      const checkPin = () => requireClaimExecutor(ledger, ctx.executorIdentity!(), privateInputs);
       try {
         checkPin();
         const marker = evidenceState.openClaim;
         const live = await readClaim(ctx,agent,task);
         if (!live || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
         const deadlineMs = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,live.expiresAt);
-        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,
+        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,claimCounts:()=>claimModelCounts(ledger),
           requiredCapabilities:decodedTask.requiredCapabilities,acceptance:brief.acceptance,listingMetadata:serviceMetadata ?? null,
           ...(binding.listing && {listing:binding.listing}),reviewFiles:reviewInputs?.length ?? 0,
           revision:!!revisionHash,reviewAttachments,extraRoomFeatures:requiresExtraRoom(decodedTask,payload),
@@ -3098,11 +3099,14 @@ export async function resumeOpenClaim(
   if (changesRequest) {
     const payload = JSON.parse(Buffer.from(verified.content).toString("utf8"));
     try {
+      let ledger: string | undefined;
       if (ctx.modelSpendDir && ctx.executorIdentity) {
         const [address] = await findClaimPda({task,bidder:agent.agentPda});
-        requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload));
+        ledger = join(ctx.modelSpendDir,ctx.signer.address+"-"+address);
+        requireClaimExecutor(ledger,ctx.executorIdentity(),needsPrivateRoom(payload));
       }
       await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,
+        ...(ledger && {claimCounts:()=>claimModelCounts(ledger!)}),
         ...(marker.listing && {listing:marker.listing as Address}),listingMetadata,requiredCapabilities:decodedTask.requiredCapabilities,
         privateInputs:needsPrivateRoom(payload),acceptance:parseJobBrief(payload).acceptance,
         reviewAttachments:changesRequest.attachments.length,extraRoomFeatures:requiresExtraRoom(decodedTask,payload)});
