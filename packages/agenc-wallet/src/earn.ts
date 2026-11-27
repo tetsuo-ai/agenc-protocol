@@ -1022,7 +1022,8 @@ export class EarnHost {
           throw new Error("This job room is no longer selected.");
       };
     };
-    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false) => {
+    let goodProbe: string | undefined;
+    const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false, policyOnly = false) => {
       const admission = requested && { ...requested, fileTransport: requested.fileTransport && !!fileLinkPrefix };
       const current = guard();
       const named = Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId);
@@ -1054,10 +1055,13 @@ export class EarnHost {
           throw Object.assign(new Error("The first model turn exceeds this job's allowance."), {name:"ExecutorBudgetError"});
       };
       check();
-      if (preview) return check;
+      if (policyOnly) return check;
       if (this.#options.checkExecutionReady !== undefined) {
         hostCheck = await this.#options.checkExecutionReady({agentId:agent.agentId,...(signal && {signal}),...(admission && {admission})});
       } else if (executor.readiness !== undefined) {
+        const proof = JSON.stringify([generation(),admission?.source,admission?.privateInputs,admission?.servicePin,admission?.serviceDigest]);
+        const tracked = !named && !!(this.#options.defaultExecutorGeneration || this.#options.liveRoomState);
+        if (preview && tracked && proof === goodProbe) return check;
         await runExecutor({
           argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
             ["admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
@@ -1067,6 +1071,8 @@ export class EarnHost {
           maxStdoutBytes: 64 * 1024,
           ...(signal === undefined ? {} : { signal }),
         });
+        check();
+        goodProbe = proof;
       } else if (executor.mode === "sandboxed") {
         throw new Error("The host must configure a job room readiness self-test before taking jobs.");
       }
@@ -1219,7 +1225,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview }) => {
+        acceptance, promptBytes, firstRoundCents, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview, policyOnly }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         let outputs;
@@ -1234,7 +1240,7 @@ export class EarnHost {
           verifiedAgreement:!!outputs,revision:!!revision,extraRoomFeatures:!!extraRoomFeatures || !!listingTerms?.childHire || listingTerms?.fulfilment?.privateInputs === true || (requiredCapabilities ?? 1n)>1n,
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
           ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
-        } : undefined,preview);
+        } : undefined,preview,policyOnly);
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }

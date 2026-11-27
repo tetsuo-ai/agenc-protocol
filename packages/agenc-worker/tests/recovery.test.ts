@@ -3463,3 +3463,11 @@ it("skips repeated account and spec reads for a permanent room image failure",as
   expect(read).not.toHaveBeenCalled();
   expect(check).toHaveBeenCalledOnce();
 });
+
+it("requires a successful room probe in a picker dry run",async()=>{
+  const check=vi.fn(async()=>{throw new Error("Installed room failed its probe.");});
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},check,ctx=>{ctx.dryRun=true;});
+  expect(result.outcome.status).toBe("skipped");
+  expect(check).toHaveBeenCalled();
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+});

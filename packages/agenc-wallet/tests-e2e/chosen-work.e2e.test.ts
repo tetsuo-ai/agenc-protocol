@@ -96,8 +96,9 @@ describe("chosen open work", () => {
     sleep.ms += 300001;
     await expect(wallet.decideWork(stale.id, true)).rejects.toThrow(/expired/);
     sleep.ms = 0;
+    const checked = await quote();
     ready.mockRejectedValueOnce(new Error("self-test failed"));
-    await expect(wallet.decideWork((await quote()).id, true)).rejects.toThrow();
+    await expect(wallet.decideWork(checked.id, true)).rejects.toThrow();
     expect((await wallet.openWork(id)).jobs).toHaveLength(2);
     await wallet.setBudget(id, 0);
     const pending = await quote();
@@ -108,10 +109,13 @@ describe("chosen open work", () => {
 
   it("checks the live Take jobs switch again after the claim self-test", async () => {
     let enabled = true;
-    const ready = async () => { enabled = false; };
+    let switchAtCheck = false;
+    const ready = async () => { if (switchAtCheck) enabled = false; };
     const { wallet, id, task } = await setup(ready, undefined, () => enabled);
     const quote = await wallet.quoteWork(id, task, "claim");
+    switchAtCheck = true;
     await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+    switchAtCheck = false;
     enabled = true;
     expect((await wallet.openWork(id)).jobs).toHaveLength(2);
     expect(world!.sandbox.deliveries.size).toBe(0);

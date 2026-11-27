@@ -545,3 +545,23 @@ it("holds a Core private hire when its approved processing selection is removed"
     expect(()=>check && check()).toThrow();
   } finally {await earn.stopAll();}
 });
+
+it("requires the current native image probe to show a picker result",async()=>{
+  const fs=await import("node:fs"),dir=mkdtempSync(path.join(tmpdir(),"picker-image-"));folders.push(dir);
+  const count=path.join(dir,"probes"),bad=path.join(dir,"bad");
+  let generation="1";
+  const code="const fs=require('fs');fs.appendFileSync(process.argv[1],'x');process.exit(fs.existsSync(process.argv[2])?78:0)";
+  const earn=host({executor:{...local,mode:"sandboxed",readiness:{argv:[process.execPath,"-e",code,count,bad]}},defaultExecutorGeneration:()=>generation});
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={task:"job" as never,creator:"buyer" as never,preview:true};
+    fs.writeFileSync(bad,"invalid digest");
+    await expect(ctx.checkExecutionReady!(job)).rejects.toThrow();
+    generation="2";fs.unlinkSync(bad);
+    await ctx.checkExecutionReady!(job);await ctx.checkExecutionReady!(job);
+    expect(fs.readFileSync(count,"utf8")).toBe("xx");
+    generation="3";fs.writeFileSync(bad,"different invalid digest");
+    await expect(ctx.checkExecutionReady!(job)).rejects.toThrow();
+  } finally {await earn.stopAll();}
+});

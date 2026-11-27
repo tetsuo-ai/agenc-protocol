@@ -312,7 +312,7 @@ export type WorkerContext = {
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
     revision?: boolean; reviewAttachments?: number; extraRoomFeatures?: boolean;
-    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
+    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number; policyOnly?:boolean; preview?:boolean }) => Promise<void | (() => void)>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -2458,7 +2458,7 @@ export async function processCandidate(
     };
     if (ctx.modelBudgetCeiling && ctx.checkExecutionReady) {
       budget = ctx.modelBudgetCeiling(decodedTask, listingMetadata);
-      await ctx.checkExecutionReady({...requirements, preview:true, ...(budget !== undefined && {firstRoundCents:firstRound(budget)})});
+      await ctx.checkExecutionReady({...requirements, preview:true, policyOnly:true, ...(budget !== undefined && {firstRoundCents:firstRound(budget)})});
     }
     budget = undefined;
     budget = await ctx.modelBudgetForTask?.(decodedTask, task, listingMetadata);
@@ -3141,7 +3141,7 @@ export async function resumeOpenClaim(
         requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload),ctx.executorProgram?.());
       }
       await ctx.checkTextRevision?.({previous:{proofHashHex:hashHex(submission!.account.proofHash),resultData:new Uint8Array(submission!.account.resultData)}});
-      await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,
+      await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,policyOnly:true,
         ...(marker.listing && {listing:marker.listing as Address}),listingMetadata,requiredCapabilities:decodedTask.requiredCapabilities,
         privateInputs:needsPrivateRoom(payload),acceptance:parseJobBrief(payload).acceptance,
         reviewAttachments:changesRequest.attachments.length,extraRoomFeatures:requiresExtraRoom(decodedTask,payload)});
