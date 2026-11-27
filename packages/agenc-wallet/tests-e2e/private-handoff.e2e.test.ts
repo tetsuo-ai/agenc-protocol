@@ -42,7 +42,7 @@ it.each([["post", false], ["hire", false], ["post", true], ["hire", true]] as co
   const program = "const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(process.argv[1])){clearInterval(t);process.stdout.write(fs.readFileSync(process.argv[1]))}},50)";
   seller = await AgencWallet.open({ dataDir: join(dir, "seller"), unlockSecret: randomBytes(32), chain: sandbox.chain, services: sandbox.services,
     prices: sandbox.prices, log: text => log.push(text), earn: { executor: { argv: [process.execPath, "-e", program, pointerFile, "{prompt}"],
-      mode: "sandboxed", envAllowlist: [], timeoutMs: 40000, isolatedJobRoom: true }, roomWork: privateRoomDouble(), pollIntervalMs: 120,
+      mode: "sandboxed", envAllowlist: [], timeoutMs: 40000, jobRoom: true, isolatedJobRoom: true }, roomWork: privateRoomDouble(), pollIntervalMs: 120,
       checkExecutionReady: async () => {} } });
   sandbox.fund(seller.mainAddress, 5n * SOL);
   const provider = await seller.createAgent("Studio"), buyer = await wallet.createAgent("Client");

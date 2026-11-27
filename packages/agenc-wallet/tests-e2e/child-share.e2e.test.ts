@@ -47,7 +47,7 @@ it.skipIf(!("exchangeContext" in taskThread))(
       world: {
         // The seller's host room (C/D) admits the private parent; this test parks its turn.
         earn: {
-          executor: { argv: [process.execPath, "-e", "", "{prompt}"], mode: "sandboxed", envAllowlist: [], timeoutMs: 60_000, isolatedJobRoom: true },
+          executor: { argv: [process.execPath, "-e", "", "{prompt}"], mode: "sandboxed", envAllowlist: [], timeoutMs: 60_000, jobRoom: true, isolatedJobRoom: true },
           pollIntervalMs: 150,
           serviceRefreshMs: 300,
           roomWork: () => ({ admit: async () => {}, open: async () => ({ state: "waiting" as const }) }),

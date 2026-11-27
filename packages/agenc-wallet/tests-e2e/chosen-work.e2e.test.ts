@@ -18,7 +18,7 @@ vi.mock("@tetsuo-ai/agenc-worker",async load=>{
 let world: World | undefined;
 afterEach(async () => { await world?.wallet.close(); world = undefined; });
 const executor = { argv: [process.execPath, "-e", "process.stdout.write('Room output')", "{prompt}"],
-  mode: "sandboxed" as const, timeoutMs: 3000, envAllowlist: [] };
+  mode: "sandboxed" as const, jobRoom:true, isolatedJobRoom:true, timeoutMs: 3000, envAllowlist: [] };
 
 async function setup(ready = async () => {}, tamper = () => false, enabled = () => true, options: NonNullable<Parameters<typeof startWorld>[0]> = {}) {
   world = await startWorld({

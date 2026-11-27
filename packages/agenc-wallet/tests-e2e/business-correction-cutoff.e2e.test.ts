@@ -68,7 +68,7 @@ it("refuses a correction that would run into the early release pause, and keeps 
           "{prompt}",
         ],
         mode: "sandboxed",
-        isolatedJobRoom: true,
+        jobRoom: true, isolatedJobRoom: true,
         timeoutMs: 3000,
         envAllowlist: [],
       },

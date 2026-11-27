@@ -69,6 +69,8 @@ export interface EarnExecutor {
   connectedAgent?:string;
   /** The trusted host selected the isolated guest adapter for this argv. */
   isolatedJobRoom?: boolean;
+  /** The host installed the Core job program and its delivery and exchange protocols. */
+  jobRoom?: boolean;
   /**
    * Command and arguments; one element must be exactly "{prompt}". Wherever
    * these appear they are replaced:
@@ -380,6 +382,9 @@ export class EarnHost {
     if (needs.servicePin && ["job","peer-job"].includes(executor?.argv[2] ?? "") && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) return false;
     const connected = this.connectedAgent(agentId);
     if (needs.servicePin && needs.privateInputs) return false;
+    const builtIn = executor?.jobRoom === true && executor.isolatedJobRoom === true && executor.mode === "sandboxed";
+    if (!connected && !builtIn &&
+        (needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || needs.requiredFiles?.length || needs.allowTextOnly === false)) return false;
     if (connected) {
       const policy = this.#publicJobs(connected);
       if (!policy || !executor?.isolatedJobRoom || executor.mode !== "sandboxed" || needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || executor?.argv[2] === "peer-job" ||
@@ -395,7 +400,7 @@ export class EarnHost {
   /** Whether this agent's verified isolated room can receive B's private file handoff. */
   supportsPrivateInputs(agentId: string): boolean {
     const executor = this.executorFor(agentId);
-    return executor?.argv[2] !== "peer-job" && !this.connectedAgent(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
+    return executor?.jobRoom === true && executor.argv[2] !== "peer-job" && !this.connectedAgent(agentId) && executor?.isolatedJobRoom === true && executor.mode === "sandboxed" && !this.ownJobsOnly &&
       this.#options.roomWork?.(agentId) !== undefined;
   }
 

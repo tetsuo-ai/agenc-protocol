@@ -57,7 +57,7 @@ it("passes the owner's 0.01 SOL ceiling and buyer allowlist into a named-only wo
 it("applies verified requirements to callbacks, listing terms and the first paid turn", async () => {
   let generation = "one", agent = "claude-code" as "core" | "claude-code";
   const check = vi.fn(async () => {});
-  const room = {...local, mode:"sandboxed" as const, isolatedJobRoom:true};
+  const room = {...local, mode:"sandboxed" as const, isolatedJobRoom:true, jobRoom:true};
   const earn = host({executor:room, roomWork:()=>({} as never), checkExecutionReady:check,
     defaultExecutorGeneration:()=>generation, liveRoomState:()=>({agent,coreCommand:null,generation,ready:true})});
   void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
@@ -97,7 +97,7 @@ it.each([
 
 it("rechecks the specific listing's advertised terms through a Core to Claude switch", async ()=>{
   let agent:"core"|"claude-code"="core";
-  const room={...local,mode:"sandboxed" as const,isolatedJobRoom:true};
+  const room={...local,mode:"sandboxed" as const,isolatedJobRoom:true,jobRoom:true};
   const earn=host({executor:room,roomWork:()=>({} as never),checkExecutionReady:async()=>{},
     liveRoomState:()=>({agent,generation:agent,ready:true,coreCommand:process.execPath}),defaultExecutorGeneration:()=>agent});
   void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
@@ -430,7 +430,7 @@ it.each(["job","peer-job"].flatMap(mode=>["outputs","private","revision"].map(ki
   const manifest=JSON.stringify({outputs:["answer.txt"],files:[],runtimeDigest,permissionDigest,capabilities:"1"});
   const pin={digest:sha(manifest),runtimeDigest,permissionDigest,capabilities:"1" as const};
   const dir=mkdtempSync(path.join(tmpdir(),"pinned-admission-"));folders.push(dir);
-  const callback=vi.fn(async()=>{}),room={...local,mode:"sandboxed" as const,isolatedJobRoom:true,argv:[process.execPath,"room:{agent}",mode,"pair:fixture","{prompt}"]};
+  const callback=vi.fn(async()=>{}),room={...local,jobRoom:true,mode:"sandboxed" as const,isolatedJobRoom:true,argv:[process.execPath,"room:{agent}",mode,"pair:fixture","{prompt}"]};
   const earn=new EarnHost({dataDir:dir,chain:{clientFor:()=>({}),network:"sandbox"} as never,
     services:{resultUploader:()=>({url:"agenc://test",fetch:vi.fn()}),fileLinkPrefix:"agenc://file/"} as never,
     options:{executor:room,checkExecutionReady:callback,roomWork:()=>({} as never)},log:vi.fn(),notify:vi.fn()});
@@ -466,4 +466,23 @@ it("holds text revisions of delivered files and rejects new files in a text corr
     await expect(ctx.checkTextRevision?.({output:body}) ?? Promise.resolve()).rejects.toThrow(/file/);
     await expect(ctx.checkTextRevision?.({output:Buffer.from("Changed sentence.")})).resolves.toBeUndefined();
   } finally {await earn.stopAll();}
+});
+
+it("refuses a file agreement on an unlabeled named text executor",async()=>{
+  const room={...local,argv:["/bin/true","--","room:{agent}","{prompt}"],mode:"sandboxed" as const,isolatedJobRoom:true};
+  const earn=host({executor:null,agentExecutors:{seller:room},checkExecutionReady:async()=>{}},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={task:"job" as never,creator:"buyer" as never,acceptance:[outputAgreementCriterion({requiredFiles:["report.pdf"],allowTextOnly:false})]};
+    await expect(ctx.checkExecutionReady!(job)).rejects.toThrow();
+  } finally {await earn.stopAll();}
+});
+
+it.each([false,true])("gives an ordinary job argument no built-in file policy (named %s)",named=>{
+  const room={...local, argv:[process.execPath,"/fixture/ordinary.js","job","{prompt}"], mode:"sandboxed" as const, isolatedJobRoom:true};
+  const earn=host({executor:named?null:room,...(named && {agentExecutors:{seller:room}})},1000,true);
+  expect(earn.supportsService("seller",{requiredFiles:["report.pdf"]})).toBe(false);
+  expect(earn.supportsService("seller",{})).toBe(true);
 });
