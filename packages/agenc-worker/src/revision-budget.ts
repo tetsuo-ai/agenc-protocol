@@ -1,4 +1,4 @@
-import { mkdirSync, openSync, closeSync, fsyncSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, fsyncSync, unlinkSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Address } from "@solana/kit";
 import type { ModelBudget } from "./state.js";
@@ -38,14 +38,48 @@ export function enrollClaimBudget(root: string, wallet: Address, claim: Address)
   syncDirectory(root);
 }
 
-export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number): string {
+export function pinClaim(dir: string, executor: string, budget?: number): boolean {
+  const pin = JSON.stringify({executor, budget: budget ?? null});
+  try { writeFileSync(join(dir, "admission"), pin, {flag:"wx", mode:0o600, flush:true}); syncDirectory(dir); return true; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || readFileSync(join(dir, "admission"), "utf8") !== pin)
+      throw new Error("This claim already has different terms.", {cause:error});
+    return false;
+  }
+}
+
+export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false): void {
+  if (existsSync(join(dir, "admission"))) {
+    if (JSON.parse(readFileSync(join(dir, "admission"), "utf8")).executor === executor) return;
+  } else {
+    // Only these older runs identify their executor without guessing.
+    const connected = existsSync(join(dir, "0.counts"));
+    if (!connected && legacyPrivate && executor === "core") return;
+  }
+  throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
+}
+
+export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number, cents?: number): string {
   const dir = join(root, wallet + "-" + claim);
+  const lock = join(dir,".reserving");
+  let held = false;
   try {
-    const fd = openSync(join(dir, String(round)), "wx", 0o600);
-    try { fsyncSync(fd); } finally { closeSync(fd); }
+    writeFileSync(lock,"",{flag:"wx",mode:0o600,flush:true});
+    held = true;
+    if (existsSync(join(dir, "admission"))) {
+      const {budget} = JSON.parse(readFileSync(join(dir, "admission"), "utf8"));
+      const prior = readdirSync(dir).filter(n => /^(?:-1|[0-2])$/.test(n)).map(n => Number(readFileSync(join(dir,n), "utf8")));
+      if (!Number.isSafeInteger(budget) || !Number.isSafeInteger(cents) || cents! <= 0 ||
+          prior.some(n => !Number.isSafeInteger(n) || n <= 0) || prior.reduce((a,b) => a+b, cents!) > budget)
+        throw new Error("The claim has no further allowance.");
+    }
+    writeFileSync(join(dir, String(round)), cents === undefined ? "" : String(cents), { flag:"wx", mode:0o600, flush:true });
+    if (cents !== undefined) writeFileSync(join(dir,round+".usage"),JSON.stringify({reservedCents:cents,costUsd:0}),{flag:"wx",mode:0o600,flush:true});
     syncDirectory(dir);
     return join(dir, String(round));
   } catch (cause) {
     throw new Error("Previous model spend for this round is exhausted or unknown.", { cause });
+  } finally {
+    if (held) { unlinkSync(lock); syncDirectory(dir); }
   }
 }

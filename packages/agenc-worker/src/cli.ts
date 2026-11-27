@@ -16,6 +16,7 @@
  * @module cli
  */
 import { parseArgs } from "node:util";
+import { claimChainTime } from "./upkeep.js";
 import {
   createKeyPairSignerFromBytes,
   createSolanaRpc,
@@ -202,6 +203,7 @@ async function buildContext(
     client,
     signer,
     gpa: rpc,
+    clusterTime: () => claimChainTime(readAccount),
     readAccount,
     readAccountInfo,
     stateDir: config.stateDir,

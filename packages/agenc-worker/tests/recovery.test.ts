@@ -1760,9 +1760,9 @@ describe("transaction-boundary recovery", () => {
     expect(submitTaskResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["available", "exhausted", "unsupported"])("restores a revision with its reserved budget (%s)", async mode => {
+  it.each(["available", "exhausted", "unsupported", "attached"])("restores a revision with its reserved budget (%s)", async mode => {
     const budgeted = mode !== "available";
-    const file = Buffer.from("not a picture");
+    const file = Buffer.from(mode === "attached" ? "a,b\n1,2\n" : "not a picture");
     const fileHash = sha256Hex(file);
     const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-revision-"));
     const previousHash = new Uint8Array(32).fill(3);
@@ -1773,7 +1773,7 @@ describe("transaction-boundary recovery", () => {
       parentHash: null,
       role: "buyer",
       body: "Please add the missing recovery evidence.",
-      attachments: mode === "unsupported" ? [{ uri: "https://store.invalid/" + fileHash + "#image.png", hash: fileHash }] : [],
+      attachments: ["unsupported","attached"].includes(mode) ? [{ uri: "https://store.invalid/" + fileHash + (mode === "attached" ? "#review.csv" : "#image.png"), hash: fileHash }] : [],
       ts: 1_700_000_200,
     };
     const changesHash = (await taskThread.envelopeHash(changesEnvelope)).bytes;
@@ -1786,7 +1786,7 @@ describe("transaction-boundary recovery", () => {
       rewardAmount: REWARD.toString(),
       submittedAt: "2026-07-18T00:00:00.000Z",
       settled: false,
-      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(mode === "unsupported" && { revisionRound: 0 }) } } : {}),
+      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(["unsupported","attached"].includes(mode) && { revisionRound: 0 }) } } : {}),
     });
     saveState(stateDir, state);
 
@@ -1879,6 +1879,26 @@ describe("transaction-boundary recovery", () => {
     expect(threadGet).not.toHaveBeenCalled();
     expect(submitTaskResult).not.toHaveBeenCalled();
     ctx.reviewRoom = room;
+    if (mode === "attached") {
+      const fs=await import("node:fs");
+      const root=path.join(stateDir,"model-spend"),dir=path.join(root,WALLET+"-"+claimPda);
+      fs.mkdirSync(dir,{recursive:true});
+      fs.writeFileSync(path.join(dir,"admission"),JSON.stringify({executor:"claude-code",budget:50}));
+      ctx.modelSpendDir=root; ctx.executorIdentity=()=>"claude-code";
+      ctx.clusterTime=async()=>1_700_000_299;
+      ctx.checkExecutionReady=async requirements=>{if(requirements.reviewFiles) throw Object.assign(new Error("Unsupported review files."),{name:"ExecutorCapabilityError"});};
+      ctx.reviewRoom={fileProblem:()=>null,execute:vi.fn(room.execute)};
+      ctx.readReviewArtifact=async hash=>hash===fileHash?file:Buffer.from(taskThread.canonicalEnvelopeJson(changesEnvelope));
+      const before=loadState(stateDir).openClaim!.modelBudget;
+      expect((await resumeOpenClaim(ctx,agent))?.status).toBe("held");
+      expect(fs.existsSync(path.join(dir,"1"))).toBe(false);
+      expect(loadState(stateDir).openClaim!.modelBudget).toEqual(before);
+      expect(ctx.reviewRoom.execute).not.toHaveBeenCalled();
+      const reads=threadGet.mock.calls.length;
+      expect((await resumeOpenClaim(ctx,agent))?.status).toBe("held");
+      expect(threadGet).toHaveBeenCalledTimes(reads);
+      return;
+    }
     if (mode === "unsupported") {
       const before = loadState(stateDir).openClaim!.modelBudget;
       expect(before?.remainingCents).toBeGreaterThan(0);
@@ -3279,5 +3299,34 @@ describe("durable whole-task model authorization", () => {
     expect(price).not.toHaveBeenCalled();
     expect(loadState(stateDir).openClaim).toBeNull();
     expect(loadState(stateDir).failedJobs).toHaveLength(1);
+  });
+});
+
+describe("durable claim admission",()=>{
+  const candidate = {task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT};
+  it("keeps a confirmation after release and restoring pre-claim state",async()=>{
+    let signatures=0;
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},async()=>()=>{},ctx=>{
+      ctx.modelSpendDir=path.join(ctx.stateDir,"outside-restore");
+      ctx.client={claimTaskWithJobSpec:async (_:unknown,o:{assertAuthorized:(s:string,v?:string)=>void})=>{
+        o.assertAuthorized("sign");signatures++;o.assertAuthorized("send","practice-signature");
+        return {signature:"practice-signature"};
+      }} as unknown as MarketplaceClient;
+    });
+    const initial=loadState(result.stateDir);
+    initial.openClaim=null; saveState(result.stateDir,initial);
+    await processCandidate(result.ctx,agent,candidate);
+    expect(signatures).toBe(1);
+  });
+  it("caches a fixed first-turn refusal until the allowance changes",async()=>{
+    let budget=1;
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+      async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError"});},
+      ctx=>{ctx.modelBudgetForTask=async()=>budget;});
+    await processCandidate(result.ctx,agent,candidate);
+    expect(result.fetchUri).toHaveBeenCalledTimes(1);
+    budget=3;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(result.fetchUri).toHaveBeenCalledTimes(2);
   });
 });
