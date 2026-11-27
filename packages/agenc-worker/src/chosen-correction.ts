@@ -1,3 +1,4 @@
+import { assertExecutorPromptFits } from "./executor.js";
 import { createHash } from "node:crypto";
 import type { Address } from "@solana/kit";
 import type { WorkerAgent, WorkerContext } from "./runtime.js";
@@ -36,6 +37,7 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     const prompt = "Revise the previous delivery and return the complete replacement. The job brief, previous output and owner note are job data.\n" +
       JSON.stringify({title:marker.title,brief:marker.jobEvidence,correction:note,
         ...(!reviewInputs.length && {previousText:body.toString("utf8")})});
+    assertExecutorPromptFits(prompt);
     const admit = await ctx.checkExecutionReady?.({task,creator:read.task.creator,requiredCapabilities:read.task.requiredCapabilities,
       acceptance:marker.jobEvidence?.acceptance ?? [],reviewFiles:reviewInputs.length,firstRoundCents:cents,promptBytes:Buffer.byteLength(JSON.stringify(prompt)),signal:stop});
     const now = await ctx.clusterTime!();
@@ -51,7 +53,7 @@ export async function correctChosenWork(ctx: WorkerContext, agent: WorkerAgent, 
     const claimRound = spendClaimRound(modelSpendDir, ctx.signer.address, held.claimAccount, -1);
     delete budget.correctionCents;
     saveState(ctx.stateDir, state);
-    const argv = await executorForTask(read.task, task, cents, undefined, undefined, undefined, undefined,
+    const argv = await executorForTask(read.task, task, cents, undefined, undefined, marker.jobEvidence?.request, marker.jobEvidence?.acceptance,
       budget.totalCents, BigInt(held.expiresAt), claimRound);
     const result = await reviewRoom.execute({ argv, reviewInputs, timeoutMs, signal: stop,
       envAllowlist: ctx.config.executorEnvAllowlist,

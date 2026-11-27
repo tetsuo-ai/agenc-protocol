@@ -18,6 +18,10 @@ it("admits the correction before charging it and passes a text result inline", a
   await expect(correct([{name:"file.txt",bytes:Buffer.from("review")}])).rejects.toThrow("Unsupported files");
   expect(s.spend).not.toHaveBeenCalled();
   expect(s.marker.modelBudget.correctionCents).toBe(5);
+  s.marker.execution.resultBytesBase64=Buffer.alloc(240*1024,65).toString("base64");
+  await expect(correct([])).rejects.toThrow();
+  expect(s.spend).not.toHaveBeenCalled();
+  s.marker.execution.resultBytesBase64=Buffer.from(previous).toString("base64");
   await correct([]);
   expect(execute).toHaveBeenCalledWith(expect.objectContaining({prompt:expect.stringContaining(previous)}));
   expect(s.spend).toHaveBeenCalledOnce();

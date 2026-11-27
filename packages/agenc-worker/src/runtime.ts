@@ -289,6 +289,7 @@ export type WorkerContext = {
    * before every fresh claim, before its WAL or transaction. Throw to defer.
    * Receives no buyer text. Recovery and settlement remain available.
    */
+  chosenRoomCurrent?: () => boolean;
   admissionGeneration?: () => string;
   capabilityRefusals?: Map<Address, string>;
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
@@ -1974,7 +1975,13 @@ async function executeAndSubmit(
       // No new executor or model authorization. The host joins the original run.
       if (!evidenceState.openClaim?.modelBudget || evidenceState.openClaim.modelBudget.remainingCents !== 0)
         throw new Error("There is no previously reserved room run to resume.");
-      const result = await turn.resume();
+      let until: number | undefined;
+      if (ctx.config.executor.includes("{jobDeadline}")) {
+        const claim = await readClaim(ctx,agent,task);
+        if (!claim || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
+        until = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,claim.expiresAt);
+      }
+      const result = await turn.resume(until,ctx.signal);
       if (result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     } else {
@@ -2119,7 +2126,7 @@ export async function processCandidate(
   const refused = ctx.capabilityRefusals ??= new Map();
   if (refused.get(task) === generation) return {status:"skipped",task,reason:"The selected room cannot fulfil these terms.",retryable:true};
   const journal = claimSignatureJournal(ctx.modelSpendDir ?? ctx.stateDir, ctx.signer.address, task);
-  if (journal.exists()) return {status:"skipped",task,reason:"A previous signature needs reconciliation."};
+  if (journal.exists() && !options.inspect && !options.authorizeChosen) return {status:"skipped",task,reason:"A previous signature needs reconciliation."};
   const state = loadState(ctx.stateDir);
   const verdict = passesLocalFilters(ctx, state, candidate);
   if (!verdict.ok) {
@@ -2282,9 +2289,20 @@ export async function processCandidate(
     let firstRoundCents = budget === undefined ? undefined : claimBudget(budget, ctx.reserveRevisionBudget === true && decodedTask.taskType === TaskType.Exclusive).remainingCents;
     if (options.authorizeChosen && ctx.reviewRoom && ctx.modelSpendDir && firstRoundCents !== undefined && firstRoundCents >= 2)
       firstRoundCents -= Math.max(1, Math.floor(firstRoundCents / 4));
-    const deadlineMs = ctx.config.executor.includes("{jobDeadline}") ? await chainDeadline(
-      () => { if (!ctx.clusterTime) throw new Error("The chain clock is unavailable."); return ctx.clusterTime(); },
-      ctx.config.executorTimeoutMs, decodedTask.deadline) : undefined;
+    let deadlineMs: number | undefined;
+    if (ctx.config.executor.includes("{jobDeadline}")) {
+      if (!ctx.clusterTime) throw new Error("The chain clock is unavailable.");
+      let timeout = ctx.config.executorTimeoutMs;
+      if (decodedTask.deadline === 0n) {
+        const [pda] = await findProtocolConfigPda();
+        const data = await ctx.readAccount(pda);
+        if (!data) throw new Error("The claim duration is unavailable.");
+        const duration = getProtocolConfigDecoder().decode(data).maxClaimDuration;
+        if (duration <= 0n) throw new Error("The claim duration is unavailable.");
+        timeout = Math.min(timeout,Number(duration)*1000);
+      }
+      deadlineMs = await chainDeadline(ctx.clusterTime,timeout,decodedTask.deadline);
+    }
     const guard = await ctx.checkExecutionReady?.({
       task, creator: decodedTask.creator, privateInputs, listingMetadata, requiredCapabilities: decodedTask.requiredCapabilities,
       acceptance: parseJobBrief(verifiedSpec).acceptance, promptBytes: Buffer.byteLength(JSON.stringify(prompt)),
@@ -2297,6 +2315,8 @@ export async function processCandidate(
       ctx.signal?.throwIfAborted();
       if ((ctx.admissionGeneration?.() ?? "configured") !== generation ||
           (deadlineMs !== undefined && monotonicMs() >= deadlineMs) ||
+          (options.authorizeChosen && ctx.chosenRoomCurrent?.() === false) ||
+          (!hireBinding.isHire && !options.authorizeChosen && ctx.chooseOpenJobs?.()) ||
           (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)))
         throw new Error("The claim admission changed.");
       if (guard) guard();
@@ -2378,9 +2398,9 @@ export async function processCandidate(
     }
     assertAdmission();
     if (boundary === "sign") {
-      journal.reserve();
+      journal.reserve(!!options.authorizeChosen);
       reservedSignature = true;
-      assertAdmission();
+      try { assertAdmission(); } catch (error) { journal.landed(); reservedSignature=false; throw error; }
     }
   };
   try {
