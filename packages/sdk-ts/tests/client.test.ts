@@ -126,6 +126,17 @@ describe("stabilizeTransactionSigner public identity contract", () => {
   });
 });
 
+it.each([1, 2])("checks admission at signing and transmission boundary %i", async boundary => {
+  const transport = fakeTransport();
+  const signer = await generateKeyPairSigner();
+  const client = createMarketplaceClient({ transport, signer });
+  let checks = 0;
+  await expect(client.send([DUMMY_IX], { assertAuthorized() {
+    if (++checks === boundary) throw new Error("The selected room changed.");
+  } })).rejects.toMatchObject({ signature: null });
+  expect(transport.sendCalls()).toBe(0);
+});
+
 /** Deterministic, valid base58 blockhash from a filled 32-byte seed. */
 function blockhashFromSeed(seed: number): Blockhash {
   return getBase58Decoder().decode(new Uint8Array(32).fill(seed)) as Blockhash;
