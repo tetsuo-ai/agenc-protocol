@@ -7,6 +7,7 @@ import type { KeyPairSigner } from "@solana/kit";
 import type { Chain } from "../src/chain.js";
 import type { MarketServices } from "../src/services.js";
 import { EarnHost, type EarnExecutor } from "../src/earn.js";
+import { earnOptions } from "../src/earn-bootstrap.js";
 import { withAgentExecutors } from "../src/agent-executors.js";
 
 const seen = vi.hoisted(() => ({ runs: [] as { agent: string; argv: string[] }[], contexts: [] as unknown[] }));
@@ -37,6 +38,21 @@ function host(options: ConstructorParameters<typeof EarnHost>[0]["options"], cha
   return new EarnHost({ dataDir, chain: { clusterTime: async () => chainNow, clientFor: () => ({}), network: "sandbox" } as unknown as Chain,
     services: { resultUploader: () => null, fileLinkPrefix: null } as unknown as MarketServices, options, log: vi.fn(), notify: vi.fn() });
 }
+
+it("passes the owner's 0.01 SOL ceiling and buyer allowlist into a named-only worker", async () => {
+  const bootstrap = { ownerToken: "fake", unlockSecret: "fake", earn: {
+    executor: null, agentExecutors: { named: local }, maxRewardLamports: "10000000", ownJobsOnly: true,
+  } };
+  const options = withAgentExecutors(earnOptions(bootstrap), bootstrap.earn.agentExecutors, () => local);
+  const earn = host(options);
+  void earn.start({ agentId: "named", signer: { address: "fixture" } as unknown as KeyPairSigner, minRewardLamports: 0n });
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    expect(seen.contexts[0]).toMatchObject({ config: {
+      maxRewardLamports: 10_000_000n, allowUnboundedReward: false, allowAnyCreator: false, creatorAllowlist: [],
+    } });
+  } finally { await earn.stopAll(); }
+});
 
 it("applies verified requirements to callbacks, listing terms and the first paid turn", async () => {
   let generation = "one", agent = "claude-code" as "core" | "claude-code";
