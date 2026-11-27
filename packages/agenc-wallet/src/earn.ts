@@ -175,6 +175,7 @@ export interface EarnAgent {
   minRewardLamports: bigint;
   /** Fresh dollars per SOL. Required before a job can be claimed or executed. */
   solUsd?: () => Promise<number | null>;
+  lastSolUsd?: () => number | null;
   /** Leave the worker free for existing service hires while reopening listings. */
   reconcileBeforeOpenJobs?: boolean;
   /** Hires it owes, by task, with what each pays: taken whatever the floor. */
@@ -230,6 +231,8 @@ export function maximumOfferPrice(options: EarnOptions): bigint {
 /** A zero/empty budget is unsafe for hosts that interpret it as unlimited. */
 export function jobPayCents(reward: bigint, rate: number | null): number {
   const cents = rate === null ? NaN : Math.floor(Number(reward) * rate / 10_000_000);
+  if (rate !== null && Number.isFinite(rate) && rate > 0 && cents === 0)
+    throw Object.assign(new Error("The spending limit is below one cent."),{name:"ExecutorBudgetError"});
   if (rate === null || !Number.isFinite(rate) || rate <= 0 || !Number.isSafeInteger(cents) || cents <= 0) {
     throw new Error("A current dollar price is needed to set this job's spending limit.");
   }
@@ -1015,7 +1018,13 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
-      executorIdentity, capabilityRefusals:new Map(), budgetRefusals:new Map(), revisionRefusals:new Map(),
+      executorIdentity, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
+      modelBudgetCeiling:(task,metadata)=>(metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
+      allowanceGeneration:(task,metadata,budget)=>{
+        const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);
+        const cap = terms?.modelCapCents;
+        return JSON.stringify([cap,terms?.minimumMarginCents,cap !== undefined && budget !== undefined && budget >= cap ? null : agent.lastSolUsd?.()]);
+      },
       ...(roomWork && { roomWork }),
       admissionGeneration: () => String(generation() ?? "configured") + "/" + (entry.capabilityRevision ?? 0),
       ...(agent.admitsListing && { admitsListing: agent.admitsListing }),

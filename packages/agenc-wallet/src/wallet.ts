@@ -6789,6 +6789,7 @@ export class AgencWallet {
         reconcileBeforeOpenJobs: agentOffers(current).some((offer) => offer.wanted && offer.listed),
         ...(owed !== undefined ? { owed } : {}),
         solUsd: () => this.#freshRate(),
+        lastSolUsd: () => this.#store.state.lastSolUsd?.value ?? null,
       });
       if (agentOffers(current).some((offer) => offer.wanted)) {
         const resume = started.then(() => this.#earn.canTakeJobs(agent.id) && this.#advanceOffer(agent.id));
