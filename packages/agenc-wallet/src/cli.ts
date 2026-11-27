@@ -100,7 +100,8 @@ interface Bootstrap {
   ownerToken: string;
   earn?: {
     executor: { argv: string[]; mode: string; isolatedJobRoom?: boolean; reserveRevisionBudget?: boolean; envAllowlist?: string[]; timeoutMs?: number; readiness?: { argv: string[]; timeoutMs?: number } } | null;
-    conditionalRoom?: { setting: string; executor: NonNullable<NonNullable<Bootstrap["earn"]>["executor"]> };
+    defaultRoomSetting?: string;
+    conditionalRoom?: { setting: string; when?: "core"; executor: NonNullable<NonNullable<Bootstrap["earn"]>["executor"]> };
     maxRewardLamports?: string | null;
     /** Take jobs only from this wallet's own addresses. */
     ownJobsOnly?: boolean;
@@ -186,6 +187,7 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
   const conditional = bootstrap.earn?.conditionalRoom;
   if (conditional !== undefined && (bootstrap.earn?.executor != null || !conditional ||
       typeof conditional.setting !== "string" || !path.isAbsolute(conditional.setting) ||
+      (conditional.when !== undefined && conditional.when !== "core") ||
       conditional.executor?.mode !== "sandboxed" || conditional.executor.isolatedJobRoom !== true ||
       !conditional.executor.readiness)) throw new WalletError("BAD_REQUEST", "The selected room needs an isolated executor and a readiness check.");
   const executor = conditional?.executor ?? bootstrap.earn?.executor ?? null;
@@ -215,6 +217,9 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
   }
   const maxReward = bootstrap.earn?.maxRewardLamports;
   const chosenRoomSetting = bootstrap.earn?.chosenRoomSetting;
+  const selection = bootstrap.earn?.defaultRoomSetting ?? conditional?.setting;
+  if (selection !== undefined && (typeof selection !== "string" || !path.isAbsolute(selection)))
+    throw new WalletError("BAD_REQUEST", "The room selection needs a host path.");
   return {
     executor: {
       argv: executor.argv,
@@ -227,7 +232,17 @@ function earnOptions(bootstrap: Bootstrap): EarnOptions {
     },
     ...(conditional && { defaultExecutorEnabled: () => {
       // Only the presence of the host setting matters. Its contents stay with the host.
-      try { return lstatSync(conditional.setting).isFile(); } catch { return false; }
+      try { return lstatSync(conditional.setting).isFile() && conditional.when !== "core"; }
+      catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" && conditional.when === "core"; }
+    } }),
+    ...(selection && { defaultExecutorGeneration: () => {
+      // The wallet reads only file metadata. The epoch also remembers a switch away and back.
+      return [selection, selection + ".epoch"].map(file => {
+        try {
+          const stat = lstatSync(file, {bigint:true});
+          return [stat.dev, stat.ino, stat.ctimeNs].join("-");
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent"; throw error; }
+      }).join("/");
     } }),
     ...(maxReward === undefined
       ? {}
