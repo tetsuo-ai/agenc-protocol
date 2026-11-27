@@ -137,6 +137,32 @@ it.each([1, 2])("checks admission at signing and transmission boundary %i", asyn
   expect(transport.sendCalls()).toBe(0);
 });
 
+it("rechecks admission at the actual payer after an asynchronous modifying signer", async () => {
+  const payer = await generateKeyPairSigner();
+  const other = await generateKeyPairSigner();
+  let ready = true, payerCalls = 0;
+  const coSigner = {
+    address: other.address,
+    modifyAndSignTransactions: async (txs: Parameters<KeyPairSigner["signTransactions"]>[0]) => {
+      const signatures = await other.signTransactions(txs);
+      ready = false;
+      return txs.map((tx, i) => ({ ...tx, signatures: { ...tx.signatures, ...signatures[i] } }));
+    },
+  };
+  const guardedPayer = { address: payer.address, signTransactions: (...args: Parameters<KeyPairSigner["signTransactions"]>) => {
+    payerCalls++;
+    return payer.signTransactions(...args);
+  } };
+  const transport = fakeTransport();
+  const client = createMarketplaceClient({ signer: guardedPayer, transport });
+  const instruction = { ...DUMMY_IX, accounts: [{ role: AccountRole.READONLY_SIGNER, address: coSigner.address, signer: coSigner }] };
+  await expect(client.send([instruction], { assertAuthorized: () => {
+    if (!ready) throw new Error("Room changed.");
+  } })).rejects.toThrow();
+  expect(payerCalls).toBe(0);
+  expect(transport.sendCalls()).toBe(0);
+});
+
 /** Deterministic, valid base58 blockhash from a filled 32-byte seed. */
 function blockhashFromSeed(seed: number): Blockhash {
   return getBase58Decoder().decode(new Uint8Array(32).fill(seed)) as Blockhash;

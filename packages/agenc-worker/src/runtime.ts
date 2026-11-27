@@ -2397,7 +2397,7 @@ export async function processCandidate(
       recordedSignature = true;
     }
     assertAdmission();
-    if (boundary === "sign") {
+    if (boundary === "sign" && !reservedSignature) {
       journal.reserve(!!options.authorizeChosen);
       reservedSignature = true;
       try { assertAdmission(); } catch (error) { journal.landed(); reservedSignature=false; throw error; }
