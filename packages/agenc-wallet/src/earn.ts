@@ -51,7 +51,7 @@ import {
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
 import { chainDeadline, monotonicMs, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
-import { commandGeneration, type RoomSelection } from "./room-selection.js";
+import { checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { outputAgreementFromSpec } from "./client/job-exchange.js";
@@ -962,11 +962,13 @@ export class EarnHost {
     const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false) => {
       const admission = requested && { ...requested, fileTransport: requested.fileTransport && !!fileLinkPrefix };
       const current = guard();
+      const named = Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId);
       current();
       let hostCheck: void | (() => void);
       const check = () => {
         signal?.throwIfAborted();
         current();
+        if (named) checkNamedProgram(executor.argv);
         if (hostCheck) hostCheck();
         if (!admission) return;
         if (admission.deadlineMs !== undefined && monotonicMs() >= admission.deadlineMs) throw new Error("The claim deadline passed.");

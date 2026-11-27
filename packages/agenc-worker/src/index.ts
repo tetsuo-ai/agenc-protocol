@@ -35,7 +35,7 @@ export {
 export {
   buildExecutorArgv,
   assertExecutorPromptFits,
-  preflightExecutor,
+  preflightExecutor, executablePath,
   runExecutor,
   ExecutorError,
   DEFAULT_MAX_STDOUT_BYTES,

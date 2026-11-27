@@ -171,7 +171,7 @@ function isolatedEnvironment(
   return env;
 }
 
-function executablePath(command: string): string | null {
+export function executablePath(command: string): string | null {
   const candidates: string[] = [];
   if (path.isAbsolute(command) || command.includes("/") || command.includes("\\")) {
     candidates.push(path.resolve(command));

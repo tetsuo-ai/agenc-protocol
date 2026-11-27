@@ -260,7 +260,7 @@ it.each([[0n, 90n, "90"], [150n, 90n, "90"], [75n, 90n, "75"]])("binds executor 
 });
 
 it("keeps hand-picked jobs available to a named worker with its own ready sandbox", async () => {
-  const ready = { ...local, mode:"sandboxed" as const, isolatedJobRoom:true, readiness:{argv:["/ready"]} };
+  const ready = { ...local, argv:[process.execPath,"-e","void 0","room:{agent}","{prompt}"],mode:"sandboxed" as const, isolatedJobRoom:true, readiness:{argv:["/ready"]} };
   const earn = host({ executor:ready, agentExecutors:{named:ready}, defaultExecutorEnabled:()=>false,
     chosenRoomEnabled:()=>true, checkExecutionReady:async()=>{} });
   void earn.start({agentId:"named", signer:{address:"fake"} as unknown as KeyPairSigner, minRewardLamports:0n});
@@ -373,4 +373,23 @@ it("reads a restored seller's measured cost from the original claim",async()=>{
   indexClaimUsage(state,task,path.join(dir,"0"));
   fs.mkdirSync(state,{recursive:true}); fs.rmSync(state,{recursive:true});
   expect(serviceUsage(state,task)).toEqual({budgetCents:10,reservedCents:8,unknownReservedCents:0,costUsd:0.071,runs:1});
+});
+
+it("refuses a named job executable that disappears or loses execute permission",async()=>{
+  const fs=await import("node:fs");
+  const dir=fs.mkdtempSync(path.join(tmpdir(),"named-job-"));folders.push(dir);
+  const exe=path.join(dir,"room");fs.writeFileSync(exe,"#!/bin/sh\nexit 0\n",{mode:0o700});
+  const callback=vi.fn(async()=>{});
+  const earn=host({executor:null,agentExecutors:{seller:{...local,argv:[exe,"room:{agent}","{prompt}"]}},checkExecutionReady:callback});
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const current=await ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never});
+    fs.chmodSync(exe,0o600);
+    expect(()=>current && current()).toThrow();
+    await expect(ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never})).rejects.toThrow();
+    fs.rmSync(exe);
+    await expect(ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never})).rejects.toThrow();
+  } finally {await earn.stopAll();}
 });
