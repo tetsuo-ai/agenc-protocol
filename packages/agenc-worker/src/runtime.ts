@@ -113,6 +113,9 @@ import {
 } from "./upkeep.js";
 
 /** One structured log event (a JSON line in the CLI). */
+/** The exact 32 bytes a Task Validation V2 review task carries as its constraint hash. */
+const MANUAL_VALIDATION_SENTINEL = new TextEncoder().encode("agenc-manual-validation-v2-seed!");
+
 export type WorkerLogEvent = { event: string } & Record<string, unknown>;
 /** Settlement events may replay after a crash. Persist consumers synchronously
  * and deduplicate settlement.observed by task before returning. */
@@ -2320,7 +2323,8 @@ export async function processCandidate(
   if (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)) {
     return { status: "skipped", task, reason: "listing-not-approved" };
   }
-  if (!chosen && !hireBinding.isHire && decodedTask.taskType === TaskType.Exclusive && decodedTask.constraintHash.every(byte=>byte===0))
+  // submit_task_result requires the manual-validation sentinel for every task type, so an automatic claim of any other task could not be submitted.
+  if (!chosen && !hireBinding.isHire && !MANUAL_VALIDATION_SENTINEL.every((byte,i)=>decodedTask.constraintHash[i]===byte))
     return {status:"skipped",task,reason:"Automatic work requires buyer review."};
   if (!chosen && !hireBinding.isHire && ctx.chooseOpenJobs?.()) {
     return { status: "skipped", task, reason: "waiting-for-owner-choice" };
