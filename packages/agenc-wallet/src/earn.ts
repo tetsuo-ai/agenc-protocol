@@ -1492,6 +1492,10 @@ export class EarnHost {
       stateDir,
       ...(this.#chain.simulateWork && { simulateWork: (ix, guards) => this.#chain.simulateWork!(agent.signer.address, ix, guards) }),
       ...(this.#chain.workOutcome && { chosenOutcome: receipt => this.#chain.workOutcome!(receipt) }),
+      ...(this.#chain.operationBlockhashValid && this.#chain.sendNeverLands && { operationLifetime: {
+        blockhashValid: (hash: string) => this.#chain.operationBlockhashValid!(hash as import("@solana/kit").Blockhash),
+        neverLanded: (receipt: { signature: string; signedTransaction: string; lastValidBlockHeight: string }) => this.#chain.sendNeverLands!(receipt),
+      } }),
       getBalance: (account) => this.#chain.getBalance(account),
       getMinimumBalanceForRentExemption: (space) =>
         this.#chain.getMinimumBalanceForRentExemption(space),

@@ -3627,6 +3627,20 @@ it("refuses automatic Exclusive Auto work before reading its spec or signing",as
   expect(result.outcome).toMatchObject({status:"skipped",reason:"Automatic work requires buyer review."});
 });
 
+it.each([
+  ["Competitive with no review sentinel",{taskType:TaskType.Competitive,constraintHash:new Uint8Array(32)}],
+  ["Collaborative with no review sentinel",{taskType:TaskType.Collaborative,constraintHash:new Uint8Array(32)}],
+  ["Exclusive with another constraint hash",{taskType:TaskType.Exclusive,constraintHash:new Uint8Array(32).fill(1)}],
+])("refuses automatic work that cannot be submitted: %s",async(_name,overrides)=>{
+  const automatic = taskData(TaskStatus.Open, overrides);
+  const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()}, undefined, ctx => {
+    const read = ctx.readAccount;
+    ctx.readAccount = key => key === TASK ? Promise.resolve(automatic) : read(key);
+  });
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  expect(result.outcome).toMatchObject({status:"skipped",reason:"Automatic work requires buyer review."});
+});
+
 it("skips repeated account and spec reads for a permanent room image failure",async()=>{
   const check=vi.fn(async()=>{throw Object.assign(new Error("Invalid installed image."),{name:"RoomImageError"});});
   const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},check);

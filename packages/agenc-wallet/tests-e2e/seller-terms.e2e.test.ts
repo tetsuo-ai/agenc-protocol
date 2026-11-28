@@ -600,6 +600,27 @@ it("pauses a live connected offer when its exchange rate no longer funds the fir
   await eventually(async()=>await status()==="live"?true:null);
 });
 
+it("does not flip a connected offer between paused and live as SOL moves by fractions of a percent",async()=>{
+  // This offer's first turn is affordable at a rate of about 24.55 dollars per SOL and above.
+  let rate=26;
+  world=await startWorld({config:{prices:{solUsd:async()=>rate}},earn:{...earn,
+    executor:{...earn.executor,isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"claude-code",ready:true,coreCommand:null,generation:"choice"}),checkExecutionReady:async()=>{}}});
+  const seller=await world.wallet.createAgent(), input={...service,enableEarns:true as const};
+  const quote=await world.wallet.quoteEarn(seller.id,input);
+  await world.wallet.setOffer(seller.id,input,undefined,quote.quoteId);
+  const status=async()=>{await world.wallet.tick();return (await world.wallet.overview()).agents.find(a=>a.id===seller.id)?.earn.offer?.status;};
+  await eventually(async()=>await status()==="live"?true:null);
+  rate=24.5;
+  await eventually(async()=>await status()==="paused"?true:null);
+  // Wiggling around the minimum sends nothing: the offer stays paused until it clears the minimum by a margin.
+  const seen=new Set<unknown>();
+  for(const wiggle of [24.56,24.5,24.6,24.9]){rate=wiggle;seen.add(await status());}
+  expect([...seen]).toEqual(["paused"]);
+  rate=25.5;
+  await eventually(async()=>await status()==="live"?true:null);
+},30_000);
+
 it("pauses a Core offer without the connected room's published minimum",async()=>{
   let selected="core";
   world=await startWorld({earn:{...earn, executor:{...earn.executor,jobRoom:true,isolatedJobRoom:true,reserveRevisionBudget:true},
