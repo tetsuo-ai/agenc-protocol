@@ -3534,7 +3534,7 @@ it("holds a finite business login before a signature for a job with buyer revisi
     ctx.reserveRevisionBudget=true;
     const read=ctx.readAccount;
     ctx.readAccount=async addr=>addr===TASK
-      ? taskData(TaskStatus.Open,{deadline:BigInt(now+600), constraintHash:new Uint8Array(32).fill(1)}) : read(addr);
+      ? taskData(TaskStatus.Open,{deadline:BigInt(now+600)}) : read(addr);
   });
   expect(result.outcome).toMatchObject({status:"skipped",reason:expect.stringMatching(/revision window/)});
   expect(ready).not.toHaveBeenCalled();
