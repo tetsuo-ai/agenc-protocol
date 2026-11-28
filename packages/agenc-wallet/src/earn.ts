@@ -52,8 +52,8 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
-import { claimBudget, chainDeadline, monotonicMs, ExecutorBudgetError, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
-import { privateProcessing, checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
+import { admissionRounds, claimBudget, chainDeadline, monotonicMs, ExecutorBudgetError, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
+import { admissionArgs, privateProcessing, checkNamedProgram, commandGeneration, type RoomSelection } from "./room-selection.js";
 import type { Chain } from "./chain.js";
 import type { EarnState } from "./client/types.js";
 import { outputAgreementFromSpec } from "./client/job-exchange.js";
@@ -108,8 +108,8 @@ function firstTurnFits(cents:number, bytes:number):boolean {
   return Number.isSafeInteger(cents) && (bytes + MINIMUM_MESSAGE_BYTES + 64) * 40 + 100 <= cents * 200_000;
 }
 // Codex checks the same envelope in the host proxy before sending its first request.
-function codexApiFirstTurn(cents: number, promptBytes: number, file = false): boolean {
-  return Number.isSafeInteger(cents) && codexMinimum(false, promptBytes, file).units <= cents * CODEX_PRICE.cent;
+function codexApiFirstTurn(cents: number, promptBytes: number, calls = 1): boolean {
+  return Number.isSafeInteger(cents) && codexMinimum(false, promptBytes, calls > 1).units <= cents * CODEX_PRICE.cent;
 }
 type ListingNeeds = {promptBytes?:number; requiredFiles?:readonly string[]; allowTextOnly?:boolean; privateInputs?:boolean; servicePin?:boolean; serviceDigest?:string; modelCapCents?:number; extraRoomFeatures?:boolean};
 export interface JobAdmission {
@@ -128,12 +128,14 @@ export interface JobAdmission {
   fileTransport: boolean;
   promptBytes: number;
   firstRoundCents?: number;
+  laterRoundCents?: readonly number[];
+  loginThroughMs?: number;
   deadlineMs?: number;
 }
 
 export interface EarnOptions {
   /** Trusted capability and pricing checks for additional in-room model adapters. */
-  connectedPublicJobs?:Readonly<Record<string,{sampleFile?:string; canDeliver:(name:string)=>boolean; firstTurnFits:(cents:number,promptBytes:number,requiresFile?:boolean)=>boolean}>>;
+  connectedPublicJobs?:Readonly<Record<string,{sampleFile?:string; canDeliver:(name:string)=>boolean; firstTurnFits:(cents:number,promptBytes:number,calls?:number)=>boolean}>>;
   liveRoomState?: () => RoomSelection;
   /** Host-owned exchange and supplier grant resolved independently for each seller. */
   roomWork?: (agentId: string) => WorkerContext["roomWork"];
@@ -197,6 +199,7 @@ export interface EarnAgent {
   /** Fresh dollars per SOL. Required before a job can be claimed or executed. */
   solUsd?: () => Promise<number | null>;
   lastSolUsd?: () => number | null;
+  quoteLifetimeMs?: () => number;
   /** Leave the worker free for existing service hires while reopening listings. */
   reconcileBeforeOpenJobs?: boolean;
   /** Hires it owes, by task, with what each pays: taken whatever the floor. */
@@ -365,7 +368,15 @@ export class EarnHost {
     if (adapters && Object.hasOwn(adapters,adapter)) return adapters[adapter];
     if (adapter === "codex-api") return {sampleFile:"answer.txt", canDeliver:()=>true, firstTurnFits:codexApiFirstTurn};
     if (adapter === "codex-plan") return {sampleFile:"answer.txt", canDeliver:()=>true,
-      firstTurnFits:(cents:number, _bytes:number, requiresFile = false) => Number.isSafeInteger(cents) && cents * CODEX_PRICE.cent >= codexMinimum(true, 0, requiresFile).units};
+      firstTurnFits:(cents:number, _bytes:number, calls = 1) => Number.isSafeInteger(cents) && cents * CODEX_PRICE.cent >= codexMinimum(true, 0, calls > 1).units};
+    if (adapter === "acp") {
+      const room = this.#options.liveRoomState?.();
+      const price = room?.firstCall;
+      if (room?.agent !== "acp" || !room.identity || !price || !Number.isSafeInteger(price.tokenHold) || price.tokenHold! <= 0 || price.tokenHold! > 1000000) return undefined;
+      return {sampleFile:"answer.txt", canDeliver:(name:string)=>!agreedOutputProblem(name),
+        firstTurnFits:(cents:number, bytes:number, calls=1)=>Number.isSafeInteger(cents) && cents >= 0 &&
+          (price.baseTicks + price.inputTicksPerByte * bytes) * calls <= cents * 100_000_000};
+    }
     return adapter === "claude-code" ? {sampleFile:"answer.txt",canDeliver:()=>true,firstTurnFits} : undefined;
   }
 
@@ -396,12 +407,16 @@ export class EarnHost {
         (needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || needs.requiredFiles?.length || needs.allowTextOnly === false)) return false;
     if (connected) {
       const policy = this.#publicJobs(connected);
+      const calls = needs.requiredFiles?.length || needs.allowTextOnly === false ? 2 : 1;
+      const rounds = needs.modelCapCents === undefined ? undefined :
+        admissionRounds(needs.modelCapCents, executor?.reserveRevisionBudget === true);
+      const allowances = !rounds ? [] : [rounds.firstRoundCents,...(connected === "acp" ? rounds.laterRoundCents : [])];
       if (!policy || !executor?.isolatedJobRoom || executor.mode !== "sandboxed" || needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || executor?.argv[2] === "peer-job" ||
           (needs.requiredFiles?.some(name=>!policy.canDeliver(name))) ||
           (needs.allowTextOnly === false && !needs.requiredFiles?.length &&
             (!policy.sampleFile || agreedOutputProblem(policy.sampleFile) || !policy.canDeliver(policy.sampleFile))) ||
           ((needs.requiredFiles?.length || needs.allowTextOnly === false) && (!this.#services.fileLinkPrefix || this.#running.get(agentId)?.fileTransport === false)) ||
-          (needs.modelCapCents !== undefined && !policy.firstTurnFits(this.listingFirstRound(agentId,needs.modelCapCents)!,needs.promptBytes ?? 0, !!needs.requiredFiles?.length || needs.allowTextOnly === false))) return false;
+          allowances.some(cents=>!policy.firstTurnFits(cents,needs.promptBytes ?? 0,calls))) return false;
     }
     return !!executor && (executor.argv[2] !== "peer-job" || (needs.servicePin && !needs.privateInputs) === true) && (!needs.privateInputs || this.supportsPrivateInputs(agentId));
   }
@@ -822,7 +837,7 @@ export class EarnHost {
       source:"external",privateInputs:!!needs.privateInputs,servicePin:!!needs.servicePin,...(needs.serviceDigest && {serviceDigest:needs.serviceDigest}),reviewFiles:0,
       requiredFiles:needs.requiredFiles ?? [],allowTextOnly:needs.allowTextOnly ?? true,fileTransport:!!this.#services.fileLinkPrefix,promptBytes:needs.promptBytes ?? 0, verifiedAgreement:true,
       ...(needs.extraRoomFeatures && {extraRoomFeatures:true}),
-      ...(needs.modelCapCents !== undefined && {firstRoundCents:this.listingFirstRound(agentId,needs.modelCapCents)!}),
+      ...(needs.modelCapCents !== undefined && admissionRounds(needs.modelCapCents,this.executorFor(agentId)?.reserveRevisionBudget === true)),
     });
   }
 
@@ -1007,6 +1022,7 @@ export class EarnHost {
     };
 
     const generation = () => this.generationFor(agent.agentId);
+    const named = Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId);
     const executorProgram = () => Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId)
       ? createHash("sha256").update(JSON.stringify([executor.argv,commandGeneration(executor.argv)])).digest("hex") : undefined;
     const executorIdentity = () => {
@@ -1020,6 +1036,7 @@ export class EarnHost {
         return "peer:" + generation();
       }
       const connected = this.connectedAgent(agent.agentId);
+      if (connected === "acp" && !named) return this.#options.liveRoomState?.().identity ?? "unavailable:acp";
       if (connected) return connected;
       if (executor.argv[2] === "job") return "core";
       return "command:" + createHash("sha256").update(JSON.stringify(executor.argv)).digest("hex");
@@ -1035,7 +1052,6 @@ export class EarnHost {
     const checkReady = async (signal?: AbortSignal, requested?: JobAdmission, preview = false, policyOnly = false) => {
       const admission = requested && { ...requested, fileTransport: requested.fileTransport && !!fileLinkPrefix };
       const current = guard();
-      const named = Object.hasOwn(this.#options.agentExecutors ?? {},agent.agentId);
       current();
       let hostCheck: void | (() => void);
       let reportedMinimum = 0;
@@ -1062,15 +1078,26 @@ export class EarnHost {
           catch { throw new ExecutorCapabilityError("The rehearsal cannot deliver the agreed files."); }
         }
         const requiresFile = admission.requiredFiles.length > 0 || !admission.allowTextOnly;
+        const calls = requiresFile ? 2 : 1;
+        if (connected === "acp" && admission.loginThroughMs !== undefined) {
+          const end = this.#options.liveRoomState?.().validUntil;
+          if (end === undefined || !Number.isSafeInteger(end) || end <= admission.loginThroughMs)
+            throw new ExecutorCapabilityError("The login expires before this job can finish.");
+        }
         if (admission.claimCounts && (connected === "codex-api" || connected === "codex-plan")) {
           const used = admission.claimCounts();
           const needed = codexMinimum(connected === "codex-plan", admission.promptBytes, requiresFile);
           if (used.calls + needed.calls > CODEX_CAP.calls || used.tokens + needed.tokens > CODEX_CAP.tokens)
             throw new ExecutorBudgetError("The claim has too few model calls or tokens left.");
         }
-        if (admission.firstRoundCents !== undefined && (admission.firstRoundCents < reportedMinimum * (requiresFile ? 2 : 1) ||
-            (connected && !this.#publicJobs(connected)!.firstTurnFits(admission.firstRoundCents,admission.promptBytes,requiresFile))))
+        if (admission.firstRoundCents !== undefined && admission.firstRoundCents < reportedMinimum * calls)
           throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
+        if (connected && admission.firstRoundCents !== undefined) {
+          const rounds = [admission.firstRoundCents,...(connected === "acp" ? admission.laterRoundCents ?? [] : [])];
+          const policy = this.#publicJobs(connected)!;
+          if (!rounds.every(cents=>policy.firstTurnFits(cents,admission.promptBytes,calls)))
+            throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
+        }
       };
       check();
       if (policyOnly) return check;
@@ -1081,7 +1108,7 @@ export class EarnHost {
         const tracked = !named && !!(this.#options.defaultExecutorGeneration || this.#options.liveRoomState);
         if (preview && tracked && proof === goodProbe) return check;
         const report = await runExecutor({
-          argv: [...executor.readiness.argv.map(fill), ...(admission && executor.readiness.argv[2] === "self-test" ?
+          argv: [...executor.readiness.argv.map(fill), ...admissionArgs(executor.readiness.argv,named ? undefined : this.#options.liveRoomState?.()), ...(admission && executor.readiness.argv[2] === "self-test" ?
             [...(admission.deadlineMs === undefined ? [] : ["boot:" + admission.deadlineMs]),
               "admit",admission.source,admission.privateInputs ? "private" : admission.servicePin ? "service" : "public"] :
             executor.readiness.argv[2] === "peer-ready" && admission?.serviceDigest ? [admission.serviceDigest] : [])],
@@ -1123,8 +1150,24 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
+      expiringExecutorLogin: () => this.connectedAgent(agent.agentId) === "acp" && this.#options.liveRoomState?.().firstCall?.needsExpiry === true,
+      chosenCorrectionFits: acceptance => {
+        if (this.connectedAgent(agent.agentId) !== "acp") return true;
+        const outputs = outputAgreementFromSpec({acceptance:[...acceptance]});
+        return !!outputs && outputs.allowTextOnly && !outputs.requiredFiles.length;
+      },
+      roundCapacity: acceptance => {
+        if (this.connectedAgent(agent.agentId) !== "acp") return undefined;
+        const outputs = outputAgreementFromSpec({acceptance:[...acceptance]});
+        const calls = outputs && outputs.allowTextOnly && !outputs.requiredFiles.length ? 1 : 2;
+        const hold = this.#options.liveRoomState?.().firstCall?.tokenHold;
+        if (!hold) throw new ExecutorCapabilityError("Update the job room before starting an ACP round.");
+        return {calls, tokens: hold + calls - 1};
+      },
+      localExecutorReady: () => this.connectedAgent(agent.agentId) !== "acp" || this.#options.liveRoomState?.().ready === true,
       executorIdentity, executorProgram, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
       modelBudgetCeiling:(task,metadata)=>(metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
+      ...(agent.quoteLifetimeMs && {quoteLifetimeMs:agent.quoteLifetimeMs}),
       allowanceGeneration:(task,metadata,budget)=>{
         const terms = metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities);
         const cap = terms?.modelCapCents;
@@ -1255,7 +1298,7 @@ export class EarnHost {
       },
       log,
       checkExecutionReady: async ({ listing, signal, creator, listingMetadata, privateInputs, requiredCapabilities,
-        acceptance, promptBytes, firstRoundCents, claimCounts, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview, policyOnly }) => {
+        acceptance, promptBytes, firstRoundCents, laterRoundCents, loginThroughMs, claimCounts, deadlineMs, reviewFiles, reviewAttachments, revision, extraRoomFeatures, preview, policyOnly }) => {
         if (!listing && entry.awaitingListings) throw new Error("Services are still being reconciled.");
         const terms = listingMetadata ? termsFor(listingMetadata) : agent.specialistTerms?.(requiredCapabilities ?? 0n);
         let outputs;
@@ -1269,8 +1312,8 @@ export class EarnHost {
           servicePin:!!terms?.servicePin,...(terms?.servicePin && {serviceDigest:terms.servicePin.digest,verifiedPin:terms.servicePin}),reviewFiles:Math.max(reviewFiles ?? 0,reviewAttachments ?? 0),requiredFiles:outputs?.requiredFiles ?? [],
           verifiedAgreement:!!outputs,revision:!!revision,extraRoomFeatures:!!extraRoomFeatures || !!listingTerms?.childHire || listingTerms?.fulfilment?.privateInputs === true || (requiredCapabilities ?? 1n)>1n,
           allowTextOnly:outputs?.allowTextOnly ?? true,fileTransport:!!fileLinkPrefix,promptBytes:promptBytes ?? 0,
-          ...(firstRoundCents !== undefined && {firstRoundCents}),...(deadlineMs !== undefined && {deadlineMs}),
-        } : undefined,preview,policyOnly);
+          ...(firstRoundCents !== undefined && {firstRoundCents}),...(laterRoundCents && {laterRoundCents}),...(loginThroughMs !== undefined && {loginThroughMs}),...(deadlineMs !== undefined && {deadlineMs}),
+        } : undefined,preview);
       },
       ...(uploader !== null
         ? { uploadFetch: fileLinkPrefix === null ? uploader.fetch : publishingOutbox(uploader.fetch, outboxDir) }

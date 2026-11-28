@@ -1,4 +1,4 @@
-export { requireClaimExecutor, claimBudget } from "./revision-budget.js";
+export { requireClaimExecutor, claimBudget, admissionRounds } from "./revision-budget.js";
 export { chainDeadline, deadlineFromChain, monotonicMs, ExecutorBudgetError, ExecutorCapabilityError } from "./claim-admission.js";
 // @tetsuo-ai/agenc-worker — programmatic surface.
 //

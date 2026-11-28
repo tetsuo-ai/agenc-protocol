@@ -9,6 +9,13 @@ import {
 import { executablePath, ExecutorCapabilityError } from "@tetsuo-ai/agenc-worker";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
+export interface FirstCallPrice {
+  baseTicks: number;
+  inputTicksPerByte: number;
+  needsExpiry?: boolean;
+  tokenHold?: number;
+}
+
 export interface LiveRoom {
   setting: string;
   keyStore: string;
@@ -17,12 +24,17 @@ export interface LiveRoom {
   agentFiles: readonly string[];
   codexFiles?: readonly string[];
   codexPlanMinimumCents?: number;
+  acpFiles?: readonly string[];
+  acpPrices?: Record<string, FirstCallPrice>;
   generationFiles?: readonly string[];
   managedSettingsRoot?: string;
 }
 export interface RoomSelection {
   agent: string;
   minimumModelCents?: number;
+  firstCall?: FirstCallPrice;
+  validUntil?: number;
+  identity?: string;
   ready: boolean;
   coreCommand: string | null;
   generation: string;
@@ -129,37 +141,23 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.baseFiles,
       ...room.agentFiles,
       ...(room.codexFiles ?? []),
+      ...(room.acpFiles ?? []),
       ...(room.generationFiles ?? []),
       ...(room.managedSettingsRoot ? [room.managedSettingsRoot] : []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
     !room.agentFiles.length ||
     (room.codexPlanMinimumCents !== undefined &&
-      (!Number.isSafeInteger(room.codexPlanMinimumCents) || room.codexPlanMinimumCents < 1))
+      (!Number.isSafeInteger(room.codexPlanMinimumCents) || room.codexPlanMinimumCents < 1)) ||
+    (!!room.acpPrices !== !!room.acpFiles?.length) ||
+    Object.values(room.acpPrices ?? {}).some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
+      !Number.isSafeInteger(p.inputTicksPerByte) || p.inputTicksPerByte < 0)
   )
     throw new Error("Invalid job room paths.");
   return () => {
     const slot = file(room.setting);
-    let agent: RoomSelection["agent"] = slot.id === "missing" ? "core" : "claude-code";
-    let validSlot = slot.regular;
-    let planVersion: string | undefined;
-    let planTag: string | undefined;
-    if (slot.regular && room.codexFiles !== undefined) {
-      try {
-        // Desktop seals the login. The wallet needs only the public choice in the envelope.
-        const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
-        const choice: unknown = envelope.agent;
-        if (choice === "codex-plan" && /^[a-f0-9]{64}$/.test(envelope.version)) {
-          planVersion = envelope.version;
-          planTag = envelope.tag;
-        }
-        if (choice === "codex-api" || choice === "codex-plan" || choice === "claude-code") agent = choice;
-        else validSlot = false;
-      } catch { validSlot = false; }
-    }
-    const codex = agent === "codex-api" || agent === "codex-plan";
-    const agentFiles = (codex ? room.codexFiles ?? [] : room.agentFiles).map(file);
-    const base = room.baseFiles.map(file), commands = room.coreCandidates.map(file);
+    const base = room.baseFiles.map(file),
+      commands = room.coreCandidates.map(file);
     const coreCommand =
       room.coreCandidates.find((p, i) => {
         if (!commands[i]?.regular) return false;
@@ -170,6 +168,51 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
           return false;
         }
       }) ?? null;
+    let profile: unknown = "claude-code";
+    let validUntil: unknown;
+    let version: unknown;
+    let tag: unknown;
+    let validSlot = slot.regular;
+    // Desktop seals the login and owns this envelope. Only its public choice enters the wallet.
+    if (slot.regular && (room.acpPrices || room.codexFiles !== undefined)) {
+      try {
+        if (statSync(room.setting).size > 65536) throw new Error();
+        const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
+        profile = envelope.agent;
+        version = envelope.version;
+        tag = envelope.tag;
+        validUntil = envelope.validUntil;
+      } catch { profile = null; }
+    }
+    let agent: RoomSelection["agent"] = slot.id === "missing" ? "core" : "claude-code";
+    let planVersion: string | undefined;
+    let planTag: string | undefined;
+    if (agent !== "core" && profile !== "claude-code") {
+      if (room.codexFiles !== undefined && (profile === "codex-api" || profile === "codex-plan")) {
+        agent = profile;
+        if (profile === "codex-plan" && typeof version === "string" && /^[a-f0-9]{64}$/.test(version)) {
+          planVersion = version;
+          planTag = typeof tag === "string" ? tag : undefined;
+        }
+      } else if (room.acpPrices) agent = "acp";
+      else validSlot = false;
+    }
+    const firstCall = agent === "acp" && typeof profile === "string" && Object.hasOwn(room.acpPrices ?? {}, profile)
+      ? room.acpPrices![profile] : undefined;
+    const identity = agent === "acp" && firstCall && typeof version === "string" && /^[a-f0-9]{64}$/.test(version)
+      ? "acp:" + profile + ":" + version : undefined;
+    let retryAt = 0;
+    let entitled = true;
+    if (identity) {
+      const marker = join(dirname(room.setting), ".paid-agent-entitlement." + profile + "." + version);
+      if (file(marker).regular) {
+        retryAt = Number(readFileSync(marker, "utf8"));
+        entitled = Number.isSafeInteger(retryAt) && Date.now() >= retryAt;
+      }
+    }
+    const loginCurrent = !firstCall?.needsExpiry || (typeof validUntil === "number" && Number.isSafeInteger(validUntil) && Date.now() < validUntil);
+    const agentFiles = (agent === "codex-api" || agent === "codex-plan" ? room.codexFiles ?? [] :
+      agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -196,13 +239,13 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       } catch { managed = true; }
     }
     const ready =
-      !managed && keysStable &&
+      !managed && keysStable && loginCurrent && entitled && (agent !== "acp" || (!!firstCall && Number.isSafeInteger(firstCall.tokenHold) && firstCall.tokenHold! > 0 && firstCall.tokenHold! <= 1000000)) &&
       (epoch === "legacy" || /^[0-9a-f-]{36}$/.test(epoch)) &&
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
         : validSlot && agentFiles.length > 0 && agentFiles.every((f) => f.regular) &&
-          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined));
+          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined) && (agent !== "acp" || !!identity));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
@@ -222,6 +265,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     const generation = JSON.stringify([
       epoch,
       keysEpoch,
+      loginCurrent, entitled, retryAt,
       managed,
       refusals,
       planVersion ?? slot.id,
@@ -232,7 +276,15 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       agentFiles,
       room.generationFiles?.map(file),
     ]);
-    return { agent, ready, coreCommand, generation,
-      ...(agent === "codex-plan" && room.codexPlanMinimumCents !== undefined && {minimumModelCents:room.codexPlanMinimumCents}) };
+    const refused = refusals.includes(".paid-agent-denied.unidentified") || refusals.includes(".paid-agent-refused." + version) || (typeof tag === "string" && /^[a-f0-9]{64}$/.test(tag) &&
+      (refusals.includes(".paid-agent-denied." + tag) || refusals.some(n => n.startsWith(".paid-agent-claim." + tag + "."))));
+    return { agent, ready:ready && !refused && !file(join(dirname(room.setting),".paid-agent-clearing")).regular, coreCommand, generation,
+      ...(agent === "codex-plan" && room.codexPlanMinimumCents !== undefined && {minimumModelCents:room.codexPlanMinimumCents}), ...(identity && {identity}), ...(firstCall && {firstCall}), ...(firstCall?.needsExpiry && typeof validUntil === "number" && {validUntil}) };
   };
+}
+
+export const ACP_ADMISSION = "room-acp-admission-v2";
+
+export function admissionArgs(argv: readonly string[], selection?: RoomSelection): string[] {
+  return argv[2] === "self-test" && selection?.agent === "acp" ? [ACP_ADMISSION] : [];
 }

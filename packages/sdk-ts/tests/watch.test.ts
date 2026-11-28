@@ -1995,3 +1995,26 @@ it("uses the existing sweep to announce changed spec hashes and remove closed ta
     await vi.waitFor(()=>expect(live).toBe(false));
   } finally {await watch.stop();}
 });
+
+it("revisits the open snapshot after a parked login recovers, including candidate 101", async () => {
+  const accounts: Array<{address:Address;data:Uint8Array}> = [];
+  for (let index=0; index<101; index++) {
+    const taskId = new Uint8Array(32).fill(index+1);
+    const [task] = await findTaskPda({creator:CREATOR_A,taskId}), [pin] = await findTaskJobSpecPda({task});
+    accounts.push({address:task,data:encodeTask({creator:CREATOR_A,taskId,requiredCapabilities:1n,rewardAmount:3000000n})},
+      {address:pin,data:encodeTaskJobSpec(task,CREATOR_A)});
+  }
+  let epoch: string | false = false, sweeps = 0;
+  const read: Address[] = [];
+  const watch = watchClaimableTasks({indexer:makeGpaTransport(accounts),pollIntervalMs:10,
+    candidateEpoch:()=>epoch, onCandidateSnapshot:()=>{sweeps++;}, onTask:job=>{read.push(job.task);}});
+  try {
+    await vi.waitFor(()=>expect(sweeps).toBeGreaterThan(1));
+    expect(read).toHaveLength(0);
+    epoch="restored";
+    await vi.waitFor(()=>expect(new Set(read).size).toBe(101));
+    const snapshot = sweeps;
+    await vi.waitFor(()=>expect(sweeps).toBeGreaterThan(snapshot));
+    expect(read).toHaveLength(101);
+  } finally { await watch.stop(); }
+});

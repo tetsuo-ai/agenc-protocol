@@ -132,6 +132,35 @@ it("invalidates a named peer admission if its pairing is replaced", () => {
   }
 });
 
+it("tracks the selected ACP image and rejects a missing or unknown profile", () => {
+  const dir = mkdtempSync(join(tmpdir(), "profile-room-"));
+  const path = (n: string) => join(dir, n);
+  const room = {setting:path("choice"), keyStore:path("keystore"), baseFiles:[path("base")],
+    agentFiles:[path("claude")], coreCandidates:[], acpFiles:[path("acp")],
+    acpPrices:{grok:{baseTicks:60_000_000_000, inputTicksPerByte:0,tokenHold:500000}, business:{baseTicks:1000,inputTicksPerByte:1,needsExpiry:true,tokenHold:32000}}};
+  const select = liveRoomSelection(room);
+  try {
+    writeFileSync(path("base"), "");
+    writeFileSync(path("choice"), JSON.stringify({agent:"grok",version:"1".repeat(64)}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("acp"), "stand-in");
+    expect(select()).toMatchObject({agent:"acp", ready:true,identity:"acp:grok:"+"1".repeat(64), firstCall:room.acpPrices.grok});
+    const initial = select().generation;
+    writeFileSync(path("acp"), "changed");
+    expect(select().generation).not.toBe(initial);
+    writeFileSync(path("choice"), JSON.stringify({agent:"business",version:"2".repeat(64),validUntil:Date.now() - 1}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("choice"), JSON.stringify({agent:"business",version:"2".repeat(64),validUntil:Date.now() + 60000}));
+    expect(select().ready).toBe(true);
+    writeFileSync(path("choice"), JSON.stringify({agent:"unsupported"}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("choice"), JSON.stringify({agent:"claude-code"}));
+    expect(select().ready).toBe(false);
+    writeFileSync(path("claude"), "stand-in");
+    expect(select()).toMatchObject({agent:"claude-code", ready:true});
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
 it("invalidates a ready room when machine settings arrive",async()=>{
   const {liveRoomSelection}=await import("../src/room-selection.js");
   const {mkdirSync}=await import("node:fs");
@@ -176,6 +205,38 @@ it("keeps the seller selection stable when the same plan rotates its token", () 
     write("d".repeat(64),"c".repeat(64));
     expect(read().generation).not.toBe(selected.generation);
   } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+it("parks a known entitlement failure only for its profile, login version and refresh interval", () => {
+  const root=mkdtempSync(join(tmpdir(),"model-access-"));
+  const f=(n:string)=>join(root,n), version="a".repeat(64);
+  try {
+    writeFileSync(f("selection"),JSON.stringify({agent:"grok",version}));
+    writeFileSync(f("image"),"fixture");
+    const current=liveRoomSelection({setting:f("selection"),keyStore:f("keys"),baseFiles:[f("image")],agentFiles:[f("image")],
+      acpFiles:[f("image")],coreCandidates:[],acpPrices:{grok:{baseTicks:60000000000,inputTicksPerByte:0,tokenHold:500000}}});
+    const mark=f(".paid-agent-entitlement.grok."+version);
+    const old=current();
+    writeFileSync(mark,String(Date.now()+300000));
+    expect(current().ready).toBe(false);
+    expect(current().generation).not.toBe(old.generation);
+    writeFileSync(mark,String(Date.now()-1));
+    expect(current().ready).toBe(true);
+    writeFileSync(mark,String(Date.now()+300000));
+    writeFileSync(f("selection"),JSON.stringify({agent:"grok",version:"b".repeat(64)}));
+    expect(current().ready).toBe(true);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+it("parks an ACP image from a Desktop that supplied no pre-call token ceiling", () => {
+  const root=mkdtempSync(join(tmpdir(),"old-acp-room-")), f=(name:string)=>join(root,name);
+  try {
+    writeFileSync(f("image"),"fixture");
+    writeFileSync(f("selection"),JSON.stringify({agent:"grok",version:"a".repeat(64)}));
+    const select=liveRoomSelection({setting:f("selection"),keyStore:f("keys"),baseFiles:[f("image")],agentFiles:[f("image")],
+      acpFiles:[f("image")],coreCandidates:[],acpPrices:{grok:{baseTicks:60000000000,inputTicksPerByte:0}}});
+    expect(select().ready).toBe(false);
+  } finally {rmSync(root,{recursive:true,force:true});}
 });
 
 it("resolves shell scripts after errexit and node scripts after a warning code", async()=>{

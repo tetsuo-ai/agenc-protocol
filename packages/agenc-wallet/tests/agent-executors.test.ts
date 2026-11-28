@@ -376,6 +376,22 @@ it.each(["codex-api","codex-plan"] as const)("applies verified job requirements 
   } finally { await earn.stopAll(); }
 });
 
+it("refuses an unfundable first ACP call before the seller can sign", async () => {
+  const room = {...local, mode:"sandboxed" as const, isolatedJobRoom:true};
+  const firstCall = {baseTicks:60_000_000_000,inputTicksPerByte:0,tokenHold:500000};
+  const earn = host({executor:room, roomWork:()=>({} as never), checkExecutionReady:async()=>{},
+    liveRoomState:()=>({agent:"acp", ready:true, identity:"acp:grok:"+"a".repeat(64), coreCommand:null, generation:"one", firstCall})});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const facts = {task:"task" as never,creator:"buyer" as never,promptBytes:40, acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})]};
+    await expect(ctx.checkExecutionReady!({...facts,firstRoundCents:599})).rejects.toThrow(/allowance/);
+    await ctx.checkExecutionReady!({...facts,firstRoundCents:600});
+    expect(earn.supportsPrivateInputs("seller")).toBe(false);
+  } finally { await earn.stopAll(); }
+});
+
 it("prices the required Claude system instruction and Bash tool before admission", async () => {
   const earn = host({ executor:{...local,mode:"sandboxed",isolatedJobRoom:true}, checkExecutionReady:async()=>{},
     liveRoomState:()=>({agent:"claude-code",coreCommand:null,ready:true,generation:"test"}) });
@@ -465,6 +481,39 @@ it("uses the offer's first-round money at activation and availability", async ()
   } finally {await earn.stopAll();}
 });
 
+it("keeps file correction closed when a seller switches a pinned ACP claim to Core", async () => {
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const { fileCorrectionAllowed, indexClaimUsage } = await import("../src/service-usage.js");
+  const root = mkdtempSync(path.join(tmpdir(), "file-correction-"));
+  folders.push(root);
+  const task = "1".repeat(32);
+  const state = path.join(root, "earn", "seller");
+  const ledger = path.join(root, "model-spend", task + "-" + task);
+  mkdirSync(ledger, {recursive:true});
+  writeFileSync(path.join(ledger, "admission"), JSON.stringify({executor:"acp:grok:fixture", budget:6000}));
+  indexClaimUsage(state, task, path.join(ledger, "0"));
+  expect(fileCorrectionAllowed(state, task, "core")).toBe(false);
+});
+
+it("prices the ACP command, answer and each promised revision before approval",async()=>{
+  const firstCall={baseTicks:60000000000,inputTicksPerByte:0,tokenHold:500000};
+  const earn=host({executor:{...local, mode:"sandboxed",isolatedJobRoom:true},roomWork:()=>({} as never),
+    checkExecutionReady:async()=>{},liveRoomState:()=>({agent:"acp",identity:"acp:grok:"+"a".repeat(64),ready:true,coreCommand:null,generation:"one",firstCall})},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const facts={task:"job" as never,creator:"buyer" as never,promptBytes:60,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})]};
+    const files={...facts,acceptance:["Agreed outputs v1: at least one file; required files: note.txt"]};
+    await expect.soft(ctx.checkExecutionReady!({...files,firstRoundCents:600})).rejects.toThrow(/allowance/);
+    await expect.soft(ctx.checkExecutionReady!({...facts,firstRoundCents:600,laterRoundCents:[200,200]})).rejects.toThrow(/allowance/);
+    await expect(ctx.checkExecutionReady!({...files,firstRoundCents:1200,laterRoundCents:[1200,1200]})).resolves.toBeTypeOf("function");
+    expect(ctx.executorIdentity?.()).toBe("acp:grok:"+"a".repeat(64));
+    await expect(ctx.checkExecutionReady!({...facts,acceptance:[],firstRoundCents:600})).rejects.toThrow();
+    expect(earn.supportsService("seller",{requiredFiles:["note.txt"],modelCapCents:600})).toBe(false);
+    expect(earn.supportsService("seller",{requiredFiles:["note.txt"],modelCapCents:1200})).toBe(true);
+  } finally {await earn.stopAll();}
+});
 it.each(["claude-code","codex","acp:fixture","pi"])("admits only verified public work for %s", async agent => {
   const callback = vi.fn(async () => {});
   const room = {...local,mode:"sandboxed" as const,isolatedJobRoom:true, reserveRevisionBudget:true};
@@ -654,4 +703,42 @@ it("requires the current native image probe to show a picker result",async()=>{
     generation="3";fs.writeFileSync(bad,"different invalid digest");
     await expect(ctx.checkExecutionReady!(job)).rejects.toThrow();
   } finally {await earn.stopAll();}
+});
+
+it("keeps the full chosen file delivery allowance and both buyer revisions", async () => {
+  const earn=host({executor:{...local,mode:"sandboxed",isolatedJobRoom:true},roomWork:()=>({} as never),checkExecutionReady:async()=>{},
+    liveRoomState:()=>({agent:"acp",identity:"acp:grok:"+"b".repeat(64),ready:true,coreCommand:null,generation:"one",
+      firstCall:{baseTicks:60000000000,inputTicksPerByte:0,tokenHold:500000}})},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const acceptance=[outputAgreementCriterion({requiredFiles:["note.txt"],allowTextOnly:false})];
+    const correct=ctx.chosenCorrectionFits?.(acceptance) ?? true;
+    const {admissionRounds,claimBudget}=await import("@tetsuo-ai/agenc-worker");
+    const rounds=admissionRounds(6000,true,correct);
+    expect(rounds).toEqual({firstRoundCents:3600,laterRoundCents:[1200,1200]});
+    expect(claimBudget(6000,true,correct)).toEqual({totalCents:6000,remainingCents:3600,revisionRound:0});
+    expect(ctx.roundCapacity?.(acceptance)).toEqual({calls:2,tokens:500001});
+    await expect(ctx.checkExecutionReady!({task:"job" as never,creator:"buyer" as never,acceptance,...rounds})).resolves.toBeTypeOf("function");
+  } finally { await earn.stopAll(); }
+});
+
+it("requires the business grant to cover the promised job window", async () => {
+  const start=Date.now(), firstCall={needsExpiry:true,baseTicks:100,inputTicksPerByte:0,tokenHold:25000};
+  let validUntil=start+600000;
+  const earn=host({executor:{...local, mode:"sandboxed",isolatedJobRoom:true},roomWork:()=>({} as never),checkExecutionReady:async()=>{},
+    liveRoomState:()=>({agent:"acp",identity:"acp:antigravity-business:"+"c".repeat(64),ready:true,coreCommand:null,generation:"one",validUntil,firstCall})},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const needs={task:"job" as never,creator:"buyer" as never,firstRoundCents:600,loginThroughMs:start+86400000,
+      acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})]};
+    await expect(ctx.checkExecutionReady!(needs)).rejects.toThrow(/expires/);
+    validUntil=start+86400001;
+    const guard=await ctx.checkExecutionReady!(needs);
+    validUntil=start+100;
+    expect(guard).toThrow(/expires/);
+  } finally { await earn.stopAll(); }
 });

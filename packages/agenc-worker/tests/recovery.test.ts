@@ -1,5 +1,5 @@
 import { findWorkerStatsPda } from "@tetsuo-ai/marketplace-sdk";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { address, type Address, type TransactionSigner } from "@solana/kit";
@@ -3391,6 +3391,34 @@ describe("durable claim admission",()=>{
     expect(price).not.toHaveBeenCalled();
     expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
   });
+  it("retries an affordable Grok job after the local quote crosses six dollars",async()=>{
+    let cents=599;
+    const price=vi.fn(async()=>cents);
+    const ready=vi.fn(async(input:Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0])=>{
+      if ((input.firstRoundCents ?? 0) < 600)
+        throw Object.assign(new Error("Grok needs six dollars."),{name:"ExecutorBudgetError"});
+      throw new Error("Practice check stops before signing.");
+    });
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},ready,
+      ctx=>{ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>String(cents);});
+    const read=vi.spyOn(result.ctx,"readAccount");
+    await processCandidate(result.ctx,agent,candidate);
+    expect(read).not.toHaveBeenCalled();
+    expect(price).toHaveBeenCalledOnce();
+    cents=601;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(ready.mock.calls.map(([facts])=>facts.firstRoundCents)).toEqual([599,601]);
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
+  it("expires a price refusal with the rate even when no other job refreshes it",async()=>{
+    const price=vi.fn().mockResolvedValueOnce(599).mockResolvedValue(601);
+    const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()}, async()=>{
+      throw Object.assign(new Error("Price check."),{name:"ExecutorBudgetError"});
+    },ctx=>{ctx.modelBudgetForTask=price;ctx.allowanceGeneration=()=>"unchanged";ctx.quoteLifetimeMs=()=>0;});
+    await processCandidate(result.ctx,agent,candidate);
+    expect(price).toHaveBeenCalledTimes(2);
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
   it("caches a fixed first-turn refusal until the allowance changes",async()=>{
     let budget=1;
     const price=vi.fn(async()=>budget);
@@ -3406,6 +3434,50 @@ describe("durable claim admission",()=>{
     await processCandidate(result.ctx,agent,candidate);
     expect(result.fetchUri).toHaveBeenCalledTimes(2);
   });
+});
+
+it("parks a locally expired ACP login before task and quote reads",async()=>{
+  let ready=false;
+  const price=vi.fn(async()=>1000);
+  const reads=vi.fn();
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{throw Error("stop before signing");},ctx=>{
+      ctx.localExecutorReady=()=>ready;
+      ctx.admissionGeneration=()=>ready?"new":"expired";
+      ctx.modelBudgetForTask=price;
+      const read=ctx.readAccount;
+      ctx.readAccount=async address=>{reads();return read(address);};
+    });
+  const candidate={task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT};
+  await processCandidate(result.ctx,agent,candidate);
+  expect(reads).not.toHaveBeenCalled();
+  expect(price).not.toHaveBeenCalled();
+  ready=true;
+  await processCandidate(result.ctx,agent,candidate);
+  expect(reads).toHaveBeenCalled();
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+});
+
+it("keeps the admitted ACP profile and login after a switch during confirmation",async()=>{
+  const admitted="acp:hermes:"+"a".repeat(64);
+  let selected=admitted;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},async()=>()=>{},ctx=>{
+    ctx.modelSpendDir=path.join(ctx.stateDir,"canonical-claims");
+    ctx.modelBudgetForTask=async()=>1000;
+    ctx.executorIdentity=()=>selected;
+    ctx.client={claimTaskWithJobSpec:async (_input:unknown,opts:{assertAuthorized:(stage:string,signature?:string)=>void})=>{
+      opts.assertAuthorized("sign");opts.assertAuthorized("send","practice-confirmation");
+      selected="core";
+      return {signature:"practice-confirmation"};
+    }} as unknown as MarketplaceClient;
+  });
+  const [claim]=await findClaimPda({task:TASK,bidder:agent.agentPda});
+  const dir=path.join(result.ctx.modelSpendDir!,result.ctx.signer.address+"-"+claim);
+  expect(JSON.parse(readFileSync(path.join(dir,"admission"),"utf8"))).toEqual({executor:admitted,budget:1000});
+  const {requireClaimExecutor}=await import("../src/revision-budget.js");
+  expect(()=>requireClaimExecutor(dir,"core")).toThrow();
+  expect(()=>requireClaimExecutor(dir,"acp:hermes:"+"b".repeat(64))).toThrow();
+  expect(()=>requireClaimExecutor(dir,admitted)).not.toThrow();
 });
 
 it.each(["verified","different hash","connected"])("recovers a 0.1.16 private submission only with its signed saved output (%s)",async kind=>{
@@ -3451,6 +3523,21 @@ it.each(["between attempts","during admission"])("reconsiders a changed spec obs
   available=true;
   await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,jobSpecHash:digest.hex,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
   expect(result.claimTaskWithJobSpec).toHaveBeenCalledOnce();
+});
+
+it("holds a finite business login before a signature for a job with buyer revisions", async () => {
+  const now=1700000000;
+  const ready=vi.fn(async()=>{ throw new Error("Unexpected paid readiness"); });
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},ready,ctx=>{
+    ctx.expiringExecutorLogin=()=>true;
+    ctx.clusterTime=async()=>now;
+    ctx.reserveRevisionBudget=true;
+    const read=ctx.readAccount;
+    ctx.readAccount=async addr=>addr===TASK
+      ? taskData(TaskStatus.Open,{deadline:BigInt(now+600), constraintHash:new Uint8Array(32).fill(1)}) : read(addr);
+  });
+  expect(result.outcome).toMatchObject({status:"skipped",reason:expect.stringMatching(/revision window/)});
+  expect(ready).not.toHaveBeenCalled();
 });
 
 it("keeps a capability refusal when only the SOL price changes",async()=>{

@@ -1,3 +1,4 @@
+import { fileCorrectionAllowed } from "./service-usage.js";
 import { publishTaskReview } from "./task-review-publication.js";
 import { reviewBytes, type SignedTaskReview, type TaskReview } from "./client/task-review.js";
 import type { HistoryQuery } from "./client/money-operations.js";
@@ -181,7 +182,7 @@ import {
 } from "./market.js";
 import { busyServiceText, hireRefundAt } from "./hire-wait-words.js";
 import { listingIsFull } from "./listing-slot.js";
-import { centsToLamports, lamportsToCents, type PriceSource } from "./pricing.js";
+import { centsToLamports, lamportsToCents, PRICE_CACHE_MS, type PriceSource } from "./pricing.js";
 import { createRecordKeeper, type RecordKeeper } from "./records.js";
 import {
   buildJobSpec,
@@ -600,6 +601,7 @@ function sellerMoney(lamports: bigint, rate: number | null) {
 
 export class AgencWallet {
   readonly #config: WalletConfig;
+  #observedSolUsd: number | null = null;
   readonly #chain: Chain;
   readonly #services: MarketServices;
   readonly #vault: KeyVault;
@@ -867,6 +869,7 @@ export class AgencWallet {
     const value = raw !== null && Number.isFinite(raw) && raw > 0 ? raw : null;
     this.#currentSolUsd = value;
     if (value !== null) {
+      this.#observedSolUsd = value;
       const previous = this.#store.state.lastSolUsd;
       if (previous === null || Math.abs(previous.value - value) / value > 0.002) {
         this.#store.update((draft) => {
@@ -6057,7 +6060,7 @@ export class AgencWallet {
     if (!marker?.chosen || marker.task !== task || marker.execution?.resultHashHex !== hash)
       throw new WalletError("NOT_FOUND", "Review the current room result.");
     return inspectWorkChunk(Buffer.from(marker.execution.resultBytesBase64, "base64"), hash, part, offset,
-      marker.modelBudget?.correctionCents ?? 0, workFileSource(stateDir, sha => this.#services.fetchFile(sha)));
+      marker.modelBudget?.correctionCents ?? 0, workFileSource(stateDir, sha => this.#services.fetchFile(sha)), fileCorrectionAllowed(stateDir, task, this.#earn.connectedAgent(agentId)));
   }
 
   async correctWork(agentId: string, task: string, hash: string, note: string) {
@@ -6068,7 +6071,7 @@ export class AgencWallet {
       this.#emit({type: "overview"});
       const fetch = workFileSource(ctx.stateDir, sha => this.#services.fetchFile(sha));
       const result = await correctChosenWork(ctx, agent, signal, workAddress(task), hash, note,
-        body => correctionInputs(body, fetch), body => checkWorkFiles(body, fetch));
+        body => correctionInputs(body, fetch, fileCorrectionAllowed(ctx.stateDir, task, this.#earn.connectedAgent(agentId))), body => checkWorkFiles(body, fetch));
       this.#emit({type: "overview"});
       return result;
     });
@@ -6858,7 +6861,8 @@ export class AgencWallet {
         reconcileBeforeOpenJobs: agentOffers(current).some((offer) => offer.wanted && offer.listed),
         ...(owed !== undefined ? { owed } : {}),
         solUsd: () => this.#freshRate(),
-        lastSolUsd: () => this.#store.state.lastSolUsd?.value ?? null,
+        lastSolUsd: () => this.#observedSolUsd ?? this.#store.state.lastSolUsd?.value ?? null,
+        quoteLifetimeMs: () => this.#config.prices.remainingMs?.() ?? PRICE_CACHE_MS,
       });
       if (agentOffers(current).some((offer) => offer.wanted)) {
         const resume = started.then(() => this.#earn.canTakeJobs(agent.id) && this.#advanceOffer(agent.id));

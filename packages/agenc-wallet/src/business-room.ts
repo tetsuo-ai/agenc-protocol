@@ -1,5 +1,5 @@
 import { runExecutor } from "@tetsuo-ai/agenc-worker";
-import { commandGeneration } from "./room-selection.js";
+import { admissionArgs, commandGeneration } from "./room-selection.js";
 import type { EarnExecutor, EarnOptions } from "./earn.js";
 import { WalletError } from "./errors.js";
 import type { WalletState } from "./store.js";
@@ -36,11 +36,11 @@ export async function checkBusinessRoom(
         "The room self-test is unavailable.",
       );
     await runExecutor({
-      argv: readiness.argv.map((arg) =>
+      argv: [...readiness.argv.map((arg) =>
         arg === "{roomCore}"
           ? (options.liveRoomState?.().coreCommand ?? "room-agent")
           : arg.replaceAll("{agent}", agentId),
-      ),
+      ), ...admissionArgs(readiness.argv,options.liveRoomState?.())],
       timeoutMs: readiness.timeoutMs ?? 30_000,
       envAllowlist,
       maxStdoutBytes: 65536,

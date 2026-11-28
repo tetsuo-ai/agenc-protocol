@@ -128,7 +128,7 @@ export function workEligibility(task: string, code: keyof typeof eligibilityReas
 async function inspect(ctx: WorkerContext, agent: WorkerAgent, task: Address) {
   const refused = (code: keyof typeof eligibilityReasons) => ({ job: null, eligibility: workEligibility(task, code) });
   try {
-    if (cachedJobRefusal(ctx,task,true)) return refused("unavailable");
+    if (ctx.localExecutorReady?.() === false || cachedJobRefusal(ctx,task,true)) return refused("unavailable");
     const read = await readTaskAccount(ctx, task);
     if (read.kind !== "task") return refused(read.kind);
     const now = await ctx.clusterTime!();
@@ -242,18 +242,6 @@ export async function takeOpenWork(ctx: WorkerContext, agent: WorkerAgent, signa
     },
   }));
   if (result.status !== "held") throw new Error("The worker could not confirm the claim. Refresh the jobs list.");
-  // Leave the two buyer-requested revision slices intact. A crash before this
-  // write simply leaves this older claim without a pre-submission repair.
-  const state = loadState(ctx.stateDir);
-  const marker = state.openClaim;
-  const budget = marker?.modelBudget;
-  if (marker?.chosen && marker.task === task && marker.phase === "claimed" && ctx.reviewRoom && ctx.modelSpendDir &&
-      budget && budget.remainingCents >= 2) {
-    const heldBack = Math.max(1, Math.floor(budget.remainingCents / 4));
-    budget.remainingCents -= heldBack;
-    budget.correctionCents = heldBack;
-    saveState(ctx.stateDir, state);
-  }
 }
 
 type Terms = NonNullable<Awaited<ReturnType<typeof taskTerms>>>;

@@ -37,13 +37,26 @@ export function indexClaimUsage(stateDir: string, task: string, round: string) {
   }
 }
 
-function durableUsage(stateDir:string,task:string):ServiceUsage|null {
+function indexedLedger(stateDir:string,task:string):string|null {
   const {root,index}=claimIndex(stateDir,task);
   let name:string;
   try { name=readFileSync(index,"utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code==="ENOENT") return null; throw error; }
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}-[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(name)) throw new Error("Invalid claim ledger.");
-  const dir=path.join(root,name), {budget}=JSON.parse(readFileSync(path.join(dir,"admission"),"utf8"));
+  return path.join(root,name);
+}
+
+export function fileCorrectionAllowed(stateDir:string, task:string, connected?:string):boolean {
+  const dir = indexedLedger(stateDir, task);
+  if (!dir) return connected !== "acp";
+  const {executor} = JSON.parse(readFileSync(path.join(dir,"admission"),"utf8"));
+  return typeof executor === "string" && !executor.startsWith("acp:") && connected !== "acp";
+}
+
+function durableUsage(stateDir:string,task:string):ServiceUsage|null {
+  const dir=indexedLedger(stateDir, task);
+  if (!dir) return null;
+  const {budget}=JSON.parse(readFileSync(path.join(dir,"admission"),"utf8"));
   const rounds=readdirSync(dir).filter(n=>/^(?:-1|[0-2])$/.test(n));
   let reservedCents=0,unknownReservedCents=0,measured=0;
   for (const round of rounds) {
