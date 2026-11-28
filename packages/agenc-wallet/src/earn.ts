@@ -412,7 +412,7 @@ export class EarnHost {
       const calls = needs.requiredFiles?.length || needs.allowTextOnly === false ? 2 : 1;
       const rounds = needs.modelCapCents === undefined ? undefined :
         admissionRounds(needs.modelCapCents, executor?.reserveRevisionBudget === true);
-      const allowances = !rounds ? [] : [rounds.firstRoundCents,...(connected === "acp" ? rounds.laterRoundCents : [])];
+      const allowances = !rounds ? [] : [rounds.firstRoundCents,...(pricedAgent(connected) ? rounds.laterRoundCents : [])];
       if (!policy || !executor?.isolatedJobRoom || executor.mode !== "sandboxed" || needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || executor?.argv[2] === "peer-job" ||
           (needs.requiredFiles?.some(name=>!policy.canDeliver(name))) ||
           (needs.allowTextOnly === false && !needs.requiredFiles?.length &&
@@ -1095,7 +1095,7 @@ export class EarnHost {
         if (admission.firstRoundCents !== undefined && admission.firstRoundCents < reportedMinimum * calls)
           throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
         if (connected && admission.firstRoundCents !== undefined) {
-          const rounds = [admission.firstRoundCents,...(connected === "acp" ? admission.laterRoundCents ?? [] : [])];
+          const rounds = [admission.firstRoundCents,...(pricedAgent(connected) ? admission.laterRoundCents ?? [] : [])];
           const policy = this.#publicJobs(connected)!;
           if (!rounds.every(cents=>policy.firstTurnFits(cents,admission.promptBytes,calls)))
             throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");

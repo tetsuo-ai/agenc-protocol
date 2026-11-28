@@ -539,8 +539,26 @@ it.each(["claude-code","codex","acp:fixture","pi"])("admits only verified public
     await expect(ctx.checkExecutionReady!({...facts,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:false})]})).rejects.toThrow();
     expect(earn.supportsService("seller",{modelCapCents:1})).toBe(false);
     await expect(earn.checkListingReady("seller",undefined,{modelCapCents:5})).rejects.toThrow();
-    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:10})).resolves.toBeTypeOf("function");
-    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:10,promptBytes:6000})).rejects.toThrow();
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:20})).resolves.toBeTypeOf("function");
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:20,promptBytes:6000})).rejects.toThrow();
+  } finally {await earn.stopAll();}
+});
+
+it("refuses a Pi job whose later revision rounds cannot be afforded", async () => {
+  const callback = vi.fn(async () => {});
+  const room = {...local,mode:"sandboxed" as const,isolatedJobRoom:true, reserveRevisionBudget:true};
+  const earn=host({executor:room,roomWork:()=>({} as never),checkExecutionReady:callback,
+    connectedPublicJobs:{pi:{canDeliver:name=>name.endsWith(".txt"),firstTurnFits:(cents)=>cents>=4}},
+    liveRoomState:()=>({agent:"pi",coreCommand:null,ready:true,generation:"pi"})},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fixture"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    ctx.log({event:"watch.started"});
+    const facts={task:"job" as never,creator:"buyer" as never,acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})],promptBytes:30,firstRoundCents:6};
+    await expect(ctx.checkExecutionReady!({...facts,laterRoundCents:[6,6]})).resolves.toBeTypeOf("function");
+    await expect(ctx.checkExecutionReady!({...facts,laterRoundCents:[6,3]})).rejects.toThrow(/allowance/);
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:10})).rejects.toThrow();
   } finally {await earn.stopAll();}
 });
 
