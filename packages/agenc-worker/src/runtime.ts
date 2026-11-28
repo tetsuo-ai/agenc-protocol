@@ -207,6 +207,11 @@ export type WorkerContext = {
   simulateWork?: (instruction: import("@solana/kit").Instruction, guards?: readonly import("@solana/kit").Instruction[]) => Promise<WorkSimulation | null>;
   chosenOutcome?: (receipt: { signature: string; lastValidBlockHeight: string }) => Promise<"pending" | "landed" | "failed" | "expired">;
   roomWork?: RoomWork;
+  /** Chain facts that let a saved signed operation be resent while valid, or replaced once it can never land. */
+  operationLifetime?: {
+    blockhashValid(blockhash: string): Promise<boolean>;
+    neverLanded(receipt: { signature: string; signedTransaction: string; lastValidBlockHeight: string }): Promise<boolean>;
+  };
   chooseOpenJobs?: () => boolean;
   checkChosenRoom?: (signal?: AbortSignal) => Promise<void>;
   /** Signing + sending (the hot wallet is this client's signer/fee payer). */
