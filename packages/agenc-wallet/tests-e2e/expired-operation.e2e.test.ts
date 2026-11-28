@@ -305,3 +305,16 @@ it("closes a dropped funding decision as not funded only on proof, and frees the
   expect(entry.refills.filter(row => row.signature === undefined)).toEqual([]);
   expect(Object.values(state().moneyOperations ?? {}).filter(op => op.state === "pending")).toEqual([]);
 });
+
+it("reconciles an expired transfer quote without sending its still-valid bytes",async()=>{
+  const {net,start}=lossyWorld();
+  w=await start();
+  const q=await w.wallet.quoteTransfer(withdrawal((await generateKeyPairSigner()).address));
+  net.drop=true;
+  const first=await w.wallet.confirmTransfer(q.id);
+  expect(first.state).toBe("pending");
+  w.clock.now=q.expiresAt;
+  await w.wallet.close();w.wallet=await w.reopen();
+  expect((await w.wallet.confirmTransfer(q.id)).state).toBe("pending");
+  expect(net.sends).toBe(1);
+});

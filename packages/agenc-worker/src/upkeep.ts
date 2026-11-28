@@ -39,6 +39,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
+import { sendClaimOperation } from "./claim-operation.js";
 import { chainDeadline, monotonicMs } from "./claim-admission.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import type { WorkerAgent, WorkerContext } from "./runtime.js";
@@ -53,6 +54,14 @@ export async function claimChainTime(read: WorkerContext["readAccount"]): Promis
   const seconds = Number(new DataView(data.buffer, data.byteOffset, data.byteLength).getBigInt64(32, true));
   if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("The claim clock is unavailable.");
   return seconds;
+}
+
+async function releaseClock(ctx:WorkerContext): Promise<number> {
+  try {
+    const now=await ctx.clusterTime?.();
+    if (typeof now === "number" && Number.isSafeInteger(now) && now > 0) return now;
+  } catch {}
+  return claimChainTime(ctx.readAccount);
 }
 
 /** The cluster's clock in unix seconds, as well as this worker can tell. */
@@ -311,10 +320,9 @@ export async function sendReleaseClaim(
   decoded: Task,
   refundBefore?: bigint,
 ): Promise<string> {
-  const end = refundBefore === undefined ? undefined : await chainDeadline(ctx.clusterTime ?? (()=>claimChainTime(ctx.readAccount)),Number.MAX_SAFE_INTEGER,refundBefore);
+  const end = refundBefore === undefined ? undefined : await chainDeadline(()=>releaseClock(ctx),Number.MAX_SAFE_INTEGER,refundBefore);
   const check = () => { if (end !== undefined && monotonicMs() >= end) throw new Error("The claim refund window closed."); };
-  const { signature } = await ctx.client.send(
-    [
+  const instructions = [
       await facade.releaseClaim({
         task,
         worker: agent.agentPda,
@@ -323,10 +331,9 @@ export async function sendReleaseClaim(
         taskValidationConfig: await validationConfigOrNull(ctx, task),
       }),
       ...(refundBefore === undefined ? [] : [lighthouse.assertClockBefore(Number(refundBefore))]),
-    ],
-    { maxRetries: 0,...(end !== undefined && {assertAuthorized:check}) },
-  );
-  return signature;
+    ];
+  return sendClaimOperation(ctx, agent.agentPda, task, "release", "release",
+    options => ctx.client.send(instructions, options), check);
 }
 
 function markReleased(ctx: WorkerContext, task: Address): void {
@@ -385,7 +392,7 @@ export async function releaseOwnClaims(
     if (job.chosen) continue; // Only the owner may spend to close this claim.
     const decoded = await readTask(ctx, task);
     if (decoded === null) continue;
-    now ??= await clusterNowSeconds(ctx);
+    try { now ??= await releaseClock(ctx); } catch { continue; }
     const ended =
       decoded.status === TaskStatus.Completed || decoded.status === TaskStatus.Cancelled;
     const live =
@@ -422,7 +429,8 @@ export async function releaseOwnClaims(
       }
       treasury ??= await readTreasury(ctx);
       const instruction = await cleanupClaimInstruction(ctx, agent, task, decoded, treasury, ended);
-      const { signature } = await ctx.client.send([instruction], { maxRetries: 0 });
+      const signature = await sendClaimOperation(ctx, agent.agentPda, task, ended ? "reclaim" : "expire", ended ? "reclaim" : "expire",
+        options => ctx.client.send([instruction], options));
       markReleased(ctx, task);
       const how = ended ? "reclaimed" : "expired";
       released.push({ task, how });

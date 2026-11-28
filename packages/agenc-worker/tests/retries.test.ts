@@ -173,6 +173,7 @@ async function heldJob(options: { task?: Uint8Array; inARow?: number } = {}) {
       executorTimeoutMs: 30_000,
       pollIntervalMs: 15_000,
     },
+    clusterTime: async () => 1_800_000_000,
     client: {} as MarketplaceClient,
     signer: { address: WALLET } as TransactionSigner,
     gpa: { getProgramAccounts: async () => [] } as ProgramAccountsTransport,

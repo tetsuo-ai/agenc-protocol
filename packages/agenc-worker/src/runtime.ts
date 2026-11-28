@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { chainDeadline, deadlineFromChain, monotonicMs, claimSignatureJournal, ExecutorCapabilityError } from "./claim-admission.js";
+import { sendClaimOperation } from "./claim-operation.js";
 import { requiresExtraRoom } from "./public-job.js";
 import { parseJobBrief } from "./job-brief.js";
 // The worker runtime: ensureRegistered → find claim candidates (ONE at a time — the
@@ -103,6 +104,7 @@ import {
 } from "./state.js";
 import { formatDiagnosticError, redactSensitiveText } from "./redact.js";
 import {
+  claimChainTime,
   clusterNowSeconds,
   readTaskAccount,
   runUpkeep,
@@ -295,6 +297,7 @@ export type WorkerContext = {
    * before every fresh claim, before its WAL or transaction. Throw to defer.
    * Receives no buyer text. Recovery and settlement remain available.
    */
+  checkTextRevision?: (delivery:{previous:{proofHashHex:string;resultData:Uint8Array}} | {output:Buffer}) => Promise<void>;
   chosenRoomCurrent?: () => boolean;
   admissionGeneration?: () => string;
   executorIdentity?: () => string;
@@ -302,8 +305,11 @@ export type WorkerContext = {
   expiringExecutorLogin?: () => boolean;
   chosenCorrectionFits?: (acceptance: readonly string[]) => boolean;
   roundCapacity?: (acceptance: readonly string[]) => {calls:number; tokens:number} | undefined;
+  executorProgram?: () => string | undefined;
+  capabilityRefusals?: Map<Address, string>;
   candidateHashes?: Map<Address,string>;
-  refusals?: Map<string,{hash:string; snapshot?:string | undefined; generation:string; reason:string; expires?:number; retryAt?:number; unchanged:()=>boolean}>;
+  candidateScan?: number;
+  refusals?: Map<string,{hash:string; snapshot?:string | undefined; scan?:number; generation:string; reason:string; expires?:number; retryAt?:number; unchanged:()=>boolean}>;
   /** Synchronous local revision. Checking a refused job must not fetch the price again. */
   quoteLifetimeMs?: () => number;
   allowanceGeneration?: (task:Task, metadata:Uint8Array|null, lastBudget?:number)=>string;
@@ -311,7 +317,7 @@ export type WorkerContext = {
   checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
     revision?: boolean; reviewAttachments?: number; extraRoomFeatures?: boolean;
-    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; laterRoundCents?: readonly number[]; loginThroughMs?: number; deadlineMs?: number; reviewFiles?: number; preview?:boolean }) => Promise<void | (() => void)>;
+    acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; laterRoundCents?: readonly number[]; loginThroughMs?: number; deadlineMs?: number; reviewFiles?: number; policyOnly?:boolean; preview?:boolean }) => Promise<void | (() => void)>;
 };
 
 /** Owner operations run on the watcher's serialized lane, with its real context. */
@@ -878,6 +884,7 @@ export async function listClaimCandidates(
     }),
     listPinnedJobSpecHashes(ctx.gpa),
   ]);
+  observeCandidateScan(ctx, new Set(open.map(row => row.address)), pinned);
   const candidates: ClaimCandidate[] = [];
   for (const { address, account } of open) {
     if (account.status !== TaskStatus.Open) continue; // defensive
@@ -902,6 +909,13 @@ export async function listClaimCandidates(
         : 0,
   );
   return candidates;
+}
+
+function observeCandidateScan(ctx: WorkerContext, open: ReadonlySet<Address>, pins: ReadonlyMap<Address,string>) {
+  ctx.candidateScan = (ctx.candidateScan ?? 0) + 1;
+  ctx.candidateHashes = new Map(Array.from(pins).filter(([task])=>open.has(task)));
+  if (ctx.refusals)
+    for (const key of ctx.refusals.keys()) if (!open.has(key.split("/")[0] as Address)) ctx.refusals.delete(key);
 }
 
 /** Outcome of attempting one candidate. */
@@ -1830,12 +1844,13 @@ async function submitPreparedResult(
       }
       assertAuthorized = () => {
         // A completed delivery drains after the seller turns off new claims.
-        if (ctx.executorIdentity && ctx.modelSpendDir) requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+account),ctx.executorIdentity());
+        if (ctx.executorIdentity && ctx.modelSpendDir) requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+account),ctx.executorIdentity(),false,ctx.executorProgram?.());
         if (monotonicMs() >= end || ctx.admissionGeneration?.() !== generation) throw new Error("The claim admission changed.");
       };
     }
     assertAuthorized?.();
-    const { signature } = await ctx.client.submitTaskResult(
+    const signature = await sendClaimOperation(ctx, agent.agentPda, task,
+      `submit-${broadcastingMarker.revisionSubmissionCount ?? 0}`, intent.resultHashHex, options => ctx.client.submitTaskResult(
       {
         task,
         worker: agent.agentPda,
@@ -1843,8 +1858,8 @@ async function submitPreparedResult(
         proofHash: hexToBytes(intent.resultHashHex),
         resultData: resultDataFromHashHex(intent.resultHashHex),
       },
-      { maxRetries: 0, ...(assertAuthorized && {assertAuthorized}) },
-    );
+      options,
+    ), assertAuthorized, intent.transactionSignature);
     const record = commitSubmission(ctx, task, intent, { signature });
     return { status: "submitted", task, record };
   } catch (error) {
@@ -2003,6 +2018,7 @@ async function executeAndSubmit(
   const binding = { task, seller: agent.agentPda, deadline: decodedTask.deadline, spec: payload, privateInputs, listingMetadata: serviceMetadata ?? null,
     listing: (evidenceState.openClaim?.listing as Address | undefined) ?? null };
   let stdout: Buffer;
+  let watch: ReturnType<typeof setInterval> | undefined;
   try {
     // A queued recovery tick can drain after shutdown. Cancellation must not
     // turn an already-spent reservation into an additional failed attempt.
@@ -2013,9 +2029,21 @@ async function executeAndSubmit(
     }
     const [claimAddress] = await findClaimPda({task, bidder:agent.agentPda});
     const currentExecutor = ctx.executorIdentity?.();
-    let executionGuard: (() => void) | undefined;
+    const liveClaim = await readClaim(ctx,agent,task);
+    if (!liveClaim) throw new Error("The worker could not verify its claim.");
+    const cutoff = await chainDeadline(ctx.clusterTime ?? (()=>claimChainTime(ctx.readAccount)),
+      ctx.config.executorTimeoutMs,decodedTask.deadline,liveClaim.expiresAt);
+    const expired = new AbortController();
+    const running = ctx.signal ? AbortSignal.any([ctx.signal,expired.signal]) : expired.signal;
+    const expireIfDue = () => {
+      if (monotonicMs() >= cutoff) expired.abort(new DOMException("The claim expired.", "TimeoutError"));
+    };
+    const checkTime = () => { expireIfDue(); running.throwIfAborted(); };
+    watch = setInterval(expireIfDue, 100);
+    let executionGuard: () => void = checkTime;
+    let checkCompleted: () => void = checkTime;
     if (currentExecutor && ctx.modelSpendDir) {
-      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs);
+      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs,ctx.executorProgram?.());
       try {
         checkPin();
         const marker = evidenceState.openClaim;
@@ -2023,16 +2051,16 @@ async function executeAndSubmit(
           const capacity = ctx.roundCapacity(brief.acceptance);
           if (capacity) requireRoundCapacity(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), capacity);
         }
-        const live = await readClaim(ctx,agent,task);
-        if (!live || !ctx.clusterTime) throw new Error("The claim clock is unavailable.");
-        const deadlineMs = await chainDeadline(ctx.clusterTime,ctx.config.executorTimeoutMs,decodedTask.deadline,live.expiresAt);
+        const deadlineMs = cutoff;
         const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,
           requiredCapabilities:decodedTask.requiredCapabilities,acceptance:brief.acceptance,listingMetadata:serviceMetadata ?? null,
           ...(binding.listing && {listing:binding.listing}),reviewFiles:reviewInputs?.length ?? 0,
           revision:!!revisionHash,reviewAttachments,extraRoomFeatures:requiresExtraRoom(decodedTask,payload),
           ...(marker?.modelBudget?.remainingCents && {firstRoundCents:marker.modelBudget.remainingCents}),
           promptBytes:Buffer.byteLength(JSON.stringify(prompt)),deadlineMs,...(ctx.signal && {signal:ctx.signal})});
-        executionGuard = () => { checkPin(); if (ready) ready(); if (monotonicMs() >= deadlineMs) throw new Error("The claim expired."); };
+        // Turning off discovery lets an admitted job finish on its original program.
+        checkCompleted = () => { checkTime(); checkPin(); };
+        executionGuard = () => { checkCompleted(); if (ready) ready(); };
       } catch (error) {
         ctx.log({event:"task.execution-not-ready",task,reason:formatDiagnosticError(error)});
         if (evidenceState.openClaim?.revisionSubmissionCount && error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name))
@@ -2066,7 +2094,8 @@ async function executeAndSubmit(
       executionGuard?.();
       const round = ctx.modelSpendDir && join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress,
         String(evidenceState.openClaim.revisionSubmissionCount ?? 0));
-      const result = await turn.resume(until,ctx.signal,round);
+      const result = await turn.resume(Math.min(until ?? cutoff,cutoff),running,round);
+      checkTime();
       if (result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
     } else {
@@ -2108,17 +2137,24 @@ async function executeAndSubmit(
       if (!ctx.reserveAtLaunch) commitRound?.();
       const argv = ctx.executorForTask === undefined ? ctx.config.executor : await ctx.executorForTask(decodedTask, task, reservedCents, (evidenceState.openClaim?.listing as Address | undefined) ?? null, serviceMetadata, brief.request, brief.acceptance, budgetTotalCents, claimExpires, claimRound, commitRound);
       commitRound?.();
+      executionGuard();
       const result = await executeTurn({
         argv,
         prompt,
         ...(reviewInputs?.length ? { reviewInputs } : {}),
-        timeoutMs: ctx.config.executorTimeoutMs,
+        timeoutMs: Math.max(1,cutoff-monotonicMs()),
         envAllowlist: ctx.config.executorEnvAllowlist,
         unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
-        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+        signal: running,
       });
+      checkTime();
       if ("state" in result && result.state === "parked") return { status: "held", task };
       stdout = result.stdout;
+    }
+    checkCompleted();
+    if (revisionHash) {
+      await ctx.checkTextRevision?.({output:stdout});
+      checkCompleted();
     }
     // B binds the v2 pointer to the claim generation; v1 remains for earlier rooms.
     if (privateInputs && (stdout.length !== "agenc.private-output.v1:".length + 64 || !/^agenc\.private-output\.v[12]:[0-9a-f]{64}$/.test(stdout.toString("utf8"))))
@@ -2139,7 +2175,7 @@ async function executeAndSubmit(
     }
     noteJobFailure(ctx, task, reason, { rewardAmount: decodedTask.rewardAmount, ranWork: true });
     return { status: "execution-failed", task, reason };
-  }
+  } finally { clearInterval(watch); }
 
   const resultBytes = new Uint8Array(stdout);
   const execution: ExecutionIntent = {
@@ -2210,7 +2246,7 @@ export function cachedJobRefusal(ctx:WorkerContext,task:Address,chosen:boolean,h
   if (!prior) return undefined;
   const observed = ctx.candidateHashes?.get(task) ?? hint;
   if (prior.generation === (ctx.admissionGeneration?.() ?? "configured") &&
-      (!observed || observed === prior.hash || observed === prior.snapshot) &&
+      (!observed || observed === prior.hash || (observed === prior.snapshot && (ctx.candidateScan ?? 0) === prior.scan)) &&
       (prior.retryAt === undefined || monotonicMs() < prior.retryAt) && prior.unchanged()) {
     if (prior.expires !== undefined && monotonicMs() >= prior.expires)
       return {status:"skipped" as const,task,reason:"The job deadline passed."};
@@ -2236,12 +2272,14 @@ export async function processCandidate(
     return {status:"skipped", task, reason:"The selected room needs its login or image.", retryable:true};
   const refused = ctx.refusals ??= new Map();
   const chosen = !!(options.authorizeChosen || options.inspect);
+  const scan = ctx.candidateScan ?? 0;
   const observedHash = ctx.candidateHashes?.get(task) ?? candidate.jobSpecHash;
   const cached = cachedJobRefusal(ctx,task,chosen,observedHash);
   if (cached) return cached;
   const [claimAddress] = await findClaimPda({task, bidder:agent.agentPda});
   const journal = claimSignatureJournal(ctx.modelSpendDir ?? ctx.stateDir, ctx.signer.address, task, claimAddress);
   const executor = ctx.executorIdentity?.();
+  const program = ctx.executorProgram?.();
   if (journal.exists() && !options.inspect && !options.authorizeChosen) return {status:"skipped",task,reason:"A previous signature needs reconciliation."};
   const state = loadState(ctx.stateDir);
   const verdict = passesLocalFilters(ctx, state, candidate);
@@ -2293,6 +2331,8 @@ export async function processCandidate(
   if (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)) {
     return { status: "skipped", task, reason: "listing-not-approved" };
   }
+  if (!chosen && !hireBinding.isHire && decodedTask.taskType === TaskType.Exclusive && decodedTask.constraintHash.every(byte=>byte===0))
+    return {status:"skipped",task,reason:"Automatic work requires buyer review."};
   if (!chosen && !hireBinding.isHire && ctx.chooseOpenJobs?.()) {
     return { status: "skipped", task, reason: "waiting-for-owner-choice" };
   }
@@ -2442,7 +2482,7 @@ export async function processCandidate(
     };
     if (ctx.modelBudgetCeiling && ctx.checkExecutionReady) {
       budget = ctx.modelBudgetCeiling(decodedTask, listingMetadata);
-      await ctx.checkExecutionReady({...requirements, preview:true, ...(budget !== undefined && rounds(budget))});
+      await ctx.checkExecutionReady({...requirements, preview:true, policyOnly:true, ...(budget !== undefined && rounds(budget))});
     }
     budget = undefined;
     priced = true;
@@ -2467,11 +2507,12 @@ export async function processCandidate(
     await ctx.executorForTask?.(decodedTask, task, undefined, hireBinding.listing, listingMetadata);
   } catch (error) {
     const reason = formatDiagnosticError(error);
-    if (error instanceof Error && ["ExecutorBudgetError","ExecutorCapabilityError"].includes(error.name)) {
-      const current = () => ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) ?? "";
+    if (error instanceof Error && (["ExecutorBudgetError","ExecutorCapabilityError","RoomImageError"].includes(error.name) ||
+        (error instanceof ExecutorError && error.detail.reason === "exit" && error.detail.exitCode === SELLER_SETUP_EXIT))) {
+      const current = () => error.name === "ExecutorBudgetError" ? ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) ?? "" : "";
       const allowance = current();
       const quoteMs = priced && error.name === "ExecutorBudgetError" ? ctx.quoteLifetimeMs?.() : undefined;
-      refused.set(task+(chosen?"/chosen":"/automatic"),{hash:bytesToHex(new Uint8Array(verified.jobSpecHash)),snapshot:observedHash,generation,reason,
+      refused.set(task+(chosen?"/chosen":"/automatic"),{hash:bytesToHex(new Uint8Array(verified.jobSpecHash)),snapshot:observedHash,scan,generation,reason,
         ...(expires !== undefined && {expires}), ...(quoteMs !== undefined && {retryAt:monotonicMs()+quoteMs}),unchanged:()=>current()===allowance});
     }
     ctx.log({ event: "task.execution-not-ready", task, reason });
@@ -2554,7 +2595,7 @@ export async function processCandidate(
       reservedSignature = true;
       let createdPin = false;
       try {
-        if (executor && ctx.modelSpendDir) createdPin = pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget);
+        if (executor && ctx.modelSpendDir) createdPin = pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget,program);
         assertAdmission();
       } catch (error) { journal.clearUnsigned(createdPin); reservedSignature=false; throw error; }
     }
@@ -2585,7 +2626,7 @@ export async function processCandidate(
     };
     saveState(ctx.stateDir, claimedState);
     if (executor && ctx.modelSpendDir && !reservedSignature) {
-      pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget);
+      pinClaim(join(ctx.modelSpendDir,ctx.signer.address + "-" + claimAddress),executor,budget,program);
     }
     if (reservedSignature || ctx.modelSpendDir) journal.confirmed(signature);
     ctx.log({ event: "task.claimed", task, signature, parentTask, ...labels });
@@ -3123,9 +3164,10 @@ export async function resumeOpenClaim(
     try {
       if (ctx.modelSpendDir && ctx.executorIdentity) {
         const [address] = await findClaimPda({task,bidder:agent.agentPda});
-        requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload));
+        requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload),ctx.executorProgram?.());
       }
-      await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,
+      await ctx.checkTextRevision?.({previous:{proofHashHex:hashHex(submission!.account.proofHash),resultData:new Uint8Array(submission!.account.resultData)}});
+      await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,policyOnly:true,
         ...(marker.listing && {listing:marker.listing as Address}),listingMetadata,requiredCapabilities:decodedTask.requiredCapabilities,
         privateInputs:needsPrivateRoom(payload),acceptance:parseJobBrief(payload).acceptance,
         reviewAttachments:changesRequest.attachments.length,extraRoomFeatures:requiresExtraRoom(decodedTask,payload)});
@@ -3876,10 +3918,8 @@ async function runUpLocked(
     indexer: ctx.gpa,
     ...(ctx.localExecutorReady && {candidateEpoch: () => ctx.localExecutorReady!() ? (ctx.admissionGeneration?.() ?? "configured") : false as const}),
     onCandidateSnapshot(open,pins) {
+      observeCandidateScan(ctx,open,pins);
       for (const task of deferred.keys()) if (!open.has(task)) deferred.delete(task);
-      for (const key of ctx.refusals!.keys()) if (!open.has(key.split("/")[0] as Address)) ctx.refusals!.delete(key);
-      for (const task of ctx.candidateHashes!.keys()) if (!open.has(task)) ctx.candidateHashes!.delete(task);
-      for (const task of open) { const hash=pins.get(task); if (hash) ctx.candidateHashes!.set(task,hash); }
     },
     filter: {
       capabilities: ctx.config.capabilities,

@@ -13,6 +13,7 @@ export interface Bootstrap {
       mode: string;
       connectedAgent?: string;
       isolatedJobRoom?: boolean;
+      jobRoom?: boolean;
       reserveRevisionBudget?: boolean;
       envAllowlist?: string[];
       timeoutMs?: number;
@@ -107,6 +108,7 @@ function parseExecutor(
     mode: executor.mode,
     envAllowlist: executor.envAllowlist ?? [],
     isolatedJobRoom: executor.isolatedJobRoom === true,
+    ...(executor.jobRoom === true && { jobRoom: true }),
     reserveRevisionBudget: executor.reserveRevisionBudget === true,
     timeoutMs: executor.timeoutMs ?? 15 * 60_000,
     ...(readiness && { readiness }),

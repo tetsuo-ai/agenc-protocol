@@ -74,7 +74,7 @@ function taskArgs(
     creator: CREATOR,
     requiredCapabilities: 1n,
     description: new Uint8Array(64).fill(2),
-    constraintHash: new Uint8Array(32),
+    constraintHash: Buffer.from("agenc-manual-validation-v2-seed!"),
     rewardAmount: REWARD,
     maxWorkers: 1,
     currentWorkers: status === TaskStatus.Open ? 0 : 1,
@@ -223,7 +223,12 @@ function context(
     client: client as unknown as MarketplaceClient,
     signer: { address: WALLET } as TransactionSigner,
     gpa: { getProgramAccounts: async () => [] } as ProgramAccountsTransport,
-    readAccount: async (account) => accounts.get(account) ?? null,
+    readAccount: async (account) => {
+      if (account === "SysvarC1ock11111111111111111111111111111111" && !accounts.has(account)) {
+        const clock=Buffer.alloc(40); clock.writeBigInt64LE(1_700_000_001n,32); return clock;
+      }
+      return accounts.get(account) ?? null;
+    },
     stateDir,
     log: (event) => events.push(event),
     // Every fresh-claim path is live-funded. Individual tests override these
@@ -1261,7 +1266,7 @@ describe("transaction-boundary recovery", () => {
         options: { maxRetries?: number },
       ) => {
         const marker = loadState(stateDir).openClaim;
-        expect(options).toEqual({ maxRetries: 0 });
+        expect(options).toMatchObject({ maxRetries: 0, onSigned: expect.any(Function) });
         expect(marker?.phase).toBe("submitting");
         expect(marker?.claimTransactionSignature).toBe(
           "claim-ambiguous-signature",
@@ -1839,7 +1844,7 @@ describe("transaction-boundary recovery", () => {
         input: { proofHash: Uint8Array },
         options: { maxRetries?: number },
       ) => {
-        expect(options).toEqual({ maxRetries: 0 });
+        expect(options).toMatchObject({ maxRetries: 0, onSigned: expect.any(Function) });
         submittedHashes.push(Buffer.from(input.proofHash).toString("hex"));
         return { signature: "revision-submit-signature" };
       },
@@ -2022,8 +2027,8 @@ describe("transaction-boundary recovery", () => {
     retryable.openClaim!.submission!.lastBroadcastAt =
       "2000-01-01T00:00:00.000Z";
     saveState(stateDir, retryable);
-    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("submitted");
-    expect(submitTaskResult).toHaveBeenCalledTimes(2);
+    expect((await resumeOpenClaim(ctx, agent))?.status).toBe("execution-failed");
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
   });
 
   it("does not mistake an equal-hash Submitted account from the prior revision for the current round", async () => {
@@ -2982,9 +2987,10 @@ describe("upkeep that cannot read the chain", () => {
     const events: WorkerLogEvent[] = [];
     const ctx = context(stateDir, accounts, { submitTaskResult }, events);
     ctx.fetchUri = async () => body;
+    const read = ctx.readAccount;
     ctx.readAccount = async (account) => {
       if (account === givenUpClaim) throw new Error("rpc answered 503");
-      return accounts.get(account) ?? null;
+      return read(account);
     };
     return { stateDir, ctx, events, submitTaskResult };
   }
@@ -3475,5 +3481,81 @@ it("holds a finite business login before a signature for a job with buyer revisi
   });
   expect(result.outcome).toMatchObject({status:"skipped",reason:expect.stringMatching(/revision window/)});
   expect(ready).not.toHaveBeenCalled();
+});
+
+it("keeps a capability refusal when only the SOL price changes",async()=>{
+  let rate=100;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{throw Object.assign(new Error("This room cannot read private inputs."),{name:"ExecutorCapabilityError"});},
+    ctx=>{ctx.allowanceGeneration=()=>String(rate);});
+  const reads=vi.spyOn(result.ctx,"readAccount");
+  rate=95;
+  await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
+  expect(reads).not.toHaveBeenCalled();
+  expect(result.fetchUri).toHaveBeenCalledOnce();
+});
+
+it("rechecks a restored discovery hash after a newer scan",async()=>{
+  const first="a".repeat(64), seen=new Map<Address,string>([[TASK,first]]);
+  let calls=0;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{ if (++calls===1) throw Object.assign(new Error("Files are unavailable."),{name:"ExecutorCapabilityError"}); },
+    ctx=>{ctx.candidateHashes=seen;});
+  const candidate={task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT};
+  await processCandidate(result.ctx,agent,candidate);
+  expect(result.fetchUri).toHaveBeenCalledOnce();
+  Object.assign(result.ctx,{candidateScan:1});
+  await processCandidate(result.ctx,agent,candidate);
+  expect(result.fetchUri).toHaveBeenCalledTimes(2);
+});
+
+it("stops a named executor at claim expiry without a deadline placeholder",async()=>{
+  const dir=mkdtempSync(path.join(tmpdir(),"worker-claim-cutoff-"));
+  const [claim]=await findClaimPda({task:TASK,bidder:WORKER}),[spec]=await findTaskJobSpecPda({task:TASK});
+  const payload={instructions:"Write a sentence"},hash=await values.canonicalJobSpecHash(payload);
+  const state=emptyState();state.openClaim={task:TASK,phase:"claimed",claimedAt:new Date().toISOString()};saveState(dir,state);
+  const ctx=context(dir,new Map([[TASK,taskData(TaskStatus.InProgress)],[claim,claimData(claim)],[spec,
+    new Uint8Array(getTaskJobSpecEncoder().encode({task:TASK,creator:CREATOR,jobSpecHash:hash.bytes,jobSpecUri:SPEC_URI,createdAt:1n,updatedAt:1n,bump:248,reserved:new Uint8Array(7)}))]]),{},[]);
+  ctx.fetchUri=async()=>Buffer.from(JSON.stringify({integrity:{algorithm:"sha256",canonicalization:"json-stable-v1",payloadHash:hash.hex},payload}));
+  ctx.clusterTime=async()=>3999999998;
+  ctx.config.executorTimeoutMs=900000;
+  let stopped=false, timeout=0;
+  ctx.roomWork={admit:async()=>{},open:async()=>({state:"ready",execute:async options=>{
+    timeout=options.timeoutMs!;
+    if(options.signal && timeout<=1001) {
+      await new Promise<void>(resolve=>options.signal!.addEventListener("abort",()=>resolve(),{once:true}));
+      stopped=options.signal.aborted;
+    }
+    return {state:"delivered",stdout:Buffer.from("done")};
+  }})};
+  await resumeOpenClaim(ctx,agent);
+  expect(timeout).toBeGreaterThan(0);expect(timeout).toBeLessThanOrEqual(1001);expect(stopped).toBe(true);
+});
+
+it("refuses automatic Exclusive Auto work before reading its spec or signing",async()=>{
+  const automatic = taskData(TaskStatus.Open, {constraintHash:new Uint8Array(32)});
+  const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()}, undefined, ctx => {
+    const read = ctx.readAccount;
+    ctx.readAccount = key => key === TASK ? Promise.resolve(automatic) : read(key);
+  });
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  expect(result.fetchUri).not.toHaveBeenCalled();
+  expect(result.outcome).toMatchObject({status:"skipped",reason:"Automatic work requires buyer review."});
+});
+
+it("skips repeated account and spec reads for a permanent room image failure",async()=>{
+  const check=vi.fn(async()=>{throw Object.assign(new Error("Invalid installed image."),{name:"RoomImageError"});});
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},check);
+  const read=vi.spyOn(result.ctx,"readAccount");
+  await processCandidate(result.ctx,agent,{task:TASK,creator:CREATOR,rewardAmount:REWARD,rewardMint:null,requiredCapabilities:1n,parentTask:PARENT});
+  expect(read).not.toHaveBeenCalled();
+  expect(check).toHaveBeenCalledOnce();
+});
+
+it("requires a successful room probe in a picker dry run",async()=>{
+  const check=vi.fn(async()=>{throw new Error("Installed room failed its probe.");});
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},check,ctx=>{ctx.dryRun=true;});
+  expect(result.outcome.status).toBe("skipped");
+  expect(check).toHaveBeenCalled();
   expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
 });

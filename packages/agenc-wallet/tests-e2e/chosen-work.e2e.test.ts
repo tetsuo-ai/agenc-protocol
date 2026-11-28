@@ -18,7 +18,7 @@ vi.mock("@tetsuo-ai/agenc-worker",async load=>{
 let world: World | undefined;
 afterEach(async () => { await world?.wallet.close(); world = undefined; });
 const executor = { argv: [process.execPath, "-e", "process.stdout.write('Room output')", "{prompt}"],
-  mode: "sandboxed" as const, timeoutMs: 3000, envAllowlist: [] };
+  mode: "sandboxed" as const, jobRoom:true, isolatedJobRoom:true, timeoutMs: 3000, envAllowlist: [] };
 
 async function setup(ready = async () => {}, tamper = () => false, enabled = () => true, options: NonNullable<Parameters<typeof startWorld>[0]> = {}) {
   world = await startWorld({
@@ -96,8 +96,9 @@ describe("chosen open work", () => {
     sleep.ms += 300001;
     await expect(wallet.decideWork(stale.id, true)).rejects.toThrow(/expired/);
     sleep.ms = 0;
+    const checked = await quote();
     ready.mockRejectedValueOnce(new Error("self-test failed"));
-    await expect(wallet.decideWork((await quote()).id, true)).rejects.toThrow();
+    await expect(wallet.decideWork(checked.id, true)).rejects.toThrow();
     expect((await wallet.openWork(id)).jobs).toHaveLength(2);
     await wallet.setBudget(id, 0);
     const pending = await quote();
@@ -108,10 +109,13 @@ describe("chosen open work", () => {
 
   it("checks the live Take jobs switch again after the claim self-test", async () => {
     let enabled = true;
-    const ready = async () => { enabled = false; };
+    let switchAtCheck = false;
+    const ready = async () => { if (switchAtCheck) enabled = false; };
     const { wallet, id, task } = await setup(ready, undefined, () => enabled);
     const quote = await wallet.quoteWork(id, task, "claim");
+    switchAtCheck = true;
     await expect(wallet.decideWork(quote.id, true)).rejects.toThrow();
+    switchAtCheck = false;
     enabled = true;
     expect((await wallet.openWork(id)).jobs).toHaveLength(2);
     expect(world!.sandbox.deliveries.size).toBe(0);
@@ -344,6 +348,7 @@ it("refunds a provably unused submission reservation and requires a new approval
   await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
   await eventually(async () => (await wallet.openWork(id)).held?.canSubmit);
   await expect(wallet.decideWork(original.id, true)).rejects.toThrow();
+  world!.sandbox.market.expireBlockhash();
   const retry = await wallet.quoteWork(id, task, "submit");
   expect(retry.dailyRemaining).toEqual(original.dailyRemaining);
   expect(retry.id).not.toBe(original.id);
@@ -590,6 +595,7 @@ it("retains the signed claim reservation over restart until it proves unused", a
   world!.wallet = await world!.reopen();
   expect((await world!.wallet.openWork(id)).jobs).toEqual([]);
   pending = false;
+  world!.sandbox.market.expireBlockhash();
   await eventually(async () => !journal(id).openClaim);
   const retry = await world!.wallet.quoteWork(id, task, "claim");
   expect(retry.dailyRemaining).toEqual(quote.dailyRemaining);
@@ -888,4 +894,36 @@ it("keeps a verified file job out of the picker while file transport is off",asy
   const page=await wallet.openWork(id,0,job.task);
   expect(page.jobs).toHaveLength(0);
   expect(page.eligibility?.code).not.toBe("available");
+});
+
+it("withholds ordinary Earn funding when its quote expires in the send queue",async()=>{
+  let hold=false, dispatched=false, queued=false;
+  world=await startWorld({earn:{executor,checkExecutionReady:async()=>{}},
+    transport:base=>({...base,async sendAndConfirm(tx,guard){
+      if(hold){queued=true;world!.clock.now+=301000;guard?.();dispatched=true;}
+      return base.sendAndConfirm(tx,guard);
+    }})});
+  const seller=await world.wallet.createAgent("Practice seller");
+  const quote=await world.wallet.quoteEarn(seller.id);
+  expect(BigInt(quote.fromMain.lamports)).toBeGreaterThan(0n);
+  const balance=await world.balance(seller.address);
+  hold=true;
+  await expect(world.wallet.approveEarnFunding(quote.quoteId)).rejects.toThrow();
+  expect(queued).toBe(true);
+  expect(dispatched).toBe(false);
+  expect(await world.balance(seller.address)).toBe(balance);
+});
+
+it("keeps a landed claim's daily charge when RPC history omits its status",async()=>{
+  let limited=false;
+  const {wallet,id,task}=await setup(undefined,undefined,undefined,{
+    chain:base=>({...base,workOutcome:r=>limited?Promise.resolve("expired"):base.workOutcome!(r),
+      sendNeverLands:async()=>false, reviewDebit:async()=>null}),
+  });
+  const quoted=await wallet.quoteWork(id,task,"claim");
+  limited=true;
+  await wallet.decideWork(quoted.id,true);
+  await eventually(async()=>(await wallet.openWork(id)).held?.canSubmit);
+  const next=await wallet.quoteWork(id,task,"submit");
+  expect(BigInt(next.dailyRemaining.lamports)).toBeLessThan(BigInt(quoted.dailyRemaining.lamports));
 });

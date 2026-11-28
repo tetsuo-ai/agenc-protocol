@@ -573,3 +573,42 @@ it("checks the connected room's first turn before quoting a listing",async()=>{
   await expect(quote(1)).rejects.toThrow(/allowance|start/);
   await expect(quote(10)).resolves.toBeDefined();
 });
+
+it("prices a canonical one-character hire with a 200-character description",async()=>{
+  world=await startWorld({config:{prices:fixedPrice(100)},earn:{...earn,executor:{...earn.executor,isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"claude-code",ready:true,coreCommand:null,generation:"choice"}),checkExecutionReady:async()=>{}}});
+  const seller=await world.wallet.createAgent();
+  const quote=(lamports:string)=>world.wallet.quoteEarn(seller.id,{...service,summary:"A".repeat(200),price:{lamports}});
+  await expect(quote("700000")).rejects.toThrow(/allowance|start/);
+  await expect(quote("2000000")).resolves.toBeDefined();
+});
+
+it("pauses a live connected offer when its exchange rate no longer funds the first turn",async()=>{
+  let rate=100;
+  world=await startWorld({config:{prices:{solUsd:async()=>rate}},earn:{...earn,
+    executor:{...earn.executor,isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"claude-code",ready:true,coreCommand:null,generation:"choice"}),checkExecutionReady:async()=>{}}});
+  const seller=await world.wallet.createAgent(), input={...service,enableEarns:true as const};
+  const quote=await world.wallet.quoteEarn(seller.id,input);
+  await world.wallet.setOffer(seller.id,input,undefined,quote.quoteId);
+  const status=async()=>{await world.wallet.tick();return (await world.wallet.overview()).agents.find(a=>a.id===seller.id)?.earn.offer?.status;};
+  await eventually(async()=>await status()==="live"?true:null);
+  rate=10;
+  await status();
+  expect(await status()).toBe("paused");
+  rate=100;
+  await eventually(async()=>await status()==="live"?true:null);
+});
+
+it("pauses a Core offer without the connected room's published minimum",async()=>{
+  let selected="core";
+  world=await startWorld({earn:{...earn, executor:{...earn.executor,jobRoom:true,isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:selected,ready:true,coreCommand:null,generation:selected}),checkExecutionReady:async()=>{}}});
+  const seller=await world.wallet.createAgent(),input={...service,enableEarns:true as const};
+  const quote=await world.wallet.quoteEarn(seller.id,input);
+  await world.wallet.setOffer(seller.id,input,undefined,quote.quoteId);
+  const status=async()=>{await world.wallet.tick();return (await world.wallet.overview()).agents.find(a=>a.id===seller.id)?.earn.offer?.status;};
+  await eventually(async()=>await status()==="live"?true:null);
+  selected="claude-code";
+  await eventually(async()=>await status()==="paused"?true:null);
+});

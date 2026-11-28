@@ -11,7 +11,7 @@ afterEach(async () => { await world?.wallet.close(); world = undefined; });
 // catalog, or a practice parent hire cannot bind the supplier digest (g1's three-origin run).
 it("lists a practice service's published supplier policy in the catalog", async () => {
   world = await startWorld({ earn: {
-    executor: { argv: [process.execPath, "-e", "process.stdout.write('Parent result')", "{prompt}"], mode: "sandboxed", envAllowlist: [], timeoutMs: 60_000 },
+    executor: { argv: [process.execPath, "-e", "process.stdout.write('Parent result')", "{prompt}"], mode: "sandboxed", jobRoom:true, isolatedJobRoom:true, envAllowlist: [], timeoutMs: 60_000 },
     pollIntervalMs: 150, serviceRefreshMs: 300,
   } });
   const { wallet, sandbox } = world;

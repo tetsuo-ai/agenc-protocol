@@ -317,7 +317,16 @@ describe("selling money safety", () => {
   }, 30_000);
 
   it("takes a cheap own service hire while refusing an equally cheap open job", async () => {
-    world = await startWorld({ earn: EARN });
+    let attempts = 0;
+    world = await startWorld({ earn: EARN, chain: base => ({ ...base, clientFor(signer) {
+      const client = base.clientFor(signer);
+      return Object.create(client, { claimTaskWithJobSpec: { value: async (...args: Parameters<typeof client.claimTaskWithJobSpec>) => {
+        attempts++;
+        // Let a routine listing refresh fire with this admitted claim still in flight.
+        await new Promise(resolve => setTimeout(resolve, 600));
+        return client.claimTaskWithJobSpec(...args);
+      } } }) as typeof client;
+    } }) });
     const { wallet, sandbox } = world;
     const seller = await wallet.createAgent();
     const buyer = await wallet.createAgent();
@@ -343,6 +352,7 @@ describe("selling money safety", () => {
     });
     await eventually(async () => (await wallet.getJob(job.id, true)).status === "delivered");
     expect(await open.delivered()).toBe(false);
+    expect(attempts).toBe(1);
   }, 30_000);
 
   it("fails closed when pricing is missing at startup and recovers on a fresh quote", async () => {

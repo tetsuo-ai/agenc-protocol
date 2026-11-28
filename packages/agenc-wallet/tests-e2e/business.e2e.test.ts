@@ -68,7 +68,7 @@ it("reopens a manual funding quote, takes only the chosen task, inspects files, 
           "{prompt}",
         ],
         mode: "sandboxed",
-        isolatedJobRoom: true,
+        jobRoom: true, isolatedJobRoom: true,
         timeoutMs: 3000,
         envAllowlist: [],
       },
@@ -220,7 +220,7 @@ it("restores a verified draft and assets, reconciles a pending signature and wai
     chain: (base) => ({
       ...base,
       network: "localnet",
-      workOutcome: async () => (pending ? "pending" : "expired"),
+      workOutcome: async () => (pending ? "pending" : "landed"),
     }),
     earn: {
       executor: {

@@ -1,7 +1,7 @@
-import { mkdirSync, openSync, closeSync, fsyncSync, unlinkSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, fsyncSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Address } from "@solana/kit";
-import type { ModelBudget } from "./state.js";
+import { acquireStateLock, type ModelBudget } from "./state.js";
 
 // Hold one fifth for each of the two possible revisions, with one cent for
 // each round on small jobs. The initial run keeps the rest.
@@ -59,8 +59,8 @@ export function enrollClaimBudget(root: string, wallet: Address, claim: Address)
   syncDirectory(root);
 }
 
-export function pinClaim(dir: string, executor: string, budget?: number): boolean {
-  const pin = JSON.stringify({executor, budget: budget ?? null});
+export function pinClaim(dir: string, executor: string, budget?: number, program?:string): boolean {
+  const pin = JSON.stringify({executor, budget: budget ?? null,...(program && {program})});
   try { writeFileSync(join(dir, "admission"), pin, {flag:"wx", mode:0o600, flush:true}); syncDirectory(dir); return true; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST" || readFileSync(join(dir, "admission"), "utf8") !== pin)
@@ -73,12 +73,13 @@ export function isReleasedClaimRound(dir:string):boolean {
   return !existsSync(join(dir,"format")) && existsSync(join(dir,"0")) && readFileSync(join(dir,"0"),"utf8")==="";
 }
 
-export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false): void {
+export function requireClaimExecutor(dir: string, executor: string, legacyPrivate = false, program?:string): void {
   if (existsSync(join(dir, "admission"))) {
-    if (JSON.parse(readFileSync(join(dir, "admission"), "utf8")).executor === executor) return;
+    const saved = JSON.parse(readFileSync(join(dir, "admission"), "utf8"));
+    if (saved.executor === executor && saved.program === program) return;
   } else {
     // Only these older runs identify their executor without guessing.
-    if (legacyPrivate && executor === "core" && isReleasedClaimRound(dir)) return;
+    if (!program && legacyPrivate && executor === "core" && isReleasedClaimRound(dir)) return;
   }
   throw Object.assign(new Error("The executor that took this claim is unavailable."),{name:"ExecutorCapabilityError"});
 }
@@ -100,11 +101,10 @@ export function requireRoundCapacity(dir: string, needed: RoundCapacity) {
 
 export function spendClaimRound(root: string, wallet: Address, claim: Address, round: number, cents?: number, needed?: RoundCapacity): string {
   const dir = join(root, wallet + "-" + claim);
-  const lock = join(dir,".reserving");
-  let held = false;
+  let release: (() => void) | undefined;
   try {
-    writeFileSync(lock,"",{flag:"wx",mode:0o600,flush:true});
-    held = true;
+    if (!existsSync(dir)) throw new Error("Missing claim ledger.");
+    release = acquireStateLock(dir);
     if (needed) requireRoundCapacity(dir, needed);
     if (existsSync(join(dir, "admission"))) {
       const {budget} = JSON.parse(readFileSync(join(dir, "admission"), "utf8"));
@@ -128,6 +128,6 @@ export function spendClaimRound(root: string, wallet: Address, claim: Address, r
   } catch (cause) {
     throw new Error("Previous model spend for this round is exhausted or unknown.", { cause });
   } finally {
-    if (held) { unlinkSync(lock); syncDirectory(dir); }
+    release?.();
   }
 }

@@ -30,7 +30,7 @@ it.skipIf(!program || !assets).each(["register", "upgrade"])("rehearses and serv
   const room = path.join(scratch, "{agent}");
   const earn = {
     executor: { argv: [process.execPath, program!, "job", room, process.execPath, "120", assets!, "{outbox}", "{files}", "{pay}", "{requestSource}", "{prompt}"],
-      mode: "sandboxed" as const, isolatedJobRoom: true, envAllowlist: [], timeoutMs: 150000,
+      mode: "sandboxed" as const, jobRoom: true, isolatedJobRoom: true, envAllowlist: [], timeoutMs: 150000,
       readiness: { argv: [process.execPath, program!, "self-test", assets!, scratch], timeoutMs: 120000 } },
     pollIntervalMs: 100, serviceRefreshMs: 1000,
   };

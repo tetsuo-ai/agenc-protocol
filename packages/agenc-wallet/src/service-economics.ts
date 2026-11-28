@@ -8,6 +8,7 @@ export interface ServiceEconomicsInput {
   referrerFeeBps?: number;
   usdPerSol: number | null;
   minimumMarginCents?: number;
+  minimumModelCents?: number;
   modelCapCents?: number;
 }
 
@@ -29,7 +30,9 @@ export function serviceEconomics(input: ServiceEconomicsInput) {
   const places = fraction.length - Number(exponent);
   const rate = BigInt(whole + fraction) * 10n ** BigInt(Math.max(-places, 0));
   const divisor = 10_000_000n * 10n ** BigInt(Math.max(places, 0));
-  const target = ((BigInt(margin) + 1n) * divisor + rate - 1n) / rate;
+  const minimum = input.minimumModelCents ?? 1;
+  if (!Number.isSafeInteger(minimum) || minimum < 1 || minimum > cap) throw new WalletError('NOT_AVAILABLE','The model allowance cannot fund the first turn.');
+  const target = ((BigInt(margin) + BigInt(minimum)) * divisor + rate - 1n) / rate;
   const fees = BigInt(marketFeeBps + operatorFeeBps + referrer);
   const net = (price: bigint) => price - price * BigInt(marketFeeBps) / 10000n - price * BigInt(operatorFeeBps) / 10000n - price * BigInt(referrer) / 10000n;
   // The two independent rounding points can coincide and drop net by a lamport.
@@ -38,6 +41,7 @@ export function serviceEconomics(input: ServiceEconomicsInput) {
   let minimumPriceLamports = target > 3n ? (target - 3n) * 10000n / (10000n - fees) : 1n;
   while (net(minimumPriceLamports) < target) minimumPriceLamports++;
   const sellerNetLamports = net(priceLamports);
+  if (minimum > 1 && sellerNetLamports < target) throw new WalletError('NOT_AVAILABLE','The current service price cannot fund its first turn.');
   if (sellerNetLamports < target)
     throw Object.assign(new WalletError("BAD_REQUEST", `This price leaves less than one cent for the job after fees and margin. The minimum is ${minimumPriceLamports} lamports at the current rate.`), { name: "ExecutorBudgetError" });
   const available = sellerNetLamports * rate / divisor - BigInt(margin);
