@@ -2,9 +2,32 @@ import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { commandGeneration } from "../src/room-selection.js";
+import { commandGeneration, liveRoomSelection } from "../src/room-selection.js";
 import { earnOptions } from "../src/earn-bootstrap.js";
 import { checkBusinessRoom } from "../src/business-room.js";
+
+it("selects the installed Codex room live and refuses a plan without registration", () => {
+  const dir = mkdtempSync(join(tmpdir(),"codex-selection-"));
+  const path = (name:string) => join(dir,name);
+  const room = {setting:path("choice"), keyStore:path("empty"),coreCandidates:[],
+    baseFiles:[path("base")],agentFiles:[path("claude")],codexFiles:[path("codex")]};
+  try {
+    writeFileSync(path("base"),"fixture");
+    writeFileSync(room.setting,JSON.stringify({agent:"codex-api"}));
+    const read = liveRoomSelection(room);
+    expect(read()).toMatchObject({agent:"codex-api",ready:false});
+    writeFileSync(path("codex"),"fixture");
+    const api = read();
+    expect(api).toMatchObject({agent:"codex-api",ready:true});
+    writeFileSync(room.setting,JSON.stringify({agent:"codex-plan"}));
+    expect(read()).toMatchObject({agent:"codex-plan",ready:false});
+    const plan = liveRoomSelection({...room,codexPlanMinimumCents:78})();
+    expect(plan).toMatchObject({agent:"codex-plan",ready:true,minimumModelCents:78});
+    expect(plan.generation).not.toBe(api.generation);
+    writeFileSync(room.setting,"unreadable selection");
+    expect(read().ready).toBe(false);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
 
 it("retains the money restrictions and chosen switch with only a named executor", () => {
   const config = earnOptions({
@@ -129,6 +152,30 @@ it("invalidates a ready room when machine settings arrive",async()=>{
     writeFileSync(join(dir,"config.d","rule.toml"),"test");
     expect(select().ready).toBe(false);
   } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+it("keeps the seller selection stable when the same plan rotates its token", () => {
+  const dir = mkdtempSync(join(tmpdir(),"codex-rotation-"));
+  const setting = join(dir,"choice"), image = join(dir,"image");
+  try {
+    writeFileSync(image,"test image");
+    const read = liveRoomSelection({setting,keyStore:join(dir,"keys"),coreCandidates:[],
+      agentFiles:[image],baseFiles:[image],codexFiles:[image],codexPlanMinimumCents:78});
+    const write = (version:string, tag:string) => writeFileSync(setting,JSON.stringify({
+      agent:"codex-plan",version,tag,sealed:"fixture-"+tag}));
+    write("a".repeat(64),"b".repeat(64));
+    const selected = read();
+    write("a".repeat(64),"c".repeat(64));
+    expect(read()).toEqual(selected);
+    const marker = join(dir,"0.refused");
+    writeFileSync(join(dir,".paid-agent-claim."+"c".repeat(64)+"."+"e".repeat(64)),marker);
+    writeFileSync(marker,"b".repeat(64));
+    expect(read()).toEqual(selected);
+    writeFileSync(marker,"c".repeat(64));
+    expect(read().generation).not.toBe(selected.generation);
+    write("d".repeat(64),"c".repeat(64));
+    expect(read().generation).not.toBe(selected.generation);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 
 it("resolves shell scripts after errexit and node scripts after a warning code", async()=>{

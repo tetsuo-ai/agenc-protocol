@@ -1765,7 +1765,7 @@ describe("transaction-boundary recovery", () => {
     expect(submitTaskResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["available", "exhausted", "unsupported", "attached"])("restores a revision with its reserved budget (%s)", async mode => {
+  it.each(["available", "exhausted", "unsupported", "attached", "claim counters"])("restores a revision with its reserved budget (%s)", async mode => {
     const budgeted = mode !== "available";
     const file = Buffer.from(mode === "attached" ? "a,b\n1,2\n" : "not a picture");
     const fileHash = sha256Hex(file);
@@ -1791,7 +1791,7 @@ describe("transaction-boundary recovery", () => {
       rewardAmount: REWARD.toString(),
       submittedAt: "2026-07-18T00:00:00.000Z",
       settled: false,
-      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(["unsupported","attached"].includes(mode) && { revisionRound: 0 }) } } : {}),
+      ...(budgeted ? { modelBudget: { totalCents: 50, remainingCents: 0, ...(["unsupported","attached","claim counters"].includes(mode) && { revisionRound: 0 }) } } : {}),
     });
     saveState(stateDir, state);
 
@@ -1884,14 +1884,23 @@ describe("transaction-boundary recovery", () => {
     expect(threadGet).not.toHaveBeenCalled();
     expect(submitTaskResult).not.toHaveBeenCalled();
     ctx.reviewRoom = room;
-    if (mode === "attached") {
+    if (mode === "attached" || mode === "claim counters") {
       const fs=await import("node:fs");
       const root=path.join(stateDir,"model-spend"),dir=path.join(root,WALLET+"-"+claimPda);
       fs.mkdirSync(dir,{recursive:true});
-      fs.writeFileSync(path.join(dir,"admission"),JSON.stringify({executor:"claude-code",budget:50}));
-      ctx.modelSpendDir=root; ctx.executorIdentity=()=>"claude-code";
+      const connected = mode === "attached" ? "claude-code" : "codex-plan";
+      fs.writeFileSync(path.join(dir,"admission"),JSON.stringify({executor:connected,budget:50}));
+      ctx.modelSpendDir=root; ctx.executorIdentity=()=>connected;
       ctx.clusterTime=async()=>1_700_000_299;
-      ctx.checkExecutionReady=async requirements=>{if(requirements.reviewFiles) throw Object.assign(new Error("Unsupported review files."),{name:"ExecutorCapabilityError"});};
+      if (mode === "claim counters") {
+        fs.writeFileSync(path.join(dir,"0"),"30");
+        fs.writeFileSync(path.join(dir,"0.counts"), JSON.stringify({tokens:600001,calls:2}));
+      }
+      ctx.checkExecutionReady=async requirements=>{
+        if (requirements.reviewFiles) throw Object.assign(new Error("Unsupported review files."),{name:"ExecutorCapabilityError"});
+        if (mode === "claim counters" && requirements.claimCounts?.().tokens === 600001)
+          throw Object.assign(new Error("The revision exceeds the token cap."),{name:"ExecutorBudgetError"});
+      };
       ctx.reviewRoom={fileProblem:()=>null,execute:vi.fn(room.execute)};
       ctx.readReviewArtifact=async hash=>hash===fileHash?file:Buffer.from(taskThread.canonicalEnvelopeJson(changesEnvelope));
       const before=loadState(stateDir).openClaim!.modelBudget;
@@ -2995,6 +3004,25 @@ describe("upkeep that cannot read the chain", () => {
     return { stateDir, ctx, events, submitTaskResult };
   }
 
+  it("retains the room admission returned to the continuous worker", async () => {
+    const {ctx} = await workerWithUpkeepDown();
+    const stop = new AbortController();
+    const selected = () => { throw new Error("The selected room changed."); };
+    ctx.checkExecutionReady = async () => selected;
+    let changed = false;
+    ctx.onWorkerReady = (_dispatch, read) => {
+      if (read) void read(async live => {
+        try {
+          const guard = await live.checkExecutionReady!({task:TASK});
+          try { if (guard) guard(); } catch (e) { changed = (e as Error).message === "The selected room changed."; }
+        }
+        finally { stop.abort(); }
+      });
+    };
+    await runUp(ctx,{signal:stop.signal});
+    expect(changed).toBe(true);
+  });
+
   it("does not stop a tick: the rest of its work is done and the failure is logged", async () => {
     const { ctx, events, submitTaskResult } = await workerWithUpkeepDown();
     const result = await runTickOnce(ctx);
@@ -3219,6 +3247,20 @@ describe("selling preflight", () => {
     expect(signatures).toBe(1);
   });
 
+  it("checks the first round after revisions before spending a deposit", async () => {
+    const ready = vi.fn(async ({firstRoundCents}: Parameters<NonNullable<WorkerContext["checkExecutionReady"]>>[0]) => {
+      if ((firstRoundCents ?? 0) < 78) throw new Error("The plan needs a larger first round.");
+    });
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT, executable:false, data:new Uint8Array()}, ready, ctx => {
+      ctx.reserveRevisionBudget = true;
+      ctx.modelBudgetForTask = async () => 80;
+    });
+    expect(ready.mock.calls[0]?.[0].firstRoundCents).toBeLessThan(78);
+    expect(result.outcome.status).toBe("skipped");
+    expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(result.stateDir).openClaim).toBeNull();
+  });
+
   it("only reaches the claim transaction after the self-test resolves", async () => {
     const ready = vi.fn(async () => {});
     const result = await attemptFreshClaimWithHireSnapshot({ owner: PARENT, executable: false, data: new Uint8Array() }, ready);
@@ -3324,6 +3366,21 @@ describe("durable claim admission",()=>{
     await processCandidate(result.ctx,agent,candidate);
     expect(signatures).toBe(1);
   });
+  it("skips network prices and job reads while a fixed service cap cannot fund the room",async()=>{
+    let cap = 20;
+    const price = vi.fn(async()=>cap);
+    const result = await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+      async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError",minimumCents:78});},
+      ctx=>{ctx.modelBudgetForTask=price; ctx.modelBudgetCeiling=()=>cap;ctx.allowanceGeneration=()=>String(cap);});
+    const initial = price.mock.calls.length;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(price).toHaveBeenCalledTimes(initial);
+    expect(result.fetchUri).toHaveBeenCalledTimes(1);
+    cap = 200;
+    await processCandidate(result.ctx,agent,candidate);
+    expect(result.fetchUri).toHaveBeenCalledTimes(2);
+  });
+
   it("checks a fixed model ceiling before the first price read",async()=>{
     const price=vi.fn(async()=>1);
     const check=vi.fn(async()=>{throw Object.assign(new Error("Insufficient allowance."),{name:"ExecutorBudgetError"});});

@@ -612,3 +612,31 @@ it("lets the seller repair an unset delivery period on the existing listing", as
   expect(approval!.terms!.listingDurationSecs).toBe(1800);
   expect((await wallet.decideApproval(approval!.id, true)).status).toBe("waiting");
 }, 60_000);
+
+it("refuses to advertise a twenty cent service through the plan", async () => {
+  let plan = false;
+  let relays = 0;
+  world = await startWorld({
+    earn:{...EARN, liveRoomState:() => plan
+      ? {agent:"codex-plan",generation:"plan",ready:true,coreCommand:null,minimumModelCents:78}
+      : {agent:"core",generation:"core",ready:true,coreCommand:null}},
+    config:{listingRelay:async () => { relays++; return Response.json({ok:true}); }},
+  });
+  const {wallet, sandbox, clock} = world;
+  const seller = await wallet.createAgent("Practice seller");
+  const offer = {...LINE_WRITER,enableEarns:true as const,setupId:"test-service",terms:{modelCapCents:20}};
+  const approved = await wallet.quoteEarn(seller.id,offer);
+  expect(approved.serviceAdmission?.modelBudgetCents).toBe(20);
+  await wallet.setOffer(seller.id,offer,undefined,approved.quoteId);
+  const live = await offerReaches(world,seller.id,"live");
+  const listing = live.earn.offer!.listing as Address;
+  const identity = await readListing(sandbox.chain,listing);
+  const issued = clock.now;
+  const message = {kind:"availability" as const,listing,provider:seller.address,version:identity!.version.toString(),
+    issued,expires:issued+60_000,roomChecked:issued,startSeconds:1,inquiries:false};
+  await wallet.postListingMessage(seller.id,message);
+  const before = relays;
+  plan = true;
+  await expect(wallet.postListingMessage(seller.id,message)).rejects.toMatchObject({code:"NOT_ALLOWED"});
+  expect(relays).toBe(before);
+}, 60_000);

@@ -400,5 +400,7 @@ it.skipIf(process.platform==="win32")("gives only the isolated job program a wal
     writeFileSync(file,'import {fstatSync} from "node:fs"; console.log(fstatSync(3).isSocket() && process.env.AGENC_JOB_WALLET_PID===String(process.ppid));');
     const run=await runExecutor({argv:[process.execPath,file,"job","{prompt}"],prompt:"practice",timeoutMs:5000});
     expect(run.stdout.toString().trim()).toBe("true");
+    const ready=await runExecutor({argv:[process.execPath,file,"self-test","admit","own","public"],timeoutMs:5000});
+    expect(ready.stdout.toString().trim()).toBe("true");
   } finally {rmSync(dir,{recursive:true,force:true});}
 });

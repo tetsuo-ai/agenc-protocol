@@ -15,11 +15,14 @@ export interface LiveRoom {
   coreCandidates: readonly string[];
   baseFiles: readonly string[];
   agentFiles: readonly string[];
+  codexFiles?: readonly string[];
+  codexPlanMinimumCents?: number;
   generationFiles?: readonly string[];
   managedSettingsRoot?: string;
 }
 export interface RoomSelection {
   agent: string;
+  minimumModelCents?: number;
   ready: boolean;
   coreCommand: string | null;
   generation: string;
@@ -125,18 +128,38 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.coreCandidates,
       ...room.baseFiles,
       ...room.agentFiles,
+      ...(room.codexFiles ?? []),
       ...(room.generationFiles ?? []),
       ...(room.managedSettingsRoot ? [room.managedSettingsRoot] : []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
     !room.baseFiles.length ||
-    !room.agentFiles.length
+    !room.agentFiles.length ||
+    (room.codexPlanMinimumCents !== undefined &&
+      (!Number.isSafeInteger(room.codexPlanMinimumCents) || room.codexPlanMinimumCents < 1))
   )
     throw new Error("Invalid job room paths.");
   return () => {
     const slot = file(room.setting);
-    const base = room.baseFiles.map(file),
-      agentFiles = room.agentFiles.map(file),
-      commands = room.coreCandidates.map(file);
+    let agent: RoomSelection["agent"] = slot.id === "missing" ? "core" : "claude-code";
+    let validSlot = slot.regular;
+    let planVersion: string | undefined;
+    let planTag: string | undefined;
+    if (slot.regular && room.codexFiles !== undefined) {
+      try {
+        // Desktop seals the login. The wallet needs only the public choice in the envelope.
+        const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
+        const choice: unknown = envelope.agent;
+        if (choice === "codex-plan" && /^[a-f0-9]{64}$/.test(envelope.version)) {
+          planVersion = envelope.version;
+          planTag = envelope.tag;
+        }
+        if (choice === "codex-api" || choice === "codex-plan" || choice === "claude-code") agent = choice;
+        else validSlot = false;
+      } catch { validSlot = false; }
+    }
+    const codex = agent === "codex-api" || agent === "codex-plan";
+    const agentFiles = (codex ? room.codexFiles ?? [] : room.agentFiles).map(file);
+    const base = room.baseFiles.map(file), commands = room.coreCandidates.map(file);
     const coreCommand =
       room.coreCandidates.find((p, i) => {
         if (!commands[i]?.regular) return false;
@@ -147,7 +170,6 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
           return false;
         }
       }) ?? null;
-    const agent = slot.id === "missing" ? "core" : "claude-code";
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -179,15 +201,22 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
-        : slot.regular && agentFiles.every((f) => f.regular));
+        : validSlot && agentFiles.length > 0 && agentFiles.every((f) => f.regular) &&
+          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
         .filter((n) => {
-          if (/^\.paid-agent-(denied|refused)\./.test(n)) return true;
+          if (/^\.paid-agent-(denied|refused)\./.test(n))
+            return !planVersion || n === ".paid-agent-denied.unidentified" || n === ".paid-agent-refused." + planVersion || n === ".paid-agent-denied." + planTag;
           if (!/^\.paid-agent-claim\.[a-f0-9]{64}\.[a-f0-9]{64}$/.test(n)) return false;
+          if (planVersion && !n.startsWith(".paid-agent-claim." + planTag + ".")) return false;
           const marker = readFileSync(join(dirname(room.setting),n),"utf8");
-          return !isAbsolute(marker) || file(marker).regular;
+          if (!isAbsolute(marker)) return true;
+          if (!file(marker).regular) return false;
+          if (!planVersion) return true;
+          const denied = readFileSync(marker,"utf8");
+          return !/^[a-f0-9]{64}$/.test(denied) || denied === planTag;
         })
         .sort();
     const generation = JSON.stringify([
@@ -195,7 +224,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       keysEpoch,
       managed,
       refusals,
-      slot.id,
+      planVersion ?? slot.id,
       file(room.keyStore).id,
       coreCommand,
       commands,
@@ -203,6 +232,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       agentFiles,
       room.generationFiles?.map(file),
     ]);
-    return { agent, ready, coreCommand, generation };
+    return { agent, ready, coreCommand, generation,
+      ...(agent === "codex-plan" && room.codexPlanMinimumCents !== undefined && {minimumModelCents:room.codexPlanMinimumCents}) };
   };
 }

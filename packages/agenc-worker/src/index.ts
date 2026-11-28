@@ -1,5 +1,5 @@
 export { requireClaimExecutor, claimBudget } from "./revision-budget.js";
-export { chainDeadline, deadlineFromChain, monotonicMs, ExecutorCapabilityError } from "./claim-admission.js";
+export { chainDeadline, deadlineFromChain, monotonicMs, ExecutorBudgetError, ExecutorCapabilityError } from "./claim-admission.js";
 // @tetsuo-ai/agenc-worker — programmatic surface.
 //
 // Everything the CLI composes is exported here so the worker loop can be

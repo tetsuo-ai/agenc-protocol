@@ -2953,7 +2953,7 @@ export class AgencWallet {
       admitted = () => {
         checked();
         const current = this.#agentRecord(agentId);
-        if (!agentOffers(current).some(o => o.listing === identity.listing && o.status === "live" && this.#wantsLive(current,o)))
+        if (!agentOffers(current).some(o => o.listing === identity.listing && o.status === "live" && o.specHashHex === offer.specHashHex && o.priceLamports === offer.priceLamports && sameOfferTerms(o,offer) && this.#wantsLive(current,o)))
           throw new WalletError("NOT_AVAILABLE","The listing changed.");
       };
     }
@@ -7575,7 +7575,8 @@ export class AgencWallet {
         ready();
         const agent = this.#agentRecord(agentId);
         const latest = agentOffers(agent).find(item=>item.id === offer.id);
-        if (!latest || latest.specHashHex !== offer.specHashHex || !this.#wantsLive(agent,latest)) throw new Error("The listing changed.");
+        if (!latest || latest.specHashHex !== offer.specHashHex || latest.priceLamports !== offer.priceLamports ||
+            !sameOfferTerms(latest,offer) || !this.#wantsLive(agent,latest)) throw new Error("The listing changed.");
       });
     }
     return () => { for (const check of checks) check(); };

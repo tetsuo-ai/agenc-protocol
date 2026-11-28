@@ -330,6 +330,52 @@ it("refreshes room availability and readiness while the same wallet is open", as
   } finally { await earn.stopAll(); }
 });
 
+it("takes a model minimum only from the host room readiness report", async () => {
+  const folder = mkdtempSync(path.join(tmpdir(),"room-allowance-"));
+  folders.push(folder);
+  const program = path.join(folder,"room.cjs");
+  const {writeFileSync} = await import("node:fs");
+  writeFileSync(program, 'console.log(JSON.stringify({ok:true,minimumModelCents:78}));');
+  const earn = host({executor:{...local, mode:"sandboxed",isolatedJobRoom:true,
+    readiness:{argv:[process.execPath,program,"self-test","/assets",folder]}}});
+  void earn.start({agentId:"seller", signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const paid = {task:"test" as never,creator:"buyer" as never,promptBytes:36};
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:77})).rejects.toThrow("allowance");
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:78})).resolves.toBeTypeOf("function");
+  } finally { await earn.stopAll(); }
+});
+
+it.each(["codex-api","codex-plan"] as const)("applies verified job requirements to %s before the host check", async agent => {
+  const probe = vi.fn(async () => {});
+  const earn = host({executor:{...local, mode:"sandboxed", isolatedJobRoom:true},
+    liveRoomState:()=>({agent,ready:true,coreCommand:null,generation:"selected",
+      ...(agent === "codex-plan" && {minimumModelCents:78})}), checkExecutionReady:probe},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
+  try {
+    await vi.waitFor(() => expect(seen.contexts).toHaveLength(1));
+    const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const paid = {acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})],task:"test" as never, creator:"buyer" as never, firstRoundCents:1, promptBytes:20000};
+    const {acceptance: _agreement, ...withoutAgreement} = paid;
+    await expect(ctx.checkExecutionReady!({...withoutAgreement, firstRoundCents:200})).rejects.toThrow(/tools/);
+    await expect(ctx.checkExecutionReady!({...paid, extraRoomFeatures:true, firstRoundCents:200})).rejects.toThrow(/tools/);
+    await expect(ctx.checkExecutionReady!(paid)).rejects.toThrow(/allowance/);
+    if (agent === "codex-api") {
+      await expect(ctx.checkExecutionReady!({...paid, promptBytes:11_000})).rejects.toThrow(/allowance/);
+      await expect(ctx.checkExecutionReady!({...paid, promptBytes:7_600})).resolves.toBeTypeOf("function");
+      const acceptance=[outputAgreementCriterion({allowTextOnly:false,requiredFiles:["answer.txt"]})];
+      await expect(ctx.checkExecutionReady!({...paid, acceptance, promptBytes:7_600})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+      await expect(ctx.checkExecutionReady!({...paid, acceptance, promptBytes:7_600,firstRoundCents:4})).resolves.toBeTypeOf("function");
+    }
+    await expect(ctx.checkExecutionReady!({...paid, firstRoundCents:100,reviewFiles:1})).rejects.toThrow(/tools/);
+    expect(earn.supportsPrivateInputs("seller")).toBe(false);
+    expect(earn.supportsService("seller",{servicePin:true})).toBe(false);
+    await expect(ctx.checkExecutionReady!({...paid,firstRoundCents:100})).resolves.toBeTypeOf("function");
+  } finally { await earn.stopAll(); }
+});
+
 it("prices the required Claude system instruction and Bash tool before admission", async () => {
   const earn = host({ executor:{...local,mode:"sandboxed",isolatedJobRoom:true}, checkExecutionReady:async()=>{},
     liveRoomState:()=>({agent:"claude-code",coreCommand:null,ready:true,generation:"test"}) });
@@ -373,6 +419,50 @@ it("reads a restored seller's measured cost from the original claim",async()=>{
   indexClaimUsage(state,task,path.join(dir,"0"));
   fs.mkdirSync(state,{recursive:true}); fs.rmSync(state,{recursive:true});
   expect(serviceUsage(state,task)).toEqual({budgetCents:10,reservedCents:8,unknownReservedCents:0,costUsd:0.071,runs:1});
+});
+
+
+it("pins the actual Codex executor and prices mandatory tool and final turns before signing", async () => {
+  const check = vi.fn(async()=>{});
+  let agent: "codex-plan" | "codex-api" = "codex-plan";
+  const earn = host({executor:{...local, argv:["/node","/room","job","{prompt}"], mode:"sandboxed",isolatedJobRoom:true},
+    liveRoomState:()=>({agent,...(agent==="codex-plan" && {minimumModelCents:78}),coreCommand:null,ready:true,generation:agent}),
+    checkExecutionReady:check},1000,true);
+  void earn.start({agentId:"seller",signer:{address:"fake"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    const ctx=seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
+    const job={acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})],creator:"buyer" as never,task:"task" as never,firstRoundCents:78,promptBytes:20};
+    const acceptance=[outputAgreementCriterion({allowTextOnly:false,requiredFiles:["answer.txt"]})];
+    await expect(ctx.checkExecutionReady!({...job,acceptance})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    await expect(ctx.checkExecutionReady!({...job,acceptance,firstRoundCents:155})).rejects.toThrow(/allowance/);
+    expect(check).not.toHaveBeenCalled();
+    await expect(ctx.checkExecutionReady!({...job,acceptance,firstRoundCents:156})).resolves.toBeTypeOf("function");
+    await expect(ctx.checkExecutionReady!(job)).resolves.toBeTypeOf("function");
+    expect(ctx.executorIdentity!()).toBe("codex-plan");
+    await expect(ctx.checkExecutionReady!({...job,revision:true,claimCounts:()=>({tokens:600001,calls:2})})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    await expect(ctx.checkExecutionReady!({...job,revision:true,claimCounts:()=>({tokens:600000,calls:63})})).resolves.toBeTypeOf("function");
+    await expect(ctx.checkExecutionReady!({...job,revision:true,claimCounts:()=>({tokens:0,calls:64})})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    agent="codex-api";
+    expect(ctx.executorIdentity!()).toBe("codex-api");
+    await expect(ctx.checkExecutionReady!({...job,firstRoundCents:1,promptBytes:16_384})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+  } finally {await earn.stopAll();}
+});
+
+it("uses the offer's first-round money at activation and availability", async () => {
+  const check = vi.fn(async()=>{});
+  const earn=host({executor:{...local, mode:"sandboxed", isolatedJobRoom:true,reserveRevisionBudget:true},
+    liveRoomState:()=>({agent:"codex-plan",minimumModelCents:78,coreCommand:null,ready:true,generation:"plan"}),checkExecutionReady:check});
+  void earn.start({agentId:"seller",signer:{address:"fake"} as never,minRewardLamports:0n});
+  try {
+    await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
+    (seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext).log({event:"watch.started"});
+    for(const modelBudgetCents of [20,78]) {
+      await expect(earn.checkListingReady("seller",undefined,{modelCapCents:modelBudgetCents})).rejects.toMatchObject({name:"ExecutorBudgetError"});
+    }
+    await expect(earn.checkListingReady("seller",undefined,{modelCapCents:200})).resolves.toBeTypeOf("function");
+    expect(check).toHaveBeenCalledWith(expect.objectContaining({admission:expect.objectContaining({firstRoundCents:120})}));
+  } finally {await earn.stopAll();}
 });
 
 it.each(["claude-code","codex","acp:fixture","pi"])("admits only verified public work for %s", async agent => {

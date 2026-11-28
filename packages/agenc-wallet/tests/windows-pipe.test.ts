@@ -247,6 +247,18 @@ describe.skipIf(process.platform === "win32")("the owner pipe's mutual hello", (
 describe.skipIf(process.platform === "win32")("the unlock pipe's server proof", () => {
   const secret = new Uint8Array(32).fill(9);
 
+  it("never unlocks an authenticated legacy service during a reconnect",async()=>{
+    const dir=folder(), socketPath=path.join(dir,"legacy.sock"), key=randomBytes(32);
+    const file=unlockServerKeyFile(dir);
+    writeFileSync(file,key,{mode:0o600});
+    const received=await impostor(socketPath,line => ({state:"locked",proof:unlockServerProof(key,"locked",String(line.nonce),null)}));
+    const startup=vi.fn(()=>({ownerToken:OWNER}));
+    await expect(openBackgroundWallet({socketPath,unlockSecret:secret,serverKeyFile:file,startup,reconnectOnly:true,timeoutMs:500}))
+      .rejects.toThrow("earlier wallet is locked");
+    expect(startup).not.toHaveBeenCalled();
+    expect(received).toHaveLength(1);
+  });
+
   it("sends no start-up line to a locked stand-in without the key", async () => {
     const dir = folder();
     const keyFile = unlockServerKeyFile(dir);

@@ -55,7 +55,7 @@ import {
   type TaskSubmission,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
-import { claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
+import { claimModelCounts, claimBudget, budgetForRevision, enrollClaimBudget, isReleasedClaimRound, pinClaim, requireClaimExecutor, spendClaimRound } from "./revision-budget.js";
 import { ReviewArtifactUnavailable, readReviewEnvelope, readReviewInputs, type ReviewInputFile } from "./review-artifact.js";
 import type { AccountInfoReader } from "./account-reader.js";
 import { needsPrivateRoom, waitForRoomAnswer, type RoomWork } from "./room-work.js";
@@ -310,7 +310,7 @@ export type WorkerContext = {
   allowanceGeneration?: (task:Task, metadata:Uint8Array|null, lastBudget?:number)=>string;
   revisionRefusals?: Map<Address,string>;
   budgetRefusals?: Map<Address, {generation:string; unchanged:()=>Promise<boolean>}>;
-  checkExecutionReady?: (input: { task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
+  checkExecutionReady?: (input: { claimCounts?: () => {tokens:number;calls:number}; task: Address; listing?: Address; signal?: AbortSignal; creator?: Address;
     privateInputs?: boolean; listingMetadata?: Uint8Array | null; requiredCapabilities?: bigint;
     revision?: boolean; reviewAttachments?: number; extraRoomFeatures?: boolean;
     acceptance?: readonly string[]; promptBytes?: number; firstRoundCents?: number; deadlineMs?: number; reviewFiles?: number; policyOnly?:boolean; preview?:boolean }) => Promise<void | (() => void)>;
@@ -2036,15 +2036,17 @@ async function executeAndSubmit(
     };
     const checkTime = () => { expireIfDue(); running.throwIfAborted(); };
     watch = setInterval(expireIfDue, 100);
+    let justReserved: number | undefined;
     let executionGuard: () => void = checkTime;
     let checkCompleted: () => void = checkTime;
     if (currentExecutor && ctx.modelSpendDir) {
-      const checkPin = () => requireClaimExecutor(join(ctx.modelSpendDir!, ctx.signer.address + "-" + claimAddress), ctx.executorIdentity!(), privateInputs,ctx.executorProgram?.());
+      const ledger = join(ctx.modelSpendDir, ctx.signer.address + "-" + claimAddress);
+      const checkPin = () => requireClaimExecutor(ledger, ctx.executorIdentity!(), privateInputs,ctx.executorProgram?.());
       try {
         checkPin();
         const marker = evidenceState.openClaim;
         const deadlineMs = cutoff;
-        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,
+        const ready = await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,privateInputs,claimCounts:()=>claimModelCounts(ledger,justReserved),
           requiredCapabilities:decodedTask.requiredCapabilities,acceptance:brief.acceptance,listingMetadata:serviceMetadata ?? null,
           ...(binding.listing && {listing:binding.listing}),reviewFiles:reviewInputs?.length ?? 0,
           revision:!!revisionHash,reviewAttachments,extraRoomFeatures:requiresExtraRoom(decodedTask,payload),
@@ -2117,7 +2119,10 @@ async function executeAndSubmit(
           if (committed) return;
           executionGuard?.();
           ctx.signal?.throwIfAborted();
-          if (ctx.modelSpendDir) spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents);
+          if (ctx.modelSpendDir) {
+            spendClaimRound(ctx.modelSpendDir,ctx.signer.address,claimAddress,round,reservedCents);
+            justReserved = round;
+          }
           marker.modelBudget = { ...marker.modelBudget!, remainingCents:0 };
           saveState(ctx.stateDir,state);
           committed = true;
@@ -3142,12 +3147,15 @@ export async function resumeOpenClaim(
   if (changesRequest) {
     const payload = JSON.parse(Buffer.from(verified.content).toString("utf8"));
     try {
+      let ledger: string | undefined;
       if (ctx.modelSpendDir && ctx.executorIdentity) {
         const [address] = await findClaimPda({task,bidder:agent.agentPda});
-        requireClaimExecutor(join(ctx.modelSpendDir,ctx.signer.address+"-"+address),ctx.executorIdentity(),needsPrivateRoom(payload),ctx.executorProgram?.());
+        ledger = join(ctx.modelSpendDir,ctx.signer.address+"-"+address);
+        requireClaimExecutor(ledger,ctx.executorIdentity(),needsPrivateRoom(payload),ctx.executorProgram?.());
       }
       await ctx.checkTextRevision?.({previous:{proofHashHex:hashHex(submission!.account.proofHash),resultData:new Uint8Array(submission!.account.resultData)}});
       await ctx.checkExecutionReady?.({task,creator:decodedTask.creator,revision:true,preview:true,policyOnly:true,
+        ...(ledger && {claimCounts:()=>claimModelCounts(ledger!)}),
         ...(marker.listing && {listing:marker.listing as Address}),listingMetadata,requiredCapabilities:decodedTask.requiredCapabilities,
         privateInputs:needsPrivateRoom(payload),acceptance:parseJobBrief(payload).acceptance,
         reviewAttachments:changesRequest.attachments.length,extraRoomFeatures:requiresExtraRoom(decodedTask,payload)});
