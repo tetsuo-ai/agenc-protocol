@@ -3421,6 +3421,20 @@ it("does not sign an automatic claim after the SOL price behind its budget chang
   expect(result.outcome).toMatchObject({status:"skipped",retryable:true});
 });
 
+it("signs an automatic claim when a rate refresh leaves the price unchanged",async()=>{
+  let refreshes=0;
+  const rate=100;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{},
+    ctx=>{
+      ctx.modelBudgetForTask=async()=>5;
+      ctx.allowanceGeneration=()=>String(rate);
+      ctx.executorForTask=async()=>{refreshes++;return undefined as never;};
+    });
+  expect(refreshes).toBeGreaterThan(0);
+  expect(result.claimTaskWithJobSpec).toHaveBeenCalledOnce();
+});
+
 it("rechecks a restored discovery hash after a newer scan",async()=>{
   const first="a".repeat(64), seen=new Map<Address,string>([[TASK,first]]);
   let calls=0;
