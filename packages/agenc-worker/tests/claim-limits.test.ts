@@ -65,3 +65,11 @@ it.each([{tokens:8,calls:64},{tokens:500001,calls:2}])("keeps a known cap refusa
     expect(start()).toBe(join(dir,"1"));
   } finally { rmSync(root,{recursive:true,force:true}); }
 });
+
+it("admits a capped Antigravity round of 965,536 tokens and refuses the uncapped 1,114,112", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agy-round-"));
+  try {
+    expect(() => ledger.requireRoundCapacity(dir, { calls: 2, tokens: 965_536 + 1 })).not.toThrow();
+    expect(() => ledger.requireRoundCapacity(dir, { calls: 2, tokens: 1_114_112 + 1 })).toThrow(/insufficient/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

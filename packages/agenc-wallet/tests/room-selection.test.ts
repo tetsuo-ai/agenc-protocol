@@ -248,3 +248,15 @@ it("resolves shell scripts after errexit and node scripts after a warning code",
     expect(()=>checkNamedProgram(["/bin/sh","-c","true"])).not.toThrow();
   }
 });
+
+it("offers an Antigravity room whose first call holds the capped 965,536 tokens and refuses the old 1,114,112", () => {
+  const root=mkdtempSync(join(tmpdir(),"agy-hold-")), f=(name:string)=>join(root,name);
+  try {
+    writeFileSync(f("image"),"fixture");
+    writeFileSync(f("selection"),JSON.stringify({agent:"antigravity",version:"a".repeat(64)}));
+    const ready=(tokenHold:number)=>liveRoomSelection({setting:f("selection"),keyStore:f("keys"),baseFiles:[f("image")],agentFiles:[f("image")],
+      acpFiles:[f("image")],coreCandidates:[],acpPrices:{antigravity:{baseTicks:1000,inputTicksPerByte:0,tokenHold}}})().ready;
+    expect(ready(900000+65536)).toBe(true);
+    expect(ready(1048576+65536)).toBe(false);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
