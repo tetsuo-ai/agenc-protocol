@@ -298,6 +298,8 @@ const BALANCE_CACHE_MS = 4_000;
  */
 const BALANCE_SETTLE_MS = 60_000;
 const STALE_PRICE_MS = 6 * 60 * 60_000;
+/** A paused connected listing resumes only when its first turn is affordable at a rate this much lower. */
+const RESUME_MARGIN = 0.02;
 /**
  * How long a list of services waits for the record of who offers them and
  * what buyers paid them, when that is being read. The rest is filled in when
@@ -7606,8 +7608,12 @@ export class AgencWallet {
     if (this.#earn.connectedAgent(agent.id)) {
       try {
         const work = this.#publishedWork(agent.id,offer);
+        // A paused offer resumes only when it clears the minimum by a margin, so small moves of SOL do not
+        // flip it between paused and live (each flip is a signed transaction).
+        const rate = this.#currentSolUsd !== null && offer.status === "paused"
+          ? this.#currentSolUsd * (1 - RESUME_MARGIN) : this.#currentSolUsd;
         const economics = serviceEconomics({...storedTerms(offer),priceLamports:BigInt(offer.priceLamports),
-          usdPerSol:this.#currentSolUsd,marketFeeBps:this.#feeRate?.bps ?? null});
+          usdPerSol:rate,marketFeeBps:this.#feeRate?.bps ?? null});
         if (!this.#earn.supportsService(agent.id,{...this.#listingNeeds(offer),...work,modelCapCents:economics.modelBudgetCents})) return false;
       } catch { return false; }
     }
