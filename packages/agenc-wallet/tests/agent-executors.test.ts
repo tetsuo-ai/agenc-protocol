@@ -376,16 +376,17 @@ it.each(["codex-api","codex-plan"] as const)("applies verified job requirements 
   } finally { await earn.stopAll(); }
 });
 
-it("refuses an unfundable first ACP call before the seller can sign", async () => {
+it.each(["acp", "pi"] as const)("refuses an unfundable first %s call before the seller can sign", async agent => {
   const room = {...local, mode:"sandboxed" as const, isolatedJobRoom:true};
   const firstCall = {baseTicks:60_000_000_000,inputTicksPerByte:0,tokenHold:500000};
   const earn = host({executor:room, roomWork:()=>({} as never), checkExecutionReady:async()=>{},
-    liveRoomState:()=>({agent:"acp", ready:true, identity:"acp:grok:"+"a".repeat(64), coreCommand:null, generation:"one", firstCall})});
+    liveRoomState:()=>({agent, ready:true, identity:agent+":grok:"+"a".repeat(64), coreCommand:null, generation:"one", firstCall})});
   void earn.start({agentId:"seller",signer:{address:"fake"} as unknown as KeyPairSigner,minRewardLamports:0n});
   try {
     await vi.waitFor(()=>expect(seen.contexts).toHaveLength(1));
     const ctx = seen.contexts[0] as import("@tetsuo-ai/agenc-worker").WorkerContext;
     const facts = {task:"task" as never,creator:"buyer" as never,promptBytes:40, acceptance:[outputAgreementCriterion({requiredFiles:[],allowTextOnly:true})]};
+    if (agent === "pi") await expect(ctx.checkExecutionReady!({...facts,creator:"buyer" as never})).rejects.toThrow(/allowance/);
     await expect(ctx.checkExecutionReady!({...facts,firstRoundCents:599})).rejects.toThrow(/allowance/);
     await ctx.checkExecutionReady!({...facts,firstRoundCents:600});
     expect(earn.supportsPrivateInputs("seller")).toBe(false);

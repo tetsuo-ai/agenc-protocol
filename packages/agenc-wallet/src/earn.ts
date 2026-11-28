@@ -111,6 +111,8 @@ function firstTurnFits(cents:number, bytes:number):boolean {
 function codexApiFirstTurn(cents: number, promptBytes: number, calls = 1): boolean {
   return Number.isSafeInteger(cents) && codexMinimum(false, promptBytes, calls > 1).units <= cents * CODEX_PRICE.cent;
 }
+/** Agents that bill per call at a published first-call price and keep an identified, expiring login. */
+const pricedAgent = (agent?: string): boolean => agent === "acp" || agent === "pi";
 type ListingNeeds = {promptBytes?:number; requiredFiles?:readonly string[]; allowTextOnly?:boolean; privateInputs?:boolean; servicePin?:boolean; serviceDigest?:string; modelCapCents?:number; extraRoomFeatures?:boolean};
 export interface JobAdmission {
   claimCounts?: () => {tokens:number; calls:number};
@@ -369,10 +371,10 @@ export class EarnHost {
     if (adapter === "codex-api") return {sampleFile:"answer.txt", canDeliver:()=>true, firstTurnFits:codexApiFirstTurn};
     if (adapter === "codex-plan") return {sampleFile:"answer.txt", canDeliver:()=>true,
       firstTurnFits:(cents:number, _bytes:number, calls = 1) => Number.isSafeInteger(cents) && cents * CODEX_PRICE.cent >= codexMinimum(true, 0, calls > 1).units};
-    if (adapter === "acp") {
+    if (adapter === "acp" || adapter === "pi") {
       const room = this.#options.liveRoomState?.();
       const price = room?.firstCall;
-      if (room?.agent !== "acp" || !room.identity || !price || !Number.isSafeInteger(price.tokenHold) || price.tokenHold! <= 0 || price.tokenHold! > 1000000) return undefined;
+      if (room?.agent !== adapter || !room.identity || !price || !Number.isSafeInteger(price.tokenHold) || price.tokenHold! <= 0 || price.tokenHold! > 1000000) return undefined;
       return {sampleFile:"answer.txt", canDeliver:(name:string)=>!agreedOutputProblem(name),
         firstTurnFits:(cents:number, bytes:number, calls=1)=>Number.isSafeInteger(cents) && cents >= 0 &&
           (price.baseTicks + price.inputTicksPerByte * bytes) * calls <= cents * 100_000_000};
@@ -410,7 +412,7 @@ export class EarnHost {
       const calls = needs.requiredFiles?.length || needs.allowTextOnly === false ? 2 : 1;
       const rounds = needs.modelCapCents === undefined ? undefined :
         admissionRounds(needs.modelCapCents, executor?.reserveRevisionBudget === true);
-      const allowances = !rounds ? [] : [rounds.firstRoundCents,...(connected === "acp" ? rounds.laterRoundCents : [])];
+      const allowances = !rounds ? [] : [rounds.firstRoundCents,...(pricedAgent(connected) ? rounds.laterRoundCents : [])];
       if (!policy || !executor?.isolatedJobRoom || executor.mode !== "sandboxed" || needs.privateInputs || needs.servicePin || needs.extraRoomFeatures || executor?.argv[2] === "peer-job" ||
           (needs.requiredFiles?.some(name=>!policy.canDeliver(name))) ||
           (needs.allowTextOnly === false && !needs.requiredFiles?.length &&
@@ -1036,7 +1038,7 @@ export class EarnHost {
         return "peer:" + generation();
       }
       const connected = this.connectedAgent(agent.agentId);
-      if (connected === "acp" && !named) return this.#options.liveRoomState?.().identity ?? "unavailable:acp";
+      if (pricedAgent(connected) && !named) return this.#options.liveRoomState?.().identity ?? "unavailable:" + connected;
       if (connected) return connected;
       if (executor.argv[2] === "job") return "core";
       return "command:" + createHash("sha256").update(JSON.stringify(executor.argv)).digest("hex");
@@ -1079,7 +1081,7 @@ export class EarnHost {
         }
         const requiresFile = admission.requiredFiles.length > 0 || !admission.allowTextOnly;
         const calls = requiresFile ? 2 : 1;
-        if (connected === "acp" && admission.loginThroughMs !== undefined) {
+        if (pricedAgent(connected) && admission.loginThroughMs !== undefined) {
           const end = this.#options.liveRoomState?.().validUntil;
           if (end === undefined || !Number.isSafeInteger(end) || end <= admission.loginThroughMs)
             throw new ExecutorCapabilityError("The login expires before this job can finish.");
@@ -1093,7 +1095,7 @@ export class EarnHost {
         if (admission.firstRoundCents !== undefined && admission.firstRoundCents < reportedMinimum * calls)
           throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
         if (connected && admission.firstRoundCents !== undefined) {
-          const rounds = [admission.firstRoundCents,...(connected === "acp" ? admission.laterRoundCents ?? [] : [])];
+          const rounds = [admission.firstRoundCents,...(pricedAgent(connected) ? admission.laterRoundCents ?? [] : [])];
           const policy = this.#publicJobs(connected)!;
           if (!rounds.every(cents=>policy.firstTurnFits(cents,admission.promptBytes,calls)))
             throw new ExecutorBudgetError("The first model turn exceeds this job's allowance.");
@@ -1150,21 +1152,21 @@ export class EarnHost {
     const ctx: WorkerContext = {
       ...this.#chainContext(agent, stateDir),
       chosenRoomCurrent:()=>this.chosenRoomFor(agent.agentId),
-      expiringExecutorLogin: () => this.connectedAgent(agent.agentId) === "acp" && this.#options.liveRoomState?.().firstCall?.needsExpiry === true,
+      expiringExecutorLogin: () => pricedAgent(this.connectedAgent(agent.agentId)) && this.#options.liveRoomState?.().firstCall?.needsExpiry === true,
       chosenCorrectionFits: acceptance => {
-        if (this.connectedAgent(agent.agentId) !== "acp") return true;
+        if (!pricedAgent(this.connectedAgent(agent.agentId))) return true;
         const outputs = outputAgreementFromSpec({acceptance:[...acceptance]});
         return !!outputs && outputs.allowTextOnly && !outputs.requiredFiles.length;
       },
       roundCapacity: acceptance => {
-        if (this.connectedAgent(agent.agentId) !== "acp") return undefined;
+        if (!pricedAgent(this.connectedAgent(agent.agentId))) return undefined;
         const outputs = outputAgreementFromSpec({acceptance:[...acceptance]});
         const calls = outputs && outputs.allowTextOnly && !outputs.requiredFiles.length ? 1 : 2;
         const hold = this.#options.liveRoomState?.().firstCall?.tokenHold;
         if (!hold) throw new ExecutorCapabilityError("Update the job room before starting an ACP round.");
         return {calls, tokens: hold + calls - 1};
       },
-      localExecutorReady: () => this.connectedAgent(agent.agentId) !== "acp" || this.#options.liveRoomState?.().ready === true,
+      localExecutorReady: () => !pricedAgent(this.connectedAgent(agent.agentId)) || this.#options.liveRoomState?.().ready === true,
       executorIdentity, executorProgram, refusals:new Map(),candidateHashes:new Map(),revisionRefusals:new Map(),
       modelBudgetCeiling:(task,metadata)=>(metadata ? termsFor(metadata) : agent.specialistTerms?.(task.requiredCapabilities))?.modelCapCents,
       ...(agent.quoteLifetimeMs && {quoteLifetimeMs:agent.quoteLifetimeMs}),

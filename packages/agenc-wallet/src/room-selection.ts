@@ -26,6 +26,8 @@ export interface LiveRoom {
   codexPlanMinimumCents?: number;
   acpFiles?: readonly string[];
   acpPrices?: Record<string, FirstCallPrice>;
+  piFiles?: readonly string[];
+  piPrices?: Record<string, FirstCallPrice>;
   generationFiles?: readonly string[];
   managedSettingsRoot?: string;
 }
@@ -142,6 +144,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       ...room.agentFiles,
       ...(room.codexFiles ?? []),
       ...(room.acpFiles ?? []),
+      ...(room.piFiles ?? []),
       ...(room.generationFiles ?? []),
       ...(room.managedSettingsRoot ? [room.managedSettingsRoot] : []),
     ].every((p) => typeof p === "string" && isAbsolute(p)) ||
@@ -150,7 +153,9 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     (room.codexPlanMinimumCents !== undefined &&
       (!Number.isSafeInteger(room.codexPlanMinimumCents) || room.codexPlanMinimumCents < 1)) ||
     (!!room.acpPrices !== !!room.acpFiles?.length) ||
-    Object.values(room.acpPrices ?? {}).some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
+    (!!room.piPrices !== !!room.piFiles?.length) ||
+    Object.keys(room.piPrices ?? {}).some(id => Object.hasOwn(room.acpPrices ?? {}, id)) ||
+    [...Object.values(room.acpPrices ?? {}), ...Object.values(room.piPrices ?? {})].some(p => !p || !Number.isSafeInteger(p.baseTicks) || p.baseTicks <= 0 ||
       !Number.isSafeInteger(p.inputTicksPerByte) || p.inputTicksPerByte < 0)
   )
     throw new Error("Invalid job room paths.");
@@ -174,7 +179,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     let tag: unknown;
     let validSlot = slot.regular;
     // Desktop seals the login and owns this envelope. Only its public choice enters the wallet.
-    if (slot.regular && (room.acpPrices || room.codexFiles !== undefined)) {
+    if (slot.regular && (room.acpPrices || room.piPrices || room.codexFiles !== undefined)) {
       try {
         if (statSync(room.setting).size > 65536) throw new Error();
         const envelope = JSON.parse(readFileSync(room.setting, "utf8"));
@@ -194,13 +199,16 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
           planVersion = version;
           planTag = typeof tag === "string" ? tag : undefined;
         }
-      } else if (room.acpPrices) agent = "acp";
+      } else if (typeof profile === "string" && Object.hasOwn(room.piPrices ?? {}, profile)) agent = "pi";
+      else if (room.acpPrices) agent = "acp";
       else validSlot = false;
     }
-    const firstCall = agent === "acp" && typeof profile === "string" && Object.hasOwn(room.acpPrices ?? {}, profile)
-      ? room.acpPrices![profile] : undefined;
-    const identity = agent === "acp" && firstCall && typeof version === "string" && /^[a-f0-9]{64}$/.test(version)
-      ? "acp:" + profile + ":" + version : undefined;
+    const priced = agent === "acp" || agent === "pi";
+    const prices = agent === "pi" ? room.piPrices : room.acpPrices;
+    const firstCall = priced && typeof profile === "string" && prices && Object.hasOwn(prices, profile)
+      ? prices[profile] : undefined;
+    const identity = priced && firstCall && typeof version === "string" && /^[a-f0-9]{64}$/.test(version)
+      ? agent + ":" + profile + ":" + version : undefined;
     let retryAt = 0;
     let entitled = true;
     if (identity) {
@@ -212,7 +220,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
     }
     const loginCurrent = !firstCall?.needsExpiry || (typeof validUntil === "number" && Number.isSafeInteger(validUntil) && Date.now() < validUntil);
     const agentFiles = (agent === "codex-api" || agent === "codex-plan" ? room.codexFiles ?? [] :
-      agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
+      agent === "pi" ? room.piFiles ?? [] : agent === "acp" ? room.acpFiles ?? [] : room.agentFiles).map(file);
     const epochPath = room.setting + ".epoch";
     const epoch = file(epochPath).regular
       ? readFileSync(epochPath, "utf8")
@@ -239,13 +247,13 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       } catch { managed = true; }
     }
     const ready =
-      !managed && keysStable && loginCurrent && entitled && (agent !== "acp" || (!!firstCall && Number.isSafeInteger(firstCall.tokenHold) && firstCall.tokenHold! > 0 && firstCall.tokenHold! <= 1000000)) &&
+      !managed && keysStable && loginCurrent && entitled && (!priced || (!!firstCall && Number.isSafeInteger(firstCall.tokenHold) && firstCall.tokenHold! > 0 && firstCall.tokenHold! <= 1000000)) &&
       (epoch === "legacy" || /^[0-9a-f-]{36}$/.test(epoch)) &&
       base.every((f) => f.regular) &&
       (agent === "core"
         ? !!coreCommand
         : validSlot && agentFiles.length > 0 && agentFiles.every((f) => f.regular) &&
-          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined) && (agent !== "acp" || !!identity));
+          (agent !== "codex-plan" || room.codexPlanMinimumCents !== undefined) && (!priced || !!identity));
     let refusals: string[] = [];
     if (slot.regular)
       refusals = readdirSync(dirname(room.setting))
@@ -275,6 +283,7 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
       base,
       agentFiles,
       room.generationFiles?.map(file),
+      ...(agent === "pi" ? [profile, firstCall] : []),
     ]);
     const refused = refusals.includes(".paid-agent-denied.unidentified") || refusals.includes(".paid-agent-refused." + version) || (typeof tag === "string" && /^[a-f0-9]{64}$/.test(tag) &&
       (refusals.includes(".paid-agent-denied." + tag) || refusals.some(n => n.startsWith(".paid-agent-claim." + tag + "."))));
@@ -286,5 +295,5 @@ export function liveRoomSelection(room: LiveRoom): () => RoomSelection {
 export const ACP_ADMISSION = "room-acp-admission-v2";
 
 export function admissionArgs(argv: readonly string[], selection?: RoomSelection): string[] {
-  return argv[2] === "self-test" && selection?.agent === "acp" ? [ACP_ADMISSION] : [];
+  return argv[2] === "self-test" && (selection?.agent === "acp" || selection?.agent === "pi") ? [ACP_ADMISSION] : [];
 }

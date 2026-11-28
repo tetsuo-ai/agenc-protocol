@@ -48,9 +48,10 @@ function indexedLedger(stateDir:string,task:string):string|null {
 
 export function fileCorrectionAllowed(stateDir:string, task:string, connected?:string):boolean {
   const dir = indexedLedger(stateDir, task);
-  if (!dir) return connected !== "acp";
+  const priced = connected === "acp" || connected === "pi";
+  if (!dir) return !priced;
   const {executor} = JSON.parse(readFileSync(path.join(dir,"admission"),"utf8"));
-  return typeof executor === "string" && !executor.startsWith("acp:") && connected !== "acp";
+  return typeof executor === "string" && !executor.startsWith("acp:") && !executor.startsWith("pi:") && !priced;
 }
 
 function durableUsage(stateDir:string,task:string):ServiceUsage|null {
