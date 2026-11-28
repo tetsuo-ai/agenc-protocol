@@ -2468,6 +2468,8 @@ export async function processCandidate(
       throw Object.assign(new Error("This job has no valid model budget."),{name:"ExecutorBudgetError"});
     const guard = await ctx.checkExecutionReady?.({...requirements, preview:ctx.dryRun === true,
       ...(budget !== undefined && {firstRoundCents:firstRound(budget)})});
+    // The budget was priced at this rate: signing at another one is a different offer.
+    const priced = budget !== undefined ? ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) : undefined;
     assertAdmission = () => {
       options.signal?.throwIfAborted();
       ctx.signal?.throwIfAborted();
@@ -2476,6 +2478,8 @@ export async function processCandidate(
           (options.authorizeChosen && ctx.chosenRoomCurrent?.() === false) ||
           (!hireBinding.isHire && !options.authorizeChosen && ctx.chooseOpenJobs?.()) ||
           (hireBinding.listing && ctx.admitsListing && !ctx.admitsListing(hireBinding.listing)))
+        throw new Error("The claim admission changed.");
+      if (priced !== undefined && ctx.allowanceGeneration?.(decodedTask,listingMetadata,budget) !== priced)
         throw new Error("The claim admission changed.");
       if (guard) guard();
     };

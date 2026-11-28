@@ -3408,6 +3408,19 @@ it("keeps a capability refusal when only the SOL price changes",async()=>{
   expect(result.fetchUri).toHaveBeenCalledOnce();
 });
 
+it("does not sign an automatic claim after the SOL price behind its budget changed",async()=>{
+  let rate=100;
+  const result=await attemptFreshClaimWithHireSnapshot({owner:PARENT,executable:false,data:new Uint8Array()},
+    async()=>{},
+    ctx=>{
+      ctx.modelBudgetForTask=async()=>5;
+      ctx.allowanceGeneration=()=>String(rate);
+      ctx.executorForTask=async()=>{rate=90;return undefined as never;};
+    });
+  expect(result.claimTaskWithJobSpec).not.toHaveBeenCalled();
+  expect(result.outcome).toMatchObject({status:"skipped",retryable:true});
+});
+
 it("rechecks a restored discovery hash after a newer scan",async()=>{
   const first="a".repeat(64), seen=new Map<Address,string>([[TASK,first]]);
   let calls=0;
